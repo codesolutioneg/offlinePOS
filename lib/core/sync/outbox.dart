@@ -105,15 +105,23 @@ class Outbox {
     return sent;
   }
 
+  /// Kinds seen with no registered sender, surfaced so a misconfigured till is
+  /// visible instead of quietly never syncing.
+  final Set<String> unhandledKinds = {};
+
   Future<_BatchResult> _drainBatch(List<OutboxEntry> batch) async {
     var sent = 0;
     var parked = 0;
+    var unhandled = 0;
     for (final entry in batch) {
       final sender = _senders[entry.kind];
       if (sender == null) {
-        // Nothing can ever handle this. Park it rather than block the queue.
-        await _store.markDead(entry.id, 'no sender for kind ${entry.kind}');
-        parked++;
+        // Skip, but leave it pending. A missing sender is almost always a till
+        // that has not finished enrolling yet, and parking a sale because the app
+        // was still configuring would throw away money that was correctly taken.
+        // It stays queued until a sender appears.
+        unhandled++;
+        unhandledKinds.add(entry.kind);
         continue;
       }
       try {
@@ -133,16 +141,24 @@ class Outbox {
           continue;
         }
         // Treat as the line being down: preserve order and try again later.
-        return _BatchResult(sent: sent, parked: parked, stopped: true);
+        return _BatchResult(
+            sent: sent, parked: parked, unhandled: unhandled, stopped: true);
       }
     }
-    return _BatchResult(sent: sent, parked: parked, stopped: false);
+    return _BatchResult(
+        sent: sent, parked: parked, unhandled: unhandled, stopped: false);
   }
 }
 
 class _BatchResult {
-  const _BatchResult({required this.sent, required this.parked, required this.stopped});
+  const _BatchResult({
+    required this.sent,
+    required this.parked,
+    required this.unhandled,
+    required this.stopped,
+  });
   final int sent;
   final int parked;
+  final int unhandled;
   final bool stopped;
 }

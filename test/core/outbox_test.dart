@@ -95,12 +95,28 @@ void main() {
     expect(received.toSet().length, 1);
   });
 
-  test('an unknown kind is parked, not silently dropped', () async {
+  test('an entry with no sender yet is kept, never parked', () async {
+    // A till that has not finished enrolling has no senders registered. Parking a
+    // sale for that reason would throw away money that was correctly taken.
     final store = FakeStore();
     final outbox = Outbox(store: store, senders: {});
-    await outbox.enqueue('mystery', 'u1', {});
+    await outbox.enqueue('order.push', 'u1', {});
     await outbox.drain();
-    expect(store.deadReasons.values.single, contains('no sender'));
+    expect(store.deadIds, isEmpty);
+    expect((await store.pending()).single.payloadUuid, 'u1');
+    expect(outbox.unhandledKinds, contains('order.push'));
+  });
+
+  test('a sale queued before enrolment goes out once a sender appears', () async {
+    final store = FakeStore();
+    final delivered = <String>[];
+    final senders = <String, OutboxSender>{};
+    final outbox = Outbox(store: store, senders: senders);
+    await outbox.enqueue('order.push', 'u1', {});
+    expect(await outbox.drain(), 0);
+    senders['order.push'] = (e) async => delivered.add(e.payloadUuid);
+    expect(await outbox.drain(), 1);
+    expect(delivered, ['u1']);
   });
 
   test('a permanent rejection is parked and the queue keeps moving', () async {
