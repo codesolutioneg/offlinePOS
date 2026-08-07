@@ -45,11 +45,18 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Widget app({Duration? staleness}) => MaterialApp(
+  Widget app({
+    Duration? staleness,
+    VoidCallback? onSignOut,
+    VoidCallback? onChanged,
+  }) =>
+      MaterialApp(
         home: SellScreen(
           session: session,
           formatAmount: (v) => v.toStringAsFixed(2),
           staleness: staleness,
+          onSignOut: onSignOut,
+          onChanged: onChanged,
         ),
       );
 
@@ -171,5 +178,43 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('Water'), findsOneWidget);
     expect(find.text('Margherita'), findsNothing);
+  });
+
+  group('a shift can be changed on the device', () {
+    testWidgets('there is a way out, so a handover does not mean killing the app',
+        (t) async {
+      var signedOut = false;
+      await t.pumpWidget(app(onSignOut: () => signedOut = true));
+      await t.tap(find.byKey(const Key('sign-out')));
+      await t.pumpAndSettle();
+      expect(signedOut, isTrue);
+    });
+
+    testWidgets('handing the till over mid-order is refused', (t) async {
+      await t.pumpWidget(app(onSignOut: () {}));
+      await t.tap(find.byKey(const Key('product-11')));
+      await t.pumpAndSettle();
+      // Whose sale it was is the thing that would be lost.
+      expect(
+        t.widget<TextButton>(find.byKey(const Key('sign-out'))).onPressed,
+        isNull,
+      );
+    });
+  });
+
+  testWidgets('an order gaining lines is published, so the update gate can see it',
+      (t) async {
+    // The gate is built in the composition root, before any screen exists, and
+    // this is the only honest source of "a customer is standing there".
+    final states = <bool>[];
+    await t.pumpWidget(app(onChanged: () => states.add(session.hasLines)));
+
+    await t.tap(find.byKey(const Key('product-11')));
+    await t.pumpAndSettle();
+    expect(states, [true]);
+
+    await t.tap(find.byIcon(Icons.delete_outline));
+    await t.pumpAndSettle();
+    expect(states, [true, false]);
   });
 }

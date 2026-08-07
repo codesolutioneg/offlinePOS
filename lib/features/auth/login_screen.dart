@@ -14,11 +14,17 @@ class LoginScreen extends StatefulWidget {
     required this.auth,
     required this.users,
     required this.onSignedIn,
+    this.provisioningPin,
   });
 
   final AuthService auth;
   final UserStore users;
   final void Function(Cashier) onSignedIn;
+
+  /// The one-time PIN for the setup account, when this till has no real roster
+  /// yet. Shown here because there is nowhere else to show it and no shipped
+  /// credential to fall back on; see `BootstrapCashier`.
+  final String? provisioningPin;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -43,11 +49,21 @@ class _LoginScreenState extends State<LoginScreen> {
         AuthOk() => null,
         AuthRejected() => 'Incorrect PIN',
         AuthMalformed() => 'PIN must be 4 to 6 digits',
-        // Say it is a lockout, not a wrong PIN, or the cashier keeps trying.
-        AuthLockedOut() => 'Too many attempts. Locked for a few minutes.',
+        // Say it is a lockout, not a wrong PIN, or the cashier keeps trying. The
+        // wait doubles with each further failure, so it is quoted rather than
+        // described as "a few minutes".
+        AuthLockedOut(:final until) =>
+          'Too many attempts. Try again in ${_wait(until)}.',
       };
     });
     if (result is AuthOk) widget.onSignedIn(result.cashier);
+  }
+
+  static String _wait(DateTime until) {
+    final left = until.difference(DateTime.now());
+    if (left.inMinutes < 1) return '${left.inSeconds.clamp(1, 59)} seconds';
+    if (left.inHours < 1) return '${left.inMinutes + 1} minutes';
+    return '${left.inHours + 1} hours';
   }
 
   void _press(String d) {
@@ -71,6 +87,21 @@ class _LoginScreenState extends State<LoginScreen> {
               const Text('offlinePOS',
                   style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
               const SizedBox(height: 24),
+              if (widget.provisioningPin != null)
+                Card(
+                  key: const Key('provisioning'),
+                  color: Colors.amber.shade100,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      'This till has no staff yet. Sign in as Setup with PIN '
+                      '${widget.provisioningPin}, then enrol the real roster. '
+                      'This code is new on every launch and stops appearing once '
+                      'staff are enrolled.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
               if (staff.isEmpty)
                 const Padding(
                   padding: EdgeInsets.all(16),

@@ -71,6 +71,11 @@ class Outbox {
   /// long outage must not be mistaken for a bad order. 0 disables parking.
   final int maxAttempts;
 
+  /// Whether anything at all is registered to deliver. False means the till is
+  /// accumulating correctly and delivering nothing, which support has to be told
+  /// rather than left to read as "offline".
+  bool get hasSenders => _senders.isNotEmpty;
+
   bool _draining = false;
 
   /// Queue something for delivery. Returns as soon as it is durable.

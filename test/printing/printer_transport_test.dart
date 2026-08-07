@@ -28,10 +28,11 @@ void main() {
     late ServerSocket server;
     late Completer<List<int>> firstJob;
 
-    setUp(() async {
-      // Complete on the first full job rather than polling a fixed number of
-      // times, which loses the race when the suite runs in parallel.
-      firstJob = Completer<List<int>>();
+    // Bound once for the whole group. Opening a listening socket is the one
+    // operation here that can stall the test isolate for seconds at a time, and
+    // the server holds no per-test state: the completer it reports through is the
+    // one belonging to whichever test is running.
+    setUpAll(() async {
       server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       server.listen((socket) {
         final buffer = <int>[];
@@ -41,7 +42,11 @@ void main() {
         });
       });
     });
-    tearDown(() async => server.close());
+    tearDownAll(() async => server.close());
+
+    // Complete on the first full job rather than polling a fixed number of
+    // times, which loses the race when the suite runs in parallel.
+    setUp(() => firstJob = Completer<List<int>>());
 
     test('sends the bytes over the LAN, with no cloud involved', () async {
       final printer = TcpPrinter(host: server.address.address, port: server.port);

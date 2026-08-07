@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'spool_store.dart';
+
 /// Where receipt bytes actually go.
 abstract interface class PrinterTransport {
   Future<void> send(Uint8List bytes);
@@ -118,41 +120,75 @@ class FallbackPrinter implements PrinterTransport {
 ///
 /// A receipt that never printed is a customer without proof of payment and a kitchen
 /// without a ticket. The sale itself is already safe on disk; this keeps the paper
-/// side recoverable too.
+/// side recoverable too, including across the restart a till gets every night.
+///
+/// Where the backlog lives is the [SpoolStore]'s business. Hand it a durable one on
+/// a real till: an in-memory spool is only recoverable until closing time, which is
+/// precisely when someone closes the app.
 class SpooledPrinter implements PrinterTransport {
-  SpooledPrinter(this._inner, {this.maxSpool = 100});
+  SpooledPrinter(
+    this._inner, {
+    SpoolStore? spool,
+    this.maxSpool = 100,
+    this.onDropped,
+  }) : _spool = spool ?? MemorySpoolStore();
 
   final PrinterTransport _inner;
+  final SpoolStore _spool;
+
+  /// The backlog is capped so a printer left off for a week cannot fill the disk.
   final int maxSpool;
-  final List<Uint8List> _spool = [];
 
-  int get spooledCount => _spool.length;
-  bool get hasSpooled => _spool.isNotEmpty;
+  /// Called for every job the cap forces out. A discarded receipt is a customer
+  /// with no proof of payment, so it is never dropped quietly.
+  final void Function(SpooledJob job)? onDropped;
 
+  bool _flushing = false;
+
+  int get spooledCount => _spool.count;
+  bool get hasSpooled => spooledCount > 0;
+
+  Future<List<SpooledJob>> held({int limit = 50}) =>
+      _spool.oldestFirst(limit: limit);
+
+  /// [reference] is the order the receipt belongs to, so a held one can be named
+  /// on the support screen instead of being an anonymous count.
   @override
-  Future<void> send(Uint8List bytes) async {
+  Future<void> send(Uint8List bytes, {String? reference}) async {
     try {
       await _inner.send(bytes);
     } catch (e) {
-      if (_spool.length >= maxSpool) _spool.removeAt(0);
-      _spool.add(bytes);
+      await _spool.add(bytes, reference: reference);
+      for (final dropped in await _spool.trimTo(maxSpool)) {
+        onDropped?.call(dropped);
+      }
       rethrow;
     }
   }
 
   /// Retry the backlog, oldest first. Stops at the first failure so the order in
   /// which tickets print is preserved.
+  ///
+  /// Safe to call from a timer and from a support button at the same time: the
+  /// second caller does nothing rather than printing everything twice.
   Future<int> flush() async {
-    var printed = 0;
-    while (_spool.isNotEmpty) {
-      try {
-        await _inner.send(_spool.first);
-        _spool.removeAt(0);
+    if (_flushing) return 0;
+    _flushing = true;
+    try {
+      var printed = 0;
+      for (final job in await _spool.oldestFirst()) {
+        try {
+          await _inner.send(job.bytes);
+        } catch (e) {
+          await _spool.markFailed(job.id, e.toString());
+          break;
+        }
+        await _spool.remove(job.id);
         printed++;
-      } catch (_) {
-        break;
       }
+      return printed;
+    } finally {
+      _flushing = false;
     }
-    return printed;
   }
 }

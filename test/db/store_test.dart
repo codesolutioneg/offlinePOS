@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqlite3/sqlite3.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/schema.dart';
@@ -28,6 +29,30 @@ void main() {
   test('migrating twice is a no-op', () {
     db.migrate();
     expect(db.userVersion, Schema.version);
+  });
+
+  test('a till holding unsynced sales keeps them across an upgrade', () {
+    // Built the way a shipped till was built, then upgraded, because a migration
+    // failure on a device whose sales exist nowhere else is the worst bug this app
+    // can have. Additive only: nothing that was already there is touched.
+    final raw = sqlite3.open(':memory:');
+    const shipped = Schema.version - 1;
+    for (var v = 0; v < shipped; v++) {
+      for (final statement in Schema.migrations[v]) {
+        raw.execute(statement);
+      }
+    }
+    raw.execute('PRAGMA user_version = $shipped');
+    raw.execute(
+      'INSERT INTO outbox (kind, payload_uuid, payload, created_at) '
+      "VALUES ('order.push', 'u1', '{}', '2026-03-01T10:00:00Z')",
+    );
+
+    final upgraded = Db(raw)..migrate();
+    addTearDown(upgraded.close);
+
+    expect(upgraded.userVersion, Schema.version);
+    expect(SqliteOutboxStore(upgraded).pendingSalesCount, 1);
   });
 
   test('an order round-trips through disk with its modifiers', () {

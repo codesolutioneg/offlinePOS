@@ -14,14 +14,19 @@ enum SyncState { idle, working, offline }
 /// Nothing here is ever awaited by a selling screen. The till's job is to take money;
 /// this runs behind it and catches up when there is a line.
 class SyncService {
+  /// [outboxStore] is required rather than optional because every number this
+  /// class reports about the till comes out of it. Passing null used to compile
+  /// fine and made [status] answer zero to everything, which is worse than having
+  /// no diagnostics at all: it sends support looking somewhere else while a week
+  /// of takings sits on the device.
   SyncService({
     required Outbox outbox,
     required CatalogueStore catalogue,
+    required SqliteOutboxStore outboxStore,
+    required this.deviceId,
+    required this.appVersion,
     OdooPuller? puller,
-    SqliteOutboxStore? outboxStore,
     AuditLog? audit,
-    this.deviceId = 'unknown',
-    this.appVersion = '0.0.0',
     this.catalogueMaxAge = const Duration(hours: 6),
     DateTime Function()? now,
   })  : _outbox = outbox,
@@ -34,12 +39,27 @@ class SyncService {
   final Outbox _outbox;
   final CatalogueStore _catalogue;
   final OdooPuller? _puller;
-  final SqliteOutboxStore? _outboxStore;
+  final SqliteOutboxStore _outboxStore;
   final AuditLog? _audit;
   final String deviceId;
   final String appVersion;
   final Duration catalogueMaxAge;
   final DateTime Function() _now;
+
+  /// Sales still on the till, for anything that has to decide whether losing this
+  /// device would lose money. The update gate is the caller that matters.
+  int get pendingSales => _outboxStore.pendingSalesCount;
+
+  /// True when something is registered that can actually deliver.
+  ///
+  /// A till with no destination is not offline, and calling it offline is the
+  /// wrong thing to tell support. It has nowhere to be online to, which is a
+  /// configuration answer rather than a network one.
+  bool get hasDestination => _outbox.hasSenders;
+
+  /// Kinds that were queued with nothing registered to send them. Non-empty means
+  /// the till is accumulating work it can never deliver.
+  Set<String> get undeliverableKinds => _outbox.unhandledKinds;
 
   /// Who is signed in, folded into the heartbeat so support can see it.
   String? cashierId;
@@ -73,10 +93,10 @@ class SyncService {
         deviceId: deviceId,
         appVersion: appVersion,
         at: _now().toUtc(),
-        pending: _outboxStore?.pendingCount ?? 0,
-        dead: _outboxStore?.deadCount ?? 0,
+        pending: _outboxStore.pendingCount,
+        dead: _outboxStore.deadCount,
         unsyncedAudit: _audit?.unsyncedCount ?? 0,
-        oldestPendingAge: _outboxStore?.oldestPendingAge(_now().toUtc()),
+        oldestPendingAge: _outboxStore.oldestPendingAge(_now().toUtc()),
         catalogueRefreshedAt: _catalogue.refreshedAt,
         lastError: lastError,
         cashierId: cashierId,
@@ -117,6 +137,11 @@ class SyncService {
       await _queueAudit();
       await _queueHeartbeat();
       sentThisRun = await _outbox.drain();
+      if (sentThisRun > 0) {
+        // Acknowledged entries are kept a while so a duplicate push is still
+        // recognisable, then cleared. Without this the table only ever grows.
+        _outboxStore.pruneSent();
+      }
       if (_puller != null && catalogueNeedsRefresh) {
         final pull = await _puller.pull();
         // Never overwrite a working catalogue with an empty pull.

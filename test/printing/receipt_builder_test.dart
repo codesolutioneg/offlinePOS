@@ -58,4 +58,18 @@ void main() {
     final total = s.split('\n').firstWhere((l) => l.contains('TOTAL'));
     expect(total.trimRight().length, 32);
   });
+
+  test('a menu in any script still produces a receipt', () {
+    // Building a receipt used to throw on a product name outside Latin-1, which
+    // for a euro-priced or Arabic menu is every receipt. It threw before the spool
+    // had anything to hold, so the sale was taken and nothing anywhere recorded
+    // that a receipt had been due.
+    final order = Order(deviceId: 'till-1', cashierId: 'sara', lines: [
+      OrderLine(productId: 1, name: 'Café — 3€', quantity: 1, unitPrice: 3),
+      OrderLine(productId: 2, name: 'شاي', quantity: 1, unitPrice: 2),
+    ]);
+    final s = render(order);
+    expect(s, contains('TOTAL'));
+    expect(s, contains('5.00'));
+  });
 }

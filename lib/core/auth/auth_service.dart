@@ -31,17 +31,20 @@ class AuthMalformed extends AuthResult {
 /// normal shift change, which is the difference between a till that keeps trading
 /// and one that stops when the line does.
 class AuthService {
+  /// [attempts] is where the failure count lives. Left out it is in memory only,
+  /// which means the lockout dies with the process; a till passes the durable one.
   AuthService({
     required UserStore users,
     required PinHasher hasher,
     required AuditLog audit,
     PinPolicy policy = const PinPolicy(),
+    AttemptStore? attempts,
     DateTime Function()? now,
   })  : _users = users,
         _hasher = hasher,
         _audit = audit,
         _policy = policy,
-        _guard = PinAttemptGuard(policy),
+        _guard = PinAttemptGuard(policy, store: attempts),
         _now = now ?? DateTime.now;
 
   final UserStore _users;
@@ -63,7 +66,10 @@ class AuthService {
     final now = _now();
     if (_guard.isLocked(cashierId, now: now)) {
       _audit.record(cashierId, 'pin.locked_out');
-      return AuthLockedOut(now.add(_policy.lockout));
+      // The real end of the lockout, not a fresh window from now: the backoff
+      // escalates, so recomputing it here would understate the wait and have the
+      // screen count down to a moment that still rejects them.
+      return AuthLockedOut(_guard.lockedUntil(cashierId)!);
     }
 
     final user = _users.byId(cashierId);

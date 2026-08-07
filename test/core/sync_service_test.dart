@@ -1,30 +1,13 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/catalogue_store.dart';
 import 'package:offline_pos/core/db/database.dart';
+import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/sync/odoo_puller.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 
 import '../db/sqlite_loader.dart';
-
-class MemStore implements OutboxStore {
-  final List<OutboxEntry> _e = [];
-  final Set<int> _sent = {};
-  int _n = 1;
-  @override
-  Future<void> append(String k, String u, Map<String, dynamic> p) async =>
-      _e.add(OutboxEntry(id: _n++, kind: k, payloadUuid: u, payload: p));
-  @override
-  Future<List<OutboxEntry>> pending({int limit = 20}) async =>
-      _e.where((x) => !_sent.contains(x.id)).take(limit).toList();
-  @override
-  Future<void> markSent(int id) async => _sent.add(id);
-  @override
-  Future<void> markFailed(int id, String e) async {}
-  @override
-  Future<void> markDead(int id, String reason) async => _sent.add(id);
-}
 
 OdooPuller pullerWith(List<Product> products) => OdooPuller(
       call: (model, method, args, kwargs) async => switch (model) {
@@ -39,29 +22,44 @@ OdooPuller pullerWith(List<Product> products) => OdooPuller(
 void main() {
   late Db db;
   late CatalogueStore cat;
+  late SqliteOutboxStore store;
   setUpAll(useSystemSqlite);
   setUp(() {
     db = Db.open(':memory:');
     cat = CatalogueStore(db);
+    store = SqliteOutboxStore(db);
   });
   tearDown(() => db.close());
 
+  /// The real outbox store, because it is where every number the service reports
+  /// about the till comes from. A stand-in here would let the two drift.
+  SyncService serviceWith({
+    Map<String, OutboxSender> senders = const {},
+    OdooPuller? puller,
+    Outbox? outbox,
+  }) =>
+      SyncService(
+        outbox: outbox ?? Outbox(store: store, senders: senders),
+        catalogue: cat,
+        outboxStore: store,
+        deviceId: 'till-7',
+        appVersion: '1.2.3',
+        puller: puller,
+      );
+
   test('a never-pulled catalogue needs a refresh', () {
-    final s = SyncService(
-        outbox: Outbox(store: MemStore(), senders: const {}), catalogue: cat);
-    expect(s.catalogueNeedsRefresh, isTrue);
+    expect(serviceWith().catalogueNeedsRefresh, isTrue);
   });
 
   test('a tick drains the outbox and refreshes the catalogue', () async {
-    final store = MemStore();
     final outbox = Outbox(store: store, senders: {'order.push': (e) async {}});
     await outbox.enqueue('order.push', 'u1', {});
-    final s = SyncService(
+    final s = serviceWith(
       outbox: outbox,
-      catalogue: cat,
       puller: pullerWith(const [Product(id: 1, name: 'A', price: 5)]),
     );
     await s.tick();
+    // The sale and the heartbeat: the heartbeat has no sender, so only one went.
     expect(s.sentThisRun, 1);
     expect(cat.products().single.name, 'A');
     expect(s.state, SyncState.idle);
@@ -69,9 +67,7 @@ void main() {
   });
 
   test('a failing tick records the error instead of throwing', () async {
-    final s = SyncService(
-      outbox: Outbox(store: MemStore(), senders: const {}),
-      catalogue: cat,
+    final s = serviceWith(
       puller: OdooPuller(call: (a, b, c, d) async => throw Exception('down')),
     );
     await s.tick();
@@ -85,20 +81,14 @@ void main() {
       groups: const [], productGroupIds: const {},
       refreshedAt: DateTime.utc(2020),
     );
-    final s = SyncService(
-      outbox: Outbox(store: MemStore(), senders: const {}),
-      catalogue: cat,
-      puller: pullerWith(const []),
-    );
+    final s = serviceWith(puller: pullerWith(const []));
     await s.tick();
     expect(cat.products().single.name, 'Keep');
   });
 
   test('a fresh catalogue is not re-pulled', () async {
     var pulls = 0;
-    final s = SyncService(
-      outbox: Outbox(store: MemStore(), senders: const {}),
-      catalogue: cat,
+    final s = serviceWith(
       puller: OdooPuller(call: (model, m, a, k) async {
         if (model == 'product.product') pulls++;
         return model == 'product.product'

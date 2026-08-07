@@ -15,12 +15,22 @@ class SellScreen extends StatefulWidget {
     required this.session,
     required this.formatAmount,
     this.onPaid,
+    this.onChanged,
+    this.onSignOut,
     this.staleness,
   });
 
   final PosSession session;
   final String Function(double) formatAmount;
   final void Function(dynamic order)? onPaid;
+
+  /// Fired whenever the open order gains or loses lines, so anything that needs to
+  /// know a customer is mid-order does not have to poll for it.
+  final VoidCallback? onChanged;
+
+  /// Ends the shift. Absent, the screen shows no control for it.
+  final VoidCallback? onSignOut;
+
   final Duration? staleness;
 
   @override
@@ -33,10 +43,17 @@ class _SellScreenState extends State<SellScreen> {
 
   PosSession get s => widget.session;
 
+  /// Redraws and tells the owner the open order changed. Every mutation goes
+  /// through here so the two can never drift apart.
+  void _changed(VoidCallback mutate) {
+    setState(mutate);
+    widget.onChanged?.call();
+  }
+
   Future<void> _tap(Product product) async {
     final groups = s.catalogue.modifierGroupsFor(product.id);
     if (groups.isEmpty) {
-      setState(() => s.addProduct(product));
+      _changed(() => s.addProduct(product));
       return;
     }
     final chosen = await showModalBottomSheet<List<ChosenModifier>>(
@@ -48,7 +65,7 @@ class _SellScreenState extends State<SellScreen> {
         formatAmount: widget.formatAmount,
       ),
     );
-    if (chosen != null) setState(() => s.addProduct(product, chosen: chosen));
+    if (chosen != null) _changed(() => s.addProduct(product, chosen: chosen));
   }
 
   void _pay() {
@@ -84,6 +101,21 @@ class _SellScreenState extends State<SellScreen> {
 
   Widget _catalogue(List<Product> products) => Column(
         children: [
+          if (widget.onSignOut != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 8, top: 8),
+                child: TextButton.icon(
+                  key: const Key('sign-out'),
+                  // Disabled mid-order: handing the till over with a customer's
+                  // half-rung sale on screen loses whose sale it was.
+                  onPressed: s.hasLines ? null : widget.onSignOut,
+                  icon: const Icon(Icons.logout),
+                  label: const Text('End shift'),
+                ),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.all(8),
             child: TextField(
@@ -158,8 +190,8 @@ class _SellScreenState extends State<SellScreen> {
                               '${m.name}${m.quantity > 1 ? ' x${m.quantity.toStringAsFixed(0)}' : ''}'
                                   '${m.unitPrice == 0 ? '' : '  ${widget.formatAmount(m.total * line.quantity)}'}'
                           ],
-                          onRemove: () => setState(() => s.removeLine(line.uuid)),
-                          onQty: (q) => setState(() => s.setQuantity(line.uuid, q)),
+                          onRemove: () => _changed(() => s.removeLine(line.uuid)),
+                          onQty: (q) => _changed(() => s.setQuantity(line.uuid, q)),
                         ),
                     ],
                   ),

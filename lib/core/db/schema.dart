@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 4;
+  static const int version = 6;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -163,6 +163,75 @@ class Schema {
       'ALTER TABLE outbox ADD COLUMN dead_at TEXT',
       'ALTER TABLE outbox ADD COLUMN dead_reason TEXT',
       'CREATE INDEX idx_outbox_dead ON outbox(dead_at)',
+    ],
+
+    // v4 -> v5: printers, and the help a cashier has switched off.
+    [
+      // Printers are remembered by name, never by address. The shop runs mesh wifi
+      // and DHCP leases drift, so the address written down at installation goes
+      // stale and the kitchen quietly stops getting tickets. The name is what a
+      // receipt is routed by; host is only the last address that answered, and
+      // identity is what the printer called itself, so a rescan can tell the
+      // kitchen printer from the bar one.
+      '''
+      CREATE TABLE printers (
+        name         TEXT PRIMARY KEY,
+        host         TEXT,
+        port         INTEGER NOT NULL DEFAULT 9100,
+        identity     TEXT,
+        last_seen_at TEXT
+      )
+      ''',
+      // Keyed by wizard as well as by cashier: a till is shared, so the closer
+      // switching off the sale walkthrough must not take it away from the starter,
+      // and a wizard added in a later release must still show once to someone who
+      // dismissed everything that existed before it.
+      //
+      // No foreign key to users(id) on purpose. A dismissal is not worth failing an
+      // insert over when the roster sync has not landed yet, and a row left behind
+      // by a roster replace costs the cashier one more sight of the help.
+      '''
+      CREATE TABLE wizard_dismissals (
+        wizard_id    TEXT NOT NULL,
+        cashier_id   TEXT NOT NULL,
+        dismissed_at TEXT NOT NULL,
+        PRIMARY KEY (wizard_id, cashier_id)
+      )
+      ''',
+    ],
+
+    // v5 -> v6: receipts and lockouts that outlive the process.
+    [
+      // Held receipts used to live in a list in memory, so a printer that was off
+      // during a rush lost every one of them the moment the app closed, which on a
+      // till is nightly. The sale was always safe on disk; this is what makes the
+      // paper side as recoverable as it was always described as being.
+      //
+      // Keyed by printer name rather than by address, for the same reason the
+      // printers table is: the job belongs to 'receipt', not to a lease that moved.
+      '''
+      CREATE TABLE print_jobs (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        printer    TEXT NOT NULL,
+        bytes      BLOB NOT NULL,
+        reference  TEXT,
+        created_at TEXT NOT NULL,
+        attempts   INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+      )
+      ''',
+      'CREATE INDEX idx_print_jobs_queue ON print_jobs(printer, id)',
+
+      // An attempt limit held in memory is not an attempt limit. Four wrong PINs,
+      // force-quit, four more, and a 4-digit PIN is ten thousand tries from open.
+      // docs/SECURITY.md calls this out by name.
+      '''
+      CREATE TABLE auth_attempts (
+        cashier_id   TEXT PRIMARY KEY,
+        failures     INTEGER NOT NULL DEFAULT 0,
+        locked_until TEXT
+      )
+      ''',
     ],
   ];
 }

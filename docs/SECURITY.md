@@ -40,6 +40,9 @@ The real moat is the server, the data and the integrations, not the APK.
 ## Data at rest
 
 - SQLite encrypted with SQLCipher. The key lives in the platform keystore.
+  **Not done yet:** the build depends on plain `sqlite3`, so `Db.open`'s
+  `encryptionKey` is accepted and has no effect. Treat every till as carrying its
+  sales and staff records in the clear until this is real.
 - Never store sales, customers or staff records in plain `SharedPreferences`. A lost
   or stolen till must not leak them.
 - Support remote wipe of a device's local data.
@@ -72,10 +75,16 @@ Print agents, fingerprint agents and similar helpers are part of the attack surf
 
 ## Before go-live
 
-- [ ] No secret, key or credential in the repo or the binary
+- [x] No secret, key or credential in the repo or the binary
+      (the provisioning PIN is random per device and never stored; the release
+      public key is a public key)
 - [ ] Backend rules deny by default and are tenant-scoped
-- [ ] PINs Argon2id, attempt limit enforced
-- [ ] Local database encrypted
+- [x] PINs Argon2id, attempt limit enforced, persisted across restarts, escalating
+- [ ] **Local database encrypted — open blocker.** Needs a SQLCipher-enabled
+      `sqlite3` build and a keystore-backed key. See docs/ARCHITECTURE.md.
 - [ ] Dependency audit clean of High and Critical
-- [ ] Agents authenticated, loopback-bound, signed updates
+- [x] Signed updates: Ed25519 over the manifest bytes, release key in the build,
+      certificate-pinned transport, digest re-checked against the file on disk at
+      the moment of install
+- [ ] Agents authenticated and loopback-bound
 - [ ] Secrets rotated if any ever reached git history

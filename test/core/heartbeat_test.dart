@@ -78,4 +78,44 @@ void main() {
     final age = store.oldestPendingAge(DateTime.now().toUtc().add(const Duration(days: 6)));
     expect(age!.inDays, 6);
   });
+
+  test('a till that has only ever queued heartbeats is not an outage', () async {
+    await sync.tick();
+    await sync.tick();
+
+    // The heartbeat is keyed on the device and replaced in place every 30 s, and
+    // `append` deliberately keeps the original created_at, so that row carries the
+    // timestamp of the very first launch forever. Counting it would make "oldest
+    // waiting" mean "time since this till was installed" the moment delivery
+    // stopped, and the red banner would latch on 24 hours after install and never
+    // clear. Support triages on these two numbers.
+    final sixDaysOn = SyncService(
+      outbox: Outbox(store: store, senders: const {}),
+      catalogue: CatalogueStore(db),
+      outboxStore: store,
+      audit: audit,
+      deviceId: 'till-7',
+      appVersion: '1.2.3',
+      now: () => DateTime.now().toUtc().add(const Duration(days: 6)),
+    );
+
+    final s = sixDaysOn.status();
+    expect(s.pending, 0);
+    expect(s.oldestPendingAge, isNull);
+    expect(s.needsAttention, isFalse);
+  });
+
+  test('a real sale behind the heartbeat is still counted and still aged',
+      () async {
+    await sync.tick();
+    await store.append('order.push', 'a', {});
+
+    expect(store.pendingCount, 1);
+    expect(store.pendingSalesCount, 1);
+    expect(
+      store.oldestPendingAge(DateTime.now().toUtc().add(const Duration(hours: 3)))!
+          .inHours,
+      3,
+    );
+  });
 }

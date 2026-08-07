@@ -85,10 +85,19 @@ class SqliteOutboxStore implements OutboxStore {
 
   /// Age of the oldest thing still waiting, which is how long the books have been
   /// out of date.
+  ///
+  /// The heartbeat is excluded, and that exclusion is the whole point of this
+  /// method being written out rather than being a one-line count. `device.status`
+  /// is keyed on the device and re-queued every 30 s onto the same row, and
+  /// [append] deliberately leaves `created_at` alone on a conflict, so that row
+  /// keeps the timestamp of the very first launch. Counting it would make this
+  /// return "time since this till was installed" the moment delivery stopped, and
+  /// the red attention banner would latch on 24 hours after install and never
+  /// clear. Support triages on this number; it has to mean the outage.
   Duration? oldestPendingAge(DateTime now) {
     final rows = _db.raw.select(
         'SELECT created_at FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL '
-        'ORDER BY id LIMIT 1');
+        "AND kind <> '$_heartbeat' ORDER BY id LIMIT 1");
     if (rows.isEmpty) return null;
     return now.difference(DateTime.parse(rows.first['created_at'] as String));
   }
@@ -108,7 +117,25 @@ class SqliteOutboxStore implements OutboxStore {
     return _db.raw.updatedRows;
   }
 
+  /// Everything still owed to the server, heartbeat aside.
+  ///
+  /// The heartbeat is a snapshot of this queue keyed on the device, so it is
+  /// replaced rather than accumulated and is never a backlog item. Counting it
+  /// would make a fully caught-up till report one thing waiting, forever.
   int get pendingCount => _db.raw
-      .select('SELECT COUNT(*) c FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL')
+      .select('SELECT COUNT(*) c FROM outbox WHERE sent_at IS NULL '
+          "AND dead_at IS NULL AND kind <> '$_heartbeat'")
       .first['c'] as int;
+
+  /// Sales specifically, which is the number a shop and its support actually mean
+  /// when they ask how much is waiting. Audit rows are owed to the server too, but
+  /// they are not takings.
+  int get pendingSalesCount => _db.raw
+      .select('SELECT COUNT(*) c FROM outbox WHERE sent_at IS NULL '
+          "AND dead_at IS NULL AND kind = '$_order'")
+      .first['c'] as int;
+
+  /// Kinds are part of the on-disk contract; see docs/ODOO_SYNC.md.
+  static const String _heartbeat = 'device.status';
+  static const String _order = 'order.push';
 }

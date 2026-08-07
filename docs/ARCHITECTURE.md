@@ -51,7 +51,15 @@ retry and backoff. Rules:
 
 ## Storage
 
-SQLite, encrypted at rest (SQLCipher). Versioned migrations, tested, run on launch.
+SQLite. Versioned migrations, tested, run on launch.
+
+**Encryption at rest is not implemented.** The target is SQLCipher with the key
+from the platform keystore, and `Db.open` already takes a key, but the dependency
+is the plain `sqlite3` build, so a key passed today is accepted and ignored. Until
+that changes, sales, PIN hashes and the audit log are readable by anyone holding
+the device. It is on the go-live checklist in docs/SECURITY.md as an open blocker,
+and it is stated here rather than described as done because someone will otherwise
+sign the checklist against this page.
 
 A migration failure on a till holding unsynced sales is the worst bug this app can
 have, so migrations are additive first and destructive only after a release that

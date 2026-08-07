@@ -35,6 +35,20 @@ void main() {
   Widget app() => MaterialApp(
       home: DiagnosticsScreen(sync: sync, outboxStore: store));
 
+  /// A till that has somewhere to send, which the default one does not.
+  Widget appWithServer() {
+    final wired = SyncService(
+      outbox: Outbox(store: store, senders: {'order.push': (e) async {}}),
+      catalogue: CatalogueStore(db),
+      outboxStore: store,
+      audit: audit,
+      deviceId: 'till-7',
+      appVersion: '1.2.3',
+    );
+    return MaterialApp(
+        home: DiagnosticsScreen(sync: wired, outboxStore: store));
+  }
+
   testWidgets('shows what support needs to identify the till', (t) async {
     await t.pumpWidget(app());
     expect(find.text('till-7'), findsOneWidget);
@@ -87,6 +101,42 @@ void main() {
     await t.pumpWidget(app());
     // No senders registered and nothing queued: still healthy, no error shown.
     expect(find.byKey(const Key('diag-last-error')), findsNothing);
+  });
+
+  testWidgets('a till with nowhere to send never claims to be online', (t) async {
+    await t.pumpWidget(app());
+    // With no sender registered the till delivers nothing and never errors, so
+    // the reading used to be "Online" on a machine that had never transmitted a
+    // byte. Support would then go looking at the shop's internet.
+    expect(t.widget<Text>(find.byKey(const Key('diag-connection'))).data,
+        'No server configured');
+  });
+
+  testWidgets('a till that can send reports the line, not the wiring', (t) async {
+    await t.pumpWidget(appWithServer());
+    expect(t.widget<Text>(find.byKey(const Key('diag-connection'))).data, 'Online');
+  });
+
+  testWidgets('work that nothing can deliver is named', (t) async {
+    await store.append('order.push', 'a', {});
+    await sync.tick();
+    await t.pumpWidget(app());
+    expect(t.widget<Text>(find.byKey(const Key('diag-undeliverable'))).data,
+        contains('order.push'));
+  });
+
+  testWidgets('a build with no update channel says so', (t) async {
+    await t.pumpWidget(app());
+    expect(find.byKey(const Key('no-updates')), findsOneWidget);
+  });
+
+  testWidgets('sales waiting counts sales, not the heartbeat', (t) async {
+    await sync.tick();
+    await t.pumpWidget(app());
+    // A caught-up till used to report one thing waiting forever, because the
+    // heartbeat describing the queue was being counted as part of it.
+    expect(t.widget<Text>(find.byKey(const Key('diag-pending'))).data, '0');
+    expect(t.widget<Text>(find.byKey(const Key('diag-oldest'))).data, '-');
   });
 
   testWidgets('sync can be forced by hand during a support call', (t) async {
