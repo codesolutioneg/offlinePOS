@@ -1,0 +1,53 @@
+name: Build Windows app
+
+# Builds a ready-to-run Windows app in the cloud, so nobody needs Flutter or
+# Visual Studio locally. Runs on every push to main, on demand from the Actions
+# tab, and attaches a zip to a GitHub Release when a version tag is pushed.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Pinned to the version this project is developed against, so the cloud
+          # build matches local behaviour rather than drifting on a newer stable.
+          flutter-version: '3.41.6'
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      # Fail early and loudly if anything is broken, rather than shipping a bad exe.
+      - run: flutter analyze
+      - run: flutter test
+
+      - run: flutter build windows --release
+
+      # Flutter produces a folder (the exe plus its DLLs and a data directory); the
+      # whole folder is the app, so the deliverable is that folder zipped.
+      - name: Package
+        run: |
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath offlinePOS-windows.zip
+        shell: pwsh
+
+      - name: Upload downloadable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: offlinePOS-windows
+          path: offlinePOS-windows.zip
+          retention-days: 30
+
+      # On a tag like v0.1.0, publish it as a Release so there is a permanent link.
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: offlinePOS-windows.zip
