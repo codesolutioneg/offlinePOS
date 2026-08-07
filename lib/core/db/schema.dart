@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 3;
+  static const int version = 4;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -151,6 +151,18 @@ class Schema {
         value TEXT NOT NULL
       )
       ''',
+    ],
+
+    // v3 -> v4: dead-lettering.
+    //
+    // A permanently rejected entry used to stop the queue behind it, which after a
+    // long outage means one bad order strands a week of takings. Such an entry is
+    // now parked here and the drain continues; parked entries are surfaced loudly
+    // rather than dropped, because each one is money that did not reach the books.
+    [
+      'ALTER TABLE outbox ADD COLUMN dead_at TEXT',
+      'ALTER TABLE outbox ADD COLUMN dead_reason TEXT',
+      'CREATE INDEX idx_outbox_dead ON outbox(dead_at)',
     ],
   ];
 }

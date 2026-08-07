@@ -22,6 +22,8 @@ class MemStore implements OutboxStore {
   Future<void> markSent(int id) async => _sent.add(id);
   @override
   Future<void> markFailed(int id, String e) async {}
+  @override
+  Future<void> markDead(int id, String reason) async => _sent.add(id);
 }
 
 OdooPuller pullerWith(List<Product> products) => OdooPuller(
