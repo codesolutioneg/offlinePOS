@@ -1,0 +1,29 @@
+# Builds a ready-to-run Windows app on Codemagic's cloud Windows machine, so nobody
+# needs Flutter or Visual Studio locally and it does not touch GitHub billing.
+#
+# One-time: sign in at codemagic.io with GitHub, add the offlinePOS repo, and it
+# picks up this file. Then run the "windows" workflow and download the zip artifact.
+workflows:
+  windows:
+    name: offlinePOS Windows build
+    instance_type: windows_x2
+    max_build_duration: 30
+    environment:
+      flutter: 3.41.6
+    scripts:
+      - name: Dependencies
+        script: flutter pub get
+      # Fail before producing an exe if anything is broken.
+      - name: Analyze
+        script: flutter analyze
+      - name: Test
+        script: flutter test
+      - name: Build Windows
+        script: flutter build windows --release
+      - name: Package
+        script: |
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath offlinePOS-windows.zip -Force
+    artifacts:
+      # Downloadable from the build page when it finishes.
+      - offlinePOS-windows.zip
+      - build/windows/x64/runner/Release/**
