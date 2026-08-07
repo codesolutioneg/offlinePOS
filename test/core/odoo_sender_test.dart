@@ -3,12 +3,35 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/sync/odoo_sender.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
+import 'package:offline_pos/domain/order.dart';
 
 OdooSender sender(HttpPost post) =>
     OdooSender(baseUrl: Uri.parse('https://odoo.example'), db: 'prod', post: post);
 
 OutboxEntry entry() =>
     OutboxEntry(id: 1, kind: 'order.push', payloadUuid: 'u1', payload: {'uuid': 'u1'});
+
+/// Minimal durable-ish store so the sender can be driven through a real Outbox.
+class FakeStore implements OutboxStore {
+  final List<OutboxEntry> entries = [];
+  final Set<int> sent = {};
+  final Map<int, String> deadReasons = {};
+  int _n = 1;
+  @override
+  Future<void> append(String k, String u, Map<String, dynamic> p) async =>
+      entries.add(OutboxEntry(id: _n++, kind: k, payloadUuid: u, payload: p));
+  @override
+  Future<List<OutboxEntry>> pending({int limit = 20}) async => entries
+      .where((e) => !sent.contains(e.id) && !deadReasons.containsKey(e.id))
+      .take(limit)
+      .toList();
+  @override
+  Future<void> markSent(int id) async => sent.add(id);
+  @override
+  Future<void> markFailed(int id, String e) async {}
+  @override
+  Future<void> markDead(int id, String reason) async => deadReasons[id] = reason;
+}
 
 void main() {
   test('authenticates and remembers the session', () async {
@@ -77,7 +100,9 @@ void main() {
     expect(s.isAuthenticated, isFalse);
   });
 
-  test('a business rejection is permanent and surfaced', () async {
+  test('a business rejection parks that one sale, freeing the queue', () async {
+    // The outbox keys off this type: PermanentlyRejected parks one entry and lets
+    // the rest of the week's takings through.
     var calls = 0;
     final s = sender((u, h, b) async {
       calls++;
@@ -85,6 +110,56 @@ void main() {
       return HttpReply(200, jsonEncode({'error': {'message': 'session already closed'}}));
     });
     await s.authenticate('a', 'b');
-    expect(() => s.orderSender(entry()), throwsA(isA<PermanentSyncError>()));
+    expect(() => s.orderSender(entry()), throwsA(isA<PermanentlyRejected>()));
+  });
+
+  test('a rejected order parks while the rest of the backlog still drains', () async {
+    var calls = 0;
+    final s = sender((u, h, b) async {
+      calls++;
+      if (calls == 1) return HttpReply(200, jsonEncode({'result': {'uid': 2}}));
+      final decoded = jsonDecode(b) as Map<String, dynamic>;
+      final args = (decoded['params'] as Map)['args'] as List;
+      final uuid = ((args.first as List).first as Map)['uuid'];
+      if (uuid == 'poison') {
+        return HttpReply(200, jsonEncode({'error': {'message': 'product deleted'}}));
+      }
+      return HttpReply(200, jsonEncode({'result': 1}));
+    });
+    await s.authenticate('a', 'b');
+
+    final store = FakeStore();
+    final outbox = Outbox(store: store, senders: {'order.push': s.orderSender});
+    await outbox.enqueue('order.push', 'poison', {'uuid': 'poison'});
+    for (final u in ['a', 'b']) {
+      await outbox.enqueue('order.push', u, {'uuid': u});
+    }
+    expect(await outbox.drain(), 2);
+    expect(store.deadReasons.values.single, contains('product deleted'));
+  });
+
+  test('the payload carries what the server needs to place the sale', () async {
+    Map<String, dynamic>? seen;
+    final s = sender((u, h, b) async {
+      if (u.path.contains('authenticate')) {
+        return HttpReply(200, jsonEncode({'result': {'uid': 2}}));
+      }
+      final args = ((jsonDecode(b) as Map)['params'] as Map)['args'] as List;
+      seen = ((args.first as List).first as Map).cast<String, dynamic>();
+      return HttpReply(200, jsonEncode({'result': 7}));
+    });
+    await s.authenticate('a', 'b');
+    final order = Order(
+      deviceId: 'till-1', cashierId: 'sara',
+      createdAt: DateTime(2026, 3, 11, 1, 0).toUtc(),
+    );
+    await s.orderSender(OutboxEntry(
+        id: 1, kind: 'order.push', payloadUuid: order.uuid, payload: order.toMap()));
+    // Without these the server cannot place the sale in the right day's session
+    // and every daily report after a long outage is wrong.
+    expect(seen!['uuid'], order.uuid);
+    expect(seen!['business_date'], isNotNull);
+    expect(seen!['created_at'], order.createdAt.toIso8601String());
+    expect(seen!['cashier_id'], 'sara');
   });
 }

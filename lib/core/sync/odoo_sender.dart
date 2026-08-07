@@ -20,6 +20,10 @@ class PermanentSyncError implements Exception {
   String toString() => 'PermanentSyncError: $message';
 }
 
+/// A refusal of one order becomes the outbox's parking signal, so a single bad
+/// sale cannot strand a week of takings queued behind it.
+PermanentlyRejected _park(String reason) => PermanentlyRejected(reason);
+
 /// Minimal HTTP contract, so the sender can be tested without a socket.
 typedef HttpPost = Future<HttpReply> Function(
     Uri url, Map<String, String> headers, String body);
@@ -75,19 +79,26 @@ class OdooSender {
   /// An [OutboxSender] for 'order.push' entries.
   OutboxSender get orderSender => (OutboxEntry entry) async {
         if (!isAuthenticated) {
+          // Not a refusal: the till simply has not signed in yet. Keep the sale.
           throw TransientSyncError('not authenticated yet');
         }
-        final reply = await _call('/web/dataset/call_kw', {
-          'model': model,
-          'method': method,
-          'args': [
-            [entry.payload]
-          ],
-          'kwargs': {},
-        });
-        final result = reply['result'];
-        if (result == null) {
-          throw PermanentSyncError('server returned no result for ${entry.payloadUuid}');
+        try {
+          final reply = await _call('/web/dataset/call_kw', {
+            'model': model,
+            'method': method,
+            'args': [
+              [entry.payload]
+            ],
+            'kwargs': {},
+          });
+          final result = reply['result'];
+          if (result == null) {
+            throw PermanentlyRejected('no result for ${entry.payloadUuid}');
+          }
+        } on PermanentSyncError catch (e) {
+          // The server understood the order and refused it. Retrying cannot help,
+          // so park this one and let everything behind it through.
+          throw _park(e.message);
         }
       };
 

@@ -1,3 +1,4 @@
+import 'business_day.dart';
 import 'identity.dart';
 
 enum OrderState { draft, paid, synced }
@@ -103,11 +104,24 @@ class Order {
 
   double get total => lines.fold(0.0, (s, l) => s + l.total);
 
+  /// The trading day this sale belongs to, which decides the session it lands in
+  /// on the server.
+  BusinessDay get businessDay => BusinessDay.of(createdAt);
+
   Map<String, dynamic> toMap() => {
+        // The idempotency key. The server must treat a repeat of this uuid as the
+        // same sale, because a push can be retried after the server committed but
+        // before the acknowledgement was recorded.
         'uuid': uuid,
         'device_id': deviceId,
+        // Carried explicitly: with one shared Odoo login every order there is
+        // attributed to the same user, so this is the only record of who rang it.
         'cashier_id': cashierId,
+        // The moment of sale, not the moment of sync. Without it a week of offline
+        // orders all post on the day the line came back and every daily report is
+        // wrong.
         'created_at': createdAt.toIso8601String(),
+        'business_date': businessDay.key,
         'state': state.name,
         'server_id': serverId,
         'lines': lines.map((l) => l.toMap()).toList(),
