@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 1;
+  static const int version = 2;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -52,6 +52,79 @@ class Schema {
       )
       ''',
       'CREATE INDEX idx_audit_unsynced ON audit_log(synced_at, id)',
+    ],
+
+    // v1 -> v2: the catalogue.
+    //
+    // This is the table Odoo's POS never writes, and the reason it cannot start
+    // without the network: orders persist, the things you sell do not. Holding the
+    // catalogue locally is the whole point of this app, so it is a first-class table
+    // and not a cache someone can decide to skip.
+    [
+      '''
+      CREATE TABLE categories (
+        id       INTEGER PRIMARY KEY,
+        name     TEXT NOT NULL,
+        sequence INTEGER NOT NULL DEFAULT 0,
+        parent_id INTEGER
+      )
+      ''',
+      '''
+      CREATE TABLE products (
+        id           INTEGER PRIMARY KEY,
+        name         TEXT NOT NULL,
+        price        REAL NOT NULL DEFAULT 0,
+        category_id  INTEGER,
+        barcode      TEXT,
+        active       INTEGER NOT NULL DEFAULT 1,
+        sold_by_weight INTEGER NOT NULL DEFAULT 0,
+        tax_rate     REAL NOT NULL DEFAULT 0
+      )
+      ''',
+      'CREATE INDEX idx_products_category ON products(category_id, name)',
+      // Lookups by barcode happen on every scan, so they get their own index.
+      'CREATE INDEX idx_products_barcode ON products(barcode)',
+      '''
+      CREATE TABLE modifier_groups (
+        id            INTEGER PRIMARY KEY,
+        name          TEXT NOT NULL,
+        sequence      INTEGER NOT NULL DEFAULT 0,
+        min_selection INTEGER NOT NULL DEFAULT 0,
+        max_selection INTEGER NOT NULL DEFAULT 0,
+        required      INTEGER NOT NULL DEFAULT 0
+      )
+      ''',
+      '''
+      CREATE TABLE modifiers (
+        id         INTEGER PRIMARY KEY,
+        group_id   INTEGER NOT NULL,
+        name       TEXT NOT NULL,
+        price      REAL NOT NULL DEFAULT 0,
+        price_type TEXT NOT NULL DEFAULT 'fixed',
+        sequence   INTEGER NOT NULL DEFAULT 0,
+        product_id INTEGER,
+        FOREIGN KEY (group_id) REFERENCES modifier_groups(id) ON DELETE CASCADE
+      )
+      ''',
+      'CREATE INDEX idx_modifiers_group ON modifiers(group_id, sequence)',
+      // Which groups apply to which product. Resolved locally on every tap, so it
+      // must be an indexed join and not a scan.
+      '''
+      CREATE TABLE product_modifier_groups (
+        product_id INTEGER NOT NULL,
+        group_id   INTEGER NOT NULL,
+        PRIMARY KEY (product_id, group_id),
+        FOREIGN KEY (group_id) REFERENCES modifier_groups(id) ON DELETE CASCADE
+      )
+      ''',
+      // When the catalogue was last refreshed, so the till can warn that it is
+      // selling from stale prices rather than pretend everything is fine.
+      '''
+      CREATE TABLE catalogue_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+      ''',
     ],
   ];
 }
