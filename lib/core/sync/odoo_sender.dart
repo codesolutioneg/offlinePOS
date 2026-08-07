@@ -29,9 +29,15 @@ typedef HttpPost = Future<HttpReply> Function(
     Uri url, Map<String, String> headers, String body);
 
 class HttpReply {
-  const HttpReply(this.statusCode, this.body);
+  const HttpReply(this.statusCode, this.body, {this.headers = const {}});
   final int statusCode;
   final String body;
+
+  /// Response headers, lower-cased keys. Needed to read the session cookie Odoo
+  /// sets on authenticate: without carrying it back, every call after login is
+  /// unauthenticated. A live round trip is the only thing that catches this; a
+  /// fake that returns a body but no headers does not.
+  final Map<String, String> headers;
 }
 
 /// Pushes queued orders to Odoo.
@@ -72,6 +78,15 @@ class OdooSender {
       throw PermanentSyncError('authentication rejected');
     }
     _uid = uid as int;
+  }
+
+  /// Extract the Odoo session id from a Set-Cookie header so it can be replayed on
+  /// every later request. Odoo authenticates by cookie, not by a token in the body.
+  void _captureCookie(HttpReply reply) {
+    final raw = reply.headers['set-cookie'];
+    if (raw == null) return;
+    final match = RegExp(r'session_id=([^;]+)').firstMatch(raw);
+    if (match != null) _sessionCookie = 'session_id=${match.group(1)}';
   }
 
   bool get isAuthenticated => _uid != null;
@@ -137,6 +152,8 @@ class OdooSender {
       // network condition, not a bad request, so it must be retried.
       throw TransientSyncError('response was not JSON');
     }
+
+    _captureCookie(reply);
 
     final error = decoded['error'];
     if (error != null) {
