@@ -70,9 +70,9 @@ that session from Odoo when ready.
 
 ## What to expect / known limits for this test
 
-- **No encryption at rest yet.** The local database (sales, PIN hashes) is not
-  encrypted; `sqlite3` here is the plain build. Fine for a local test, a blocker for
-  a customer. See docs/SECURITY.md.
+- **Encrypted at rest.** The local database is SQLCipher-encrypted with a key kept
+  in the Windows credential store. If Windows is reinstalled or the credential
+  wiped, an existing database becomes unreadable by design, so sync before wiping.
 - **Printing** needs a network (ESC/POS, port 9100) printer on your LAN; without one,
   receipts spool and you can reprint from Support. USB printers are not wired yet.
 - **The rescue session** opens in Odoo's "opening control" state; open/close it from

@@ -80,8 +80,9 @@ Print agents, fingerprint agents and similar helpers are part of the attack surf
       public key is a public key)
 - [ ] Backend rules deny by default and are tenant-scoped
 - [x] PINs Argon2id, attempt limit enforced, persisted across restarts, escalating
-- [ ] **Local database encrypted — open blocker.** Needs a SQLCipher-enabled
-      `sqlite3` build and a keystore-backed key. See docs/ARCHITECTURE.md.
+- [x] **Local database encrypted** with SQLCipher; key generated once and held in
+      the platform keychain (flutter_secure_storage), never beside the data.
+      Proven: data is not in the file as clear text and a wrong key is rejected.
 - [ ] Dependency audit clean of High and Critical
 - [x] Signed updates: Ed25519 over the manifest bytes, release key in the build,
       certificate-pinned transport, digest re-checked against the file on disk at

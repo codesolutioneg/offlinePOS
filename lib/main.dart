@@ -14,6 +14,8 @@ import 'core/config/till_config.dart';
 import 'core/db/attempt_store.dart';
 import 'core/db/catalogue_store.dart';
 import 'core/db/database.dart';
+import 'core/db/db_key.dart';
+import 'core/db/secure_key_store.dart';
 import 'core/db/device_store.dart';
 import 'core/db/order_store.dart';
 import 'core/db/print_job_store.dart';
@@ -42,10 +44,13 @@ Future<void> main() async {
   final config = TillConfig.fromEnvironment();
 
   final dir = await getApplicationSupportDirectory();
-  // Not encrypted. `sqlite3` here is the plain build, not SQLCipher, so a key
-  // would be accepted and ignored; docs/SECURITY.md carries this as an open
-  // go-live blocker rather than a claim that it is done.
-  final db = Db.open('${dir.path}${Platform.pathSeparator}pos.db');
+  // Encrypted at rest with SQLCipher. The key is generated once and kept in the
+  // platform keychain via SecureKeyStore, never in a file beside the data. If the
+  // keychain is ever wiped, an existing database becomes unreadable rather than
+  // silently reset: a till must be synced before a wipe, which is why enrolment
+  // happens online. See docs/SECURITY.md.
+  final dbKey = await DbKey(SecureKeyStore()).getOrCreate();
+  final db = Db.open('${dir.path}${Platform.pathSeparator}pos.db', encryptionKey: dbKey);
 
   final catalogue = CatalogueStore(db);
   final orders = OrderStore(db);
