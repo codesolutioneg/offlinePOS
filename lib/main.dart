@@ -3,72 +3,59 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'app/pos_session.dart';
+import 'app/pos_app.dart';
 import 'core/audit/audit_log.dart';
+import 'core/auth/auth_service.dart';
+import 'core/auth/pin_hasher.dart';
+import 'core/auth/user_store.dart';
 import 'core/db/catalogue_store.dart';
 import 'core/db/database.dart';
 import 'core/db/order_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
-import 'core/printing/receipt_builder.dart';
 import 'core/sync/outbox.dart';
 import 'core/sync/sync_service.dart';
-import 'features/sell/sell_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final dir = await getApplicationSupportDirectory();
+  // TODO(security): supply the SQLCipher key from the platform keystore. Db.open
+  // already accepts one; nothing reads it from secure storage yet.
   final db = Db.open('${dir.path}${Platform.pathSeparator}pos.db');
 
   final catalogue = CatalogueStore(db);
   final orders = OrderStore(db);
-  final outboxStore = SqliteOutboxStore(db);
+  final users = UserStore(db);
   final audit = AuditLog(db);
+  final outboxStore = SqliteOutboxStore(db);
 
   // Senders are registered once the device is enrolled and authenticated. Until
-  // then the outbox simply accumulates, which is the correct offline behaviour.
+  // then the outbox simply accumulates, which is the correct offline behaviour:
+  // a sale is never blocked on having somewhere to send it.
   final outbox = Outbox(store: outboxStore, senders: {});
+
+  final auth = AuthService(
+    users: users,
+    hasher: Argon2idPinHasher(),
+    audit: audit,
+  );
+
+  // A fresh device has nobody who can sign in. Until enrolment is wired to the
+  // server, seed one cashier so the till is usable.
+  if (users.isEmpty) {
+    await auth.enrol(id: 'cashier', name: 'Cashier', pin: '1234');
+  }
 
   final sync = SyncService(outbox: outbox, catalogue: catalogue)..start();
 
   runApp(PosApp(
-    session: PosSession(
-      catalogue: catalogue,
-      orders: orders,
-      outbox: outbox,
-      audit: audit,
-      // Replaced by the enrolled device id and the signed-in cashier once the
-      // auth flow is wired.
-      deviceId: 'till-1',
-      cashierId: 'cashier',
-    ),
+    auth: auth,
+    users: users,
+    catalogue: catalogue,
+    orders: orders,
+    outbox: outbox,
+    audit: audit,
     sync: sync,
+    deviceId: 'till-1',
   ));
-}
-
-class PosApp extends StatelessWidget {
-  const PosApp({super.key, required this.session, required this.sync});
-
-  final PosSession session;
-  final SyncService sync;
-
-  static String money(double v) => v.toStringAsFixed(2);
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'offlinePOS',
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
-      home: SellScreen(
-        session: session,
-        formatAmount: money,
-        staleness: session.catalogue.stalenessAt(DateTime.now().toUtc()),
-        onPaid: (order) {
-          // The receipt is built as printer bytes, never rasterised. Handing them
-          // to a transport is all that is left.
-          ReceiptBuilder(shopName: 'OFFLINE POS', formatAmount: money).build(order);
-        },
-      ),
-    );
-  }
 }

@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 2;
+  static const int version = 3;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -121,6 +121,32 @@ class Schema {
       // selling from stale prices rather than pretend everything is fine.
       '''
       CREATE TABLE catalogue_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+      ''',
+    ],
+
+    // v2 -> v3: cashiers, so a shift change works with no network.
+    //
+    // The PIN is stored only as an Argon2id hash with a per-user salt. Nothing here
+    // can be turned back into a PIN, which matters because this table sits on a
+    // device that can be stolen.
+    [
+      '''
+      CREATE TABLE users (
+        id        TEXT PRIMARY KEY,
+        name      TEXT NOT NULL,
+        pin_salt  TEXT NOT NULL,
+        pin_hash  TEXT NOT NULL,
+        role      TEXT NOT NULL DEFAULT 'cashier',
+        active    INTEGER NOT NULL DEFAULT 1
+      )
+      ''',
+      'CREATE INDEX idx_users_active ON users(active, name)',
+      // The signed device authorisation, cached so an outage cannot lock the till.
+      '''
+      CREATE TABLE device_enrolment (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )

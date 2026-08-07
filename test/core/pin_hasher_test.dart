@@ -3,7 +3,7 @@ import 'package:offline_pos/core/auth/pin_hasher.dart';
 
 void main() {
   // Cheap parameters so the suite stays fast. Production uses the defaults.
-  final hasher = PinHasher(memory: 1024, iterations: 1);
+  final hasher = Argon2idPinHasher(memory: 1024, iterations: 1);
 
   test('the same PIN and salt give the same hash', () async {
     final salt = PinHasher.newSalt();

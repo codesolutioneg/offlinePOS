@@ -1,0 +1,113 @@
+import '../audit/audit_log.dart';
+import 'pin_hasher.dart';
+import 'pin_policy.dart';
+import 'user_store.dart';
+
+sealed class AuthResult {
+  const AuthResult();
+}
+
+class AuthOk extends AuthResult {
+  const AuthOk(this.cashier);
+  final Cashier cashier;
+}
+
+class AuthRejected extends AuthResult {
+  const AuthRejected();
+}
+
+class AuthLockedOut extends AuthResult {
+  const AuthLockedOut(this.until);
+  final DateTime until;
+}
+
+class AuthMalformed extends AuthResult {
+  const AuthMalformed();
+}
+
+/// Signing a cashier in, entirely on the device.
+///
+/// No network call anywhere on this path. A shift change during an outage is a
+/// normal shift change, which is the difference between a till that keeps trading
+/// and one that stops when the line does.
+class AuthService {
+  AuthService({
+    required UserStore users,
+    required PinHasher hasher,
+    required AuditLog audit,
+    PinPolicy policy = const PinPolicy(),
+    DateTime Function()? now,
+  })  : _users = users,
+        _hasher = hasher,
+        _audit = audit,
+        _policy = policy,
+        _guard = PinAttemptGuard(policy),
+        _now = now ?? DateTime.now;
+
+  final UserStore _users;
+  final PinHasher _hasher;
+  final AuditLog _audit;
+  final PinPolicy _policy;
+  final PinAttemptGuard _guard;
+  final DateTime Function() _now;
+
+  Cashier? _signedIn;
+  Cashier? get signedIn => _signedIn;
+  bool get isSignedIn => _signedIn != null;
+
+  /// The lockout is per cashier, so one person fat-fingering their PIN cannot lock
+  /// the whole till out during service.
+  Future<AuthResult> unlock(String cashierId, String pin) async {
+    if (!_policy.isWellFormed(pin)) return const AuthMalformed();
+
+    final now = _now();
+    if (_guard.isLocked(cashierId, now: now)) {
+      _audit.record(cashierId, 'pin.locked_out');
+      return AuthLockedOut(now.add(_policy.lockout));
+    }
+
+    final user = _users.byId(cashierId);
+    if (user == null || !user.active) {
+      // Same answer as a wrong PIN: a rejection must not reveal who exists.
+      _guard.recordFailure(cashierId, now: now);
+      _audit.record(cashierId, 'pin.rejected');
+      return const AuthRejected();
+    }
+
+    final ok = await _hasher.verify(pin, user.pinSalt, user.pinHash);
+    if (!ok) {
+      _guard.recordFailure(cashierId, now: now);
+      _audit.record(cashierId, 'pin.rejected');
+      return const AuthRejected();
+    }
+
+    _guard.recordSuccess(cashierId);
+    _signedIn = user;
+    _audit.record(cashierId, 'pin.unlock');
+    return AuthOk(user);
+  }
+
+  void signOut() {
+    final who = _signedIn?.id;
+    _signedIn = null;
+    if (who != null) _audit.record(who, 'sign_out');
+  }
+
+  int failuresFor(String cashierId) => _guard.failures(cashierId);
+
+  /// Enrol or update a cashier from a roster sync, hashing the PIN locally.
+  Future<Cashier> enrol({
+    required String id,
+    required String name,
+    required String pin,
+    String role = 'cashier',
+  }) async {
+    final salt = PinHasher.newSalt();
+    final cashier = Cashier(
+      id: id, name: name, role: role,
+      pinSalt: salt, pinHash: await _hasher.hash(pin, salt),
+    );
+    _users.upsert(cashier);
+    return cashier;
+  }
+}
