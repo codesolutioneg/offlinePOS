@@ -76,6 +76,13 @@ class Outbox {
   /// rather than left to read as "offline".
   bool get hasSenders => _senders.isNotEmpty;
 
+  /// Wire a handler for a kind after construction. Needed because the Odoo endpoint
+  /// is configured at runtime on the device, not known when the outbox is built; a
+  /// till sells and queues before it is ever pointed at a server.
+  void register(String kind, OutboxSender sender) => _senders[kind] = sender;
+
+  void unregister(String kind) => _senders.remove(kind);
+
   bool _draining = false;
 
   /// Queue something for delivery. Returns as soon as it is durable.

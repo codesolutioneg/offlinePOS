@@ -16,6 +16,8 @@ import '../core/printing/printer_transport.dart';
 import '../core/printing/receipt_builder.dart';
 import '../core/printing/registry_printer.dart';
 import '../core/printing/spool_store.dart';
+import '../core/sync/odoo_endpoint.dart';
+import '../core/sync/odoo_wiring.dart';
 import '../core/sync/outbox.dart';
 import '../core/sync/sync_service.dart';
 import '../core/updates/update_service.dart';
@@ -23,6 +25,7 @@ import '../domain/order.dart';
 import '../features/auth/login_screen.dart';
 import '../features/onboarding/wizard_overlay.dart';
 import '../features/sell/sell_screen.dart';
+import '../features/settings/server_settings_screen.dart';
 import '../features/support/diagnostics_screen.dart';
 import 'pos_session.dart';
 import 'till_activity.dart';
@@ -46,6 +49,8 @@ class PosApp extends StatefulWidget {
     required this.printers,
     required this.wizards,
     required this.deviceId,
+    required this.endpoints,
+    required this.odoo,
     this.config = const TillConfig(),
     this.receiptSpool,
     this.activity,
@@ -64,6 +69,8 @@ class PosApp extends StatefulWidget {
   final PrinterRegistry printers;
   final WizardStore wizards;
   final String deviceId;
+  final OdooEndpointStore endpoints;
+  final OdooWiring odoo;
 
   /// Shop name, tax id and receipt footer. Nothing here is invented in code: a
   /// receipt with no shop name and no tax id is not a legal receipt, and a
@@ -266,15 +273,22 @@ class _PosAppState extends State<PosApp> {
           Positioned(
             top: 8,
             right: 8,
-            // Builder, so the push happens against the Navigator inside this
-            // MaterialApp rather than the context above it, which has none.
             child: Builder(
-              builder: (context) => IconButton(
-                key: const Key('open-diagnostics'),
-                tooltip: 'Support',
-                icon: const Icon(Icons.support_agent),
-                onPressed: () => _openDiagnostics(context),
-              ),
+              // Builder, so the push targets the Navigator inside this MaterialApp.
+              builder: (context) => Row(children: [
+                IconButton(
+                  key: const Key('open-settings'),
+                  tooltip: 'Server settings',
+                  icon: const Icon(Icons.settings),
+                  onPressed: () => _openSettings(context),
+                ),
+                IconButton(
+                  key: const Key('open-diagnostics'),
+                  tooltip: 'Support',
+                  icon: const Icon(Icons.support_agent),
+                  onPressed: () => _openDiagnostics(context),
+                ),
+              ]),
             ),
           ),
           if (_firstSaleHelp)
@@ -285,6 +299,17 @@ class _PosAppState extends State<PosApp> {
             ),
         ],
       );
+
+  void _openSettings(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ServerSettingsScreen(
+        store: widget.endpoints,
+        // Rewire the live sender the moment settings are saved, so a till just
+        // pointed at a server drains its queue without a restart.
+        onSaved: widget.odoo.configure,
+      ),
+    ));
+  }
 
   void _openDiagnostics(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(

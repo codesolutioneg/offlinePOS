@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 6;
+  static const int version = 7;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -230,6 +230,26 @@ class Schema {
         cashier_id   TEXT PRIMARY KEY,
         failures     INTEGER NOT NULL DEFAULT 0,
         locked_until TEXT
+      )
+      ''',
+    ],
+
+    // v6 -> v7: the Odoo endpoint a till syncs to.
+    //
+    // Set at runtime on the device, not compiled in. url, db and login are not
+    // secrets. The password is stored here for a single-operator local test only;
+    // a fleet must not keep a shared credential on every till, which is why the
+    // real deployment authenticates to a backend that holds the one Odoo login.
+    // Stated in docs/SECURITY.md as such.
+    [
+      '''
+      CREATE TABLE odoo_endpoint (
+        id       INTEGER PRIMARY KEY CHECK (id = 1),
+        base_url TEXT NOT NULL,
+        db       TEXT NOT NULL,
+        login    TEXT NOT NULL,
+        password TEXT,
+        updated_at TEXT NOT NULL
       )
       ''',
     ],

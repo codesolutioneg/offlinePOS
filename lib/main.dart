@@ -23,6 +23,8 @@ import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
 import 'core/printing/printer_registry.dart';
 import 'core/sync/outbox.dart';
+import 'core/sync/odoo_endpoint.dart';
+import 'core/sync/odoo_wiring.dart';
 import 'core/sync/sync_service.dart';
 import 'core/updates/update_gate.dart';
 import 'core/updates/update_service.dart';
@@ -99,6 +101,27 @@ Future<void> main() async {
   // land on a till with a customer standing at it mid-order.
   final activity = TillActivity();
 
+  // Point the outbox at an Odoo server if this till has been configured, so a
+  // sale queued while unconfigured still goes out once a server is set. Selling
+  // never depends on it; an unconfigured till simply accumulates.
+  final endpoints = OdooEndpointStore(db);
+  final odoo = OdooWiring(outbox: outbox);
+  // A build may carry a default endpoint via --dart-define for a quick local test;
+  // a saved one entered on the device wins over it.
+  const envUrl = String.fromEnvironment('ODOO_URL');
+  if (envUrl.isNotEmpty && !endpoints.isConfigured) {
+    endpoints.save(OdooEndpoint(
+      baseUrl: envUrl,
+      db: const String.fromEnvironment('ODOO_DB'),
+      login: const String.fromEnvironment('ODOO_LOGIN'),
+      password: const String.fromEnvironment('ODOO_PASSWORD'),
+    ));
+  }
+  final savedEndpoint = endpoints.load();
+  if (savedEndpoint != null && savedEndpoint.isComplete) {
+    odoo.configure(savedEndpoint);
+  }
+
   runApp(PosApp(
     auth: auth,
     users: users,
@@ -116,6 +139,8 @@ Future<void> main() async {
     activity: activity,
     provisioningPin: provisioningPin,
     updates: _updateService(config, sync, activity, dir),
+    endpoints: endpoints,
+    odoo: odoo,
   ));
 }
 
