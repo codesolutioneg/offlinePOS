@@ -17,9 +17,9 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          # Pinned to the version this project is developed against, so the cloud
-          # build matches local behaviour rather than drifting on a newer stable.
-          flutter-version: '3.41.6'
+          # Latest stable rather than an exact pin: the action's version manifest
+          # may not list a very recent patch, which fails the job at setup. The app
+          # uses only stable Dart/Flutter features, so current stable builds it.
           channel: stable
           cache: true
 
