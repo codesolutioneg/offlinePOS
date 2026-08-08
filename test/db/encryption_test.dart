@@ -23,11 +23,20 @@ void _writeSecret(Db db, String secret) {
 }
 
 void main() {
+  // This proof loads the system libsqlcipher, which the loader only overrides on
+  // Linux. On Windows the app uses the bundled SQLCipher via sqlcipher_flutter_libs;
+  // running this harness there would test the wrong library and trips Windows file
+  // locking on cleanup, so it is scoped to Linux.
+  if (!Platform.isLinux) return;
   setUpAll(useSystemSqlcipher);
 
   late Directory dir;
   setUp(() => dir = Directory.systemTemp.createTempSync('encpos'));
-  tearDown(() => dir.deleteSync(recursive: true));
+  tearDown(() {
+    // Best-effort: on Windows a DB file whose handle lingers cannot be deleted,
+    // and a failed cleanup must not fail the test.
+    try { dir.deleteSync(recursive: true); } catch (_) {}
+  });
   String path() => '${dir.path}${Platform.pathSeparator}pos.db';
 
   test('a key generated once is reused the next time', () async {
