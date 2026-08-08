@@ -24,21 +24,31 @@ class OdooPuller {
         ['available_in_pos', '=', true]
       ],
     );
-    final groups = await _searchRead(
-      'product.modifier.category',
-      ['id', 'name', 'sequence', 'min_selection', 'max_selection', 'selection_type',
-       'product_template_ids'],
-      [
-        ['active', '=', true]
-      ],
-    );
-    final modifiers = await _searchRead(
-      'product.modifier',
-      ['id', 'name', 'category_id', 'price', 'price_type', 'sequence', 'product_id'],
-      [
-        ['active', '=', true]
-      ],
-    );
+    // Modifiers come from an optional add-on. On an Odoo without it, asking for
+    // these models errors; degrade to no modifiers rather than losing the whole
+    // catalogue (products and categories must still load).
+    List<Map<String, dynamic>> groups = const [];
+    List<Map<String, dynamic>> modifiers = const [];
+    try {
+      groups = await _searchRead(
+        'product.modifier.category',
+        ['id', 'name', 'sequence', 'min_selection', 'max_selection', 'selection_type',
+         'product_template_ids'],
+        [
+          ['active', '=', true]
+        ],
+      );
+      modifiers = await _searchRead(
+        'product.modifier',
+        ['id', 'name', 'category_id', 'price', 'price_type', 'sequence', 'product_id'],
+        [
+          ['active', '=', true]
+        ],
+      );
+    } catch (_) {
+      groups = const [];
+      modifiers = const [];
+    }
 
     final byGroup = <int, List<Modifier>>{};
     for (final m in modifiers) {
