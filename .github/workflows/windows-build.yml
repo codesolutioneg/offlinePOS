@@ -1,12 +1,13 @@
 name: Build Windows app
 
-# Builds a ready-to-run Windows app in the cloud, so nobody needs Flutter or
-# Visual Studio locally. Runs on every push to main, on demand from the Actions
-# tab, and attaches a zip to a GitHub Release when a version tag is pushed.
+# Builds a ready-to-run Windows app. Uses ONLY GitHub-authored actions (actions/*)
+# and installs Flutter with a shell step, because the org's Actions policy blocks
+# third-party actions (subosito/softprops), which failed the job at setup with no
+# logs. actions/checkout and actions/upload-artifact are in the GitHub-owned
+# actions org and are always allowed.
 on:
   push:
     branches: [main]
-    tags: ['v*']
   workflow_dispatch:
 
 jobs:
@@ -15,28 +16,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: subosito/flutter-action@v2
-        with:
-          # Latest stable rather than an exact pin: the action's version manifest
-          # may not list a very recent patch, which fails the job at setup. The app
-          # uses only stable Dart/Flutter features, so current stable builds it.
-          channel: stable
-          cache: true
+      - name: Install Flutter (stable)
+        shell: pwsh
+        run: |
+          git clone --depth 1 -b stable https://github.com/flutter/flutter.git "$env:RUNNER_TEMP\flutter"
+          echo "$env:RUNNER_TEMP\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Flutter version
+        run: flutter --version
 
       - run: flutter pub get
-
-      # Fail early and loudly if anything is broken, rather than shipping a bad exe.
       - run: flutter analyze
       - run: flutter test
-
       - run: flutter build windows --release
 
-      # Flutter produces a folder (the exe plus its DLLs and a data directory); the
-      # whole folder is the app, so the deliverable is that folder zipped.
       - name: Package
-        run: |
-          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath offlinePOS-windows.zip
         shell: pwsh
+        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath offlinePOS-windows.zip -Force
 
       - name: Upload downloadable build
         uses: actions/upload-artifact@v4
@@ -44,10 +40,3 @@ jobs:
           name: offlinePOS-windows
           path: offlinePOS-windows.zip
           retention-days: 30
-
-      # On a tag like v0.1.0, publish it as a Release so there is a permanent link.
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: offlinePOS-windows.zip
