@@ -1,22 +1,25 @@
 # Builds a ready-to-run Windows app on AppVeyor (free for public repos, independent
-# of the GitHub billing lock). The image ships an OLDER pre-installed Flutter at
-# C:\flutter (Dart 3.9.2), too old for this app, so we clone the latest stable into
-# a fresh directory and put it first on PATH. ErrorActionPreference + $LASTEXITCODE
-# checks make the build fail loudly on the first real error instead of limping on.
+# of the GitHub billing lock). AppVeyor pre-installs an older Flutter at C:\flutter,
+# so the latest stable is cloned into a fresh dir and put first on PATH.
+#
+# No $ErrorActionPreference='Stop': git writes its normal "Cloning into..." to
+# stderr, which under Stop aborts the whole script. Instead each native command's
+# real exit code is checked, so the build fails only on an actual error.
 image: Visual Studio 2022
 clone_depth: 1
 
 build_script:
   - ps: |
-      $ErrorActionPreference = 'Stop'
       git clone --depth 1 -b stable https://github.com/flutter/flutter.git C:\fsdk
+      if ($LASTEXITCODE -ne 0) { throw "flutter clone failed" }
       $env:PATH = "C:\fsdk\bin;$env:PATH"
       flutter --version
-      flutter pub get;               if ($LASTEXITCODE -ne 0) { throw "pub get failed" }
-      flutter analyze;               if ($LASTEXITCODE -ne 0) { throw "analyze failed" }
-      flutter test;                  if ($LASTEXITCODE -ne 0) { throw "tests failed" }
+      flutter pub get;                 if ($LASTEXITCODE -ne 0) { throw "pub get failed" }
+      flutter analyze;                 if ($LASTEXITCODE -ne 0) { throw "analyze failed" }
+      flutter test;                    if ($LASTEXITCODE -ne 0) { throw "tests failed" }
       flutter build windows --release; if ($LASTEXITCODE -ne 0) { throw "windows build failed" }
       7z a offlinePOS-windows.zip .\build\windows\x64\runner\Release\*
+      if ($LASTEXITCODE -ne 0) { throw "packaging failed" }
 
 artifacts:
   - path: offlinePOS-windows.zip
