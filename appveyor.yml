@@ -1,0 +1,24 @@
+# Builds a ready-to-run Windows app on AppVeyor, which is free for public repos and
+# is not tied to the GitHub account's billing. The image ships Visual Studio 2022
+# (the C++ toolchain Flutter needs) and 7-Zip. The whole build runs in one
+# PowerShell session so Flutter stays on PATH across the steps.
+image: Visual Studio 2022
+clone_depth: 1
+
+build_script:
+  - ps: |
+      git clone --depth 1 -b stable https://github.com/flutter/flutter.git C:\flutter
+      $env:PATH = "C:\flutter\bin;$env:PATH"
+      flutter --version
+      flutter pub get
+      flutter analyze
+      flutter test
+      flutter build windows --release
+      7z a offlinePOS-windows.zip .\build\windows\x64\runner\Release\*
+
+artifacts:
+  - path: offlinePOS-windows.zip
+    name: offlinePOS-windows
+
+# Nothing to deploy; the zip is downloaded from the build's Artifacts tab.
+deploy: off
