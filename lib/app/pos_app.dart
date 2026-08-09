@@ -8,6 +8,7 @@ import '../core/auth/user_store.dart';
 import '../core/config/till_config.dart';
 import '../core/db/catalogue_store.dart';
 import '../core/db/order_store.dart';
+import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
@@ -26,6 +27,7 @@ import '../features/auth/login_screen.dart';
 import '../features/onboarding/wizard_overlay.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/server_settings_screen.dart';
+import '../features/shift/shift_screen.dart';
 import '../features/support/diagnostics_screen.dart';
 import 'pos_session.dart';
 import 'till_activity.dart';
@@ -48,6 +50,7 @@ class PosApp extends StatefulWidget {
     required this.outboxStore,
     required this.printers,
     required this.wizards,
+    required this.shifts,
     required this.deviceId,
     required this.endpoints,
     required this.odoo,
@@ -68,6 +71,7 @@ class PosApp extends StatefulWidget {
   final SqliteOutboxStore outboxStore;
   final PrinterRegistry printers;
   final WizardStore wizards;
+  final ShiftStore shifts;
   final String deviceId;
   final OdooEndpointStore endpoints;
   final OdooWiring odoo;
@@ -290,6 +294,12 @@ class _PosAppState extends State<PosApp> {
                   icon: const Icon(Icons.support_agent),
                   onPressed: () => _openDiagnostics(context),
                 ),
+                IconButton(
+                  key: const Key('open-shift-screen'),
+                  tooltip: 'Shift',
+                  icon: const Icon(Icons.point_of_sale),
+                  onPressed: () => _openShift(context, session),
+                ),
               ]),
             ),
           ),
@@ -309,6 +319,24 @@ class _PosAppState extends State<PosApp> {
         // Rewire the live sender the moment settings are saved, so a till just
         // pointed at a server drains its queue without a restart.
         onSaved: widget.odoo.configure,
+      ),
+    ));
+  }
+
+  void _openShift(BuildContext context, PosSession session) {
+    // Which tenders count as drawer cash, read from the synced catalogue so the
+    // X/Z drawer total reconciles cash and leaves card sales out.
+    final cashMethodIds = widget.catalogue
+        .paymentMethods()
+        .where((m) => m.isCash)
+        .map((m) => m.id)
+        .toSet();
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ShiftScreen(
+        store: widget.shifts,
+        cashierId: session.cashierId,
+        cashMethodIds: cashMethodIds,
+        formatAmount: PosApp.money,
       ),
     ));
   }

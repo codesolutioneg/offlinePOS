@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 7;
+  static const int version = 8;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -250,6 +250,20 @@ class Schema {
         login    TEXT NOT NULL,
         password TEXT,
         updated_at TEXT NOT NULL
+      )
+      ''',
+    ],
+    // v7 -> v8
+    [
+      '''
+      CREATE TABLE shifts (
+        id              TEXT PRIMARY KEY,
+        opened_at       TEXT NOT NULL,
+        closed_at       TEXT,
+        opening_float   REAL NOT NULL,
+        cashier_id      TEXT NOT NULL,
+        movements       TEXT NOT NULL DEFAULT '[]',
+        closing_counted REAL
       )
       ''',
     ],

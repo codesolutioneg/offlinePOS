@@ -20,6 +20,7 @@ import 'core/db/device_store.dart';
 import 'core/db/order_store.dart';
 import 'core/db/print_job_store.dart';
 import 'core/db/printer_store.dart';
+import 'core/db/shift_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
 import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
@@ -144,6 +145,7 @@ Future<void> main() async {
     printers: printers,
     receiptSpool: SqlitePrintJobStore(db, printer: PosApp.receiptPrinter),
     wizards: WizardStore(db),
+    shifts: ShiftStore(db),
     deviceId: deviceId,
     config: config,
     activity: activity,
