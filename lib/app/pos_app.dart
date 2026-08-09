@@ -263,6 +263,7 @@ class _PosAppState extends State<PosApp> {
             session: session,
             formatAmount: PosApp.money,
             staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
+            catalogueChanged: widget.sync.catalogueRevision,
             onChanged: _publishActivity,
             onSignOut: _signOut,
             onPaid: (order) {

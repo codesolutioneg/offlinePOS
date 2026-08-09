@@ -31,6 +31,9 @@ class OdooWiring {
     );
     _outbox.register('order.push', _orderSender);
     _outbox.register('audit.push', _orderSender);
+    // Best-effort telemetry with no server sink yet: acknowledge it so it drains
+    // cleanly instead of showing as "nothing can send" on the Support screen.
+    _outbox.register('device.status', (_) async {});
   }
 
   /// Stop syncing: a till pointed at the wrong server should queue, not push there.
@@ -39,6 +42,7 @@ class OdooWiring {
     _sender = null;
     _outbox.unregister('order.push');
     _outbox.unregister('audit.push');
+    _outbox.unregister('device.status');
   }
 
   Future<void> _orderSender(OutboxEntry entry) async {

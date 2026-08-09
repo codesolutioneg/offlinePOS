@@ -18,6 +18,7 @@ class SellScreen extends StatefulWidget {
     this.onChanged,
     this.onSignOut,
     this.staleness,
+    this.catalogueChanged,
   });
 
   final PosSession session;
@@ -33,6 +34,10 @@ class SellScreen extends StatefulWidget {
 
   final Duration? staleness;
 
+  /// Ticks when a background sync refreshes the catalogue, so the grid reloads
+  /// itself instead of the cashier leaving and re-entering the screen.
+  final Listenable? catalogueChanged;
+
   @override
   State<SellScreen> createState() => _SellScreenState();
 }
@@ -42,6 +47,23 @@ class _SellScreenState extends State<SellScreen> {
   String _search = '';
 
   PosSession get s => widget.session;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.catalogueChanged?.addListener(_onCatalogueChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.catalogueChanged?.removeListener(_onCatalogueChanged);
+    super.dispose();
+  }
+
+  // A fresh catalogue landed from the server: rebuild so the grid re-queries it.
+  void _onCatalogueChanged() {
+    if (mounted) setState(() {});
+  }
 
   /// Redraws and tells the owner the open order changed. Every mutation goes
   /// through here so the two can never drift apart.

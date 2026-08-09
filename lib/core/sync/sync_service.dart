@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../audit/audit_log.dart';
 import '../db/catalogue_store.dart';
 import '../db/sqlite_outbox_store.dart';
@@ -68,6 +70,11 @@ class SyncService {
   SyncState _state = SyncState.idle;
   String? lastError;
   int sentThisRun = 0;
+
+  /// Ticks every time the catalogue is refreshed from the server, so a screen
+  /// showing the menu can reload itself instead of the cashier having to leave
+  /// and re-enter it after the first sync.
+  final ValueNotifier<int> catalogueRevision = ValueNotifier<int>(0);
 
   SyncState get state => _state;
 
@@ -153,6 +160,7 @@ class SyncService {
             productGroupIds: pull.productGroupIds,
             refreshedAt: _now().toUtc(),
           );
+          catalogueRevision.value++;
         }
       }
       lastError = null;
