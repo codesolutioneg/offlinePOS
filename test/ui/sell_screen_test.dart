@@ -152,6 +152,11 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pay')));
     await t.pumpAndSettle();
+    // The tender sheet opens; the sale completes only on confirmation.
+    expect(find.byKey(const Key('confirm-payment')), findsOneWidget);
+    expect(session.hasLines, isTrue);
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
     expect(session.hasLines, isFalse);
   });
 

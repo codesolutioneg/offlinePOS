@@ -19,6 +19,7 @@ class SellScreen extends StatefulWidget {
     this.onSignOut,
     this.staleness,
     this.catalogueChanged,
+    this.syncNow,
   });
 
   final PosSession session;
@@ -37,6 +38,10 @@ class SellScreen extends StatefulWidget {
   /// Ticks when a background sync refreshes the catalogue, so the grid reloads
   /// itself instead of the cashier leaving and re-entering the screen.
   final Listenable? catalogueChanged;
+
+  /// Kicks a sync right after a sale so the order reaches Odoo promptly instead
+  /// of waiting for the next timer tick.
+  final Future<void> Function()? syncNow;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -92,9 +97,33 @@ class _SellScreenState extends State<SellScreen> {
 
   void _pay() {
     if (!s.hasLines) return;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => _PaymentSheet(
+        total: s.total,
+        format: widget.formatAmount,
+        onConfirm: (method) {
+          Navigator.pop(ctx);
+          _complete(method);
+        },
+      ),
+    );
+  }
+
+  void _complete(String method) {
     final order = s.pay();
     setState(() {});
     widget.onPaid?.call(order);
+    // Push it now rather than waiting for the timer, so it lands in Odoo promptly.
+    widget.syncNow?.call();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      key: const Key('sale-complete'),
+      content: Text('Sale complete: ${widget.formatAmount(order.total)} ($method). '
+          'Syncing to Odoo.'),
+      duration: const Duration(seconds: 3),
+    ));
   }
 
   @override
@@ -337,4 +366,79 @@ class _LineTile extends StatelessWidget {
         ),
         trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: onRemove),
       );
+}
+
+/// The tender step: shows the amount due and how it is being paid, then confirms.
+/// A real payment moment, so a completed sale is deliberate and gets feedback,
+/// rather than the cart silently clearing.
+class _PaymentSheet extends StatefulWidget {
+  const _PaymentSheet({
+    required this.total,
+    required this.format,
+    required this.onConfirm,
+  });
+
+  final double total;
+  final String Function(double) format;
+  final void Function(String method) onConfirm;
+
+  @override
+  State<_PaymentSheet> createState() => _PaymentSheetState();
+}
+
+class _PaymentSheetState extends State<_PaymentSheet> {
+  String _method = 'Cash';
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          20, 4, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('Payment',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Total due'),
+              Text(widget.format(widget.total),
+                  key: const Key('pay-total'),
+                  style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final m in const ['Cash', 'Card'])
+                ChoiceChip(
+                  key: Key('method-$m'),
+                  label: Text(m),
+                  selected: _method == m,
+                  onSelected: (_) => setState(() => _method = m),
+                ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            height: 52,
+            child: FilledButton(
+              key: const Key('confirm-payment'),
+              onPressed: () => widget.onConfirm(_method),
+              child: Text('Charge ${widget.format(widget.total)}'),
+            ),
+          ),
+          const SizedBox(height: 4),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
 }
