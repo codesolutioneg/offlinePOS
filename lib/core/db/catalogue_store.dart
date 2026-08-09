@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../domain/catalogue.dart';
 import 'database.dart';
 
@@ -23,6 +25,7 @@ class CatalogueStore {
     required List<Product> products,
     required List<ModifierGroup> groups,
     required Map<int, List<int>> productGroupIds,
+    List<PaymentMethod> paymentMethods = const [],
     DateTime? refreshedAt,
   }) {
     _db.raw.execute('BEGIN');
@@ -65,6 +68,10 @@ class CatalogueStore {
           "INSERT INTO catalogue_meta (key, value) VALUES ('refreshed_at', ?) "
           "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
           [(refreshedAt ?? DateTime.now().toUtc()).toIso8601String()]);
+      _db.raw.execute(
+          "INSERT INTO catalogue_meta (key, value) VALUES ('payment_methods', ?) "
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+          [jsonEncode(paymentMethods.map((m) => m.toMap()).toList())]);
       _db.raw.execute('COMMIT');
     } catch (_) {
       _db.raw.execute('ROLLBACK');
@@ -90,6 +97,23 @@ class CatalogueStore {
       (_db.raw.select('SELECT COUNT(*) c FROM products').first['c'] as int) == 0;
 
   // ── reads ────────────────────────────────────────────────────────
+
+  /// Payment methods synced from the till's point of sale, for the tender screen.
+  /// Empty until the first sync that carried them; the tender screen falls back
+  /// to a plain cash tender in that case.
+  List<PaymentMethod> paymentMethods() {
+    final rows = _db.raw
+        .select("SELECT value FROM catalogue_meta WHERE key = 'payment_methods'");
+    if (rows.isEmpty) return const [];
+    try {
+      final list = jsonDecode(rows.first['value'] as String) as List;
+      return list
+          .map((e) => PaymentMethod.fromMap((e as Map).cast<String, dynamic>()))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
 
   List<Category> categories() => _db.raw
       .select('SELECT * FROM categories ORDER BY sequence, name')

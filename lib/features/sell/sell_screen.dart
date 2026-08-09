@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/pos_session.dart';
 import '../../domain/catalogue.dart';
+import '../../domain/order.dart';
 import 'modifier_sheet.dart';
 
 /// The selling screen: catalogue on the right, the order on the left.
@@ -100,19 +101,21 @@ class _SellScreenState extends State<SellScreen> {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (ctx) => _PaymentSheet(
         total: s.total,
         format: widget.formatAmount,
-        onConfirm: (method) {
+        methods: s.catalogue.paymentMethods(),
+        onConfirm: (payments, label) {
           Navigator.pop(ctx);
-          _complete(method);
+          _complete(payments, label);
         },
       ),
     );
   }
 
-  void _complete(String method) {
-    final order = s.pay();
+  void _complete(List<OrderPayment> payments, String label) {
+    final order = s.pay(payments: payments);
     setState(() {});
     widget.onPaid?.call(order);
     // Push it now rather than waiting for the timer, so it lands in Odoo promptly.
@@ -120,7 +123,7 @@ class _SellScreenState extends State<SellScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       key: const Key('sale-complete'),
-      content: Text('Sale complete: ${widget.formatAmount(order.total)} ($method). '
+      content: Text('Sale complete: ${widget.formatAmount(order.total)} ($label). '
           'Syncing to Odoo.'),
       duration: const Duration(seconds: 3),
     ));
@@ -368,26 +371,65 @@ class _LineTile extends StatelessWidget {
       );
 }
 
-/// The tender step: shows the amount due and how it is being paid, then confirms.
-/// A real payment moment, so a completed sale is deliberate and gets feedback,
-/// rather than the cart silently clearing.
+/// The tender step: choose how the sale is paid, enter cash received to see the
+/// change, and confirm. A real payment moment with feedback, not a silent clear.
 class _PaymentSheet extends StatefulWidget {
   const _PaymentSheet({
     required this.total,
     required this.format,
+    required this.methods,
     required this.onConfirm,
   });
 
   final double total;
   final String Function(double) format;
-  final void Function(String method) onConfirm;
+  final List<PaymentMethod> methods;
+  final void Function(List<OrderPayment> payments, String label) onConfirm;
 
   @override
   State<_PaymentSheet> createState() => _PaymentSheetState();
 }
 
 class _PaymentSheetState extends State<_PaymentSheet> {
-  String _method = 'Cash';
+  PaymentMethod? _method;
+  late final TextEditingController _received =
+      TextEditingController(text: widget.total.toStringAsFixed(2));
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.methods.isNotEmpty) _method = widget.methods.first;
+  }
+
+  @override
+  void dispose() {
+    _received.dispose();
+    super.dispose();
+  }
+
+  bool get _isCash => _method?.isCash ?? true;
+  double get _receivedAmount => double.tryParse(_received.text.trim()) ?? 0;
+  double get _change => (_isCash ? _receivedAmount : widget.total) - widget.total;
+  bool get _covered => _isCash ? _receivedAmount >= widget.total - 0.001 : true;
+
+  void _confirm() {
+    final label = _method?.name ?? 'Cash';
+    final payments = _method != null
+        ? [OrderPayment(methodId: _method!.id, amount: widget.total)]
+        : <OrderPayment>[];
+    widget.onConfirm(payments, label);
+  }
+
+  List<double> _quickAmounts() {
+    final t = widget.total;
+    final set = <double>{t};
+    for (final r in const [5, 10, 20, 50, 100, 200, 500]) {
+      final up = (t / r).ceil() * r.toDouble();
+      if (up > t) set.add(up);
+    }
+    final list = set.toList()..sort();
+    return list.take(4).toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -410,25 +452,69 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                   style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
             ],
           ),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 8,
-            children: [
-              for (final m in const ['Cash', 'Card'])
-                ChoiceChip(
-                  key: Key('method-$m'),
-                  label: Text(m),
-                  selected: _method == m,
-                  onSelected: (_) => setState(() => _method = m),
-                ),
-            ],
-          ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
+          if (widget.methods.isNotEmpty)
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final m in widget.methods)
+                  ChoiceChip(
+                    key: Key('method-${m.id}'),
+                    label: Text(m.name),
+                    selected: _method?.id == m.id,
+                    onSelected: (_) => setState(() => _method = m),
+                  ),
+              ],
+            )
+          else
+            const Text('Cash', style: TextStyle(color: Colors.black54)),
+          if (_isCash) ...[
+            const SizedBox(height: 16),
+            TextField(
+              key: const Key('received'),
+              controller: _received,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Amount received',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final a in _quickAmounts())
+                  ActionChip(
+                    label: Text(widget.format(a)),
+                    onPressed: () =>
+                        setState(() => _received.text = a.toStringAsFixed(2)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Change'),
+                Text(_change >= 0 ? widget.format(_change) : '-',
+                    key: const Key('change'),
+                    style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: _change >= 0
+                            ? Colors.green.shade700
+                            : Colors.red)),
+              ],
+            ),
+          ],
+          const SizedBox(height: 18),
           SizedBox(
             height: 52,
             child: FilledButton(
               key: const Key('confirm-payment'),
-              onPressed: () => widget.onConfirm(_method),
+              onPressed: _covered ? _confirm : null,
               child: Text('Charge ${widget.format(widget.total)}'),
             ),
           ),

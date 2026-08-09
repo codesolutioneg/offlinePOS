@@ -98,3 +98,18 @@ class ModifierGroup {
     return true;
   }
 }
+
+/// A way a sale can be paid, as configured on the till's point of sale in Odoo.
+class PaymentMethod {
+  const PaymentMethod({required this.id, required this.name, this.isCash = false});
+  final int id;
+  final String name;
+  final bool isCash;
+
+  Map<String, dynamic> toMap() => {'id': id, 'name': name, 'is_cash': isCash};
+  factory PaymentMethod.fromMap(Map<String, dynamic> m) => PaymentMethod(
+        id: m['id'] as int,
+        name: (m['name'] ?? '') as String,
+        isCash: m['is_cash'] == true,
+      );
+}

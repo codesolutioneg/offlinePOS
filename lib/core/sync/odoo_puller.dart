@@ -50,6 +50,17 @@ class OdooPuller {
       modifiers = const [];
     }
 
+    // Payment methods for the tender screen. Optional: an Odoo that does not
+    // expose them just leaves the till on its cash default.
+    List<Map<String, dynamic>> methods = const [];
+    try {
+      methods = await _searchRead('pos.payment.method', ['id', 'name', 'is_cash_count'], [
+        ['active', '=', true]
+      ]);
+    } catch (_) {
+      methods = const [];
+    }
+
     final byGroup = <int, List<Modifier>>{};
     for (final m in modifiers) {
       final gid = _id(m['category_id']);
@@ -116,6 +127,13 @@ class OdooPuller {
           .toList(),
       groups: mappedGroups,
       productGroupIds: productGroupIds,
+      paymentMethods: methods
+          .map((m) => PaymentMethod(
+                id: m['id'] as int,
+                name: (m['name'] ?? '') as String,
+                isCash: m['is_cash_count'] == true,
+              ))
+          .toList(),
     );
   }
 
@@ -151,12 +169,14 @@ class CataloguePull {
     required this.products,
     required this.groups,
     required this.productGroupIds,
+    this.paymentMethods = const [],
   });
 
   final List<Category> categories;
   final List<Product> products;
   final List<ModifierGroup> groups;
   final Map<int, List<int>> productGroupIds;
+  final List<PaymentMethod> paymentMethods;
 
   /// A pull with no products is refused rather than written: replacing a working
   /// catalogue with an empty one would leave the till unable to sell.

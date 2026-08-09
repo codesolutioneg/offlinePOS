@@ -82,9 +82,10 @@ class PosSession {
 
   /// Take payment. Writes locally, queues for the server, and starts a fresh order.
   /// Returns the completed order so the caller can print it.
-  Order pay() {
+  Order pay({List<OrderPayment> payments = const []}) {
     final order = current;
     order.state = OrderState.paid;
+    order.payments = List.of(payments);
     orders.save(order);
     outbox.enqueue('order.push', order.uuid, order.toMap());
     audit.record(cashierId, 'order.paid', detail: order.uuid);

@@ -88,9 +88,11 @@ class Order {
     DateTime? createdAt,
     this.state = OrderState.draft,
     List<OrderLine>? lines,
+    List<OrderPayment>? payments,
   })  : uuid = uuid ?? Uuid.v4(),
         createdAt = createdAt ?? DateTime.now().toUtc(),
-        lines = lines ?? [];
+        lines = lines ?? [],
+        payments = payments ?? [];
 
   final String uuid;
   final String deviceId;
@@ -98,6 +100,9 @@ class Order {
   final DateTime createdAt;
   OrderState state;
   final List<OrderLine> lines;
+
+  /// How the sale was tendered. Empty means the server books it to cash.
+  List<OrderPayment> payments;
 
   /// Set once the backend confirms. Never used as identity.
   int? serverId;
@@ -125,6 +130,7 @@ class Order {
         'state': state.name,
         'server_id': serverId,
         'lines': lines.map((l) => l.toMap()).toList(),
+        'payments': payments.map((p) => p.toMap()).toList(),
       };
 
   factory Order.fromMap(Map<String, dynamic> m) => Order(
@@ -136,5 +142,21 @@ class Order {
         lines: ((m['lines'] as List?) ?? const [])
             .map((e) => OrderLine.fromMap(e as Map<String, dynamic>))
             .toList(),
+        payments: ((m['payments'] as List?) ?? const [])
+            .map((e) => OrderPayment.fromMap((e as Map).cast<String, dynamic>()))
+            .toList(),
       )..serverId = m['server_id'] as int?;
+}
+
+/// One tender against a sale: which Odoo payment method, and how much.
+class OrderPayment {
+  const OrderPayment({required this.methodId, required this.amount});
+  final int methodId;
+  final double amount;
+
+  Map<String, dynamic> toMap() => {'method_id': methodId, 'amount': amount};
+  factory OrderPayment.fromMap(Map<String, dynamic> m) => OrderPayment(
+        methodId: m['method_id'] as int,
+        amount: (m['amount'] as num).toDouble(),
+      );
 }
