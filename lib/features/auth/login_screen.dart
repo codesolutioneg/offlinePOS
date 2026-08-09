@@ -86,6 +86,9 @@ class _LoginScreenState extends State<LoginScreen> {
             children: [
               const Text('offlinePOS',
                   style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+              Text('Build ${const String.fromEnvironment('APP_VERSION', defaultValue: 'dev')}',
+                  key: const Key('build-version'),
+                  style: const TextStyle(fontSize: 11, color: Colors.black45)),
               const SizedBox(height: 24),
               if (widget.provisioningPin != null)
                 Card(

@@ -46,6 +46,12 @@ class HttpReply {
 /// recognise a repeat. That matters because a drain can be interrupted after the
 /// server committed but before the acknowledgement was recorded, which means every
 /// push must be safe to repeat.
+/// The till id sent for order routing: the server books each offline order into
+/// the pos.config whose "offline till id" equals this. Overridable per build with
+/// --dart-define=OFFLINE_TILL_ID; defaults to the id the staging till is set to.
+const String kOfflineTillId =
+    String.fromEnvironment('OFFLINE_TILL_ID', defaultValue: 'till-1');
+
 class OdooSender {
   OdooSender({
     required this.baseUrl,
@@ -53,6 +59,7 @@ class OdooSender {
     required this.post,
     this.model = 'pos.order',
     this.method = 'create_from_offline_pos',
+    this.tillId = kOfflineTillId,
   });
 
   final Uri baseUrl;
@@ -60,6 +67,9 @@ class OdooSender {
   final HttpPost post;
   final String model;
   final String method;
+
+  /// Which pos.config this till's orders belong to, matched server-side.
+  final String tillId;
 
   int? _uid;
   String? _sessionCookie;
@@ -98,11 +108,16 @@ class OdooSender {
           throw TransientSyncError('not authenticated yet');
         }
         try {
+          // Route this order to the right pos.config: the server matches the
+          // payload's device_id against each config's offline till id.
+          final payload = tillId.isEmpty
+              ? entry.payload
+              : (Map<String, dynamic>.from(entry.payload)..['device_id'] = tillId);
           final reply = await _call('/web/dataset/call_kw', {
             'model': model,
             'method': method,
             'args': [
-              [entry.payload]
+              [payload]
             ],
             'kwargs': {},
           });
