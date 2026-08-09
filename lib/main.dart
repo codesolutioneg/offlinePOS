@@ -26,6 +26,7 @@ import 'core/printing/printer_discovery.dart';
 import 'core/printing/printer_registry.dart';
 import 'core/sync/outbox.dart';
 import 'core/sync/odoo_endpoint.dart';
+import 'core/sync/odoo_puller.dart';
 import 'core/sync/odoo_wiring.dart';
 import 'core/sync/sync_service.dart';
 import 'core/updates/update_gate.dart';
@@ -81,6 +82,10 @@ Future<void> main() async {
   // BootstrapCashier for why.
   final provisioningPin = await BootstrapCashier.ensure(auth, users);
 
+  // The catalogue pull rides the same authenticated Odoo session as the order
+  // push. Built here, before any endpoint is configured, but it reads the live
+  // sender at call time, so a server entered later still refreshes the menu.
+  final odoo = OdooWiring(outbox: outbox);
   final sync = SyncService(
     outbox: outbox,
     catalogue: catalogue,
@@ -88,6 +93,7 @@ Future<void> main() async {
     audit: audit,
     deviceId: deviceId,
     appVersion: appVersion,
+    puller: OdooPuller(call: odoo.catalogueCall),
   )..start();
 
   // Printers are resolved by name at print time, so a DHCP lease that moves
@@ -110,7 +116,6 @@ Future<void> main() async {
   // sale queued while unconfigured still goes out once a server is set. Selling
   // never depends on it; an unconfigured till simply accumulates.
   final endpoints = OdooEndpointStore(db);
-  final odoo = OdooWiring(outbox: outbox);
   // A build may carry a default endpoint via --dart-define for a quick local test;
   // a saved one entered on the device wins over it.
   const envUrl = String.fromEnvironment('ODOO_URL');

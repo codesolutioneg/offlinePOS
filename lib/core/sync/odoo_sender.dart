@@ -117,6 +117,20 @@ class OdooSender {
         }
       };
 
+  /// One authenticated `call_kw`, used for reads such as the catalogue pull.
+  /// Returns the raw `result`. Authentication is the caller's responsibility,
+  /// exactly like the order path, so a read never blocks a sale.
+  Future<dynamic> callKw(String model, String method, List<dynamic> args,
+      Map<String, dynamic> kwargs) async {
+    final reply = await _call('/web/dataset/call_kw', {
+      'model': model,
+      'method': method,
+      'args': args,
+      'kwargs': kwargs,
+    });
+    return reply['result'];
+  }
+
   Future<Map<String, dynamic>> _call(String path, Map<String, dynamic> params) async {
     final headers = {
       'Content-Type': 'application/json',

@@ -55,6 +55,22 @@ class OdooWiring {
     }
     await sender.orderSender(entry);
   }
+
+  /// A `call` for the catalogue [OdooPuller]: authenticates on demand against the
+  /// current endpoint, then runs one call_kw. It reads the live sender, so it
+  /// works even though the puller is built before the endpoint is configured.
+  Future<dynamic> catalogueCall(String model, String method,
+      List<dynamic> args, Map<String, dynamic> kwargs) async {
+    final sender = _sender;
+    final endpoint = _endpoint;
+    if (sender == null || endpoint == null) {
+      throw TransientSyncError('no Odoo endpoint configured');
+    }
+    if (!sender.isAuthenticated) {
+      await sender.authenticate(endpoint.login, endpoint.password ?? '');
+    }
+    return sender.callKw(model, method, args, kwargs);
+  }
 }
 
 typedef HttpPostFn = Future<HttpReply> Function(
