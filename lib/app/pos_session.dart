@@ -77,7 +77,14 @@ class PosSession {
   void clear() {
     final order = current;
     order.lines.clear();
+    order.discountPercent = 0;
     orders.save(order);
+  }
+
+  /// Apply a whole-order discount (0-100%). Persisted immediately.
+  void setDiscount(double percent) {
+    current.discountPercent = percent.clamp(0, 100).toDouble();
+    orders.save(current);
   }
 
   /// Take payment. Writes locally, queues for the server, and starts a fresh order.
@@ -87,7 +94,7 @@ class PosSession {
     order.state = OrderState.paid;
     order.payments = List.of(payments);
     orders.save(order);
-    outbox.enqueue('order.push', order.uuid, order.toMap());
+    outbox.enqueue('order.push', order.uuid, order.toServerPayload());
     audit.record(cashierId, 'order.paid', detail: order.uuid);
     _current = Order(deviceId: deviceId, cashierId: cashierId);
     return order;

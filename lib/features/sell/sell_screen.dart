@@ -96,6 +96,42 @@ class _SellScreenState extends State<SellScreen> {
     if (chosen != null) _changed(() => s.addProduct(product, chosen: chosen));
   }
 
+  Future<void> _openDiscount() async {
+    final ctrl = TextEditingController(
+        text: s.current.discountPercent > 0
+            ? s.current.discountPercent.toStringAsFixed(0)
+            : '');
+    final pct = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Order discount'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+                labelText: 'Discount', suffixText: '%', border: OutlineInputBorder()),
+          ),
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, children: [
+            for (final q in const [0, 5, 10, 15, 20])
+              ActionChip(label: Text('$q%'), onPressed: () => Navigator.pop(ctx, q.toDouble())),
+          ]),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            key: const Key('apply-discount'),
+            onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim()) ?? 0),
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    if (pct != null) _changed(() => s.setDiscount(pct));
+  }
+
   void _pay() {
     if (!s.hasLines) return;
     showModalBottomSheet<void>(
@@ -253,13 +289,45 @@ class _SellScreenState extends State<SellScreen> {
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.all(12),
-            child: Row(
+            child: Column(
               children: [
-                const Text('TOTAL', style: TextStyle(fontWeight: FontWeight.bold)),
-                const Spacer(),
-                Text(widget.formatAmount(s.total),
-                    key: const Key('total'),
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                if (s.current.discountPercent > 0) ...[
+                  Row(children: [
+                    const Text('Subtotal', style: TextStyle(color: Colors.black54)),
+                    const Spacer(),
+                    Text(widget.formatAmount(s.current.subtotal),
+                        style: const TextStyle(color: Colors.black54)),
+                  ]),
+                  const SizedBox(height: 4),
+                  Row(children: [
+                    Text('Discount ${s.current.discountPercent.toStringAsFixed(0)}%',
+                        key: const Key('discount-line'),
+                        style: TextStyle(color: Colors.green.shade700)),
+                    const Spacer(),
+                    Text('-${widget.formatAmount(s.current.subtotal - s.total)}',
+                        style: TextStyle(color: Colors.green.shade700)),
+                  ]),
+                  const SizedBox(height: 6),
+                ],
+                Row(children: [
+                  const Text('TOTAL', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Spacer(),
+                  Text(widget.formatAmount(s.total),
+                      key: const Key('total'),
+                      style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                ]),
+                if (s.hasLines)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      key: const Key('discount'),
+                      onPressed: _openDiscount,
+                      icon: const Icon(Icons.percent, size: 16),
+                      label: Text(s.current.discountPercent > 0
+                          ? 'Edit discount'
+                          : 'Add discount'),
+                    ),
+                  ),
               ],
             ),
           ),

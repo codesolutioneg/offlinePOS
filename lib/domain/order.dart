@@ -87,6 +87,7 @@ class Order {
     required this.cashierId,
     DateTime? createdAt,
     this.state = OrderState.draft,
+    this.discountPercent = 0,
     List<OrderLine>? lines,
     List<OrderPayment>? payments,
   })  : uuid = uuid ?? Uuid.v4(),
@@ -104,10 +105,16 @@ class Order {
   /// How the sale was tendered. Empty means the server books it to cash.
   List<OrderPayment> payments;
 
+  /// A whole-order discount, 0-100. Applied evenly to every line's price when the
+  /// sale is sent, so the server books the discounted total.
+  double discountPercent;
+
   /// Set once the backend confirms. Never used as identity.
   int? serverId;
 
-  double get total => lines.fold(0.0, (s, l) => s + l.total);
+  double get subtotal => lines.fold(0.0, (s, l) => s + l.total);
+  double get discountFactor => 1 - (discountPercent.clamp(0, 100) / 100);
+  double get total => subtotal * discountFactor;
 
   /// The trading day this sale belongs to, which decides the session it lands in
   /// on the server.
@@ -129,9 +136,30 @@ class Order {
         'business_date': businessDay.key,
         'state': state.name,
         'server_id': serverId,
+        'discount_percent': discountPercent,
         'lines': lines.map((l) => l.toMap()).toList(),
         'payments': payments.map((p) => p.toMap()).toList(),
       };
+
+  /// The payload sent to the server: like [toMap] but with the whole-order
+  /// discount folded into each line price, so Odoo (which totals from the line
+  /// prices) books the discounted amount. [toMap] itself stays raw, so a draft
+  /// restored from disk is not discounted twice.
+  Map<String, dynamic> toServerPayload() {
+    final f = discountFactor;
+    final m = toMap();
+    m['lines'] = lines.map((l) {
+      final lm = l.toMap();
+      lm['unit_price'] = l.unitPrice * f;
+      lm['modifiers'] = l.modifiers.map((mod) {
+        final mm = mod.toMap();
+        mm['unit_price'] = mod.unitPrice * f;
+        return mm;
+      }).toList();
+      return lm;
+    }).toList();
+    return m;
+  }
 
   factory Order.fromMap(Map<String, dynamic> m) => Order(
         uuid: m['uuid'] as String,
@@ -139,6 +167,7 @@ class Order {
         cashierId: m['cashier_id'] as String,
         createdAt: DateTime.parse(m['created_at'] as String),
         state: OrderState.values.byName(m['state'] as String),
+        discountPercent: (m['discount_percent'] as num?)?.toDouble() ?? 0,
         lines: ((m['lines'] as List?) ?? const [])
             .map((e) => OrderLine.fromMap(e as Map<String, dynamic>))
             .toList(),
