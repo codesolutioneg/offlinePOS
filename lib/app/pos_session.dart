@@ -78,12 +78,21 @@ class PosSession {
     final order = current;
     order.lines.clear();
     order.discountPercent = 0;
+    order.partnerId = null;
+    order.customerName = null;
     orders.save(order);
   }
 
   /// Apply a whole-order discount (0-100%). Persisted immediately.
   void setDiscount(double percent) {
     current.discountPercent = percent.clamp(0, 100).toDouble();
+    orders.save(current);
+  }
+
+  /// Attach (or clear, with null) the customer this sale is for.
+  void setCustomer(Customer? c) {
+    current.partnerId = c?.id;
+    current.customerName = c?.name;
     orders.save(current);
   }
 

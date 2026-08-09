@@ -96,6 +96,66 @@ class _SellScreenState extends State<SellScreen> {
     if (chosen != null) _changed(() => s.addProduct(product, chosen: chosen));
   }
 
+  Future<void> _openCustomer() async {
+    final ctrl = TextEditingController();
+    final result = await showDialog<Object?>(
+      context: context,
+      builder: (ctx) {
+        var results = s.catalogue.customers(limit: 30);
+        return StatefulBuilder(
+          builder: (ctx, setSt) => AlertDialog(
+            title: const Text('Customer'),
+            content: SizedBox(
+              width: 360,
+              height: 420,
+              child: Column(children: [
+                TextField(
+                  controller: ctrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    hintText: 'Search name or phone',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onChanged: (v) =>
+                      setSt(() => results = s.catalogue.customers(search: v, limit: 30)),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: results.isEmpty
+                      ? const Center(child: Text('No customers'))
+                      : ListView(children: [
+                          for (final c in results)
+                            ListTile(
+                              dense: true,
+                              title: Text(c.name),
+                              subtitle: c.phone != null ? Text(c.phone!) : null,
+                              onTap: () => Navigator.pop(ctx, c),
+                            ),
+                        ]),
+                ),
+              ]),
+            ),
+            actions: [
+              TextButton(
+                key: const Key('customer-clear'),
+                onPressed: () => Navigator.pop(ctx, 'clear'),
+                child: const Text('Walk-in'),
+              ),
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ],
+          ),
+        );
+      },
+    );
+    if (result is Customer) {
+      _changed(() => s.setCustomer(result));
+    } else if (result == 'clear') {
+      _changed(() => s.setCustomer(null));
+    }
+  }
+
   Future<void> _openDiscount() async {
     final ctrl = TextEditingController(
         text: s.current.discountPercent > 0
@@ -264,6 +324,20 @@ class _SellScreenState extends State<SellScreen> {
 
   Widget _orderPanel() => Column(
         children: [
+          Material(
+            color: Colors.grey.shade100,
+            child: ListTile(
+              dense: true,
+              leading: const Icon(Icons.person_outline),
+              title: Text(s.current.customerName ?? 'Walk-in customer'),
+              trailing: TextButton(
+                key: const Key('customer'),
+                onPressed: _openCustomer,
+                child: Text(s.current.partnerId == null ? 'Add' : 'Change'),
+              ),
+            ),
+          ),
+          const Divider(height: 1),
           Expanded(
             child: !s.hasLines
                 ? const Center(child: Text('Start adding products'))

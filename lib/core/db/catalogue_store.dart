@@ -26,6 +26,7 @@ class CatalogueStore {
     required List<ModifierGroup> groups,
     required Map<int, List<int>> productGroupIds,
     List<PaymentMethod> paymentMethods = const [],
+    List<Customer> customers = const [],
     DateTime? refreshedAt,
   }) {
     _db.raw.execute('BEGIN');
@@ -72,6 +73,10 @@ class CatalogueStore {
           "INSERT INTO catalogue_meta (key, value) VALUES ('payment_methods', ?) "
           "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
           [jsonEncode(paymentMethods.map((m) => m.toMap()).toList())]);
+      _db.raw.execute(
+          "INSERT INTO catalogue_meta (key, value) VALUES ('customers', ?) "
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+          [jsonEncode(customers.map((c) => c.toMap()).toList())]);
       _db.raw.execute('COMMIT');
     } catch (_) {
       _db.raw.execute('ROLLBACK');
@@ -110,6 +115,25 @@ class CatalogueStore {
       return list
           .map((e) => PaymentMethod.fromMap((e as Map).cast<String, dynamic>()))
           .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Customers synced from Odoo, optionally filtered by name or phone.
+  List<Customer> customers({String? search, int limit = 50}) {
+    final rows =
+        _db.raw.select("SELECT value FROM catalogue_meta WHERE key = 'customers'");
+    if (rows.isEmpty) return const [];
+    try {
+      final all = (jsonDecode(rows.first['value'] as String) as List)
+          .map((e) => Customer.fromMap((e as Map).cast<String, dynamic>()));
+      final q = (search ?? '').trim().toLowerCase();
+      final filtered = q.isEmpty
+          ? all
+          : all.where((c) =>
+              c.name.toLowerCase().contains(q) || (c.phone ?? '').contains(q));
+      return filtered.take(limit).toList();
     } catch (_) {
       return const [];
     }

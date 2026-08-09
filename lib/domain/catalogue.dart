@@ -113,3 +113,18 @@ class PaymentMethod {
         isCash: m['is_cash'] == true,
       );
 }
+
+/// A guest that can be attached to a sale, synced from Odoo res.partner.
+class Customer {
+  const Customer({required this.id, required this.name, this.phone});
+  final int id;
+  final String name;
+  final String? phone;
+
+  Map<String, dynamic> toMap() => {'id': id, 'name': name, 'phone': phone};
+  factory Customer.fromMap(Map<String, dynamic> m) => Customer(
+        id: m['id'] as int,
+        name: (m['name'] ?? '') as String,
+        phone: m['phone'] as String?,
+      );
+}

@@ -61,6 +61,21 @@ class OdooPuller {
       methods = const [];
     }
 
+    // Customers for attaching a guest to a sale. Bounded so a large partner list
+    // cannot bloat the till; optional like the rest.
+    List<Map<String, dynamic>> partners = const [];
+    try {
+      final raw = await call('res.partner', 'search_read', [
+        [['customer_rank', '>', 0]],
+        ['id', 'name', 'phone', 'mobile']
+      ], {'limit': 500, 'order': 'name'});
+      partners = raw is List
+          ? raw.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList()
+          : const [];
+    } catch (_) {
+      partners = const [];
+    }
+
     final byGroup = <int, List<Modifier>>{};
     for (final m in modifiers) {
       final gid = _id(m['category_id']);
@@ -134,6 +149,15 @@ class OdooPuller {
                 isCash: m['is_cash_count'] == true,
               ))
           .toList(),
+      customers: partners
+          .map((c) => Customer(
+                id: c['id'] as int,
+                name: (c['name'] ?? '') as String,
+                phone: c['phone'] is String
+                    ? c['phone'] as String
+                    : (c['mobile'] is String ? c['mobile'] as String : null),
+              ))
+          .toList(),
     );
   }
 
@@ -170,6 +194,7 @@ class CataloguePull {
     required this.groups,
     required this.productGroupIds,
     this.paymentMethods = const [],
+    this.customers = const [],
   });
 
   final List<Category> categories;
@@ -177,6 +202,7 @@ class CataloguePull {
   final List<ModifierGroup> groups;
   final Map<int, List<int>> productGroupIds;
   final List<PaymentMethod> paymentMethods;
+  final List<Customer> customers;
 
   /// A pull with no products is refused rather than written: replacing a working
   /// catalogue with an empty one would leave the till unable to sell.

@@ -159,6 +159,7 @@ class SyncService {
             groups: pull.groups,
             productGroupIds: pull.productGroupIds,
             paymentMethods: pull.paymentMethods,
+            customers: pull.customers,
             refreshedAt: _now().toUtc(),
           );
           catalogueRevision.value++;

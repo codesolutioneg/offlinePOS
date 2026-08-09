@@ -88,6 +88,8 @@ class Order {
     DateTime? createdAt,
     this.state = OrderState.draft,
     this.discountPercent = 0,
+    this.partnerId,
+    this.customerName,
     List<OrderLine>? lines,
     List<OrderPayment>? payments,
   })  : uuid = uuid ?? Uuid.v4(),
@@ -108,6 +110,11 @@ class Order {
   /// A whole-order discount, 0-100. Applied evenly to every line's price when the
   /// sale is sent, so the server books the discounted total.
   double discountPercent;
+
+  /// The Odoo partner this sale is for, and its name for the receipt/UI. Null is
+  /// a walk-in.
+  int? partnerId;
+  String? customerName;
 
   /// Set once the backend confirms. Never used as identity.
   int? serverId;
@@ -137,6 +144,8 @@ class Order {
         'state': state.name,
         'server_id': serverId,
         'discount_percent': discountPercent,
+        'partner_id': partnerId,
+        'customer_name': customerName,
         'lines': lines.map((l) => l.toMap()).toList(),
         'payments': payments.map((p) => p.toMap()).toList(),
       };
@@ -168,6 +177,8 @@ class Order {
         createdAt: DateTime.parse(m['created_at'] as String),
         state: OrderState.values.byName(m['state'] as String),
         discountPercent: (m['discount_percent'] as num?)?.toDouble() ?? 0,
+        partnerId: m['partner_id'] as int?,
+        customerName: m['customer_name'] as String?,
         lines: ((m['lines'] as List?) ?? const [])
             .map((e) => OrderLine.fromMap(e as Map<String, dynamic>))
             .toList(),
