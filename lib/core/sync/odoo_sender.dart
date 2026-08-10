@@ -57,7 +57,7 @@ class OdooSender {
     required this.baseUrl,
     required this.db,
     required this.post,
-    this.model = 'pos.order',
+    this.model = 'sale.order',
     this.method = 'create_from_offline_pos',
     this.tillId = kOfflineTillId,
   });
@@ -124,6 +124,18 @@ class OdooSender {
           final result = reply['result'];
           if (result == null) {
             throw PermanentlyRejected('no result for ${entry.payloadUuid}');
+          }
+          // The module returns one status dict per order: created/duplicate mean the
+          // sale is booked (a duplicate is a safe repeat, still an ack); rejected
+          // means retrying cannot help (deleted product, locked period), so park it
+          // rather than loop or silently drop a genuine sale.
+          final status = result is List && result.isNotEmpty && result.first is Map
+              ? (result.first as Map)['status']
+              : null;
+          if (status == 'rejected') {
+            final message = (result.first as Map)['message']?.toString() ??
+                'rejected by server';
+            throw _park(message);
           }
         } on PermanentSyncError catch (e) {
           // The server understood the order and refused it. Retrying cannot help,

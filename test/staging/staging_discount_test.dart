@@ -34,11 +34,13 @@ void main() {
     print('PRICE=$price qty=2 expectedTotal=$expected localTotal=${order.total}');
     await outbox.enqueue('order.push', order.uuid, order.toServerPayload());
     expect(await outbox.drain(), greaterThan(0));
-    final booked = ((await wiring.catalogueCall('pos.order', 'search_read',
-        [[['uuid', '=', order.uuid]], ['amount_total']], {})) as List).first as Map;
-    print('ODOO amount_total=${booked['amount_total']}');
-    expect(((booked['amount_total'] as num) - expected).abs() < 0.05, isTrue,
-        reason: 'Odoo should book the 25%-discounted total');
+    final booked = ((await wiring.catalogueCall('sale.order', 'search_read',
+        [[['offline_uuid', '=', order.uuid]], ['amount_total', 'amount_untaxed']], {})) as List).first as Map;
+    print('ODOO amount_untaxed=${booked['amount_untaxed']}');
+    // The discount is folded into each line's unit price, so the untaxed total is
+    // the discounted amount; amount_total may add tax on top.
+    expect(((booked['amount_untaxed'] as num) - expected).abs() < 0.05, isTrue,
+        reason: 'Odoo should book the 25%-discounted line total');
     db.close();
   }, timeout: const Timeout(Duration(minutes: 3)));
 }

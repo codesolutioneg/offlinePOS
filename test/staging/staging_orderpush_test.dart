@@ -1,6 +1,6 @@
 // ignore_for_file: avoid_print
 // Drives the app's REAL OdooWiring/OdooSender against real staging: enqueue a
-// paid order, drain the outbox, and confirm a pos.order was booked in Odoo.
+// paid order, drain the outbox, and confirm a sale.order was booked in Odoo.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
@@ -41,12 +41,15 @@ void main() {
     print('SENT=$sent uuid=${order.uuid} total=${order.total}');
     expect(sent, greaterThan(0));
 
-    // confirm Odoo actually booked it, routed to the till config
-    final found = await wiring.catalogueCall('pos.order', 'search_read',
-        [[['uuid', '=', order.uuid]], ['id', 'amount_total', 'offline_device_id', 'state']], {});
+    // confirm Odoo actually booked it as a sale order, keyed by the client uuid
+    final found = await wiring.catalogueCall('sale.order', 'search_read',
+        [[['offline_uuid', '=', order.uuid]],
+         ['id', 'amount_total', 'offline_device_id', 'state']], {});
     print('ODOO ORDER: $found');
     expect((found as List).isNotEmpty, isTrue,
         reason: 'the order should exist in Odoo after a drain');
+    expect((found).first['state'], 'sale',
+        reason: 'the sale order should be confirmed, so it reaches sales reports');
     db.close();
   }, timeout: const Timeout(Duration(minutes: 3)));
 }

@@ -13,6 +13,7 @@ class OrderModifier {
     required this.name,
     required this.quantity,
     required this.unitPrice,
+    this.productId,
   });
 
   final int modifierId;
@@ -20,10 +21,16 @@ class OrderModifier {
   final double quantity;
   final double unitPrice;
 
+  /// The product behind this modifier, if it is backed by one. The server books a
+  /// modifier as its own order line, so without the product id it cannot move stock
+  /// or invoice it; a modifier that is purely a label (no product) has none.
+  final int? productId;
+
   double get total => quantity * unitPrice;
 
   Map<String, dynamic> toMap() => {
         'modifier_id': modifierId,
+        'product_id': productId,
         'name': name,
         'quantity': quantity,
         'unit_price': unitPrice,
@@ -31,6 +38,7 @@ class OrderModifier {
 
   factory OrderModifier.fromMap(Map<String, dynamic> m) => OrderModifier(
         modifierId: m['modifier_id'] as int,
+        productId: m['product_id'] as int?,
         name: m['name'] as String,
         quantity: (m['quantity'] as num).toDouble(),
         unitPrice: (m['unit_price'] as num).toDouble(),

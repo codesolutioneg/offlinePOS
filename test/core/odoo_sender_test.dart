@@ -138,6 +138,49 @@ void main() {
     expect(store.deadReasons.values.single, contains('product deleted'));
   });
 
+  test('a created status from the sale.order module is an ack, not a park', () async {
+    final s = sender((u, h, b) async {
+      if (u.path.contains('authenticate')) {
+        return HttpReply(200, jsonEncode({'result': {'uid': 2}}));
+      }
+      // The module returns one status dict per order.
+      return HttpReply(200, jsonEncode({
+        'result': [{'uuid': 'u1', 'status': 'created', 'sale_order_id': 3230}]
+      }));
+    });
+    await s.authenticate('a', 'b');
+    // No throw means the outbox marks it sent.
+    await s.orderSender(entry());
+  });
+
+  test('a duplicate status is a safe repeat, still an ack', () async {
+    final s = sender((u, h, b) async {
+      if (u.path.contains('authenticate')) {
+        return HttpReply(200, jsonEncode({'result': {'uid': 2}}));
+      }
+      return HttpReply(200, jsonEncode({
+        'result': [{'uuid': 'u1', 'status': 'duplicate', 'sale_order_id': 3230}]
+      }));
+    });
+    await s.authenticate('a', 'b');
+    await s.orderSender(entry());
+  });
+
+  test('a rejected status from the module parks the sale', () async {
+    final s = sender((u, h, b) async {
+      if (u.path.contains('authenticate')) {
+        return HttpReply(200, jsonEncode({'result': {'uid': 2}}));
+      }
+      return HttpReply(200, jsonEncode({
+        'result': [
+          {'uuid': 'u1', 'status': 'rejected', 'message': 'Product 9 no longer exists.'}
+        ]
+      }));
+    });
+    await s.authenticate('a', 'b');
+    expect(() => s.orderSender(entry()), throwsA(isA<PermanentlyRejected>()));
+  });
+
   test('the payload carries what the server needs to place the sale', () async {
     Map<String, dynamic>? seen;
     final s = sender((u, h, b) async {

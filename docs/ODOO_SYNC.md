@@ -1,101 +1,94 @@
 # Syncing to Odoo
 
-## Decision: go through a backend, not straight to Odoo
+## What we book, and why it is a sale.order
 
-**Tills talk to a backend service. The backend holds the one Odoo credential.**
+An offline sale is booked as the **full on-site chain**, not a bare `pos.order`:
 
-This is forced by the licence constraint, and the evidence is in the code we already
-run:
+```
+sale.order  ->  action_confirm       (sales analysis)
+            ->  delivery validated    (stock.move / inventory)
+            ->  customer invoice       (account.move / financials, posted)
+            ->  payment registered     (account.payment, invoice paid)
+```
 
-| Route | What it does | Verdict |
-|---|---|---|
-| `jouma/flutter_api` | `auth_controller.py:38,102` call `request.session.authenticate(db, credential)`, authenticating each caller as a real `res.users` | **Unusable.** Every cashier becomes an Odoo user, so every cashier is a licence |
-| `Dishflow-pos/pos_backend` | `config.py:14-15` holds a single `odoo_username`/`odoo_password`; tills authenticate to the backend with JWT (`app/core/auth.py`) | **Correct shape.** One Odoo licence total |
+The reason is the customer's existing reports. They read `sale.order` (sales
+analysis), `stock.move` (inventory valuation) and `account.move` (financials); a
+bare `pos.order` feeds none of them. Matching jouma's own structure means an offline
+sale shows up in every report and module exactly like a sale rung on the spot, so the
+customer sees no gap and loses no feature.
 
-Three further reasons beyond licensing:
+Every record is dated to when the sale was actually **rung**, not when it synced.
+Backdating the valuation date goes through jouma's `stock_accounting_date_adjustment`
+module, so a week of offline orders lands on the right accounting days instead of all
+posting on the day the line came back.
 
-1. **The Odoo password never reaches a till.** One admin credential spread across
-   tablets in a shop is the whole business sitting on stealable hardware.
-2. **One writer to the shared account.** Several tills pushing a week of backlog
-   through one login needs serialising somewhere, and that somewhere cannot be the
-   tills.
-3. **One place to fan out.** Odoo is the accounting record, Firebase the real-time
-   layer. The till writes once; the backend distributes. Dual-writing from the device
-   produces sales that exist in one and not the other.
+This lives in the `pos_offline_sync` Odoo module: `sale.order.create_from_offline_pos(payloads)`.
+
+## The one credential
+
+The till authenticates to Odoo as a **single shared integration user** (`offlinepos_sync`
+on staging). One Odoo licence total, never one per cashier. The password is a build/
+config value, not baked into the binary. Because that shared user rings everything,
+the client `cashier_id` / `device_id` on each order is the only record of who and
+which till actually made the sale, so both are stored on the `sale.order`.
+
+### Integration-user setup (required, checked up front)
+
+The module refuses to book with a clear message if any of these is missing, rather
+than failing deep in the delivery step:
+
+| Requirement | Why |
+|---|---|
+| Group **Point of Sale / User** | The catalogue pull reads `pos.category` and `pos.payment.method` |
+| Group **Sales**, **Invoicing**, **Inventory / User** | Confirm the sale, validate delivery, post and pay the invoice |
+| Group **Stock Accounting Date Manager** | Backdating the valuation date is gated behind it |
+| An **email address** on the user | Backdated delivery posts an audit note via `message_post`, which requires the author to have an email |
 
 ## What the till sends
 
-Every order push carries these, and each one exists for a reason that has already
-gone wrong somewhere:
+Every order push carries these, each one for a reason that has gone wrong somewhere:
 
 | Field | Why |
 |---|---|
-| `uuid` | Idempotency key. A push can be retried after the server committed but before the acknowledgement was recorded, so the server must treat a repeat as the same sale |
+| `uuid` | Idempotency key. A push can be retried after the server committed but before the ack was recorded, so a repeat must return the original sale, not book a second one |
 | `created_at` | The moment of sale. Without it a week of offline orders all post on the day the line returned |
-| `business_date` | The trading day, with a 04:00 cutover, so a service running past midnight stays on one report |
-| `cashier_id` | With one shared login Odoo attributes every order to the same user, so this is the only record of who rang it |
+| `cashier_id` | With one shared login Odoo attributes every order to the same user; this is the only record of who rang it |
 | `device_id` | Which till, for reconciliation and support |
+| `lines[].product_id`, `quantity`, `unit_price` | The sale itself; a whole-order discount is folded into each line's `unit_price` before sending |
+| `lines[].modifiers[].product_id` | Each modifier backed by a product becomes its own order line, so it moves stock and invoices exactly as on-site |
 
-## What the backend must do
+## How the module answers
 
-### 1. One session per trading day, backdated
+`create_from_offline_pos` returns one status dict per order, so a batch never fails
+whole on one bad member:
 
-A week offline is a week of trading days. Each order goes into the session for its
-`business_date`, created if absent with its `start_at` and `stop_at` on that date.
+| status | Meaning | Till behaviour |
+|---|---|---|
+| `created` | Booked | Ack, mark sent |
+| `duplicate` | Same `uuid` already booked (a safe repeat) | Ack, mark sent |
+| `rejected` | Retrying cannot help (deleted product, locked period) | Park this one, let the rest of the backlog through, surface for a human |
 
-Putting a week of orders into a single open session posts a week of revenue on one
-accounting date. Daily sales, Z-reports and the cash-up are then permanently wrong,
-and **no client-side change can repair it afterwards**.
+Each order is booked in its own savepoint, so one rejection cannot poison the
+transaction and discard the others.
 
-```
-find or create pos.session where config_id = <till's config>
-                            and business_date = <order.business_date>
-set date_order = order.created_at   # never "now"
-```
+## The two failures the till distinguishes
 
-Sessions for past days should be opened and closed around the orders they hold, not
-left open, or the next day's cash-up inherits them.
-
-### 2. Reject a repeat, do not duplicate it
-
-Look up the order by `uuid` before creating. Return the existing id if found.
-
-`pos_backend/app/services/odoo_sync.py:348` currently creates a `pos.order` with a
-generated name and no uuid lookup, so a retry after a partial failure books the sale
-twice. It also sends neither `session_id` nor `date_order`, which is both problems
-above.
-
-### 3. Distinguish the two failures
-
-The till's outbox depends on this distinction and behaves very differently for each:
-
-- **Transient** (server down, 5xx, timeout, captive portal): the till keeps the sale
-  and retries forever. Nothing is lost.
-- **Permanent** (validation failure, product deleted, malformed): the till parks that
-  one sale, keeps the rest moving, and surfaces it for a human. Return an
-  unambiguous permanent error so a single bad order cannot strand a week of takings
-  behind it.
-
-Anything ambiguous should be reported as transient. A sale wrongly retried is noise;
-a sale wrongly parked is money missing from the books.
-
-### 4. Attribute the cashier
-
-Store `cashier_id` on the order. Odoo's own audit trail will say the shared user did
-everything, so the till's audit log, pushed as `audit.push`, is the real record of
-who did what. Keep it.
+- **Transient** (server down, 5xx, timeout, captive portal): keep the sale and retry
+  forever. Nothing is lost. Anything ambiguous is treated as transient.
+- **Permanent** (`status: rejected`, or an Odoo error): park that one sale, keep the
+  rest moving. A sale wrongly retried is noise; a sale wrongly parked is money missing
+  from the books, so the bar for "permanent" is high.
 
 ## Message kinds the till queues
 
 | Kind | Key | Notes |
 |---|---|---|
-| `order.push` | order uuid | The sale. Must be idempotent |
-| `audit.push` | `audit-<id>` | Who did what, since Odoo cannot say |
+| `order.push` | order uuid | The sale. Idempotent on the uuid |
+| `audit.push` | `audit-<id>` | Who did what, since Odoo's trail only shows the shared user |
 | `device.status` | device id | Heartbeat. Keyed on the device so it replaces rather than accumulating during the outage it describes |
 
-## Catch-up shape after a long outage
+## Catch-up after a long outage
 
 A week is roughly 1,400 to 3,500 orders. The till drains continuously rather than one
-batch per tick, so the limit is the server. The backend should accept a batch, keep
-per-order idempotency, and answer per order rather than failing a whole batch on one
-bad member.
+batch per tick, so the limit is the server. Idempotency per `uuid` makes the whole
+catch-up safe to interrupt and resume at any point.

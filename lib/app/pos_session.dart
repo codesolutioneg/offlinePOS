@@ -50,6 +50,7 @@ class PosSession {
         for (final c in chosen)
           OrderModifier(
             modifierId: c.modifier.id,
+            productId: c.modifier.productId,
             name: c.modifier.name,
             quantity: c.quantity.toDouble(),
             // Priced against the parent now, so a later catalogue change cannot

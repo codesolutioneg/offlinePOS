@@ -39,15 +39,20 @@ void main() {
     final sent = await outbox.drain();
     expect(sent, greaterThan(0));
 
-    final booked = ((await wiring.catalogueCall('pos.order', 'search_read',
-        [[['uuid', '=', order.uuid]], ['id', 'amount_paid', 'state', 'payment_ids']], {})) as List);
+    final booked = ((await wiring.catalogueCall('sale.order', 'search_read',
+        [[['offline_uuid', '=', order.uuid]],
+         ['id', 'amount_total', 'state', 'invoice_ids']], {})) as List);
     print('ORDER: $booked');
     expect(booked.isNotEmpty, isTrue);
     final o = booked.first as Map;
-    final pays = ((await wiring.catalogueCall('pos.payment', 'search_read',
-        [[['pos_order_id', '=', o['id']]], ['amount', 'payment_method_id']], {})) as List);
-    print('PAYMENTS: $pays');
-    expect(pays.isNotEmpty, isTrue, reason: 'the chosen method should be recorded');
+    final invIds = (o['invoice_ids'] as List).cast<int>();
+    expect(invIds.isNotEmpty, isTrue, reason: 'the sale should be invoiced');
+    // The sale.order cascade takes payment through account: the invoice is paid.
+    final inv = ((await wiring.catalogueCall('account.move', 'search_read',
+        [[['id', 'in', invIds]], ['payment_state', 'amount_residual']], {})) as List);
+    print('INVOICE: $inv');
+    expect((inv.first as Map)['payment_state'], 'paid',
+        reason: 'the tendered sale should leave the invoice fully paid');
     db.close();
   }, timeout: const Timeout(Duration(minutes: 3)));
 }
