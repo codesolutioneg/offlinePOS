@@ -24,6 +24,34 @@ posting on the day the line came back.
 
 This lives in the `pos_offline_sync` Odoo module: `sale.order.create_from_offline_pos(payloads)`.
 
+## When the till syncs: at shift close, not per order
+
+Orders are **held on the till and pushed to Odoo as one batch when the shift is
+closed**, not one-by-one as they are rung. The shop runs on a single shared Odoo
+login, and booking the day's sales in one settlement at close is how the books are
+meant to be written (it mirrors jouma's rescue-session-at-one-accounting-close
+model). A manual **Sync now** in Support pushes the batch early if needed.
+
+What runs in the background is read-only and books nothing:
+
+- A **connectivity probe** every ~20s (an unauthenticated `version_info` call) keeps
+  the **online/offline badge** on the sell screen honest.
+- A **catalogue refresh** when prices are stale.
+
+The periodic loop never drains the order queue. Selling is always available offline;
+the badge only tells the cashier whether the close-of-shift push will land now or
+wait.
+
+## Recovering from an outage
+
+Every order is written to the encrypted local database the instant it is paid, so
+nothing depends on the network. If the till is **offline at shift close**, the batch
+push fails cleanly, the orders stay queued, and the cashier is told they are safe and
+will sync when the connection returns (or from Support > Sync now). Because every push
+carries the client `uuid` and the server is idempotent on it, a batch that was
+interrupted half-way is simply pushed again: already-booked sales come back as
+`duplicate` and are skipped, the rest book. No sale is lost and none is double-booked.
+
 ## The one credential
 
 The till authenticates to Odoo as a **single shared integration user** (`offlinepos_sync`
@@ -89,6 +117,7 @@ transaction and discard the others.
 
 ## Catch-up after a long outage
 
-A week is roughly 1,400 to 3,500 orders. The till drains continuously rather than one
-batch per tick, so the limit is the server. Idempotency per `uuid` makes the whole
-catch-up safe to interrupt and resume at any point.
+A week is roughly 1,400 to 3,500 orders. They push as one batch at the next shift
+close (or a manual Sync now), draining until the queue is empty, so the limit is the
+server. Idempotency per `uuid` makes the whole catch-up safe to interrupt and resume
+at any point.

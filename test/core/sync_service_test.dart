@@ -37,6 +37,7 @@ void main() {
     Map<String, OutboxSender> senders = const {},
     OdooPuller? puller,
     Outbox? outbox,
+    Future<bool> Function()? probe,
   }) =>
       SyncService(
         outbox: outbox ?? Outbox(store: store, senders: senders),
@@ -45,6 +46,7 @@ void main() {
         deviceId: 'till-7',
         appVersion: '1.2.3',
         puller: puller,
+        probe: probe,
       );
 
   test('a never-pulled catalogue needs a refresh', () {
@@ -84,6 +86,56 @@ void main() {
     final s = serviceWith(puller: pullerWith(const []));
     await s.tick();
     expect(cat.products().single.name, 'Keep');
+  });
+
+  test('refresh never drains the outbox, so an order is not pushed off-shift', () async {
+    // The license model books orders as one batch at shift close. The periodic
+    // refresh must therefore touch reachability and the catalogue only, never send
+    // a queued sale.
+    var sent = 0;
+    final outbox = Outbox(store: store, senders: {'order.push': (e) async => sent++});
+    await outbox.enqueue('order.push', 'u1', {});
+    final s = serviceWith(
+      outbox: outbox,
+      puller: pullerWith(const [Product(id: 1, name: 'A', price: 5)]),
+      probe: () async => true,
+    );
+    await s.refresh();
+    expect(sent, 0, reason: 'refresh must not push orders');
+    expect(s.online.value, isTrue);
+    // The order is still queued, ready for the close-of-shift flush.
+    expect(store.pendingSalesCount, 1);
+  });
+
+  test('an unreachable probe marks the till offline and skips the pull', () async {
+    var pulls = 0;
+    final s = serviceWith(
+      puller: OdooPuller(call: (model, m, a, k) async {
+        if (model == 'product.product') pulls++;
+        return const [];
+      }),
+      probe: () async => false,
+    );
+    await s.refresh();
+    expect(s.online.value, isFalse);
+    expect(pulls, 0, reason: 'nothing reachable, so no pull attempt');
+  });
+
+  test('a failing flush marks the till offline', () async {
+    final bad = serviceWith(
+      puller: OdooPuller(call: (a, b, c, d) async => throw Exception('down')),
+    );
+    await bad.flush();
+    expect(bad.online.value, isFalse);
+  });
+
+  test('a successful flush marks the till online', () async {
+    final ok = serviceWith(
+      outbox: Outbox(store: store, senders: {'order.push': (e) async {}}),
+      puller: pullerWith(const [Product(id: 1, name: 'A', price: 5)]),
+    );
+    await ok.flush();
+    expect(ok.online.value, isTrue);
   });
 
   test('a fresh catalogue is not re-pulled', () async {

@@ -279,7 +279,10 @@ class _PosAppState extends State<PosApp> {
               formatAmount: PosApp.money,
               staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
               catalogueChanged: widget.sync.catalogueRevision,
-              syncNow: widget.sync.tick,
+              // No per-sale push: orders are held and sent as one batch at shift
+              // close, so the shared Odoo login is not hit per order.
+              online: widget.sync.online,
+              pendingToSync: () => widget.sync.pendingSales,
               onChanged: _publishActivity,
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
@@ -297,7 +300,8 @@ class _PosAppState extends State<PosApp> {
                 _publishActivity();
                 // A straight counter sale never held, so its lines reach the
                 // kitchen here; a dine-in order already fired on hold and reprints
-                // nothing.
+                // nothing. The sale is NOT pushed to Odoo now: it waits on the till
+                // for the shift-close batch.
                 unawaited(_fireKitchen(order as Order).then((_) => _printReceipt(order)));
               },
             ),
@@ -506,6 +510,24 @@ class _PosAppState extends State<PosApp> {
         cashierId: session.cashierId,
         cashMethodIds: cashMethodIds,
         formatAmount: PosApp.money,
+        // Closing the shift is when the day's orders are pushed to Odoo in one
+        // batch. Returns a message for the cashier: how it went, or that the
+        // orders are safe and will sync once the connection is back.
+        onCloseSync: () async {
+          final pendingBefore = widget.sync.pendingSales;
+          if (pendingBefore == 0) return 'No orders to sync.';
+          await widget.sync.flush();
+          final left = widget.sync.pendingSales;
+          if (left == 0) {
+            return 'Synced $pendingBefore order(s) to Odoo.';
+          }
+          if (!widget.sync.online.value) {
+            return 'Offline. $left order(s) saved on this till and will sync when '
+                'the connection is back (or from Support > Sync now).';
+          }
+          return 'Synced ${pendingBefore - left} of $pendingBefore. $left still '
+              'pending, try again from Support > Sync now.';
+        },
       ),
     ));
   }

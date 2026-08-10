@@ -25,6 +25,7 @@ import 'core/db/sqlite_outbox_store.dart';
 import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
 import 'core/printing/printer_registry.dart';
+import 'core/sync/http_post.dart';
 import 'core/sync/outbox.dart';
 import 'core/sync/odoo_endpoint.dart';
 import 'core/sync/odoo_puller.dart';
@@ -86,7 +87,38 @@ Future<void> main() async {
   // The catalogue pull rides the same authenticated Odoo session as the order
   // push. Built here, before any endpoint is configured, but it reads the live
   // sender at call time, so a server entered later still refreshes the menu.
-  final odoo = OdooWiring(outbox: outbox);
+  final odoo = OdooWiring(
+    outbox: outbox,
+    // Once the server books a sale, mark it synced so the history badge is honest.
+    onOrderBooked: orders.markSynced,
+    // A server-rejected sale is money taken but never booked; record it so it is
+    // not visible only as a diagnostics count.
+    onOrderRejected: (uuid, reason) =>
+        audit.record('system', 'order.rejected', detail: '$uuid: $reason'),
+  );
+
+  // The endpoint store is read here so the connectivity probe below can see the
+  // live server, and again later to point the outbox at it.
+  final endpoints = OdooEndpointStore(db);
+
+  // A cheap, unauthenticated reachability check: version_info answers on any
+  // running Odoo. It books nothing, so it is safe to run on the timer purely to
+  // keep the online/offline badge honest. Orders are never pushed here.
+  Future<bool> probeOnline() async {
+    final e = endpoints.load();
+    if (e == null || !e.isComplete) return false;
+    try {
+      final reply = await httpPost(
+        Uri.parse(e.baseUrl).resolve('/web/webclient/version_info'),
+        const {'Content-Type': 'application/json'},
+        '{"jsonrpc":"2.0","method":"call","params":{}}',
+      ).timeout(const Duration(seconds: 6));
+      return reply.statusCode >= 200 && reply.statusCode < 500;
+    } catch (_) {
+      return false;
+    }
+  }
+
   final sync = SyncService(
     outbox: outbox,
     catalogue: catalogue,
@@ -95,6 +127,7 @@ Future<void> main() async {
     deviceId: deviceId,
     appVersion: appVersion,
     puller: OdooPuller(call: odoo.catalogueCall),
+    probe: probeOnline,
   )..start();
 
   // Printers are resolved by name at print time, so a DHCP lease that moves
@@ -116,7 +149,6 @@ Future<void> main() async {
   // Point the outbox at an Odoo server if this till has been configured, so a
   // sale queued while unconfigured still goes out once a server is set. Selling
   // never depends on it; an unconfigured till simply accumulates.
-  final endpoints = OdooEndpointStore(db);
   // A build may carry a default endpoint via --dart-define for a quick local test;
   // a saved one entered on the device wins over it.
   const envUrl = String.fromEnvironment('ODOO_URL');

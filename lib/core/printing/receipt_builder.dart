@@ -47,17 +47,18 @@ class ReceiptBuilder {
     p.rule();
 
     for (final l in order.lines) {
-      // The line total is net of any per-line discount and includes its modifiers,
-      // so what prints is what the customer is charged for that line.
-      p.row('${_qty(l.quantity)} x ${l.name}', formatAmount(l.total));
+      // The base price is printed on the header and each modifier's amount below it,
+      // so the printed parts add up to the line total rather than counting the
+      // modifiers twice. A per-line discount prints as its own negative line, so
+      // header + modifiers - discount reconciles to what the customer pays.
+      p.row('${_qty(l.quantity)} x ${l.name}', formatAmount(l.quantity * l.unitPrice));
       for (final m in l.modifiers) {
-        // Modifiers are indented so the kitchen and the customer both read the
-        // line they belong to. Free ones show no amount at all.
         final amount = m.unitPrice == 0 ? '' : formatAmount(l.quantity * m.total);
         p.row('   + ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}', amount);
       }
       if (l.discountPercent > 0) {
-        p.line('   (-${_pct(l.discountPercent)}% line discount)');
+        p.row('   line discount ${_pct(l.discountPercent)}%',
+            '-${formatAmount(l.gross * l.discountPercent / 100)}');
       }
       if (l.note != null && l.note!.isNotEmpty) p.line('   ${l.note}');
     }

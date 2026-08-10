@@ -254,10 +254,15 @@ class Order {
   Map<String, dynamic> toServerPayload() {
     final f = discountFactor;
     final m = toMap();
+    // The discount is now baked into the prices below, so the percentage fields are
+    // zeroed on the wire. Leaving them set would let a server that also reads them
+    // discount an already-discounted price a second time.
+    m['discount_percent'] = 0;
     m['lines'] = lines.map((l) {
       final lf = l.lineDiscountFactor * f;
       final lm = l.toMap();
       lm['unit_price'] = l.unitPrice * lf;
+      lm['discount_percent'] = 0;
       lm['modifiers'] = l.modifiers.map((mod) {
         final mm = mod.toMap();
         mm['unit_price'] = mod.unitPrice * lf;

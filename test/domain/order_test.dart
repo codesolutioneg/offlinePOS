@@ -54,6 +54,21 @@ void main() {
     expect((mod.first as Map)['product_id'], 88);
   });
 
+  test('the server payload folds discounts into prices and zeroes the percents', () {
+    // Both discounts must be baked into unit prices AND the percent fields cleared,
+    // so a server that also reads a percent cannot discount an already-discounted
+    // price a second time.
+    final order = Order(deviceId: 'till-1', cashierId: 'c1', discountPercent: 10, lines: [
+      OrderLine(productId: 1, name: 'Steak', quantity: 1, unitPrice: 100, discountPercent: 20),
+    ]);
+    final p = order.toServerPayload();
+    expect(p['discount_percent'], 0);
+    final line = (p['lines'] as List).first as Map;
+    expect(line['discount_percent'], 0);
+    // 100 less 20% (line) less 10% (order) = 72.
+    expect((line['unit_price'] as num).toDouble(), closeTo(72.0, 0.001));
+  });
+
   test('the server id is a reference, never the identity', () {
     final order = Order(deviceId: 'till-1', cashierId: 'c1')..serverId = 42;
     final restored = Order.fromMap(order.toMap());

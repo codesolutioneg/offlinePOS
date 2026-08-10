@@ -72,12 +72,11 @@ class OrderStore {
   /// writer is a second chance for them to disagree: an UPDATE that touched only
   /// the columns left `byUuid` returning the pre-sync state forever. One writer,
   /// built from one object, cannot drift.
-  void markSynced(String uuid, int serverId) {
+  void markSynced(String uuid, [int? serverId]) {
     final order = byUuid(uuid);
     if (order == null) return;
-    order
-      ..state = OrderState.synced
-      ..serverId = serverId;
+    order.state = OrderState.synced;
+    if (serverId != null) order.serverId = serverId;
     save(order);
   }
 

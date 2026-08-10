@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/pos_session.dart';
@@ -20,11 +21,12 @@ class SellScreen extends StatefulWidget {
     this.onSignOut,
     this.staleness,
     this.catalogueChanged,
-    this.syncNow,
     this.drawer,
     this.onHold,
     this.onOpenOrders,
     this.onLineVoided,
+    this.online,
+    this.pendingToSync,
   });
 
   final PosSession session;
@@ -44,9 +46,6 @@ class SellScreen extends StatefulWidget {
   /// itself instead of the cashier leaving and re-entering the screen.
   final Listenable? catalogueChanged;
 
-  /// Kicks a sync right after a sale so the order reaches Odoo promptly instead
-  /// of waiting for the next timer tick.
-  final Future<void> Function()? syncNow;
 
   /// The navigation drawer (open orders, history, reports, staff, settings). Owned
   /// by the app shell so this screen stays about selling.
@@ -62,6 +61,13 @@ class SellScreen extends StatefulWidget {
   /// A line was voided with a reason, so the shell can print a kitchen cancel slip
   /// if the line had already been fired.
   final void Function(OrderLine line, String reason)? onLineVoided;
+
+  /// Whether the server is reachable, for the status badge. Orders sell and queue
+  /// the same either way; this only tells the cashier what will happen at close.
+  final ValueListenable<bool>? online;
+
+  /// How many sales are held on the till waiting for the shift-close batch.
+  final int Function()? pendingToSync;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -530,13 +536,13 @@ class _SellScreenState extends State<SellScreen> {
     final order = s.pay(payments: payments);
     setState(() {});
     widget.onPaid?.call(order);
-    // Push it now rather than waiting for the timer, so it lands in Odoo promptly.
-    widget.syncNow?.call();
     if (!mounted) return;
+    // The sale is saved on this till now; it is sent to Odoo with the rest of the
+    // shift's orders at close, so the message does not promise an instant sync.
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       key: const Key('sale-complete'),
       content: Text('Sale complete: ${widget.formatAmount(order.total)} ($label). '
-          'Syncing to Odoo.'),
+          'Saved on this till.'),
       duration: const Duration(seconds: 3),
     ));
   }
@@ -553,6 +559,7 @@ class _SellScreenState extends State<SellScreen> {
       appBar: AppBar(
         title: Text(title, key: const Key('order-context')),
         actions: [
+          _statusChip(),
           if (widget.onOpenOrders != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -592,6 +599,45 @@ class _SellScreenState extends State<SellScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// Online/offline badge plus how many sales are waiting for the close-of-shift
+  /// batch. This is the honest status a cashier needs: selling works either way,
+  /// but this says whether the orders have left the till yet.
+  Widget _statusChip() {
+    final online = widget.online;
+    Widget badge(bool isOnline) {
+      final pending = widget.pendingToSync?.call() ?? 0;
+      final color = isOnline ? Colors.green : Colors.grey;
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          key: const Key('online-status'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(isOnline ? Icons.cloud_done : Icons.cloud_off, size: 18, color: color),
+            const SizedBox(width: 4),
+            Text(isOnline ? 'Online' : 'Offline', style: TextStyle(color: color, fontSize: 13)),
+            if (pending > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Chip(
+                  key: const Key('pending-count'),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  label: Text('$pending to sync', style: const TextStyle(fontSize: 11)),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    if (online == null) return badge(false);
+    return ValueListenableBuilder<bool>(
+      valueListenable: online,
+      builder: (context, isOnline, child) => badge(isOnline),
     );
   }
 

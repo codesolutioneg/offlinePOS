@@ -11,6 +11,7 @@ class ShiftScreen extends StatefulWidget {
     required this.cashierId,
     required this.formatAmount,
     this.cashMethodIds = const {},
+    this.onCloseSync,
   });
 
   final ShiftStore store;
@@ -20,6 +21,10 @@ class ShiftScreen extends StatefulWidget {
   /// The payment methods that land in the drawer, so the X/Z drawer total counts
   /// cash and leaves card and other tenders out.
   final Set<int> cashMethodIds;
+
+  /// Pushes the shift's orders to Odoo as one batch when the shift closes, and
+  /// returns a message describing the outcome. Null on a build with no server.
+  final Future<String> Function()? onCloseSync;
 
   @override
   State<ShiftScreen> createState() => _ShiftScreenState();
@@ -196,10 +201,21 @@ class _ShiftScreenState extends State<ShiftScreen> {
         label: const Text('Close shift (Z)'),
         onPressed: () async {
           final counted = await _promptAmount('Close shift', label: 'Counted cash');
-          if (counted != null) {
-            final closed = widget.store.closeShift(countedCash: counted);
-            if (mounted) _showZ(closed);
-            _refresh();
+          if (counted == null) return;
+          final closed = widget.store.closeShift(countedCash: counted);
+          if (mounted) _showZ(closed);
+          _refresh();
+          // Push the day's orders to Odoo now, as one batch. The message tells the
+          // cashier whether it landed or is safely held for later.
+          if (widget.onCloseSync != null) {
+            final message = await widget.onCloseSync!();
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                key: const Key('close-sync-result'),
+                content: Text(message),
+                duration: const Duration(seconds: 5),
+              ));
+            }
           }
         },
       ),

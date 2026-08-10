@@ -29,6 +29,7 @@ class SyncService {
     required this.appVersion,
     OdooPuller? puller,
     AuditLog? audit,
+    Future<bool> Function()? probe,
     this.catalogueMaxAge = const Duration(hours: 6),
     DateTime Function()? now,
   })  : _outbox = outbox,
@@ -36,6 +37,7 @@ class SyncService {
         _puller = puller,
         _outboxStore = outboxStore,
         _audit = audit,
+        _probe = probe,
         _now = now ?? DateTime.now;
 
   final Outbox _outbox;
@@ -43,10 +45,22 @@ class SyncService {
   final OdooPuller? _puller;
   final SqliteOutboxStore _outboxStore;
   final AuditLog? _audit;
+
+  /// A cheap reachability check against the configured server. Injected so this
+  /// stays testable without a socket. Null on a build with no way to probe, in
+  /// which case a successful push is the only signal of being online.
+  final Future<bool> Function()? _probe;
+
   final String deviceId;
   final String appVersion;
   final Duration catalogueMaxAge;
   final DateTime Function() _now;
+
+  /// Whether the server is currently reachable. Drives the online/offline badge on
+  /// the sell screen. Starts false: a till has not proven it can reach anything
+  /// until it has, and claiming "online" before the first successful probe would
+  /// be a lie a cashier acts on.
+  final ValueNotifier<bool> online = ValueNotifier<bool>(false);
 
   /// Sales still on the till, for anything that has to decide whether losing this
   /// device would lose money. The update gate is the caller that matters.
@@ -85,9 +99,16 @@ class SyncService {
     return age == null || age > catalogueMaxAge;
   }
 
-  void start({Duration every = const Duration(seconds: 30)}) {
+  /// The periodic loop deliberately does NOT push orders. Orders are held on the
+  /// till and sent as one batch when the shift is closed (or by a manual sync),
+  /// because the shop runs on a single shared Odoo login and a per-order push is
+  /// not how the books are meant to be written. The timer only keeps the
+  /// online/offline badge honest and the catalogue fresh, both of which are reads.
+  void start({Duration every = const Duration(seconds: 20)}) {
     _timer?.cancel();
-    _timer = Timer.periodic(every, (_) => tick());
+    _timer = Timer.periodic(every, (_) => refresh());
+    // Probe once at startup so the badge is right before the first tick.
+    unawaited(refresh());
   }
 
   void stop() {
@@ -132,8 +153,46 @@ class SyncService {
     await _outbox.enqueue('device.status', deviceId, status().toMap());
   }
 
-  /// One pass. Safe to call at any time; failures are recorded, never thrown, so a
-  /// timer tick can never take the app down.
+  /// A read-only pass: check reachability and refresh the catalogue if it is stale.
+  /// Never drains the outbox, so it never pushes an order. This is what the timer
+  /// runs, keeping the badge and prices current without booking anything.
+  Future<void> refresh() async {
+    if (_state == SyncState.working) return;
+    if (_probe != null) {
+      online.value = await _probe();
+      // No point pulling if nothing is reachable; the badge is already set.
+      if (!online.value) return;
+    }
+    if (_puller == null || !catalogueNeedsRefresh) {
+      if (_probe == null) online.value = true;
+      return;
+    }
+    try {
+      final pull = await _puller.pull();
+      if (pull.isUsable) {
+        _catalogue.replaceAll(
+          categories: pull.categories,
+          products: pull.products,
+          groups: pull.groups,
+          productGroupIds: pull.productGroupIds,
+          paymentMethods: pull.paymentMethods,
+          customers: pull.customers,
+          refreshedAt: _now().toUtc(),
+        );
+        catalogueRevision.value++;
+      }
+      lastError = null;
+      // A successful read proves reachability even when no probe was injected.
+      online.value = true;
+    } catch (e) {
+      lastError = e.toString();
+      online.value = false;
+    }
+  }
+
+  /// One full push: hand the audit trail and heartbeat to the outbox, drain it, and
+  /// refresh the catalogue. This is the batch that runs at shift close and on a
+  /// manual sync, never on the timer. Failures are recorded, never thrown.
   Future<void> tick() async {
     if (_state == SyncState.working) return;
     _state = SyncState.working;
@@ -167,9 +226,16 @@ class SyncService {
       }
       lastError = null;
       _state = SyncState.idle;
+      // A completed push is the strongest proof of being online.
+      online.value = true;
     } catch (e) {
       lastError = e.toString();
       _state = SyncState.offline;
+      online.value = false;
     }
   }
+
+  /// Alias read at the call sites that push a batch (shift close, manual sync), so
+  /// their intent reads as "flush what is queued" rather than an anonymous tick.
+  Future<void> flush() => tick();
 }

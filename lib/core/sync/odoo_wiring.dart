@@ -9,12 +9,25 @@ import 'outbox.dart';
 /// when the session lapses. Selling never waits on any of this: the outbox drains
 /// on the sync timer, off the path of a sale.
 class OdooWiring {
-  OdooWiring({required Outbox outbox, HttpPostFn? post})
-      : _outbox = outbox,
+  OdooWiring({
+    required Outbox outbox,
+    HttpPostFn? post,
+    this.onOrderBooked,
+    this.onOrderRejected,
+  })  : _outbox = outbox,
         _post = post ?? httpPost;
 
   final Outbox _outbox;
   final HttpPostFn _post;
+
+  /// Called with a sale's uuid once the server has booked it (created or a safe
+  /// duplicate), so the till can mark the order synced and the history badge is
+  /// truthful rather than always saying "queued".
+  final void Function(String uuid)? onOrderBooked;
+
+  /// Called when the server permanently refused a sale, so the money impact of a
+  /// parked order reaches the audit trail instead of only the diagnostics count.
+  final void Function(String uuid, String reason)? onOrderRejected;
   OdooSender? _sender;
   OdooEndpoint? _endpoint;
 
@@ -57,7 +70,17 @@ class OdooWiring {
       // transient (server down / wrong-for-now), so the sale is kept and retried.
       await sender.authenticate(endpoint.login, endpoint.password ?? '');
     }
-    await sender.orderSender(entry);
+    try {
+      await sender.orderSender(entry);
+      // Completed without throwing: the server booked it. Only sales carry a
+      // synced state; the audit and heartbeat kinds do not.
+      if (entry.kind == 'order.push') onOrderBooked?.call(entry.payloadUuid);
+    } on PermanentlyRejected catch (e) {
+      if (entry.kind == 'order.push') {
+        onOrderRejected?.call(entry.payloadUuid, e.toString());
+      }
+      rethrow;
+    }
   }
 
   /// A `call` for the catalogue [OdooPuller]: authenticates on demand against the
