@@ -42,8 +42,24 @@ class OrderStore {
   /// cashier gets their order back after a crash or a closed window.
   List<Order> drafts() => _query("state = 'draft'");
 
+  /// Orders parked on a table or tab, waiting to be recalled and paid. The open
+  /// tabs a cashier switches between during a dine-in service.
+  List<Order> held() => _query("state = 'held'");
+
   /// Paid but not yet confirmed by the server.
   List<Order> awaitingSync() => _query("state = 'paid'");
+
+  /// Completed sales, newest first, for the history / reprint browser. Includes
+  /// both paid-not-yet-synced and synced, so a sale shows up the instant it is
+  /// taken, not only after the server confirms.
+  List<Order> recent({int limit = 50}) => _db.raw
+      .select(
+          "SELECT payload FROM orders WHERE state IN ('paid','synced') "
+          'ORDER BY created_at DESC LIMIT ?',
+          [limit])
+      .map((r) =>
+          Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
+      .toList();
 
   List<Order> _query(String where) => _db.raw
       .select('SELECT payload FROM orders WHERE $where ORDER BY created_at ASC')

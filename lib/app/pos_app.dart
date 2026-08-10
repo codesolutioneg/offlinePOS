@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -12,6 +13,7 @@ import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
+import '../core/printing/kitchen_ticket.dart';
 import '../core/printing/printer_registry.dart';
 import '../core/printing/printer_transport.dart';
 import '../core/printing/receipt_builder.dart';
@@ -23,8 +25,12 @@ import '../core/sync/outbox.dart';
 import '../core/sync/sync_service.dart';
 import '../core/updates/update_service.dart';
 import '../domain/order.dart';
+import '../features/admin/roster_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/onboarding/wizard_overlay.dart';
+import '../features/orders/open_orders_screen.dart';
+import '../features/orders/order_history_screen.dart';
+import '../features/reports/sales_report_screen.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/server_settings_screen.dart';
 import '../features/shift/shift_screen.dart';
@@ -209,15 +215,18 @@ class _PosAppState extends State<PosApp> {
   /// Built as printer bytes, never rasterised, and never awaited by the screen that
   /// took the money: the sale is committed before this runs, so a printer that is
   /// off costs a spooled reprint and nothing else.
-  Future<void> _printReceipt(Order order) async {
+  Future<void> _printReceipt(Order order, {bool reprint = false}) async {
     try {
       final bytes = ReceiptBuilder(
         shopName: widget.config.shopName,
         taxId: widget.config.taxId,
         footer: widget.config.receiptFooter,
         formatAmount: PosApp.money,
-      ).build(order);
-      await _receiptPrinter.send(bytes, reference: order.uuid);
+      ).build(order, reprint: reprint);
+      // A reprint uses a distinct reference so it does not collide with the
+      // original in the spool's dedupe.
+      await _receiptPrinter.send(bytes,
+          reference: reprint ? 'reprint-${order.uuid}' : order.uuid);
     } on PrinterUnavailable {
       // Already held in the spool by [SpooledPrinter]. Surfacing it here would put a
       // dialog between the cashier and the next customer.
@@ -263,44 +272,34 @@ class _PosAppState extends State<PosApp> {
   Widget _selling(PosSession session) => Stack(
         fit: StackFit.expand,
         children: [
-          SellScreen(
-            session: session,
-            formatAmount: PosApp.money,
-            staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
-            catalogueChanged: widget.sync.catalogueRevision,
-            syncNow: widget.sync.tick,
-            onChanged: _publishActivity,
-            onSignOut: _signOut,
-            onPaid: (order) {
-              _publishActivity();
-              unawaited(_printReceipt(order as Order));
-            },
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: Builder(
-              // Builder, so the push targets the Navigator inside this MaterialApp.
-              builder: (context) => Row(children: [
-                IconButton(
-                  key: const Key('open-settings'),
-                  tooltip: 'Server settings',
-                  icon: const Icon(Icons.settings),
-                  onPressed: () => _openSettings(context),
-                ),
-                IconButton(
-                  key: const Key('open-diagnostics'),
-                  tooltip: 'Support',
-                  icon: const Icon(Icons.support_agent),
-                  onPressed: () => _openDiagnostics(context),
-                ),
-                IconButton(
-                  key: const Key('open-shift-screen'),
-                  tooltip: 'Shift',
-                  icon: const Icon(Icons.point_of_sale),
-                  onPressed: () => _openShift(context, session),
-                ),
-              ]),
+          Builder(
+            // Builder, so navigation targets the Navigator inside this MaterialApp.
+            builder: (context) => SellScreen(
+              session: session,
+              formatAmount: PosApp.money,
+              staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
+              catalogueChanged: widget.sync.catalogueRevision,
+              syncNow: widget.sync.tick,
+              onChanged: _publishActivity,
+              onSignOut: _signOut,
+              drawer: _buildDrawer(context, session),
+              onOpenOrders: () => _openOrders(context, session),
+              onHold: () {
+                // Holding a table is what sends its food to the kitchen, so the
+                // ticket fires here, then the order is parked.
+                unawaited(_fireKitchen(session.current));
+                session.hold();
+                _publishActivity();
+              },
+              onLineVoided: (line, reason) =>
+                  unawaited(_fireVoid(session.current, line, reason)),
+              onPaid: (order) {
+                _publishActivity();
+                // A straight counter sale never held, so its lines reach the
+                // kitchen here; a dine-in order already fired on hold and reprints
+                // nothing.
+                unawaited(_fireKitchen(order as Order).then((_) => _printReceipt(order)));
+              },
             ),
           ),
           if (_firstSaleHelp)
@@ -311,6 +310,176 @@ class _PosAppState extends State<PosApp> {
             ),
         ],
       );
+
+  /// The app shell's navigation. Selling stays on the main screen; everything a
+  /// cashier or manager reaches occasionally lives here so the sell screen is not
+  /// buried under buttons.
+  Widget _buildDrawer(BuildContext rootContext, PosSession session) {
+    final isManager = widget.auth.signedIn?.isManager ?? false;
+    return Drawer(
+      child: SafeArea(
+        child: ListView(children: [
+          const DrawerHeader(
+            child: Center(
+              child: Text('offlinePOS',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          ListTile(
+            key: const Key('nav-open-orders'),
+            leading: const Icon(Icons.table_restaurant),
+            title: const Text('Open orders'),
+            trailing: session.heldCount > 0 ? Chip(label: Text('${session.heldCount}')) : null,
+            onTap: () {
+              Navigator.pop(rootContext);
+              _openOrders(rootContext, session);
+            },
+          ),
+          ListTile(
+            key: const Key('nav-history'),
+            leading: const Icon(Icons.receipt_long),
+            title: const Text('Order history'),
+            onTap: () {
+              Navigator.pop(rootContext);
+              _openHistory(rootContext);
+            },
+          ),
+          ListTile(
+            key: const Key('nav-report'),
+            leading: const Icon(Icons.bar_chart),
+            title: const Text('Sales report'),
+            onTap: () {
+              Navigator.pop(rootContext);
+              _openReport(rootContext);
+            },
+          ),
+          ListTile(
+            key: const Key('nav-shift'),
+            leading: const Icon(Icons.point_of_sale),
+            title: const Text('Shift / cash-up'),
+            onTap: () {
+              Navigator.pop(rootContext);
+              _openShift(rootContext, session);
+            },
+          ),
+          const Divider(),
+          if (isManager)
+            ListTile(
+              key: const Key('nav-staff'),
+              leading: const Icon(Icons.badge_outlined),
+              title: const Text('Staff'),
+              onTap: () {
+                Navigator.pop(rootContext);
+                _openRoster(rootContext);
+              },
+            ),
+          ListTile(
+            key: const Key('nav-settings'),
+            leading: const Icon(Icons.settings),
+            title: const Text('Server settings'),
+            onTap: () {
+              Navigator.pop(rootContext);
+              _openSettings(rootContext);
+            },
+          ),
+          ListTile(
+            key: const Key('nav-support'),
+            leading: const Icon(Icons.support_agent),
+            title: const Text('Support & printers'),
+            onTap: () {
+              Navigator.pop(rootContext);
+              _openDiagnostics(rootContext);
+            },
+          ),
+        ]),
+      ),
+    );
+  }
+
+  void _openOrders(BuildContext context, PosSession session) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => OpenOrdersScreen(
+        orders: widget.orders.held(),
+        formatAmount: PosApp.money,
+        onRecall: (order) => setState(() => session.recall(order.uuid)),
+      ),
+    ));
+  }
+
+  void _openHistory(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => OrderHistoryScreen(
+        orders: widget.orders.recent(limit: 100),
+        formatAmount: PosApp.money,
+        onReprint: (order) => _printReceipt(order, reprint: true),
+      ),
+    ));
+  }
+
+  void _openReport(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => SalesReportScreen(
+        orders: widget.orders.recent(limit: 500),
+        formatAmount: PosApp.money,
+      ),
+    ));
+  }
+
+  void _openRoster(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => RosterScreen(
+        users: widget.users,
+        auth: widget.auth,
+        onChanged: () => setState(() {}),
+      ),
+    ));
+  }
+
+  // ── kitchen tickets ──────────────────────────────────────────────
+
+  /// Fire a kitchen ticket for the lines not yet sent. Best-effort and never on the
+  /// path of a tap: a kitchen printer that is off must not stop the sale. When no
+  /// kitchen printer answers, the ticket falls back to the receipt printer so a
+  /// slip still comes out that staff can carry to the pass.
+  Future<void> _fireKitchen(Order order, {List<OrderLine>? only}) async {
+    final lines = only ?? order.lines.where((l) => !l.printedToKitchen).toList();
+    if (lines.isEmpty) return;
+    final builder = KitchenTicketBuilder();
+    for (final entry in routeToStations(lines).entries) {
+      final bytes = builder.build(order, only: entry.value, station: entry.key);
+      await _sendToStation(entry.key, bytes, 'kot-${order.uuid}');
+    }
+    for (final l in lines) {
+      l.printedToKitchen = true;
+    }
+    widget.orders.save(order);
+  }
+
+  Future<void> _fireVoid(Order order, OrderLine line, String reason) async {
+    final bytes = KitchenTicketBuilder().buildVoid(order, line, reason);
+    await _sendToStation('kitchen', bytes, 'void-${order.uuid}-${line.uuid}');
+  }
+
+  Future<void> _sendToStation(String station, List<int> bytes, String reference) async {
+    final payload = Uint8List.fromList(bytes);
+    try {
+      await RegistryPrinter(widget.printers, station).send(payload);
+    } on PrinterUnavailable {
+      // No station printer: fall back to the receipt printer, spooled if that is
+      // down too, so the ticket is not simply lost.
+      try {
+        await _receiptPrinter.send(payload, reference: reference);
+      } on PrinterUnavailable {
+        // Held in the spool; the background flush will retry it.
+      } catch (e) {
+        widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
+            detail: '$reference: $e');
+      }
+    } catch (e) {
+      widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
+          detail: '$reference: $e');
+    }
+  }
 
   void _openSettings(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
