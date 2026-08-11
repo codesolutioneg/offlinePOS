@@ -131,6 +131,13 @@ Future<void> main() async {
     appVersion: appVersion,
     puller: OdooPuller(call: odoo.catalogueCall),
     probe: probeOnline,
+    // Re-queue any paid sale that is not on the wire before a batch push. The
+    // outbox is unique on (kind, uuid), so this never double-books.
+    reconcile: () async {
+      for (final o in orders.awaitingSync()) {
+        await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
+      }
+    },
   )..start();
 
   // Printers are resolved by name at print time, so a DHCP lease that moves

@@ -38,6 +38,7 @@ void main() {
     OdooPuller? puller,
     Outbox? outbox,
     Future<bool> Function()? probe,
+    Future<void> Function()? reconcile,
   }) =>
       SyncService(
         outbox: outbox ?? Outbox(store: store, senders: senders),
@@ -47,10 +48,32 @@ void main() {
         appVersion: '1.2.3',
         puller: puller,
         probe: probe,
+        reconcile: reconcile,
       );
 
   test('a never-pulled catalogue needs a refresh', () {
     expect(serviceWith().catalogueNeedsRefresh, isTrue);
+  });
+
+  test('a batch push re-queues a paid sale that never reached the outbox', () async {
+    // Simulates the app being killed between saving a paid sale and queuing it: the
+    // reconcile hook re-enqueues it, so a flush still delivers it rather than
+    // stranding money on the till.
+    final outbox = Outbox(store: store, senders: {'order.push': (e) async {}});
+    final s = serviceWith(
+      outbox: outbox,
+      reconcile: () async => outbox.enqueue('order.push', 'lost-1', {'uuid': 'lost-1'}),
+    );
+    expect(store.pendingSalesCount, 0); // nothing queued yet
+    await s.flush();
+    expect(s.sentThisRun, 1); // the reconciled sale was delivered
+  });
+
+  test('reconcilePending runs the hook so pending counts can be read after it', () async {
+    var ran = 0;
+    final s = serviceWith(reconcile: () async => ran++);
+    await s.reconcilePending();
+    expect(ran, 1);
   });
 
   test('a tick drains the outbox and refreshes the catalogue', () async {

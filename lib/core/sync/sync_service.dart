@@ -30,6 +30,7 @@ class SyncService {
     OdooPuller? puller,
     AuditLog? audit,
     Future<bool> Function()? probe,
+    this.reconcile,
     this.catalogueMaxAge = const Duration(hours: 6),
     DateTime Function()? now,
   })  : _outbox = outbox,
@@ -55,6 +56,15 @@ class SyncService {
   final String appVersion;
   final Duration catalogueMaxAge;
   final DateTime Function() _now;
+
+  /// Re-queues any paid order that is not on the wire yet. Injected so this class
+  /// stays free of order/domain types. It closes the window where a paid sale's
+  /// original enqueue was lost (app killed between saving the sale and queuing it),
+  /// which would otherwise leave the sale on the till but never book it. Safe to
+  /// call before every batch: the outbox is unique on (kind, uuid) and the server
+  /// dedupes on uuid, so re-queuing an already-queued or already-booked order is a
+  /// no-op rather than a double sale.
+  final Future<void> Function()? reconcile;
 
   /// Whether the server is currently reachable. Drives the online/offline badge on
   /// the sell screen. Starts false: a till has not proven it can reach anything
@@ -197,6 +207,9 @@ class SyncService {
     if (_state == SyncState.working) return;
     _state = SyncState.working;
     try {
+      // Sweep any paid order that never made it onto the wire back into the outbox
+      // before draining, so a sale can never be stranded on the till.
+      await reconcilePending();
       // Hand the audit trail to the outbox before draining. With one shared Odoo
       // login every order there says the same user rang it, so this log is the only
       // record of who actually did what and it has to reach the server too.
@@ -233,6 +246,14 @@ class SyncService {
       _state = SyncState.offline;
       online.value = false;
     }
+  }
+
+  /// Re-queue paid orders that are not yet on the wire. Exposed so a caller can run
+  /// it before reading [pendingSales] (e.g. the shift-close message), otherwise a
+  /// sale lost from the outbox would read as "nothing to sync".
+  Future<void> reconcilePending() async {
+    final r = reconcile;
+    if (r != null) await r();
   }
 
   /// Alias read at the call sites that push a batch (shift close, manual sync), so
