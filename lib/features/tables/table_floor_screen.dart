@@ -16,12 +16,19 @@ class TableFloorScreen extends StatefulWidget {
     required this.store,
     required this.occupiedLabels,
     required this.onOpenTable,
+    this.occupiedInfo = const {},
+    this.formatAmount,
   });
 
   final TableStore store;
 
   /// Table names that currently have a held order, so those tiles read as occupied.
   final Set<String> occupiedLabels;
+
+  /// Per occupied table: its running total and when it was opened, so a waiter sees
+  /// the bill and how long the table has been sitting straight off the floor.
+  final Map<String, ({double total, DateTime since})> occupiedInfo;
+  final String Function(double)? formatAmount;
 
   /// Start a new dine-in order on a free table, or recall the order parked on an
   /// occupied one. The shell decides which; this screen just reports the tap.
@@ -207,6 +214,56 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     );
   }
 
+  Future<void> _sectionMenu(String section) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            key: const Key('section-rename'),
+            leading: const Icon(Icons.edit),
+            title: Text(tr(ctx, 'Rename section')),
+            onTap: () => Navigator.pop(ctx, 'rename'),
+          ),
+          ListTile(
+            key: const Key('section-delete'),
+            leading: const Icon(Icons.delete_outline, color: Colors.red),
+            title: Text(tr(ctx, 'Delete section and its tables')),
+            onTap: () => Navigator.pop(ctx, 'delete'),
+          ),
+        ]),
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'rename') {
+      final ctrl = TextEditingController(text: section);
+      final name = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(tr(ctx, 'Rename section')),
+          content: TextField(
+              key: const Key('section-rename-field'),
+              controller: ctrl,
+              autofocus: true,
+              decoration: const InputDecoration(border: OutlineInputBorder())),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                child: Text(tr(ctx, 'Save'))),
+          ],
+        ),
+      );
+      if (name != null && name.isNotEmpty && name != section) {
+        widget.store.renameSection(section, name);
+        setState(() => _section = name);
+      }
+    } else if (action == 'delete') {
+      widget.store.deleteSection(section);
+      _reload();
+    }
+  }
+
   Widget _sectionStrip() => SizedBox(
         height: 48,
         child: ListView(
@@ -214,11 +271,15 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           children: [
             for (final s in _sections) ...[
-              ChoiceChip(
-                key: Key('section-${s.toLowerCase()}'),
-                label: Text(s),
-                selected: _activeSection == s,
-                onSelected: (_) => setState(() => _section = s),
+              GestureDetector(
+                // In edit mode a long-press renames or deletes the whole section.
+                onLongPress: _editing ? () => _sectionMenu(s) : null,
+                child: ChoiceChip(
+                  key: Key('section-${s.toLowerCase()}'),
+                  label: Text(s),
+                  selected: _activeSection == s,
+                  onSelected: (_) => setState(() => _section = s),
+                ),
               ),
               const SizedBox(width: 6),
             ],
@@ -262,7 +323,13 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   Widget _tile(PosTable t) {
     final occupied = widget.occupiedLabels.contains(t.name);
-    final tile = _TableTile(table: t, occupied: occupied);
+    final info = widget.occupiedInfo[t.name];
+    final tile = _TableTile(
+      table: t,
+      occupied: occupied,
+      total: info == null ? null : widget.formatAmount?.call(info.total),
+      ageMinutes: info == null ? null : DateTime.now().difference(info.since).inMinutes,
+    );
     if (!_editing) {
       return InkWell(
         key: Key('table-tile-${t.id}'),
@@ -303,16 +370,23 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 }
 
 class _TableTile extends StatelessWidget {
-  const _TableTile({required this.table, required this.occupied});
+  const _TableTile({
+    required this.table,
+    required this.occupied,
+    this.total,
+    this.ageMinutes,
+  });
   final PosTable table;
   final bool occupied;
+  final String? total;
+  final int? ageMinutes;
 
   @override
   Widget build(BuildContext context) {
     final color = occupied ? Colors.red.shade400 : Colors.green.shade500;
     return Container(
-      width: 92,
-      height: 92,
+      width: 100,
+      height: 100,
       margin: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.15),
@@ -324,14 +398,21 @@ class _TableTile extends StatelessWidget {
         children: [
           Text(table.name,
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             const Icon(Icons.event_seat, size: 13),
             const SizedBox(width: 2),
             Text('${table.seats}', style: const TextStyle(fontSize: 12)),
           ]),
-          Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
-              style: TextStyle(fontSize: 11, color: color)),
+          if (occupied && total != null)
+            Text(total!,
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
+          if (occupied && ageMinutes != null)
+            Text('${ageMinutes}m',
+                style: const TextStyle(fontSize: 11, color: Colors.black54))
+          else
+            Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
+                style: TextStyle(fontSize: 11, color: color)),
         ],
       ),
     );

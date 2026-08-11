@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 9;
+  static const int version = 10;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -295,6 +295,24 @@ class Schema {
         value TEXT NOT NULL
       )
       ''',
+    ],
+
+    // v9 -> v10: customers created on the till.
+    [
+      // Walk-in / delivery customers a cashier adds on the device, kept separate
+      // from the read-only partners pulled from Odoo. id is a local uuid; a synced
+      // Odoo partner id is stored when one is known, so a later sync can link them.
+      '''
+      CREATE TABLE local_customers (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        phone      TEXT,
+        address    TEXT,
+        partner_id INTEGER,
+        created_at TEXT NOT NULL
+      )
+      ''',
+      'CREATE INDEX idx_local_customers_name ON local_customers(name)',
     ],
   ];
 }

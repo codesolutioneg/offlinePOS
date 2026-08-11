@@ -26,6 +26,8 @@ class SettingsStore {
   static const _receiptShowTax = 'receipt_show_tax';
   static const _language = 'language';
   static const _unavailableProducts = 'unavailable_products';
+  static const _favourites = 'favourite_products';
+  static const _gridColumns = 'grid_columns';
 
   // ── generic accessors ────────────────────────────────────────────
   String? getString(String key) {
@@ -192,4 +194,24 @@ class SettingsStore {
     }
     unavailableProducts = set;
   }
+
+  /// Products pinned as favourites for a quick-access grid.
+  Set<int> get favourites =>
+      getStringList(_favourites).map((e) => int.tryParse(e) ?? -1).where((e) => e >= 0).toSet();
+
+  set favourites(Set<int> ids) => setStringList(_favourites, ids.map((e) => '$e').toList());
+
+  void setFavourite(int productId, bool favourite) {
+    final set = favourites;
+    if (favourite) {
+      set.add(productId);
+    } else {
+      set.remove(productId);
+    }
+    favourites = set;
+  }
+
+  /// Product-grid density: tiles per row. 0 = auto (fit by width).
+  int get gridColumns => int.tryParse(getString(_gridColumns) ?? '') ?? 0;
+  set gridColumns(int n) => setString(_gridColumns, n <= 0 ? null : '$n');
 }

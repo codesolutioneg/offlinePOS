@@ -37,6 +37,10 @@ class SellScreen extends StatefulWidget {
     this.authorize,
     this.unavailableProducts = const {},
     this.onToggleAvailable,
+    this.favourites = const {},
+    this.onToggleFavourite,
+    this.gridColumns = 0,
+    this.extraCustomers,
   });
 
   final PosSession session;
@@ -101,12 +105,26 @@ class SellScreen extends StatefulWidget {
   /// Toggle a product's availability (86 / un-86). Manager-gated by the caller.
   final void Function(int productId, bool available)? onToggleAvailable;
 
+  /// Products pinned as favourites, shown under a Favourites filter chip.
+  final Set<int> favourites;
+
+  /// Toggle a product favourite. Manager-gated by the caller.
+  final void Function(int productId, bool favourite)? onToggleFavourite;
+
+  /// Fixed tiles-per-row for the product grid; 0 fits by width.
+  final int gridColumns;
+
+  /// Local (till-created) customers matching a query, merged into the picker so a
+  /// customer added on the device is reusable.
+  final List<Customer> Function(String query)? extraCustomers;
+
   @override
   State<SellScreen> createState() => _SellScreenState();
 }
 
 class _SellScreenState extends State<SellScreen> {
   int? _categoryId;
+  bool _favesOnly = false;
   String _search = '';
 
   // A hardware barcode scanner behaves as a keyboard that types the code fast and
@@ -186,17 +204,40 @@ class _SellScreenState extends State<SellScreen> {
     _tap(product);
   }
 
-  /// 86 / un-86 a product, manager-gated.
-  Future<void> _toggleAvailable(Product product) async {
+  /// Long-press menu: 86 the item or pin it as a favourite. Both manager-gated.
+  Future<void> _productMenu(Product product) async {
+    final soldOut = widget.unavailableProducts.contains(product.id);
+    final fave = widget.favourites.contains(product.id);
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(title: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold))),
+          if (widget.onToggleAvailable != null)
+            ListTile(
+              key: const Key('menu-86'),
+              leading: Icon(soldOut ? Icons.check_circle_outline : Icons.block),
+              title: Text(tr(ctx, soldOut ? 'Mark available' : 'Mark sold out')),
+              onTap: () => Navigator.pop(ctx, 'avail'),
+            ),
+          if (widget.onToggleFavourite != null)
+            ListTile(
+              key: const Key('menu-fave'),
+              leading: Icon(fave ? Icons.star : Icons.star_border),
+              title: Text(tr(ctx, fave ? 'Remove favourite' : 'Add favourite')),
+              onTap: () => Navigator.pop(ctx, 'fave'),
+            ),
+        ]),
+      ),
+    );
+    if (action == null) return;
     if (widget.authorize != null && !await widget.authorize!()) return;
-    final nowAvailable = widget.unavailableProducts.contains(product.id);
-    widget.onToggleAvailable?.call(product.id, nowAvailable);
-    if (mounted) {
-      _changed(() {});
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${product.name}: '
-              '${tr(context, nowAvailable ? 'available' : 'sold out')}')));
+    if (action == 'avail') {
+      widget.onToggleAvailable?.call(product.id, soldOut);
+    } else if (action == 'fave') {
+      widget.onToggleFavourite?.call(product.id, !fave);
     }
+    if (mounted) _changed(() {});
   }
 
   Future<void> _tap(Product product) async {
@@ -258,7 +299,13 @@ class _SellScreenState extends State<SellScreen> {
     final result = await showDialog<Object?>(
       context: context,
       builder: (ctx) {
-        var results = s.catalogue.customers(limit: 30);
+        // Merge the read-only Odoo partners with the till's own local customers,
+        // so a customer added on the device is pickable here too.
+        List<Customer> lookup(String v) => [
+              ...?widget.extraCustomers?.call(v),
+              ...s.catalogue.customers(search: v, limit: 30),
+            ];
+        var results = lookup('');
         return StatefulBuilder(
           builder: (ctx, setSt) => AlertDialog(
             title: Text(tr(ctx, 'Customer')),
@@ -275,8 +322,7 @@ class _SellScreenState extends State<SellScreen> {
                     border: const OutlineInputBorder(),
                     isDense: true,
                   ),
-                  onChanged: (v) =>
-                      setSt(() => results = s.catalogue.customers(search: v, limit: 30)),
+                  onChanged: (v) => setSt(() => results = lookup(v)),
                 ),
                 const SizedBox(height: 8),
                 Expanded(
@@ -748,7 +794,10 @@ class _SellScreenState extends State<SellScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final products = s.catalogue.products(categoryId: _categoryId, search: _search);
+    var products = s.catalogue.products(categoryId: _categoryId, search: _search);
+    if (_favesOnly) {
+      products = products.where((p) => widget.favourites.contains(p.id)).toList();
+    }
     final o = s.current;
     final title = o.tableLabel != null
         ? '${tr(context, o.type.label)} - ${o.tableLabel}'
@@ -890,19 +939,30 @@ class _SellScreenState extends State<SellScreen> {
                 ? Center(child: Text(tr(context, 'No products')))
                 : GridView.builder(
                     padding: const EdgeInsets.all(8),
-                    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 180, childAspectRatio: 1.3,
-                      mainAxisSpacing: 8, crossAxisSpacing: 8),
+                    // A fixed column count when the manager set a grid density,
+                    // otherwise fit tiles by width.
+                    gridDelegate: widget.gridColumns > 0
+                        ? SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: widget.gridColumns,
+                            childAspectRatio: 1.3,
+                            mainAxisSpacing: 8,
+                            crossAxisSpacing: 8)
+                        : const SliverGridDelegateWithMaxCrossAxisExtent(
+                            maxCrossAxisExtent: 180,
+                            childAspectRatio: 1.3,
+                            mainAxisSpacing: 8,
+                            crossAxisSpacing: 8),
                     itemCount: products.length,
                     itemBuilder: (_, i) => _ProductTile(
                       product: products[i],
                       price: widget.formatAmount(products[i].price),
                       color: _colorFor(products[i].categoryId),
                       unavailable: widget.unavailableProducts.contains(products[i].id),
+                      favourite: widget.favourites.contains(products[i].id),
                       onTap: () => _tapProduct(products[i]),
-                      onToggleAvailable: widget.onToggleAvailable == null
+                      onLongPress: (widget.onToggleAvailable == null && widget.onToggleFavourite == null)
                           ? null
-                          : () => _toggleAvailable(products[i]),
+                          : () => _productMenu(products[i]),
                     ),
                   ),
           ),
@@ -915,17 +975,33 @@ class _SellScreenState extends State<SellScreen> {
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       children: [
+        if (widget.favourites.isNotEmpty) ...[
+          ChoiceChip(
+            key: const Key('cat-favourites'),
+            avatar: const Icon(Icons.star, size: 16),
+            label: Text(tr(context, 'Favourites')),
+            selected: _favesOnly,
+            onSelected: (_) => setState(() => _favesOnly = !_favesOnly),
+          ),
+          const SizedBox(width: 6),
+        ],
         ChoiceChip(
           label: Text(tr(context, 'All')),
-          selected: _categoryId == null,
-          onSelected: (_) => setState(() => _categoryId = null),
+          selected: _categoryId == null && !_favesOnly,
+          onSelected: (_) => setState(() {
+            _categoryId = null;
+            _favesOnly = false;
+          }),
         ),
         for (final c in cats) ...[
           const SizedBox(width: 6),
           ChoiceChip(
             label: Text(c.name),
-            selected: _categoryId == c.id,
-            onSelected: (_) => setState(() => _categoryId = c.id),
+            selected: _categoryId == c.id && !_favesOnly,
+            onSelected: (_) => setState(() {
+              _categoryId = c.id;
+              _favesOnly = false;
+            }),
           ),
         ],
       ],
@@ -1152,14 +1228,16 @@ class _ProductTile extends StatelessWidget {
     required this.onTap,
     this.color,
     this.unavailable = false,
-    this.onToggleAvailable,
+    this.favourite = false,
+    this.onLongPress,
   });
   final Product product;
   final String price;
   final VoidCallback onTap;
   final Color? color;
   final bool unavailable;
-  final VoidCallback? onToggleAvailable;
+  final bool favourite;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -1171,32 +1249,42 @@ class _ProductTile extends StatelessWidget {
       child: InkWell(
         key: Key('product-${product.id}'),
         onTap: onTap,
-        // Long-press marks the item sold out or brings it back (manager-gated).
-        onLongPress: onToggleAvailable,
-        child: Container(
-          decoration: (color == null || unavailable)
-              ? null
-              : BoxDecoration(border: Border(top: BorderSide(color: color!, width: 4))),
-          padding: const EdgeInsets.all(8),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(product.name,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: unavailable
-                      ? const TextStyle(color: Colors.black45, decoration: TextDecoration.lineThrough)
-                      : null),
-              const SizedBox(height: 6),
-              if (unavailable)
-                Text(tr(context, 'Sold out'),
-                    key: Key('soldout-${product.id}'),
-                    style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 12))
-              else
-                Text(price, style: const TextStyle(fontWeight: FontWeight.bold)),
-            ],
-          ),
+        // Long-press opens the 86 / favourite menu (manager-gated).
+        onLongPress: onLongPress,
+        child: Stack(
+          children: [
+            Container(
+              decoration: (color == null || unavailable)
+                  ? null
+                  : BoxDecoration(border: Border(top: BorderSide(color: color!, width: 4))),
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(product.name,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: unavailable
+                          ? const TextStyle(color: Colors.black45, decoration: TextDecoration.lineThrough)
+                          : null),
+                  const SizedBox(height: 6),
+                  if (unavailable)
+                    Text(tr(context, 'Sold out'),
+                        key: Key('soldout-${product.id}'),
+                        style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 12))
+                  else
+                    Text(price, style: const TextStyle(fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+            if (favourite)
+              const Positioned(
+                top: 2,
+                right: 2,
+                child: Icon(Icons.star, size: 14, color: Colors.amber),
+              ),
+          ],
         ),
       ),
     );

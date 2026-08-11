@@ -11,6 +11,7 @@ import '../core/auth/auth_service.dart';
 import '../core/auth/user_store.dart';
 import '../core/config/till_config.dart';
 import '../core/db/catalogue_store.dart';
+import '../core/db/customer_store.dart';
 import '../core/db/order_store.dart';
 import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
@@ -33,6 +34,7 @@ import '../core/updates/update_service.dart';
 import '../domain/order.dart';
 import '../features/admin/roster_screen.dart';
 import '../features/auth/login_screen.dart';
+import '../features/customers/customer_management_screen.dart';
 import '../features/kitchen/kitchen_display_screen.dart';
 import '../features/onboarding/wizard_overlay.dart';
 import '../features/orders/open_orders_screen.dart';
@@ -78,6 +80,7 @@ class PosApp extends StatefulWidget {
     required this.odoo,
     required this.tables,
     required this.settings,
+    required this.customers,
     this.config = const TillConfig(),
     this.receiptSpool,
     this.activity,
@@ -103,6 +106,9 @@ class PosApp extends StatefulWidget {
   /// The floor plan and the on-device settings a manager edits on the device.
   final TableStore tables;
   final SettingsStore settings;
+
+  /// Customers created on the till (separate from the read-only Odoo partners).
+  final CustomerStore customers;
 
   /// Shop name, tax id and receipt footer. Nothing here is invented in code: a
   /// receipt with no shop name and no tax id is not a legal receipt, and a
@@ -355,6 +361,13 @@ class _PosAppState extends State<PosApp> {
                     available ? 'product.available' : 'product.sold_out', detail: '$id');
                 setState(() {});
               },
+              favourites: widget.settings.favourites,
+              onToggleFavourite: (id, fav) {
+                widget.settings.setFavourite(id, fav);
+                setState(() {});
+              },
+              gridColumns: widget.settings.gridColumns,
+              extraCustomers: (q) => widget.customers.search(query: q, limit: 30),
               onChanged: _publishActivity,
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
@@ -550,6 +563,7 @@ class _PosAppState extends State<PosApp> {
         allOrders: widget.orders.recent(limit: 1000),
         categories: widget.catalogue.categories(),
         formatAmount: PosApp.money,
+        onPrint: _printShiftReport,
       ),
     ));
   }
@@ -576,18 +590,26 @@ class _PosAppState extends State<PosApp> {
   /// The floor plan. Tapping a table recalls the order parked on it, or starts a
   /// fresh dine-in seated at it, then drops back to the sell screen.
   void _openFloor(BuildContext context, PosSession session) {
-    final occupied =
-        widget.orders.held().map((o) => o.tableLabel).whereType<String>().toSet();
+    final held = widget.orders.held();
+    final occupied = held.map((o) => o.tableLabel).whereType<String>().toSet();
+    // Running total + open-since per occupied table, for the floor tiles.
+    final info = <String, ({double total, DateTime since})>{
+      for (final o in held)
+        if (o.tableLabel != null) o.tableLabel!: (total: o.total, since: o.createdAt),
+    };
     // The order on screen (not yet held) also occupies its table, or opening the
     // floor and tapping it would start a second order on the same table.
     final active = session.current;
     if (active.lines.isNotEmpty && active.tableLabel != null) {
       occupied.add(active.tableLabel!);
+      info[active.tableLabel!] = (total: active.total, since: active.createdAt);
     }
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => TableFloorScreen(
         store: widget.tables,
         occupiedLabels: occupied,
+        occupiedInfo: info,
+        formatAmount: PosApp.money,
         onOpenTable: (t) {
           // Tapping the table the current order is already seated at just returns
           // to it rather than parking it and starting a duplicate.
@@ -652,7 +674,10 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Header, footer, what prints',
         icon: Icons.receipt_long,
         keyValue: 'set-receipt',
-        onTap: () => push(ReceiptDesignerScreen(settings: widget.settings, onChanged: refresh)),
+        onTap: () => push(ReceiptDesignerScreen(
+            settings: widget.settings,
+            onChanged: refresh,
+            onTestPrint: () => _printReceipt(_sampleOrder(), reprint: true))),
       ),
       SettingsEntry(
         title: 'Printers & kitchen routing',
@@ -672,6 +697,38 @@ class _PosAppState extends State<PosApp> {
             settings: widget.settings,
             categories: widget.catalogue.categories(),
             onChanged: refresh)),
+      ),
+      SettingsEntry(
+        title: 'Grid density',
+        subtitle: 'Tiles per row',
+        icon: Icons.grid_view,
+        keyValue: 'set-grid',
+        onTap: () async {
+          final n = await showDialog<int>(
+            context: context,
+            builder: (dctx) => SimpleDialog(
+              title: Text(tr(dctx, 'Tiles per row')),
+              children: [
+                for (final c in const [0, 2, 3, 4, 5, 6])
+                  SimpleDialogOption(
+                    onPressed: () => Navigator.pop(dctx, c),
+                    child: Text(c == 0 ? tr(dctx, 'Auto (fit width)') : '$c'),
+                  ),
+              ],
+            ),
+          );
+          if (n != null) {
+            widget.settings.gridColumns = n;
+            refresh();
+          }
+        },
+      ),
+      SettingsEntry(
+        title: 'Customers',
+        subtitle: 'Add / search till customers',
+        icon: Icons.people_outline,
+        keyValue: 'set-customers',
+        onTap: () => push(CustomerManagementScreen(store: widget.customers, onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'Quick notes',
@@ -869,6 +926,15 @@ class _PosAppState extends State<PosApp> {
       // Held in the spool; the flush retries it.
     }
   }
+
+  /// A throwaway order for the receipt-designer test print. Never saved or synced.
+  Order _sampleOrder() => Order(
+        deviceId: widget.deviceId,
+        cashierId: _session?.cashierId ?? 'sample',
+        lines: [
+          OrderLine(productId: 0, name: 'Sample item', quantity: 1, unitPrice: 10),
+        ],
+      )..payments = [const OrderPayment(methodId: 0, amount: 10, label: 'Cash')];
 
   void _openDiagnostics(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(

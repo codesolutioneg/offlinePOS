@@ -34,12 +34,16 @@ class ReportsHubScreen extends StatefulWidget {
     required this.allOrders,
     required this.categories,
     required this.formatAmount,
+    this.onPrint,
   });
 
   /// The recent completed orders; this screen filters them by the chosen range.
   final List<Order> allOrders;
   final List<Category> categories;
   final String Function(double) formatAmount;
+
+  /// Prints a report to the receipt printer. Null hides the print action.
+  final Future<void> Function(String title, List<(String, String)> rows)? onPrint;
 
   @override
   State<ReportsHubScreen> createState() => _ReportsHubScreenState();
@@ -48,12 +52,20 @@ class ReportsHubScreen extends StatefulWidget {
 class _ReportsHubScreenState extends State<ReportsHubScreen> {
   ReportRange _range = ReportRange.today;
 
+  /// A manager-picked from/to range; when set it overrides the preset chips so a
+  /// report can cover any period, not just today/yesterday/7-day.
+  DateTimeRange? _custom;
+
   /// Orders whose local sale date falls inside the chosen range.
   List<Order> get _filtered {
     final now = DateTime.now();
     final startOfToday = DateTime(now.year, now.month, now.day);
     bool inRange(Order o) {
       final at = o.createdAt.toLocal();
+      if (_custom != null) {
+        final end = _custom!.end.add(const Duration(days: 1));
+        return !at.isBefore(_custom!.start) && at.isBefore(end);
+      }
       return switch (_range) {
         ReportRange.today => !at.isBefore(startOfToday),
         ReportRange.yesterday => !at.isBefore(startOfToday.subtract(const Duration(days: 1))) &&
@@ -66,9 +78,57 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     return widget.allOrders.where(inRange).toList();
   }
 
+  Future<void> _pickCustom() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 2),
+      lastDate: now,
+      initialDateRange: _custom,
+    );
+    if (picked != null) setState(() => _custom = picked);
+  }
+
   void _open(Widget Function(List<Order>) build) {
     Navigator.of(context)
         .push(MaterialPageRoute<void>(builder: (_) => build(_filtered)));
+  }
+
+  /// Print the sales summary for the current range to the receipt printer.
+  Future<void> _printSummary() async {
+    final o = _filtered;
+    final f = widget.formatAmount;
+    final gross = o.fold(0.0, (s, x) => s + x.total);
+    final discounts =
+        o.fold(0.0, (s, x) => s + x.subtotal * x.discountPercent / 100);
+    final delivery = o.fold(0.0, (s, x) => s + x.deliveryCost);
+    final tips = o.fold(0.0, (s, x) => s + x.tip);
+    final tax = o.fold(0.0, (s, x) => s + x.taxTotal);
+    final byMethod = <String, double>{};
+    for (final x in o) {
+      if (x.payments.isEmpty) {
+        byMethod['Cash'] = (byMethod['Cash'] ?? 0) + x.total;
+      } else {
+        for (final p in x.payments) {
+          final k = p.label ?? 'Cash';
+          byMethod[k] = (byMethod[k] ?? 0) + p.amount;
+        }
+      }
+    }
+    final rows = <(String, String)>[
+      ('Orders', '${o.length}'),
+      ('Gross sales', f(gross)),
+      ('Discounts', f(discounts)),
+      ('Delivery', f(delivery)),
+      ('Tips', f(tips)),
+      ('Tax (incl.)', f(tax)),
+      for (final e in byMethod.entries) (e.key, f(e.value)),
+    ];
+    await widget.onPrint?.call('Sales summary', rows);
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(tr(context, 'Summary sent to printer'))));
+    }
   }
 
   @override
@@ -76,6 +136,14 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     final count = _filtered.length;
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Reports'))),
+      floatingActionButton: widget.onPrint == null
+          ? null
+          : FloatingActionButton.extended(
+              key: const Key('print-summary'),
+              icon: const Icon(Icons.print),
+              label: Text(tr(context, 'Print summary')),
+              onPressed: _printSummary,
+            ),
       body: Column(
         children: [
           Padding(
@@ -87,9 +155,21 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                   ChoiceChip(
                     key: Key('range-${r.name}'),
                     label: Text(r.label(context)),
-                    selected: _range == r,
-                    onSelected: (_) => setState(() => _range = r),
+                    selected: _custom == null && _range == r,
+                    onSelected: (_) => setState(() {
+                      _range = r;
+                      _custom = null;
+                    }),
                   ),
+                ChoiceChip(
+                  key: const Key('range-custom'),
+                  avatar: const Icon(Icons.date_range, size: 16),
+                  label: Text(_custom == null
+                      ? tr(context, 'Custom')
+                      : '${_custom!.start.month}/${_custom!.start.day} - ${_custom!.end.month}/${_custom!.end.day}'),
+                  selected: _custom != null,
+                  onSelected: (_) => _pickCustom(),
+                ),
               ],
             ),
           ),

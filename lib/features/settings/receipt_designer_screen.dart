@@ -11,12 +11,16 @@ import '../../core/i18n/l10n.dart';
 /// name/tax id text), so it lives as its own screen the receipt builder reads
 /// back from at print time via the same [SettingsStore] keys.
 class ReceiptDesignerScreen extends StatefulWidget {
-  const ReceiptDesignerScreen({super.key, required this.settings, required this.onChanged});
+  const ReceiptDesignerScreen({super.key, required this.settings, required this.onChanged, this.onTestPrint});
 
   final SettingsStore settings;
 
   /// Called after Save so anything caching the receipt layout reloads.
   final VoidCallback onChanged;
+
+  /// Prints a sample receipt with the current settings, so a manager can see the
+  /// layout on paper. Null hides the test-print button.
+  final Future<void> Function()? onTestPrint;
 
   @override
   State<ReceiptDesignerScreen> createState() => _ReceiptDesignerScreenState();
@@ -120,6 +124,23 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
             onPressed: _save,
             child: Text(tr(context, 'Save')),
           ),
+          if (widget.onTestPrint != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('test-print'),
+              icon: const Icon(Icons.print),
+              // Save first so the printed sample reflects the current settings.
+              onPressed: () async {
+                _save();
+                await widget.onTestPrint!();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(tr(context, 'Test receipt sent to printer'))));
+                }
+              },
+              label: Text(tr(context, 'Print test receipt')),
+            ),
+          ],
         ],
       ),
     );

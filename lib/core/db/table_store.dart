@@ -128,6 +128,14 @@ class TableStore {
   void remove(String id) =>
       _db.raw.execute('DELETE FROM pos_tables WHERE id = ?', [id]);
 
+  /// Rename a whole section (moves every table in it).
+  void renameSection(String from, String to) => _db.raw.execute(
+      'UPDATE pos_tables SET section = ? WHERE section = ?', [to.trim(), from]);
+
+  /// Delete a section and all its tables.
+  void deleteSection(String section) =>
+      _db.raw.execute('DELETE FROM pos_tables WHERE section = ?', [section]);
+
   int _nextSequence(String section) =>
       (_db.raw.select('SELECT COALESCE(MAX(sequence), -1) + 1 n FROM pos_tables '
               'WHERE section = ?', [section]).first['n'] as int);
