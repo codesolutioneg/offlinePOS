@@ -20,7 +20,7 @@ class OdooPuller {
     final products = await _searchRead(
       'product.product',
       ['id', 'display_name', 'lst_price', 'pos_categ_ids', 'barcode', 'active', 'to_weight',
-       'taxes_id'],
+       'taxes_id', 'product_tmpl_id'],
       [
         ['available_in_pos', '=', true]
       ],
