@@ -238,6 +238,111 @@ class PosSession {
     return order;
   }
 
+  // ── dine-in: seats, split, move, merge ──────────────────────────
+
+  /// Tag a line with the guest/seat it belongs to (null clears it). Drives
+  /// split-by-guest and the per-seat kitchen ticket.
+  void setLineSeat(String lineUuid, int? seat) {
+    final line = current.lines.firstWhere((l) => l.uuid == lineUuid);
+    line.seat = (seat != null && seat > 0) ? seat : null;
+    orders.save(current);
+  }
+
+  /// The distinct seats currently assigned on the order, ascending.
+  List<int> get seatsInUse {
+    final s = current.lines.map((l) => l.seat).whereType<int>().toSet().toList()
+      ..sort();
+    return s;
+  }
+
+  /// Carve a subset of the current order's lines into their own paid check and
+  /// take payment for it, leaving the rest of the table open. This is how a split
+  /// bill is settled: each guest/selection becomes its own paid order that syncs on
+  /// its own, so the server needs no concept of a split. Returns the paid check for
+  /// printing. The order-level discount rides along (it is a percentage, so each
+  /// check discounts only its own lines); tip is whatever was tendered on the check.
+  Order payCheck(
+    List<String> lineUuids, {
+    List<OrderPayment> payments = const [],
+    double? cashReceived,
+    double tip = 0,
+  }) {
+    final order = current;
+    final ids = lineUuids.toSet();
+    final taken = order.lines.where((l) => ids.contains(l.uuid)).toList();
+    final check = Order(
+      deviceId: deviceId,
+      cashierId: cashierId,
+      type: order.type,
+      tableLabel: order.tableLabel,
+      guestCount: order.guestCount,
+      partnerId: order.partnerId,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      discountPercent: order.discountPercent,
+      discountReason: order.discountReason,
+      tip: tip,
+      lines: taken,
+    )
+      ..state = OrderState.paid
+      ..payments = List.of(payments)
+      ..cashReceived = cashReceived;
+    orders.save(check);
+    outbox.enqueue('order.push', check.uuid, check.toServerPayload());
+    audit.record(cashierId, 'order.paid', detail: '${check.uuid}|split check');
+    order.lines.removeWhere((l) => ids.contains(l.uuid));
+    if (order.lines.isEmpty) {
+      // Whole table settled: discard the now-empty running order and start fresh.
+      orders.delete(order.uuid);
+      _current = Order(deviceId: deviceId, cashierId: cashierId);
+    } else {
+      orders.save(order);
+    }
+    return check;
+  }
+
+  /// Move a subset of the current order's lines onto another table's open tab
+  /// (creating one if the table has none), then leave the rest here. Returns the
+  /// target order. Used for "move items to another table".
+  Order moveLinesToTable(Set<String> lineUuids, String targetTableLabel) {
+    final order = current;
+    final taken = order.lines.where((l) => lineUuids.contains(l.uuid)).toList();
+    if (taken.isEmpty) return order;
+    final target = orders.held().firstWhere(
+          (o) => o.tableLabel == targetTableLabel && o.uuid != order.uuid,
+          orElse: () => Order(
+            deviceId: deviceId,
+            cashierId: cashierId,
+            type: OrderType.dineIn,
+            tableLabel: targetTableLabel,
+          )..state = OrderState.held,
+        );
+    target.lines.addAll(taken);
+    orders.save(target);
+    order.lines.removeWhere((l) => lineUuids.contains(l.uuid));
+    audit.record(cashierId, 'order.moved',
+        detail: '${order.uuid}->${target.uuid}|${taken.length} line(s)');
+    if (order.lines.isEmpty) {
+      orders.delete(order.uuid);
+      _current = Order(deviceId: deviceId, cashierId: cashierId);
+    } else {
+      orders.save(order);
+    }
+    return target;
+  }
+
+  /// Fold another table's open order into the current one, then discard the source.
+  /// Used for "merge tables". A no-op if the source is missing or is this order.
+  void mergeOrderInto(String sourceUuid) {
+    final source = orders.byUuid(sourceUuid);
+    if (source == null || source.uuid == current.uuid) return;
+    current.lines.addAll(source.lines);
+    orders.save(current);
+    orders.delete(source.uuid);
+    audit.record(cashierId, 'order.merged',
+        detail: '${source.uuid}->${current.uuid}|${source.lines.length} line(s)');
+  }
+
   static String? _blankToNull(String? v) =>
       (v == null || v.trim().isEmpty) ? null : v.trim();
 }

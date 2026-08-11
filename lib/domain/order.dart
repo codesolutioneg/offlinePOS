@@ -84,6 +84,7 @@ class OrderLine {
     this.categoryId,
     this.taxRate = 0,
     this.printedToKitchen = false,
+    this.seat,
   })  : uuid = uuid ?? Uuid.v4(),
         modifiers = modifiers ?? [];
 
@@ -113,6 +114,11 @@ class OrderLine {
   /// only the newly added lines rather than the whole ticket again.
   bool printedToKitchen;
 
+  /// Which guest/seat this line belongs to, for dine-in bill splitting (1-based).
+  /// Null means unassigned (shared / not yet split). Drives split-by-guest and the
+  /// per-seat kitchen ticket.
+  int? seat;
+
   double get lineDiscountFactor => 1 - (discountPercent.clamp(0, 100) / 100);
 
   /// Gross of any discount: quantity times unit price plus its modifiers.
@@ -134,6 +140,7 @@ class OrderLine {
         'category_id': categoryId,
         'tax_rate': taxRate,
         'printed_to_kitchen': printedToKitchen,
+        'seat': seat,
       };
 
   factory OrderLine.fromMap(Map<String, dynamic> m) => OrderLine(
@@ -147,6 +154,7 @@ class OrderLine {
         categoryId: m['category_id'] as int?,
         taxRate: (m['tax_rate'] as num?)?.toDouble() ?? 0,
         printedToKitchen: (m['printed_to_kitchen'] as bool?) ?? false,
+        seat: m['seat'] as int?,
         modifiers: ((m['modifiers'] as List?) ?? const [])
             .map((e) => OrderModifier.fromMap(e as Map<String, dynamic>))
             .toList(),
