@@ -17,6 +17,7 @@ import 'core/db/database.dart';
 import 'core/db/db_key.dart';
 import 'core/db/secure_key_store.dart';
 import 'core/db/device_store.dart';
+import 'core/db/attendance_store.dart';
 import 'core/db/customer_store.dart';
 import 'core/db/order_store.dart';
 import 'core/db/settings_store.dart';
@@ -198,6 +199,7 @@ Future<void> main() async {
     tables: TableStore(db),
     settings: SettingsStore(db),
     customers: CustomerStore(db),
+    attendance: AttendanceStore(db),
   ));
 }
 

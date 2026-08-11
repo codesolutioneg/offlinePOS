@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../../core/audit/audit_log.dart';
 import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
+import 'activity_report_screen.dart';
 import 'cashier_report_screen.dart';
 import 'category_report_screen.dart';
 import 'discounts_report_screen.dart';
@@ -34,6 +36,7 @@ class ReportsHubScreen extends StatefulWidget {
     required this.allOrders,
     required this.categories,
     required this.formatAmount,
+    required this.audit,
     this.onPrint,
   });
 
@@ -41,6 +44,9 @@ class ReportsHubScreen extends StatefulWidget {
   final List<Order> allOrders;
   final List<Category> categories;
   final String Function(double) formatAmount;
+
+  /// The audit trail, for the cancelled/voided/refunded activity report.
+  final AuditLog audit;
 
   /// Prints a report to the receipt printer. Null hides the print action.
   final Future<void> Function(String title, List<(String, String)> rows)? onPrint;
@@ -76,6 +82,27 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     }
 
     return widget.allOrders.where(inRange).toList();
+  }
+
+  /// The chosen range as explicit bounds, for reports that also read the audit
+  /// trail (which is not a list of orders). Null means unbounded on that side.
+  DateTime? get _windowFrom {
+    if (_custom != null) return _custom!.start;
+    final now = DateTime.now();
+    final startOfToday = DateTime(now.year, now.month, now.day);
+    return switch (_range) {
+      ReportRange.today => startOfToday,
+      ReportRange.yesterday => startOfToday.subtract(const Duration(days: 1)),
+      ReportRange.last7 => startOfToday.subtract(const Duration(days: 6)),
+      ReportRange.all => null,
+    };
+  }
+
+  DateTime? get _windowTo {
+    if (_custom != null) return _custom!.end.add(const Duration(days: 1));
+    final now = DateTime.now();
+    final startOfToday = DateTime(now.year, now.month, now.day);
+    return _range == ReportRange.yesterday ? startOfToday : null;
   }
 
   Future<void> _pickCustom() async {
@@ -194,6 +221,15 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                     (o) => DiscountsReportScreen(orders: o, formatAmount: widget.formatAmount)),
                 _tile(tr(context, 'Cashier performance'), Icons.badge_outlined, 'rep-cashier',
                     (o) => CashierReportScreen(orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Cancelled, voided & refunded'), Icons.gpp_bad,
+                    'rep-activity',
+                    (o) => ActivityReportScreen(
+                          orders: o,
+                          audit: widget.audit,
+                          formatAmount: widget.formatAmount,
+                          from: _windowFrom,
+                          to: _windowTo,
+                        )),
                 _tile(tr(context, 'Sales by hour'), Icons.schedule, 'rep-time',
                     (o) => SalesByTimeReportScreen(orders: o, formatAmount: widget.formatAmount)),
               ],

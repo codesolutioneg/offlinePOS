@@ -11,6 +11,7 @@ import '../core/auth/auth_service.dart';
 import '../core/auth/user_store.dart';
 import '../core/config/till_config.dart';
 import '../core/db/catalogue_store.dart';
+import '../core/db/attendance_store.dart';
 import '../core/db/customer_store.dart';
 import '../core/db/order_store.dart';
 import '../core/db/settings_store.dart';
@@ -32,7 +33,9 @@ import '../core/sync/outbox.dart';
 import '../core/sync/sync_service.dart';
 import '../core/updates/update_service.dart';
 import '../domain/order.dart';
+import '../features/admin/attendance_screen.dart';
 import '../features/admin/roster_screen.dart';
+import '../features/support/audit_log_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/customers/customer_management_screen.dart';
 import '../features/kitchen/kitchen_display_screen.dart';
@@ -81,6 +84,7 @@ class PosApp extends StatefulWidget {
     required this.tables,
     required this.settings,
     required this.customers,
+    required this.attendance,
     this.config = const TillConfig(),
     this.receiptSpool,
     this.activity,
@@ -109,6 +113,9 @@ class PosApp extends StatefulWidget {
 
   /// Customers created on the till (separate from the read-only Odoo partners).
   final CustomerStore customers;
+
+  /// Staff clock in / clock out, separate from the cash-drawer shift.
+  final AttendanceStore attendance;
 
   /// Shop name, tax id and receipt footer. Nothing here is invented in code: a
   /// receipt with no shop name and no tax id is not a legal receipt, and a
@@ -396,6 +403,10 @@ class _PosAppState extends State<PosApp> {
               },
               // Fire the kitchen ticket but keep the order on the counter.
               onSendToKitchen: () => unawaited(_fireKitchen(session.current)),
+              // Re-fire every line (a lost or re-requested ticket), ignoring the
+              // already-printed flag.
+              onResendToKitchen: () => unawaited(
+                  _fireKitchen(session.current, only: session.current.lines)),
               onLineVoided: (line, reason) =>
                   unawaited(_fireVoid(session.current, line, reason)),
               onPaid: (order) {
@@ -486,6 +497,15 @@ class _PosAppState extends State<PosApp> {
               _openShift(rootContext, session);
             },
           ),
+          ListTile(
+            key: const Key('nav-attendance'),
+            leading: const Icon(Icons.how_to_reg_outlined),
+            title: Text(tr(rootContext, 'Attendance')),
+            onTap: () {
+              Navigator.pop(rootContext);
+              _openAttendance(rootContext);
+            },
+          ),
           const Divider(),
           if (isManager)
             ListTile(
@@ -495,6 +515,18 @@ class _PosAppState extends State<PosApp> {
               onTap: () {
                 Navigator.pop(rootContext);
                 _openRoster(rootContext);
+              },
+            ),
+          if (isManager)
+            ListTile(
+              key: const Key('nav-audit'),
+              leading: const Icon(Icons.fact_check_outlined),
+              title: Text(tr(rootContext, 'Audit log')),
+              onTap: () {
+                Navigator.pop(rootContext);
+                Navigator.of(rootContext).push(MaterialPageRoute<void>(
+                  builder: (_) => AuditLogScreen(audit: widget.audit),
+                ));
               },
             ),
           ListTile(
@@ -518,6 +550,12 @@ class _PosAppState extends State<PosApp> {
         ]),
       ),
     );
+  }
+
+  void _openAttendance(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => AttendanceScreen(users: widget.users, attendance: widget.attendance),
+    ));
   }
 
   void _openOrders(BuildContext context, PosSession session) {
@@ -584,6 +622,7 @@ class _PosAppState extends State<PosApp> {
         allOrders: widget.orders.recent(limit: 1000),
         categories: widget.catalogue.categories(),
         formatAmount: PosApp.money,
+        audit: widget.audit,
         onPrint: _printShiftReport,
       ),
     ));

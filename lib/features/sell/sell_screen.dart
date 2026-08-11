@@ -44,6 +44,7 @@ class SellScreen extends StatefulWidget {
     this.extraCustomers,
     this.tables,
     this.heldOrders,
+    this.onResendToKitchen,
   });
 
   final PosSession session;
@@ -75,6 +76,10 @@ class SellScreen extends StatefulWidget {
   /// Fires the kitchen ticket for the current order but leaves it on the counter,
   /// so a table's food can be sent without parking the order.
   final VoidCallback? onSendToKitchen;
+
+  /// Re-fires every line to the kitchen, even those already sent, for when a ticket
+  /// was lost or the kitchen asks for it again. Surfaced on a long-press of Send.
+  final VoidCallback? onResendToKitchen;
 
   /// Opens the parked-orders list to recall a table.
   final VoidCallback? onOpenOrders;
@@ -834,6 +839,29 @@ class _SellScreenState extends State<SellScreen> {
     }
   }
 
+  Future<void> _resendToKitchen() async {
+    if (!s.hasLines) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Resend to kitchen')),
+        content: Text(tr(ctx, 'Print the whole ticket again?')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr(ctx, 'Resend'))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    widget.onResendToKitchen?.call();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      key: const Key('resent-kitchen'),
+      content: Text(tr(context, 'Sent to kitchen.')),
+      duration: const Duration(seconds: 2),
+    ));
+  }
+
   void _pay() {
     if (!s.hasLines) return;
     showModalBottomSheet<void>(
@@ -1561,6 +1589,10 @@ class _SellScreenState extends State<SellScreen> {
                   key: const Key('send-kitchen'),
                   onPressed: (s.hasLines && widget.onSendToKitchen != null)
                       ? _sendToKitchen
+                      : null,
+                  // Long-press re-fires the whole ticket (a lost or re-requested KOT).
+                  onLongPress: (s.hasLines && widget.onResendToKitchen != null)
+                      ? _resendToKitchen
                       : null,
                   child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                     const Icon(Icons.soup_kitchen, size: 20),
