@@ -138,6 +138,28 @@ void main() {
       expect(target.lines.single.total, closeTo(90, 0.001));
     });
 
+    test('moving into an already-discounted table does not double-discount', () {
+      // Destination table 2 already has a 20% tab.
+      session.setTable('2');
+      session.addProduct(cake); // 40 -> 32 at 20%
+      session.setDiscount(20);
+      session.hold();
+
+      // Source table 1 has a 10%-discounted pizza (worth 90).
+      session.setTable('1');
+      session.addProduct(pizza); // 100
+      session.setDiscount(10);
+
+      final target = session.moveLinesToTable({lineFor(10)}, '2');
+
+      final movedPizza = target.lines.firstWhere((l) => l.productId == 10);
+      final existingCake = target.lines.firstWhere((l) => l.productId == 12);
+      // Pizza keeps its 90 (not 72 from a second 20% hit); cake keeps its 32.
+      expect(movedPizza.total, closeTo(90, 0.001));
+      expect(existingCake.total, closeTo(32, 0.001));
+      expect(target.discountPercent, 0); // discounts are all line-level now
+    });
+
     test('merging a discounted table keeps that table\'s items discounted', () {
       // A 20%-discounted tab on table 2 with a 50 item -> worth 40.
       session.setTable('2');

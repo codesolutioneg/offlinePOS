@@ -314,6 +314,17 @@ class PosSession {
     }
   }
 
+  /// Push an order's whole-order discount down onto its own lines and clear it, so
+  /// the order carries no order-level discount. Used before foreign lines join a
+  /// table: with every discount now line-level, a moved-in line (already priced)
+  /// cannot be discounted a second time by the destination's order discount.
+  static void _flattenOrderDiscount(Order o) {
+    if (o.discountPercent <= 0) return;
+    _carryOrderDiscount(o.discountPercent, o.lines);
+    o.discountPercent = 0;
+    o.discountReason = null;
+  }
+
   /// Move a subset of the current order's lines onto another table's open tab
   /// (creating one if the table has none), then leave the rest here. Returns the
   /// target order. Used for "move items to another table". A whole-order discount on
@@ -332,6 +343,9 @@ class PosSession {
             tableLabel: targetTableLabel,
           )..state = OrderState.held,
         );
+    // Flatten the target's own discount to line level first, so the moved lines
+    // (already priced) are not discounted a second time by it.
+    _flattenOrderDiscount(target);
     target.lines.addAll(taken);
     orders.save(target);
     order.lines.removeWhere((l) => lineUuids.contains(l.uuid));
@@ -351,9 +365,11 @@ class PosSession {
   void mergeOrderInto(String sourceUuid) {
     final source = orders.byUuid(sourceUuid);
     if (source == null || source.uuid == current.uuid) return;
-    // Keep the source table's discount with its items rather than dropping it or
-    // re-pricing them under this table's discount.
+    // Keep both tables' discounts with their own items: fold the source discount
+    // into the incoming lines and flatten this table's discount onto its existing
+    // lines, so neither set is discounted twice once they share one order.
     _carryOrderDiscount(source.discountPercent, source.lines);
+    _flattenOrderDiscount(current);
     current.lines.addAll(source.lines);
     orders.save(current);
     orders.delete(source.uuid);
