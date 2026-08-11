@@ -27,6 +27,9 @@ class SellScreen extends StatefulWidget {
     this.onLineVoided,
     this.online,
     this.pendingToSync,
+    this.categoryColors = const {},
+    this.quickComments = const ['No onions', 'Extra spicy', 'Well done', 'Allergy'],
+    this.discountReasons = const [],
   });
 
   final PosSession session;
@@ -68,6 +71,14 @@ class SellScreen extends StatefulWidget {
 
   /// How many sales are held on the till waiting for the shift-close batch.
   final int Function()? pendingToSync;
+
+  /// Category id to colour (ARGB), so the product grid is colour-coded per category
+  /// the way Dishflow does. Empty leaves tiles plain.
+  final Map<int, int> categoryColors;
+
+  /// Manager-curated quick picks for line notes and discount reasons.
+  final List<String> quickComments;
+  final List<String> discountReasons;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -212,6 +223,13 @@ class _SellScreenState extends State<SellScreen> {
             decoration: const InputDecoration(
                 labelText: 'Reason (optional)', border: OutlineInputBorder(), isDense: true),
           ),
+          if (widget.discountReasons.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, children: [
+              for (final r in widget.discountReasons)
+                ActionChip(label: Text(r), onPressed: () => reasonCtrl.text = r),
+            ]),
+          ],
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
@@ -284,7 +302,7 @@ class _SellScreenState extends State<SellScreen> {
           ),
           const SizedBox(height: 8),
           Wrap(spacing: 8, children: [
-            for (final q in const ['No onions', 'Extra spicy', 'Well done', 'Allergy'])
+            for (final q in widget.quickComments)
               ActionChip(label: Text(q), onPressed: () => ctrl.text = q),
           ]),
         ]),
@@ -641,6 +659,14 @@ class _SellScreenState extends State<SellScreen> {
     );
   }
 
+  /// The configured colour for a product's category, or null to leave the tile
+  /// plain. Colour-coding the grid is how a cashier finds a category fast.
+  Color? _colorFor(int? categoryId) {
+    if (categoryId == null) return null;
+    final argb = widget.categoryColors[categoryId];
+    return argb == null ? null : Color(argb);
+  }
+
   Widget _catalogue(List<Product> products) => Column(
         children: [
           if (widget.onSignOut != null)
@@ -684,6 +710,7 @@ class _SellScreenState extends State<SellScreen> {
                     itemBuilder: (_, i) => _ProductTile(
                       product: products[i],
                       price: widget.formatAmount(products[i].price),
+                      color: _colorFor(products[i].categoryId),
                       onTap: () => _tap(products[i]),
                     ),
                   ),
@@ -917,18 +944,31 @@ class _StaleBanner extends StatelessWidget {
 }
 
 class _ProductTile extends StatelessWidget {
-  const _ProductTile({required this.product, required this.price, required this.onTap});
+  const _ProductTile({
+    required this.product,
+    required this.price,
+    required this.onTap,
+    this.color,
+  });
   final Product product;
   final String price;
   final VoidCallback onTap;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) => Card(
         clipBehavior: Clip.antiAlias,
+        // A tinted fill plus a coloured top stripe, so the category reads at a
+        // glance without hurting the legibility of the name and price.
+        color: color?.withValues(alpha: 0.12),
         child: InkWell(
           key: Key('product-${product.id}'),
           onTap: onTap,
-          child: Padding(
+          child: Container(
+            decoration: color == null
+                ? null
+                : BoxDecoration(
+                    border: Border(top: BorderSide(color: color!, width: 4))),
             padding: const EdgeInsets.all(8),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,

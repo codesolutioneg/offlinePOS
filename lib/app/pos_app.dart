@@ -9,8 +9,10 @@ import '../core/auth/user_store.dart';
 import '../core/config/till_config.dart';
 import '../core/db/catalogue_store.dart';
 import '../core/db/order_store.dart';
+import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
+import '../core/db/table_store.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
 import '../core/printing/kitchen_ticket.dart';
@@ -32,9 +34,15 @@ import '../features/orders/open_orders_screen.dart';
 import '../features/orders/order_history_screen.dart';
 import '../features/reports/sales_report_screen.dart';
 import '../features/sell/sell_screen.dart';
+import '../features/settings/appearance_settings_screen.dart';
+import '../features/settings/discount_reasons_screen.dart';
+import '../features/settings/quick_comments_screen.dart';
 import '../features/settings/server_settings_screen.dart';
+import '../features/settings/settings_hub_screen.dart';
+import '../features/settings/shop_settings_screen.dart';
 import '../features/shift/shift_screen.dart';
 import '../features/support/diagnostics_screen.dart';
+import '../features/tables/table_floor_screen.dart';
 import 'pos_session.dart';
 import 'till_activity.dart';
 
@@ -60,6 +68,8 @@ class PosApp extends StatefulWidget {
     required this.deviceId,
     required this.endpoints,
     required this.odoo,
+    required this.tables,
+    required this.settings,
     this.config = const TillConfig(),
     this.receiptSpool,
     this.activity,
@@ -81,6 +91,10 @@ class PosApp extends StatefulWidget {
   final String deviceId;
   final OdooEndpointStore endpoints;
   final OdooWiring odoo;
+
+  /// The floor plan and the on-device settings a manager edits on the device.
+  final TableStore tables;
+  final SettingsStore settings;
 
   /// Shop name, tax id and receipt footer. Nothing here is invented in code: a
   /// receipt with no shop name and no tax id is not a legal receipt, and a
@@ -217,10 +231,14 @@ class _PosAppState extends State<PosApp> {
   /// off costs a spooled reprint and nothing else.
   Future<void> _printReceipt(Order order, {bool reprint = false}) async {
     try {
+      // On-device settings win over the compile-time defaults, so a manager can
+      // fix the shop name or tax id on the receipt without a rebuild. Tax id is
+      // dropped when the receipt-tax toggle is off.
+      final s = widget.settings;
       final bytes = ReceiptBuilder(
-        shopName: widget.config.shopName,
-        taxId: widget.config.taxId,
-        footer: widget.config.receiptFooter,
+        shopName: s.shopName ?? widget.config.shopName,
+        taxId: s.receiptShowTax ? (s.taxId ?? widget.config.taxId) : null,
+        footer: s.receiptFooter ?? widget.config.receiptFooter,
         formatAmount: PosApp.money,
       ).build(order, reprint: reprint);
       // A reprint uses a distinct reference so it does not collide with the
@@ -283,6 +301,9 @@ class _PosAppState extends State<PosApp> {
               // close, so the shared Odoo login is not hit per order.
               online: widget.sync.online,
               pendingToSync: () => widget.sync.pendingSales,
+              categoryColors: widget.settings.categoryColors,
+              quickComments: widget.settings.quickComments,
+              discountReasons: widget.settings.discountReasons,
               onChanged: _publishActivity,
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
@@ -328,6 +349,15 @@ class _PosAppState extends State<PosApp> {
               child: Text('offlinePOS',
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
             ),
+          ),
+          ListTile(
+            key: const Key('nav-tables'),
+            leading: const Icon(Icons.table_bar),
+            title: const Text('Tables'),
+            onTap: () {
+              Navigator.pop(rootContext);
+              _openFloor(rootContext, session);
+            },
           ),
           ListTile(
             key: const Key('nav-open-orders'),
@@ -380,10 +410,10 @@ class _PosAppState extends State<PosApp> {
           ListTile(
             key: const Key('nav-settings'),
             leading: const Icon(Icons.settings),
-            title: const Text('Server settings'),
+            title: const Text('Settings'),
             onTap: () {
               Navigator.pop(rootContext);
-              _openSettings(rootContext);
+              _openSettingsHub(rootContext);
             },
           ),
           ListTile(
@@ -437,6 +467,87 @@ class _PosAppState extends State<PosApp> {
         onChanged: () => setState(() {}),
       ),
     ));
+  }
+
+  /// The floor plan. Tapping a table recalls the order parked on it, or starts a
+  /// fresh dine-in seated at it, then drops back to the sell screen.
+  void _openFloor(BuildContext context, PosSession session) {
+    final occupied =
+        widget.orders.held().map((o) => o.tableLabel).whereType<String>().toSet();
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => TableFloorScreen(
+        store: widget.tables,
+        occupiedLabels: occupied,
+        onOpenTable: (t) {
+          final held =
+              widget.orders.held().where((o) => o.tableLabel == t.name).toList();
+          setState(() {
+            if (held.isNotEmpty) {
+              session.recall(held.first.uuid);
+            } else {
+              session.newOrder();
+              session.setOrderType(OrderType.dineIn);
+              session.setTable(t.name);
+              if (t.seats > 0) session.setGuestCount(t.seats);
+            }
+          });
+          Navigator.of(context).pop();
+        },
+      ),
+    ));
+  }
+
+  /// The settings hub: one door onto everything a manager configures on the device.
+  void _openSettingsHub(BuildContext context) {
+    final isManager = widget.auth.signedIn?.isManager ?? false;
+    void refresh() => setState(() {});
+    void push(Widget screen) => Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => screen));
+    final entries = <SettingsEntry>[
+      SettingsEntry(
+        title: 'Shop & receipt',
+        subtitle: 'Name, tax id, footer',
+        icon: Icons.store,
+        keyValue: 'set-shop',
+        onTap: () => push(ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
+      ),
+      SettingsEntry(
+        title: 'Category colours',
+        icon: Icons.palette,
+        keyValue: 'set-appearance',
+        onTap: () => push(AppearanceSettingsScreen(
+            settings: widget.settings,
+            categories: widget.catalogue.categories(),
+            onChanged: refresh)),
+      ),
+      SettingsEntry(
+        title: 'Quick notes',
+        icon: Icons.sticky_note_2_outlined,
+        keyValue: 'set-notes',
+        onTap: () => push(QuickCommentsScreen(settings: widget.settings, onChanged: refresh)),
+      ),
+      SettingsEntry(
+        title: 'Discount reasons',
+        icon: Icons.percent,
+        keyValue: 'set-discounts',
+        onTap: () => push(DiscountReasonsScreen(settings: widget.settings, onChanged: refresh)),
+      ),
+      SettingsEntry(
+        title: 'Server (Odoo)',
+        subtitle: 'Where sales sync at shift close',
+        icon: Icons.dns,
+        keyValue: 'set-server',
+        onTap: () => _openSettings(context),
+      ),
+      if (isManager)
+        SettingsEntry(
+          title: 'Staff',
+          icon: Icons.badge_outlined,
+          keyValue: 'set-staff',
+          onTap: () => _openRoster(context),
+        ),
+    ];
+    push(SettingsHubScreen(entries: entries));
   }
 
   // ── kitchen tickets ──────────────────────────────────────────────

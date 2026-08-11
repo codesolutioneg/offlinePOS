@@ -18,6 +18,8 @@ import 'core/db/db_key.dart';
 import 'core/db/secure_key_store.dart';
 import 'core/db/device_store.dart';
 import 'core/db/order_store.dart';
+import 'core/db/settings_store.dart';
+import 'core/db/table_store.dart';
 import 'core/db/print_job_store.dart';
 import 'core/db/printer_store.dart';
 import 'core/db/shift_store.dart';
@@ -185,6 +187,8 @@ Future<void> main() async {
     updates: _updateService(config, sync, activity, dir),
     endpoints: endpoints,
     odoo: odoo,
+    tables: TableStore(db),
+    settings: SettingsStore(db),
   ));
 }
 

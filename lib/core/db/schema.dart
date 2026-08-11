@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 8;
+  static const int version = 9;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -264,6 +264,35 @@ class Schema {
         cashier_id      TEXT NOT NULL,
         movements       TEXT NOT NULL DEFAULT '[]',
         closing_counted REAL
+      )
+      ''',
+    ],
+
+    // v8 -> v9: the floor plan and on-device configuration.
+    [
+      // Tables the shop laid out, grouped into sections and positioned on a floor
+      // so a dine-in order can be started or recalled by tapping its table. Held
+      // locally like everything else, so the floor works with no network.
+      '''
+      CREATE TABLE pos_tables (
+        id       TEXT PRIMARY KEY,
+        section  TEXT NOT NULL DEFAULT 'Main',
+        name     TEXT NOT NULL,
+        seats    INTEGER NOT NULL DEFAULT 4,
+        pos_x    REAL NOT NULL DEFAULT 0,
+        pos_y    REAL NOT NULL DEFAULT 0,
+        sequence INTEGER NOT NULL DEFAULT 0
+      )
+      ''',
+      'CREATE INDEX idx_pos_tables_section ON pos_tables(section, sequence)',
+      // A general on-device settings bag: shop name and tax id for the receipt,
+      // receipt toggles, category colours, quick comments, discount reasons. One
+      // key-value table rather than a column per setting, so a new toggle is a
+      // write and not a migration.
+      '''
+      CREATE TABLE app_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
       )
       ''',
     ],
