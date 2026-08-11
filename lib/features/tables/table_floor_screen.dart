@@ -275,6 +275,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           ],
         ),
       );
+      if (!mounted) return;
       if (name != null && name.isNotEmpty && name != section) {
         widget.store.renameSection(section, name);
         setState(() => _section = name);

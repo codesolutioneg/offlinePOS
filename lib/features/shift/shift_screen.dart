@@ -150,6 +150,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
             label: Text(tr(context, 'Open shift')),
             onPressed: () async {
               final f = await _promptAmount(tr(context, 'Open shift'), label: tr(context, 'Opening float'));
+              if (!mounted) return;
               if (f != null) {
                 widget.store.openShift(openingFloat: f, cashierId: widget.cashierId);
                 _refresh();
@@ -188,6 +189,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
           label: Text(tr(context, 'Cash in')),
           onPressed: () async {
             final m = await _promptMovement(tr(context, 'Cash in'));
+            if (!mounted) return;
             if (m != null) {
               widget.store.addMovement('in', m.amount, reason: m.reason);
               _refresh();
@@ -200,6 +202,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
           label: Text(tr(context, 'Cash out')),
           onPressed: () async {
             final m = await _promptMovement(tr(context, 'Cash out'));
+            if (!mounted) return;
             if (m != null) {
               widget.store.addMovement('out', m.amount, reason: m.reason);
               _refresh();

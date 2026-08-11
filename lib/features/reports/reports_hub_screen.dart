@@ -86,6 +86,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       lastDate: now,
       initialDateRange: _custom,
     );
+    if (!mounted) return;
     if (picked != null) setState(() => _custom = picked);
   }
 
