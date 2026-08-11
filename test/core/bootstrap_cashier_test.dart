@@ -42,6 +42,9 @@ void main() {
     final pin = (await BootstrapCashier.ensure(auth, users))!;
     expect(await auth.unlock(BootstrapCashier.id, pin), isA<AuthOk>());
     expect(users.active().single.id, BootstrapCashier.id);
+    // The setup account is a manager: it is the first admin and must be able to
+    // add staff and approve manager-gated actions, or the till locks itself out.
+    expect(users.byId(BootstrapCashier.id)!.isManager, isTrue);
   });
 
   test('a relaunch issues a new code rather than reusing a stored one', () async {

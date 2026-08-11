@@ -39,7 +39,11 @@ class BootstrapCashier {
   static Future<String?> ensure(AuthService auth, UserStore users) async {
     if (!stillNeeded(users.active())) return null;
     final pin = newPin();
-    await auth.enrol(id: id, name: name, pin: pin);
+    // The setup account is the first admin: it must be a manager so whoever stands
+    // up the till can add staff and approve manager-gated actions (discounts,
+    // voids, refunds, sensitive settings). A cashier-role setup account would lock
+    // the till out of its own configuration.
+    await auth.enrol(id: id, name: name, pin: pin, role: 'manager');
     return pin;
   }
 }
