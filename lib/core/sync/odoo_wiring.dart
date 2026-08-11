@@ -74,13 +74,11 @@ class OdooWiring {
     }
     try {
       await sender.orderSender(entry);
-      // Completed without throwing: the server booked it. Only sales carry a
-      // synced state; the audit and heartbeat kinds do not.
-      if (entry.kind == 'order.push') onOrderBooked?.call(entry.payloadUuid);
+      // Only order.push is routed here (audit and heartbeat have their own local
+      // sinks), so a clean return means the server booked this sale.
+      onOrderBooked?.call(entry.payloadUuid);
     } on PermanentlyRejected catch (e) {
-      if (entry.kind == 'order.push') {
-        onOrderRejected?.call(entry.payloadUuid, e.toString());
-      }
+      onOrderRejected?.call(entry.payloadUuid, e.toString());
       rethrow;
     }
   }
