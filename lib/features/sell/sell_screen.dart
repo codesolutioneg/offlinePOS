@@ -25,6 +25,7 @@ class SellScreen extends StatefulWidget {
     this.catalogueChanged,
     this.drawer,
     this.onHold,
+    this.onSendToKitchen,
     this.onOpenOrders,
     this.onLineVoided,
     this.online,
@@ -68,6 +69,10 @@ class SellScreen extends StatefulWidget {
   /// Parks the current order on its table/tab and fires the kitchen ticket. The app
   /// shell owns it because holding is what sends food to the kitchen.
   final VoidCallback? onHold;
+
+  /// Fires the kitchen ticket for the current order but leaves it on the counter,
+  /// so a table's food can be sent without parking the order.
+  final VoidCallback? onSendToKitchen;
 
   /// Opens the parked-orders list to recall a table.
   final VoidCallback? onOpenOrders;
@@ -758,6 +763,19 @@ class _SellScreenState extends State<SellScreen> {
     _changed(() => s.newOrder());
   }
 
+  void _sendToKitchen() {
+    if (!s.hasLines) return;
+    widget.onSendToKitchen?.call();
+    setState(() {});
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        key: const Key('sent-kitchen'),
+        content: Text(tr(context, 'Sent to kitchen.')),
+        duration: const Duration(seconds: 2),
+      ));
+    }
+  }
+
   void _pay() {
     if (!s.hasLines) return;
     showModalBottomSheet<void>(
@@ -948,10 +966,10 @@ class _SellScreenState extends State<SellScreen> {
                             mainAxisSpacing: 8,
                             crossAxisSpacing: 8)
                         : const SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: 180,
-                            childAspectRatio: 1.3,
-                            mainAxisSpacing: 8,
-                            crossAxisSpacing: 8),
+                            maxCrossAxisExtent: 168,
+                            childAspectRatio: 1.05,
+                            mainAxisSpacing: 10,
+                            crossAxisSpacing: 10),
                     itemCount: products.length,
                     itemBuilder: (_, i) => _ProductTile(
                       product: products[i],
@@ -1179,25 +1197,46 @@ class _SellScreenState extends State<SellScreen> {
 
   Widget _actions() => Padding(
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-        child: Row(children: [
-          Expanded(
-            child: OutlinedButton.icon(
-              key: const Key('hold'),
-              onPressed: s.hasLines ? _hold : null,
-              icon: const Icon(Icons.pause_circle_outline),
-              label: Text(tr(context, 'Hold')),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 2,
-            child: SizedBox(
-              height: 56,
-              child: FilledButton(
-                key: const Key('pay'),
-                onPressed: s.hasLines ? _pay : null,
-                child: Text(tr(context, 'Payment')),
+        child: Column(children: [
+          Row(children: [
+            Expanded(
+              child: SizedBox(
+                height: 52,
+                child: OutlinedButton.icon(
+                  key: const Key('send-kitchen'),
+                  onPressed: (s.hasLines && widget.onSendToKitchen != null)
+                      ? _sendToKitchen
+                      : null,
+                  icon: const Icon(Icons.soup_kitchen),
+                  label: Text(tr(context, 'Send to kitchen')),
+                ),
               ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SizedBox(
+                height: 52,
+                child: OutlinedButton.icon(
+                  key: const Key('hold'),
+                  onPressed: s.hasLines ? _hold : null,
+                  icon: const Icon(Icons.pause_circle_outline),
+                  label: Text(tr(context, 'Hold')),
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            height: 68,
+            child: FilledButton.icon(
+              key: const Key('pay'),
+              style: FilledButton.styleFrom(
+                textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              onPressed: s.hasLines ? _pay : null,
+              icon: const Icon(Icons.payments, size: 26),
+              label: Text('${tr(context, 'Pay')}  ${widget.formatAmount(s.total)}'),
             ),
           ),
         ]),
@@ -1257,24 +1296,28 @@ class _ProductTile extends StatelessWidget {
               decoration: (color == null || unavailable)
                   ? null
                   : BoxDecoration(border: Border(top: BorderSide(color: color!, width: 4))),
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(10),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(product.name,
                       textAlign: TextAlign.center,
-                      maxLines: 2,
+                      maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                       style: unavailable
-                          ? const TextStyle(color: Colors.black45, decoration: TextDecoration.lineThrough)
-                          : null),
-                  const SizedBox(height: 6),
+                          ? const TextStyle(
+                              color: Colors.black45,
+                              fontSize: 15,
+                              height: 1.15,
+                              decoration: TextDecoration.lineThrough)
+                          : const TextStyle(fontSize: 15, height: 1.15, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 8),
                   if (unavailable)
                     Text(tr(context, 'Sold out'),
                         key: Key('soldout-${product.id}'),
-                        style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 12))
+                        style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 13))
                   else
-                    Text(price, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text(price, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
                 ],
               ),
             ),
@@ -1312,11 +1355,12 @@ class _LineTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListTile(
-        dense: true,
         onTap: onTapLine,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         title: Row(children: [
-          Expanded(child: Text(line.name)),
-          Text(amount, style: const TextStyle(fontWeight: FontWeight.bold)),
+          Expanded(
+              child: Text(line.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
+          Text(amount, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
         ]),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1325,28 +1369,33 @@ class _LineTile extends StatelessWidget {
               Text(
                   '   + ${m.name}${m.quantity > 1 ? ' x${m.quantity.toStringAsFixed(0)}' : ''}'
                   '${m.unitPrice == 0 ? '' : '  ${format(m.total * line.quantity)}'}',
-                  style: const TextStyle(fontSize: 12, color: Colors.green)),
+                  style: const TextStyle(fontSize: 13, color: Colors.green)),
             if (line.discountPercent > 0)
               Text('   -${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
-                  style: TextStyle(fontSize: 12, color: Colors.orange.shade800)),
+                  style: TextStyle(fontSize: 13, color: Colors.orange.shade800)),
             if (line.note != null)
               Text('   ${line.note}',
-                  style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+                  style: const TextStyle(fontSize: 13, fontStyle: FontStyle.italic)),
             Row(children: [
               IconButton(
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.remove_circle_outline, size: 18),
+                  icon: const Icon(Icons.remove_circle_outline, size: 28),
                   onPressed: () => onQty(line.quantity - 1)),
-              Text(line.quantity
-                  .toStringAsFixed(line.quantity == line.quantity.roundToDouble() ? 0 : 3)),
+              Container(
+                constraints: const BoxConstraints(minWidth: 32),
+                alignment: Alignment.center,
+                child: Text(
+                    line.quantity
+                        .toStringAsFixed(line.quantity == line.quantity.roundToDouble() ? 0 : 3),
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
               IconButton(
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.add_circle_outline, size: 18),
+                  icon: const Icon(Icons.add_circle_outline, size: 28),
                   onPressed: () => onQty(line.quantity + 1)),
             ]),
           ],
         ),
-        trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: onRemove),
+        trailing: IconButton(
+            icon: const Icon(Icons.delete_outline, size: 26), onPressed: onRemove),
       );
 }
 
@@ -1384,7 +1433,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   @override
   void initState() {
     super.initState();
-    if (widget.methods.isNotEmpty) _method = widget.methods.first;
+    if (_methods.isNotEmpty) _method = _methods.first;
   }
 
   @override
@@ -1393,6 +1442,16 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     _tip.dispose();
     _tenderAmount.dispose();
     super.dispose();
+  }
+
+  /// Payment methods with duplicate names collapsed, so a shop that has two "Cash"
+  /// entries in Odoo does not show two identical Cash buttons at the till.
+  List<PaymentMethod> get _methods {
+    final seen = <String>{};
+    return [
+      for (final m in widget.methods)
+        if (seen.add(m.name.trim().toLowerCase())) m,
+    ];
   }
 
   double get _tipAmount => double.tryParse(_tip.text.trim()) ?? 0;
@@ -1499,13 +1558,16 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
-            if (widget.methods.isNotEmpty)
+            if (_methods.isNotEmpty)
               Wrap(
-                spacing: 8,
+                spacing: 10,
+                runSpacing: 10,
                 children: [
-                  for (final m in widget.methods)
+                  for (final m in _methods)
                     ChoiceChip(
                       key: Key('method-${m.id}'),
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      labelStyle: const TextStyle(fontSize: 16),
                       label: Text(m.name),
                       selected: _method?.id == m.id,
                       onSelected: (_) => setState(() => _method = m),
@@ -1562,12 +1624,15 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 ),
                 onChanged: (_) => setState(() {}),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               Wrap(
-                spacing: 8,
+                spacing: 10,
+                runSpacing: 10,
                 children: [
                   for (final a in _quickAmounts())
                     ActionChip(
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      labelStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       label: Text(widget.format(a)),
                       onPressed: () =>
                           setState(() => _received.text = a.toStringAsFixed(2)),
@@ -1590,11 +1655,14 @@ class _PaymentSheetState extends State<_PaymentSheet> {
             ),
             const SizedBox(height: 18),
             SizedBox(
-              height: 52,
-              child: FilledButton(
+              height: 64,
+              child: FilledButton.icon(
                 key: const Key('confirm-payment'),
+                style: FilledButton.styleFrom(
+                    textStyle: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
                 onPressed: _covered ? _confirm : null,
-                child: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
+                icon: const Icon(Icons.check_circle, size: 24),
+                label: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
               ),
             ),
             const SizedBox(height: 4),

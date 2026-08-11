@@ -314,7 +314,20 @@ class _PosAppState extends State<PosApp> {
       valueListenable: _locale,
       builder: (context, locale, _) => MaterialApp(
         title: 'offlinePOS',
-        theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+        // Tuned for a touch screen: comfortable spacing and buttons/inputs tall
+        // enough to tap reliably with a finger.
+        theme: ThemeData(
+          colorSchemeSeed: Colors.teal,
+          useMaterial3: true,
+          visualDensity: VisualDensity.comfortable,
+          filledButtonTheme: FilledButtonThemeData(
+              style: FilledButton.styleFrom(minimumSize: const Size(0, 48))),
+          outlinedButtonTheme: OutlinedButtonThemeData(
+              style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48))),
+          chipTheme: const ChipThemeData(
+              padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+          listTileTheme: const ListTileThemeData(minVerticalPadding: 10),
+        ),
         locale: locale,
         supportedLocales: kSupportedLocales,
         localizationsDelegates: const [
@@ -379,6 +392,8 @@ class _PosAppState extends State<PosApp> {
                 session.hold();
                 _publishActivity();
               },
+              // Fire the kitchen ticket but keep the order on the counter.
+              onSendToKitchen: () => unawaited(_fireKitchen(session.current)),
               onLineVoided: (line, reason) =>
                   unawaited(_fireVoid(session.current, line, reason)),
               onPaid: (order) {
