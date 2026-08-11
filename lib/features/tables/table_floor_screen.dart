@@ -43,7 +43,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   String get _activeSection => _section ?? _sections.first;
 
-  void _reload() => setState(() {});
+  void _reload() => setState(() {
+        // Deleting the last table in a section makes that section vanish, so drop
+        // back to a section that still exists rather than showing a blank floor.
+        if (_section != null && !_sections.contains(_section)) _section = null;
+      });
 
   Future<void> _addTable() async {
     final result = await _tableDialog(title: 'Add table');
@@ -65,7 +69,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     if (result.delete) {
       widget.store.remove(t.id);
     } else {
-      widget.store.upsert(t.copyWith(name: result.name, seats: result.seats));
+      // Keep names unique so an order is never recalled onto the wrong table; a
+      // rename that would collide is suffixed rather than silently duplicated.
+      final name = result.name == t.name ? t.name : widget.store.uniqueName(result.name);
+      widget.store.upsert(t.copyWith(name: name, seats: result.seats));
     }
     _reload();
   }

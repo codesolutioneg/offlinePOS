@@ -79,24 +79,41 @@ class TableStore {
       (_db.raw.select('SELECT COUNT(*) c FROM pos_tables').first['c'] as int) == 0;
 
   /// Add a table, returning it with its generated id.
+  ///
+  /// The name is made unique across the whole floor, because an order is recalled
+  /// by its table name: two tables sharing a name would recall the wrong bill. When
+  /// no position is given the table is dropped on the next free grid cell rather
+  /// than stacked at the origin.
   PosTable add({
     required String name,
     String section = 'Main',
     int seats = 4,
-    double x = 0,
-    double y = 0,
+    double? x,
+    double? y,
   }) {
+    final seq = _nextSequence(section);
     final table = PosTable(
       id: Uuid.v4(),
-      name: name,
+      name: uniqueName(name),
       section: section,
       seats: seats,
-      x: x,
-      y: y,
-      sequence: _nextSequence(section),
+      x: x ?? (seq % 5).toDouble(),
+      y: y ?? (seq ~/ 5).toDouble(),
+      sequence: seq,
     );
     upsert(table);
     return table;
+  }
+
+  /// A name not already used by another table, suffixing -2, -3 on a collision.
+  String uniqueName(String desired) {
+    final taken = all().map((t) => t.name).toSet();
+    if (!taken.contains(desired)) return desired;
+    var n = 2;
+    while (taken.contains('$desired-$n')) {
+      n++;
+    }
+    return '$desired-$n';
   }
 
   void upsert(PosTable t) => _db.raw.execute(

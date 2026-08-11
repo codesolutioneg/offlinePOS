@@ -474,11 +474,24 @@ class _PosAppState extends State<PosApp> {
   void _openFloor(BuildContext context, PosSession session) {
     final occupied =
         widget.orders.held().map((o) => o.tableLabel).whereType<String>().toSet();
+    // The order on screen (not yet held) also occupies its table, or opening the
+    // floor and tapping it would start a second order on the same table.
+    final active = session.current;
+    if (active.lines.isNotEmpty && active.tableLabel != null) {
+      occupied.add(active.tableLabel!);
+    }
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => TableFloorScreen(
         store: widget.tables,
         occupiedLabels: occupied,
         onOpenTable: (t) {
+          // Tapping the table the current order is already seated at just returns
+          // to it rather than parking it and starting a duplicate.
+          if (session.current.tableLabel == t.name &&
+              session.current.lines.isNotEmpty) {
+            Navigator.of(context).pop();
+            return;
+          }
           final held =
               widget.orders.held().where((o) => o.tableLabel == t.name).toList();
           setState(() {
