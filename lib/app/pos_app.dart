@@ -29,14 +29,21 @@ import '../core/updates/update_service.dart';
 import '../domain/order.dart';
 import '../features/admin/roster_screen.dart';
 import '../features/auth/login_screen.dart';
+import '../features/kitchen/kitchen_display_screen.dart';
 import '../features/onboarding/wizard_overlay.dart';
 import '../features/orders/open_orders_screen.dart';
 import '../features/orders/order_history_screen.dart';
+import '../features/orders/refund_screen.dart';
+import '../features/reports/cashier_report_screen.dart';
+import '../features/reports/discounts_report_screen.dart';
+import '../features/reports/sales_by_time_report_screen.dart';
 import '../features/reports/sales_report_screen.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/discount_reasons_screen.dart';
+import '../features/settings/printers_screen.dart';
 import '../features/settings/quick_comments_screen.dart';
+import '../features/settings/receipt_designer_screen.dart';
 import '../features/settings/server_settings_screen.dart';
 import '../features/settings/settings_hub_screen.dart';
 import '../features/settings/shop_settings_screen.dart';
@@ -235,10 +242,23 @@ class _PosAppState extends State<PosApp> {
       // fix the shop name or tax id on the receipt without a rebuild. Tax id is
       // dropped when the receipt-tax toggle is off.
       final s = widget.settings;
+      // Open the drawer for a cash sale: an empty tender books to cash, or any
+      // tender against a cash method. A reprint never re-opens the drawer.
+      final cashIds = widget.catalogue
+          .paymentMethods()
+          .where((m) => m.isCash)
+          .map((m) => m.id)
+          .toSet();
+      final isCash = order.payments.isEmpty ||
+          order.payments.any((p) => cashIds.contains(p.methodId));
       final bytes = ReceiptBuilder(
         shopName: s.shopName ?? widget.config.shopName,
         taxId: s.receiptShowTax ? (s.taxId ?? widget.config.taxId) : null,
         footer: s.receiptFooter ?? widget.config.receiptFooter,
+        header: s.getString('receipt_header'),
+        showCashier: s.getBool('receipt_show_cashier', fallback: true),
+        showOrderType: s.getBool('receipt_show_ordertype', fallback: true),
+        openDrawer: isCash && !reprint,
         formatAmount: PosApp.money,
       ).build(order, reprint: reprint);
       // A reprint uses a distinct reference so it does not collide with the
@@ -379,12 +399,21 @@ class _PosAppState extends State<PosApp> {
             },
           ),
           ListTile(
-            key: const Key('nav-report'),
-            leading: const Icon(Icons.bar_chart),
-            title: const Text('Sales report'),
+            key: const Key('nav-kitchen'),
+            leading: const Icon(Icons.soup_kitchen),
+            title: const Text('Kitchen display'),
             onTap: () {
               Navigator.pop(rootContext);
-              _openReport(rootContext);
+              _openKitchen(rootContext);
+            },
+          ),
+          ListTile(
+            key: const Key('nav-report'),
+            leading: const Icon(Icons.bar_chart),
+            title: const Text('Reports'),
+            onTap: () {
+              Navigator.pop(rootContext);
+              _openReports(rootContext);
             },
           ),
           ListTile(
@@ -446,15 +475,69 @@ class _PosAppState extends State<PosApp> {
         orders: widget.orders.recent(limit: 100),
         formatAmount: PosApp.money,
         onReprint: (order) => _printReceipt(order, reprint: true),
+        onRefund: (order) => _openRefund(context, order),
       ),
     ));
   }
 
-  void _openReport(BuildContext context) {
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => SalesReportScreen(
-        orders: widget.orders.recent(limit: 500),
+  /// Refund a past sale: pick the lines, then record, queue and print the reversal.
+  Future<void> _openRefund(BuildContext context, Order original) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => RefundScreen(
+        original: original,
         formatAmount: PosApp.money,
+        onRefund: (refund) {
+          // A refund is a durable order like a sale: saved, queued to sync, audited,
+          // and a slip printed for the customer.
+          widget.orders.save(refund);
+          widget.outbox.enqueue('order.push', refund.uuid, refund.toServerPayload());
+          widget.audit.record(refund.cashierId, 'order.refunded',
+              detail: '${refund.uuid} of ${original.uuid}');
+          unawaited(_printReceipt(refund));
+        },
+      ),
+    ));
+    if (mounted) setState(() {});
+  }
+
+  /// The reports hub: the day's completed sales, seen from several angles.
+  void _openReports(BuildContext context) {
+    void push(Widget s) => Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => s));
+    List<Order> orders() => widget.orders.recent(limit: 500);
+    push(SettingsHubScreen(entries: [
+      SettingsEntry(
+        title: 'Sales summary',
+        icon: Icons.summarize,
+        keyValue: 'rep-summary',
+        onTap: () => push(SalesReportScreen(orders: orders(), formatAmount: PosApp.money)),
+      ),
+      SettingsEntry(
+        title: 'Discounts',
+        icon: Icons.percent,
+        keyValue: 'rep-discounts',
+        onTap: () => push(DiscountsReportScreen(orders: orders(), formatAmount: PosApp.money)),
+      ),
+      SettingsEntry(
+        title: 'Cashier performance',
+        icon: Icons.badge_outlined,
+        keyValue: 'rep-cashier',
+        onTap: () => push(CashierReportScreen(orders: orders(), formatAmount: PosApp.money)),
+      ),
+      SettingsEntry(
+        title: 'Sales by hour',
+        icon: Icons.schedule,
+        keyValue: 'rep-time',
+        onTap: () => push(SalesByTimeReportScreen(orders: orders(), formatAmount: PosApp.money)),
+      ),
+    ]));
+  }
+
+  void _openKitchen(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => KitchenDisplayScreen(
+        load: () => widget.orders.kitchenTickets(),
+        onStatus: (uuid, status) => widget.orders.setKitchenStatus(uuid, status),
       ),
     ));
   }
@@ -525,6 +608,23 @@ class _PosAppState extends State<PosApp> {
         onTap: () => push(ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
+        title: 'Receipt designer',
+        subtitle: 'Header, footer, what prints',
+        icon: Icons.receipt_long,
+        keyValue: 'set-receipt',
+        onTap: () => push(ReceiptDesignerScreen(settings: widget.settings, onChanged: refresh)),
+      ),
+      SettingsEntry(
+        title: 'Printers & kitchen routing',
+        icon: Icons.print,
+        keyValue: 'set-printers',
+        onTap: () => push(PrintersScreen(
+            printers: widget.printers,
+            settings: widget.settings,
+            categories: widget.catalogue.categories(),
+            onChanged: refresh)),
+      ),
+      SettingsEntry(
         title: 'Category colours',
         icon: Icons.palette,
         keyValue: 'set-appearance',
@@ -573,7 +673,12 @@ class _PosAppState extends State<PosApp> {
     final lines = only ?? order.lines.where((l) => !l.printedToKitchen).toList();
     if (lines.isEmpty) return;
     final builder = KitchenTicketBuilder();
-    for (final entry in routeToStations(lines).entries) {
+    // Route each line to its category's station, so a multi-station kitchen sends
+    // hot food and bar drinks to different printers. Unmapped categories fall to
+    // the single default kitchen.
+    final routed = routeToStations(lines,
+        categoryToStation: widget.settings.categoryStations);
+    for (final entry in routed.entries) {
       final bytes = builder.build(order, only: entry.value, station: entry.key);
       await _sendToStation(entry.key, bytes, 'kot-${order.uuid}');
     }

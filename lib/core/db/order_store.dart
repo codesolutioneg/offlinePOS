@@ -80,5 +80,23 @@ class OrderStore {
     save(order);
   }
 
+  /// Active kitchen tickets for the KDS board: orders that have been sent to the
+  /// kitchen (held or paid) and are not yet served, newest first.
+  List<Order> kitchenTickets() => _db.raw
+      .select("SELECT payload FROM orders WHERE state IN ('held','paid') "
+          'ORDER BY created_at DESC LIMIT 100')
+      .map((r) => Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
+      .where((o) => o.kitchenStatus != KitchenStatus.served)
+      .toList();
+
+  /// Move a ticket along the kitchen board. Goes through [save] so the indexed
+  /// columns and the payload cannot disagree.
+  void setKitchenStatus(String uuid, KitchenStatus status) {
+    final order = byUuid(uuid);
+    if (order == null) return;
+    order.kitchenStatus = status;
+    save(order);
+  }
+
   int get count => _db.raw.select('SELECT COUNT(*) c FROM orders').first['c'] as int;
 }

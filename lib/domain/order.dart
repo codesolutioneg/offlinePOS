@@ -17,6 +17,18 @@ extension OrderTypeLabel on OrderType {
 /// queued to sync. synced: acknowledged by the server.
 enum OrderState { draft, held, paid, synced }
 
+/// Where a ticket is in the kitchen, for the kitchen display board.
+enum KitchenStatus { pending, preparing, ready, served }
+
+extension KitchenStatusLabel on KitchenStatus {
+  String get label => switch (this) {
+        KitchenStatus.pending => 'New',
+        KitchenStatus.preparing => 'Preparing',
+        KitchenStatus.ready => 'Ready',
+        KitchenStatus.served => 'Served',
+      };
+}
+
 /// A modifier applied to a line, priced at the moment of sale.
 ///
 /// The price is captured here rather than looked up later: a receipt must never
@@ -152,6 +164,8 @@ class Order {
     this.note,
     this.deliveryCost = 0,
     this.tip = 0,
+    this.kitchenStatus = KitchenStatus.pending,
+    this.refundOfUuid,
     List<OrderLine>? lines,
     List<OrderPayment>? payments,
   })  : uuid = uuid ?? Uuid.v4(),
@@ -201,6 +215,15 @@ class Order {
   /// A tip added on top of the sale total.
   double tip;
 
+  /// Where this order's ticket is in the kitchen, for the KDS board.
+  KitchenStatus kitchenStatus;
+
+  /// When set, this order reverses an earlier sale (a refund/return). Its lines
+  /// carry negative quantities, so it books a credit against the original.
+  String? refundOfUuid;
+
+  bool get isRefund => refundOfUuid != null;
+
   /// Set once the backend confirms. Never used as identity.
   int? serverId;
 
@@ -243,6 +266,8 @@ class Order {
         'note': note,
         'delivery_cost': deliveryCost,
         'tip': tip,
+        'kitchen_status': kitchenStatus.name,
+        'refund_of_uuid': refundOfUuid,
         'lines': lines.map((l) => l.toMap()).toList(),
         'payments': payments.map((p) => p.toMap()).toList(),
       };
@@ -292,6 +317,9 @@ class Order {
         note: m['note'] as String?,
         deliveryCost: (m['delivery_cost'] as num?)?.toDouble() ?? 0,
         tip: (m['tip'] as num?)?.toDouble() ?? 0,
+        kitchenStatus: KitchenStatus.values
+            .byName((m['kitchen_status'] as String?) ?? KitchenStatus.pending.name),
+        refundOfUuid: m['refund_of_uuid'] as String?,
         lines: ((m['lines'] as List?) ?? const [])
             .map((e) => OrderLine.fromMap(e as Map<String, dynamic>))
             .toList(),

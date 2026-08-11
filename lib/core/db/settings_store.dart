@@ -20,7 +20,9 @@ class SettingsStore {
   static const _quickComments = 'quick_comments';
   static const _discountReasons = 'discount_reasons';
   static const _categoryColors = 'category_colors';
+  static const _categoryStations = 'category_stations';
   static const _receiptShowTax = 'receipt_show_tax';
+  static const _language = 'language';
 
   // ── generic accessors ────────────────────────────────────────────
   String? getString(String key) {
@@ -119,4 +121,35 @@ class SettingsStore {
     }
     categoryColors = map;
   }
+
+  /// Category id to kitchen station (printer name), so a multi-station kitchen
+  /// routes each item to the right printer. Empty means everything goes to the
+  /// single default kitchen.
+  Map<int, String> get categoryStations {
+    final v = getString(_categoryStations);
+    if (v == null) return const {};
+    try {
+      return (jsonDecode(v) as Map)
+          .map((k, val) => MapEntry(int.parse(k as String), val as String));
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  set categoryStations(Map<int, String> v) => setString(
+      _categoryStations, jsonEncode(v.map((k, val) => MapEntry('$k', val))));
+
+  void setCategoryStation(int categoryId, String? station) {
+    final map = Map<int, String>.from(categoryStations);
+    if (station == null || station.isEmpty) {
+      map.remove(categoryId);
+    } else {
+      map[categoryId] = station;
+    }
+    categoryStations = map;
+  }
+
+  /// UI language code: 'en' or 'ar'. Drives translation and text direction.
+  String get language => getString(_language) ?? 'en';
+  set language(String code) => setString(_language, code);
 }

@@ -15,6 +15,7 @@ class OrderHistoryScreen extends StatelessWidget {
     required this.orders,
     required this.formatAmount,
     required this.onReprint,
+    this.onRefund,
   });
 
   /// Already sorted newest first by the caller (recent()); this screen does
@@ -25,6 +26,9 @@ class OrderHistoryScreen extends StatelessWidget {
   /// Reprints the receipt for [order]. Awaited so the confirmation snackbar
   /// only fires once the job has actually been handed to the printer.
   final Future<void> Function(Order order) onReprint;
+
+  /// Opens the refund flow for [order]. Absent hides the refund action.
+  final Future<void> Function(Order order)? onRefund;
 
   /// The first six hex characters of the uuid, upper-cased. Not unique on its
   /// own across a long history, but enough for a cashier to read a table's
@@ -45,6 +49,7 @@ class OrderHistoryScreen extends StatelessWidget {
                   order: orders[i],
                   formatAmount: formatAmount,
                   onReprint: onReprint,
+                  onRefund: onRefund,
                 ),
               ),
       );
@@ -56,11 +61,13 @@ class _HistoryTile extends StatelessWidget {
     required this.order,
     required this.formatAmount,
     required this.onReprint,
+    this.onRefund,
   });
 
   final Order order;
   final String Function(double) formatAmount;
   final Future<void> Function(Order order) onReprint;
+  final Future<void> Function(Order order)? onRefund;
 
   /// synced: the server has it. paid: tendered but still queued. Nothing else
   /// reaches this screen, since a draft or held order was never a completed
@@ -92,6 +99,7 @@ class _HistoryTile extends StatelessWidget {
           order: order,
           formatAmount: formatAmount,
           onReprint: onReprint,
+          onRefund: onRefund,
         ),
       )),
     );
@@ -107,11 +115,13 @@ class OrderDetailScreen extends StatelessWidget {
     required this.order,
     required this.formatAmount,
     required this.onReprint,
+    this.onRefund,
   });
 
   final Order order;
   final String Function(double) formatAmount;
   final Future<void> Function(Order order) onReprint;
+  final Future<void> Function(Order order)? onRefund;
 
   Future<void> _reprint(BuildContext context) async {
     await onReprint(order);
@@ -155,6 +165,17 @@ class OrderDetailScreen extends StatelessWidget {
               onPressed: () => _reprint(context),
               child: const Text('Reprint receipt'),
             ),
+            // A refund is offered only on a real sale, never on a refund itself, so
+            // a return cannot be refunded again.
+            if (onRefund != null && !order.isRefund) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                key: Key('refund-${order.uuid}'),
+                onPressed: () => onRefund!(order),
+                icon: const Icon(Icons.undo),
+                label: const Text('Refund'),
+              ),
+            ],
           ],
         ),
       );

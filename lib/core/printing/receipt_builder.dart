@@ -15,6 +15,10 @@ class ReceiptBuilder {
     this.columns = 42,
     this.footer,
     this.taxId,
+    this.header,
+    this.showCashier = true,
+    this.showOrderType = true,
+    this.openDrawer = false,
   });
 
   final String shopName;
@@ -22,6 +26,17 @@ class ReceiptBuilder {
   final int columns;
   final String? footer;
   final String? taxId;
+
+  /// An optional line printed under the shop name (address, phone, slogan), set in
+  /// the receipt designer.
+  final String? header;
+
+  /// Receipt-designer toggles.
+  final bool showCashier;
+  final bool showOrderType;
+
+  /// Kick the cash drawer open at the end, for a cash sale.
+  final bool openDrawer;
 
   Uint8List build(Order order, {bool reprint = false}) {
     final p = EscPos(columns: columns)..reset();
@@ -32,6 +47,7 @@ class ReceiptBuilder {
       ..line(shopName)
       ..bold(false)
       ..size();
+    if (header != null && header!.isNotEmpty) p.centred(header!);
     if (taxId != null) p.line(taxId!);
     // A reprint is marked so a duplicate slip cannot be passed off as a second sale.
     if (reprint) p.centred('*** REPRINT ***');
@@ -39,10 +55,12 @@ class ReceiptBuilder {
 
     // Where the sale was served, so a delivery or table sale reads differently
     // from a counter one on the same roll.
-    p.line(order.type.label + (order.tableLabel != null ? '  Table ${order.tableLabel}' : ''));
-    if (order.guestCount != null) p.line('Guests: ${order.guestCount}');
+    if (showOrderType) {
+      p.line(order.type.label + (order.tableLabel != null ? '  Table ${order.tableLabel}' : ''));
+      if (order.guestCount != null) p.line('Guests: ${order.guestCount}');
+    }
     p.line('${_stamp(order.createdAt)}  #${_shortRef(order)}');
-    p.line('Cashier: ${order.cashierId}');
+    if (showCashier) p.line('Cashier: ${order.cashierId}');
     if (order.customerName != null) p.line('Customer: ${order.customerName}');
     p.rule();
 
@@ -101,7 +119,11 @@ class ReceiptBuilder {
     if (footer != null) {
       p.feed().align(EscPosAlign.center).line(footer!);
     }
-    return (p..feed(2)..cut()).build();
+    p.feed(2);
+    // Kick the drawer before the cut on a cash sale, so the till opens as the
+    // receipt prints rather than needing a separate command.
+    if (openDrawer) p.openDrawer();
+    return (p..cut()).build();
   }
 
   /// The order's own reference: the tail of the client uuid, which is stable and

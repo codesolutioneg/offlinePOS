@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app/pos_session.dart';
 import '../../domain/catalogue.dart';
@@ -88,6 +89,13 @@ class _SellScreenState extends State<SellScreen> {
   int? _categoryId;
   String _search = '';
 
+  // A hardware barcode scanner behaves as a keyboard that types the code fast and
+  // ends with Enter. We buffer keystrokes and, when they arrive faster than a human
+  // could type and finish with Enter, treat them as a scan and add the product.
+  final FocusNode _scanFocus = FocusNode();
+  String _scanBuffer = '';
+  DateTime _lastScanKey = DateTime.fromMillisecondsSinceEpoch(0);
+
   PosSession get s => widget.session;
 
   @override
@@ -99,7 +107,41 @@ class _SellScreenState extends State<SellScreen> {
   @override
   void dispose() {
     widget.catalogueChanged?.removeListener(_onCatalogueChanged);
+    _scanFocus.dispose();
     super.dispose();
+  }
+
+  void _onScanKey(KeyEvent e) {
+    if (e is! KeyDownEvent) return;
+    final now = DateTime.now();
+    // A gap longer than a scanner burst means this is human typing, not a scan.
+    if (now.difference(_lastScanKey).inMilliseconds > 150) _scanBuffer = '';
+    _lastScanKey = now;
+    if (e.logicalKey == LogicalKeyboardKey.enter ||
+        e.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _finishScan();
+      return;
+    }
+    final ch = e.character;
+    if (ch != null && ch.length == 1 && ch.trim().isNotEmpty) _scanBuffer += ch;
+  }
+
+  void _finishScan() {
+    final code = _scanBuffer.trim();
+    _scanBuffer = '';
+    // Too short to be a real barcode: ignore, so a stray Enter does nothing.
+    if (code.length < 3) return;
+    final product = s.catalogue.byBarcode(code);
+    if (product == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No product for barcode $code')));
+      return;
+    }
+    _changed(() => s.addProduct(product));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        key: const Key('scanned'),
+        content: Text('Added ${product.name}'),
+        duration: const Duration(milliseconds: 900)));
   }
 
   // A fresh catalogue landed from the server: rebuild so the grid re-queries it.
@@ -600,7 +642,11 @@ class _SellScreenState extends State<SellScreen> {
           ),
         ],
       ),
-      body: SafeArea(
+      body: KeyboardListener(
+        focusNode: _scanFocus,
+        autofocus: true,
+        onKeyEvent: _onScanKey,
+        child: SafeArea(
         child: Column(
           children: [
             if (widget.staleness != null && widget.staleness!.inHours >= 24)
@@ -615,6 +661,7 @@ class _SellScreenState extends State<SellScreen> {
               ),
             ),
           ],
+        ),
         ),
       ),
     );
