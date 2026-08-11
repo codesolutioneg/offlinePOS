@@ -127,14 +127,16 @@ class _RosterScreenState extends State<RosterScreen> {
       appBar: AppBar(
         title: Text(tr(context, 'Staff')),
         actions: [
-          Row(children: [
-            Text(tr(context, 'Show inactive')),
-            Switch(
-              key: const Key('show-inactive'),
-              value: _showInactive,
-              onChanged: (v) => setState(() => _showInactive = v),
-            ),
-          ]),
+          // A compact toggle rather than a label+switch, which can overflow the app
+          // bar once the label is translated.
+          IconButton(
+            key: const Key('show-inactive'),
+            tooltip: tr(context, 'Show inactive'),
+            isSelected: _showInactive,
+            icon: const Icon(Icons.visibility_off_outlined),
+            selectedIcon: const Icon(Icons.visibility),
+            onPressed: () => setState(() => _showInactive = !_showInactive),
+          ),
         ],
       ),
       body: staff.isEmpty
@@ -147,33 +149,33 @@ class _RosterScreenState extends State<RosterScreen> {
                 final c = staff[index];
                 return ListTile(
                   key: Key('staff-${c.id}'),
-                  title: Text(c.name),
-                  subtitle: Text(c.active ? c.id : '${c.id} · ${tr(context, 'inactive')}'),
-                  trailing: Wrap(
-                    spacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Chip(label: Text(c.isManager ? tr(context, 'Manager') : tr(context, 'Cashier'))),
-                      IconButton(
-                        key: Key('edit-${c.id}'),
-                        icon: const Icon(Icons.edit),
-                        tooltip: tr(context, 'Edit'),
-                        onPressed: () => _openEditDialog(c),
-                      ),
+                  title: Text(c.name, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(
+                      c.active
+                          ? (c.isManager ? tr(context, 'Manager') : tr(context, 'Cashier'))
+                          : '${c.isManager ? tr(context, 'Manager') : tr(context, 'Cashier')} · ${tr(context, 'inactive')}'),
+                  // Actions live in an overflow menu so a long name can never push
+                  // buttons off the row.
+                  trailing: PopupMenuButton<String>(
+                    key: Key('staff-menu-${c.id}'),
+                    onSelected: (v) {
+                      if (v == 'edit') _openEditDialog(c);
+                      if (v == 'deactivate') _deactivate(c);
+                      if (v == 'reactivate') _reactivate(c);
+                    },
+                    itemBuilder: (_) => [
+                      PopupMenuItem(
+                          key: Key('edit-${c.id}'), value: 'edit', child: Text(tr(context, 'Edit'))),
                       if (c.active)
-                        IconButton(
-                          key: Key('deactivate-${c.id}'),
-                          icon: const Icon(Icons.person_off),
-                          tooltip: tr(context, 'Deactivate'),
-                          onPressed: () => _deactivate(c),
-                        )
+                        PopupMenuItem(
+                            key: Key('deactivate-${c.id}'),
+                            value: 'deactivate',
+                            child: Text(tr(context, 'Deactivate')))
                       else
-                        IconButton(
-                          key: Key('reactivate-${c.id}'),
-                          icon: const Icon(Icons.person),
-                          tooltip: tr(context, 'Reactivate'),
-                          onPressed: () => _reactivate(c),
-                        ),
+                        PopupMenuItem(
+                            key: Key('reactivate-${c.id}'),
+                            value: 'reactivate',
+                            child: Text(tr(context, 'Reactivate'))),
                     ],
                   ),
                 );

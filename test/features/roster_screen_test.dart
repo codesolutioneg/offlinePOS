@@ -82,6 +82,9 @@ void main() {
 
   testWidgets('deactivating a cashier removes them from the active roster', (t) async {
     await t.pumpWidget(app());
+    // Actions now live in an overflow menu, so open it before tapping Deactivate.
+    await t.tap(find.byKey(const Key('staff-menu-sara')));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('deactivate-sara')));
     await t.pumpAndSettle();
 

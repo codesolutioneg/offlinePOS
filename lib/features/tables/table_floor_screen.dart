@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/db/table_store.dart';
@@ -43,6 +45,25 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   final GlobalKey _canvasKey = GlobalKey();
   bool _editing = false;
   String? _section;
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // Re-render every 30s so the "sitting for N minutes" ages on occupied tables
+    // keep counting up while the floor is open instead of freezing.
+    if (widget.occupiedInfo.isNotEmpty) {
+      _tick = Timer.periodic(const Duration(seconds: 30), (_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
 
   List<String> get _sections {
     final s = widget.store.sections();

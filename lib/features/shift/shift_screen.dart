@@ -47,6 +47,14 @@ class _ShiftScreenState extends State<ShiftScreen> {
 
   void _refresh() => setState(() => _shift = widget.store.currentOpenShift());
 
+  /// A short local timestamp, so the shift header reads "2026-08-11 14:03" rather
+  /// than a raw DateTime with microseconds.
+  static String _stamp(DateTime utc) {
+    final d = utc.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+  }
+
   Future<double?> _promptAmount(String title, {String label = 'Amount'}) {
     final c = TextEditingController();
     return showDialog<double>(
@@ -154,7 +162,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
   Widget _openView(Shift s) {
     final sum = widget.store.summary(s, cashMethodIds: widget.cashMethodIds);
     return ListView(children: [
-      Text('${tr(context, 'Open since')} ${s.openedAt.toLocal()}',
+      Text('${tr(context, 'Open since')} ${_stamp(s.openedAt)}',
           style: const TextStyle(color: Colors.black54)),
       const Divider(),
       _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),

@@ -275,26 +275,34 @@ class _SellScreenState extends State<SellScreen> {
     final ctrl = TextEditingController();
     return showDialog<double>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('${tr(ctx, 'Weight for')} ${product.name}'),
-        content: TextField(
-          key: const Key('weight-field'),
-          controller: ctrl,
-          autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(
-              labelText: tr(ctx, 'Weight'),
-              suffixText: 'x ${widget.formatAmount(product.price)}',
-              border: const OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-            key: const Key('weight-ok'),
-            onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())),
-            child: Text(tr(ctx, 'Add')),
-          ),
-        ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) {
+          final valid = (double.tryParse(ctrl.text.trim()) ?? 0) > 0;
+          return AlertDialog(
+            title: Text('${tr(ctx, 'Weight for')} ${product.name}'),
+            content: TextField(
+              key: const Key('weight-field'),
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                  labelText: tr(ctx, 'Weight'),
+                  suffixText: 'x ${widget.formatAmount(product.price)}',
+                  border: const OutlineInputBorder()),
+              onChanged: (_) => setSt(() {}),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+              FilledButton(
+                key: const Key('weight-ok'),
+                // Disabled until a positive weight is entered, so pressing Add can
+                // never silently do nothing.
+                onPressed: valid ? () => Navigator.pop(ctx, double.parse(ctrl.text.trim())) : null,
+                child: Text(tr(ctx, 'Add')),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1202,13 +1210,19 @@ class _SellScreenState extends State<SellScreen> {
             Expanded(
               child: SizedBox(
                 height: 52,
-                child: OutlinedButton.icon(
+                child: OutlinedButton(
                   key: const Key('send-kitchen'),
                   onPressed: (s.hasLines && widget.onSendToKitchen != null)
                       ? _sendToKitchen
                       : null,
-                  icon: const Icon(Icons.soup_kitchen),
-                  label: Text(tr(context, 'Send to kitchen')),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.soup_kitchen, size: 20),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(tr(context, 'Send to kitchen'),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                  ]),
                 ),
               ),
             ),
@@ -1216,11 +1230,17 @@ class _SellScreenState extends State<SellScreen> {
             Expanded(
               child: SizedBox(
                 height: 52,
-                child: OutlinedButton.icon(
+                child: OutlinedButton(
                   key: const Key('hold'),
                   onPressed: s.hasLines ? _hold : null,
-                  icon: const Icon(Icons.pause_circle_outline),
-                  label: Text(tr(context, 'Hold')),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.pause_circle_outline, size: 20),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(tr(context, 'Hold'),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                  ]),
                 ),
               ),
             ),
@@ -1454,6 +1474,10 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     ];
   }
 
+  // Whether the cashier has typed their own "amount received"; until they do, it
+  // tracks the grand total so adding a tip does not leave Charge greyed out.
+  bool _receivedEdited = false;
+
   double get _tipAmount => double.tryParse(_tip.text.trim()) ?? 0;
   double get _grand => widget.total + _tipAmount;
   bool get _isCash => _method?.isCash ?? true;
@@ -1555,7 +1579,13 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               decoration: InputDecoration(
                 labelText: tr(context, 'Tip (optional)'), border: const OutlineInputBorder(), isDense: true),
-              onChanged: (_) => setState(() {}),
+              onChanged: (_) => setState(() {
+                // Keep the cash received in step with the tip so Charge stays
+                // enabled, unless the cashier has already set a received amount.
+                if (!_receivedEdited && _isCash && !_split) {
+                  _received.text = _grand.toStringAsFixed(2);
+                }
+              }),
             ),
             const SizedBox(height: 12),
             if (_methods.isNotEmpty)
@@ -1622,7 +1652,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                   border: const OutlineInputBorder(),
                   isDense: true,
                 ),
-                onChanged: (_) => setState(() {}),
+                onChanged: (_) => setState(() => _receivedEdited = true),
               ),
               const SizedBox(height: 10),
               Wrap(

@@ -148,15 +148,13 @@ class _ModifierSheetState extends State<ModifierSheet> {
                               ? Row(mainAxisSize: MainAxisSize.min, children: [
                                   IconButton(
                                     key: Key('mod-${m.id}-minus'),
-                                    visualDensity: VisualDensity.compact,
-                                    icon: const Icon(Icons.remove_circle_outline, size: 18),
+                                    icon: const Icon(Icons.remove_circle_outline, size: 26),
                                     onPressed: () => _bump(g, m, -1),
                                   ),
                                   Text('$qty'),
                                   IconButton(
                                     key: Key('mod-${m.id}-plus'),
-                                    visualDensity: VisualDensity.compact,
-                                    icon: const Icon(Icons.add_circle_outline, size: 18),
+                                    icon: const Icon(Icons.add_circle_outline, size: 26),
                                     onPressed: () => _bump(g, m, 1),
                                   ),
                                 ])

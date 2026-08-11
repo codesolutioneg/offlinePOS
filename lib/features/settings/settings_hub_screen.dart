@@ -38,8 +38,8 @@ class SettingsHubScreen extends StatelessWidget {
             return ListTile(
               key: e.keyValue != null ? Key(e.keyValue!) : null,
               leading: Icon(e.icon),
-              title: Text(e.title),
-              subtitle: e.subtitle != null ? Text(e.subtitle!) : null,
+              title: Text(tr(context, e.title)),
+              subtitle: e.subtitle != null ? Text(tr(context, e.subtitle!)) : null,
               trailing: const Icon(Icons.chevron_right),
               onTap: e.onTap,
             );

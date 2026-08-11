@@ -27,9 +27,11 @@ class RefundScreen extends StatefulWidget {
 }
 
 class _RefundScreenState extends State<RefundScreen> {
-  // How many of each original line to refund, keyed by the line uuid.
-  late final Map<String, int> _qty = {
-    for (final l in widget.original.lines) l.uuid: l.quantity.round(),
+  // How much of each original line to refund, keyed by the line uuid. Doubles, so
+  // a weighed line (e.g. 1.5 kg) refunds its exact quantity rather than a rounded
+  // whole number.
+  late final Map<String, double> _qty = {
+    for (final l in widget.original.lines) l.uuid: l.quantity,
   };
   final TextEditingController _reason = TextEditingController();
 
@@ -54,6 +56,9 @@ class _RefundScreenState extends State<RefundScreen> {
   }
 
   bool get _anySelected => _qty.values.any((q) => q > 0);
+
+  static String _fmtQty(double q) =>
+      q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toStringAsFixed(2);
 
   void _confirm() {
     final reason = _reason.text.trim();
@@ -103,20 +108,25 @@ class _RefundScreenState extends State<RefundScreen> {
                   ListTile(
                     key: Key('refund-line-${l.uuid}'),
                     title: Text(l.name),
-                    subtitle: Text('${tr(context, 'Sold')} ${l.quantity.toStringAsFixed(0)} @ '
+                    subtitle: Text('${tr(context, 'Sold')} ${_fmtQty(l.quantity)} @ '
                         '${widget.formatAmount(l.unitPrice)}'),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                       IconButton(
-                        icon: const Icon(Icons.remove_circle_outline),
+                        icon: const Icon(Icons.remove_circle_outline, size: 28),
+                        // Step by whole units, but never below zero; a weighed line's
+                        // remaining fraction drops to zero on the last step.
                         onPressed: (_qty[l.uuid] ?? 0) > 0
-                            ? () => setState(() => _qty[l.uuid] = (_qty[l.uuid]! - 1))
+                            ? () => setState(() =>
+                                _qty[l.uuid] = (_qty[l.uuid]! - 1).clamp(0, l.quantity))
                             : null,
                       ),
-                      Text('${_qty[l.uuid] ?? 0}'),
+                      Text(_fmtQty(_qty[l.uuid] ?? 0),
+                          style: const TextStyle(fontWeight: FontWeight.bold)),
                       IconButton(
-                        icon: const Icon(Icons.add_circle_outline),
-                        onPressed: (_qty[l.uuid] ?? 0) < l.quantity.round()
-                            ? () => setState(() => _qty[l.uuid] = (_qty[l.uuid]! + 1))
+                        icon: const Icon(Icons.add_circle_outline, size: 28),
+                        onPressed: (_qty[l.uuid] ?? 0) < l.quantity
+                            ? () => setState(() =>
+                                _qty[l.uuid] = (_qty[l.uuid]! + 1).clamp(0, l.quantity))
                             : null,
                       ),
                     ]),

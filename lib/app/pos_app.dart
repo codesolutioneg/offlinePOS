@@ -565,6 +565,10 @@ class _PosAppState extends State<PosApp> {
           widget.audit.record(refund.cashierId, 'order.refunded',
               detail: '${refund.uuid} of ${original.uuid}');
           unawaited(_printReceipt(refund));
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('${'Refund recorded: '}${PosApp.money(refund.total.abs())}')));
+          }
         },
       ),
     ));
@@ -787,21 +791,22 @@ class _PosAppState extends State<PosApp> {
     final pin = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Manager approval'),
+        title: Text(tr(ctx, 'Manager approval')),
         content: TextField(
           key: const Key('manager-pin'),
           controller: ctrl,
           autofocus: true,
           obscureText: true,
           keyboardType: TextInputType.number,
-          decoration: const InputDecoration(labelText: 'Manager PIN', border: OutlineInputBorder()),
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Manager PIN'), border: const OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
             key: const Key('manager-ok'),
             onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: const Text('Approve'),
+            child: Text(tr(ctx, 'Approve')),
           ),
         ],
       ),
@@ -810,7 +815,7 @@ class _PosAppState extends State<PosApp> {
     final ok = await widget.auth.authorizeManager(pin);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Manager approval failed')));
+          SnackBar(content: Text(tr(context, 'Manager approval failed'))));
     }
     return ok;
   }
