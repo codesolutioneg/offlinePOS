@@ -103,11 +103,40 @@ class _RosterScreenState extends State<RosterScreen> {
     setState(() {});
   }
 
+  bool _showInactive = false;
+
+  void _reactivate(Cashier cashier) {
+    // Restore access with the PIN intact; deactivation kept the hash for exactly
+    // this, so no reset is needed.
+    widget.users.upsert(Cashier(
+      id: cashier.id,
+      name: cashier.name,
+      role: cashier.role,
+      pinSalt: cashier.pinSalt,
+      pinHash: cashier.pinHash,
+      active: true,
+    ));
+    widget.onChanged();
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
-    final staff = widget.users.active();
+    final staff = _showInactive ? widget.users.all() : widget.users.active();
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Staff'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Staff')),
+        actions: [
+          Row(children: [
+            Text(tr(context, 'Show inactive')),
+            Switch(
+              key: const Key('show-inactive'),
+              value: _showInactive,
+              onChanged: (v) => setState(() => _showInactive = v),
+            ),
+          ]),
+        ],
+      ),
       body: staff.isEmpty
           ? Center(
               child: Text(tr(context, 'No staff on this device yet'), key: const Key('no-staff')),
@@ -119,7 +148,7 @@ class _RosterScreenState extends State<RosterScreen> {
                 return ListTile(
                   key: Key('staff-${c.id}'),
                   title: Text(c.name),
-                  subtitle: Text(c.id),
+                  subtitle: Text(c.active ? c.id : '${c.id} · ${tr(context, 'inactive')}'),
                   trailing: Wrap(
                     spacing: 8,
                     crossAxisAlignment: WrapCrossAlignment.center,
@@ -131,12 +160,20 @@ class _RosterScreenState extends State<RosterScreen> {
                         tooltip: tr(context, 'Edit'),
                         onPressed: () => _openEditDialog(c),
                       ),
-                      IconButton(
-                        key: Key('deactivate-${c.id}'),
-                        icon: const Icon(Icons.person_off),
-                        tooltip: tr(context, 'Deactivate'),
-                        onPressed: () => _deactivate(c),
-                      ),
+                      if (c.active)
+                        IconButton(
+                          key: Key('deactivate-${c.id}'),
+                          icon: const Icon(Icons.person_off),
+                          tooltip: tr(context, 'Deactivate'),
+                          onPressed: () => _deactivate(c),
+                        )
+                      else
+                        IconButton(
+                          key: Key('reactivate-${c.id}'),
+                          icon: const Icon(Icons.person),
+                          tooltip: tr(context, 'Reactivate'),
+                          onPressed: () => _reactivate(c),
+                        ),
                     ],
                   ),
                 );

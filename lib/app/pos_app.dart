@@ -18,6 +18,7 @@ import '../core/db/sqlite_outbox_store.dart';
 import '../core/db/table_store.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
+import '../core/printing/escpos.dart';
 import '../core/printing/kitchen_ticket.dart';
 import '../core/printing/printer_registry.dart';
 import '../core/printing/printer_transport.dart';
@@ -482,10 +483,19 @@ class _PosAppState extends State<PosApp> {
 
   void _openOrders(BuildContext context, PosSession session) {
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => OpenOrdersScreen(
+      builder: (sheetContext) => OpenOrdersScreen(
         orders: widget.orders.held(),
         formatAmount: PosApp.money,
         onRecall: (order) => setState(() => session.recall(order.uuid)),
+        // Discarding a parked order is money not taken, so it is manager-gated and
+        // audited, then the list is popped so the change is visible.
+        onCancel: (order) async {
+          if (!await _authorizeManager(sheetContext)) return;
+          widget.orders.delete(order.uuid);
+          widget.audit.record(session.cashierId, 'order.cancelled', detail: order.uuid);
+          if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+          setState(() {});
+        },
       ),
     ));
   }
@@ -601,6 +611,13 @@ class _PosAppState extends State<PosApp> {
     void refresh() => setState(() {});
     void push(Widget screen) => Navigator.of(context)
         .push(MaterialPageRoute<void>(builder: (_) => screen));
+    // Sensitive config (server credentials, printers, shop identity) is manager-only
+    // so a cashier cannot repoint the till or rewrite the receipt; a manager passes
+    // straight through.
+    Future<void> pushGated(Widget screen) async {
+      if (!await _authorizeManager(context)) return;
+      push(screen);
+    }
     final entries = <SettingsEntry>[
       SettingsEntry(
         title: _locale.isArabic ? 'Language: العربية' : 'Language: English',
@@ -619,7 +636,7 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Name, tax id, footer',
         icon: Icons.store,
         keyValue: 'set-shop',
-        onTap: () => push(ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
+        onTap: () => pushGated(ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'Receipt designer',
@@ -632,7 +649,7 @@ class _PosAppState extends State<PosApp> {
         title: 'Printers & kitchen routing',
         icon: Icons.print,
         keyValue: 'set-printers',
-        onTap: () => push(PrintersScreen(
+        onTap: () => pushGated(PrintersScreen(
             printers: widget.printers,
             settings: widget.settings,
             categories: widget.catalogue.categories(),
@@ -664,7 +681,10 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Where sales sync at shift close',
         icon: Icons.dns,
         keyValue: 'set-server',
-        onTap: () => _openSettings(context),
+        onTap: () async {
+          final ok = await _authorizeManager(context);
+          if (ok && context.mounted) _openSettings(context);
+        },
       ),
       if (isManager)
         SettingsEntry(
@@ -789,6 +809,7 @@ class _PosAppState extends State<PosApp> {
         cashierId: session.cashierId,
         cashMethodIds: cashMethodIds,
         formatAmount: PosApp.money,
+        onPrintReport: _printShiftReport,
         // Closing the shift is when the day's orders are pushed to Odoo in one
         // batch. Returns a message for the cashier: how it went, or that the
         // orders are safe and will sync once the connection is back.
@@ -809,6 +830,34 @@ class _PosAppState extends State<PosApp> {
         },
       ),
     ));
+  }
+
+  /// Print an X or Z shift report to the receipt printer (spooled if it is down).
+  Future<void> _printShiftReport(String title, List<(String, String)> rows) async {
+    final shop = widget.settings.shopName ?? widget.config.shopName;
+    final p = EscPos()..reset();
+    p.align(EscPosAlign.center)
+      ..size(doubleWidth: true, doubleHeight: true)
+      ..bold(true)
+      ..line(shop)
+      ..bold(false)
+      ..size()
+      ..line(title);
+    final now = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    p.align(EscPosAlign.left)
+      ..rule()
+      ..line('${now.year}-${two(now.month)}-${two(now.day)} ${two(now.hour)}:${two(now.minute)}')
+      ..rule();
+    for (final r in rows) {
+      p.row(r.$1, r.$2);
+    }
+    final bytes = (p..feed(2)..cut()).build();
+    try {
+      await _receiptPrinter.send(bytes, reference: 'shift-$title-${now.millisecondsSinceEpoch}');
+    } on PrinterUnavailable {
+      // Held in the spool; the flush retries it.
+    }
   }
 
   void _openDiagnostics(BuildContext context) {

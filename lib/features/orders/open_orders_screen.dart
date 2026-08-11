@@ -14,11 +14,16 @@ class OpenOrdersScreen extends StatelessWidget {
     required this.orders,
     required this.formatAmount,
     required this.onRecall,
+    this.onCancel,
   });
 
   final List<Order> orders;
   final String Function(double) formatAmount;
   final void Function(Order order) onRecall;
+
+  /// Discards a held order (abandoned tab). Manager-gated by the caller. Absent
+  /// hides the cancel action.
+  final Future<void> Function(Order order)? onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +41,28 @@ class OpenOrdersScreen extends StatelessWidget {
                   onRecall(orders[i]);
                   Navigator.of(context).pop();
                 },
+                onCancel: onCancel == null
+                    ? null
+                    : () async {
+                        final ok = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: Text(tr(ctx, 'Cancel this order?')),
+                            content: Text(tr(ctx,
+                                'The parked order will be discarded. This cannot be undone.')),
+                            actions: [
+                              TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: Text(tr(ctx, 'Keep'))),
+                              FilledButton(
+                                  key: const Key('confirm-cancel-order'),
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: Text(tr(ctx, 'Discard'))),
+                            ],
+                          ),
+                        );
+                        if (ok == true) await onCancel!(orders[i]);
+                      },
               ),
             ),
     );
@@ -47,11 +74,13 @@ class _OpenOrderCard extends StatelessWidget {
     required this.order,
     required this.formatAmount,
     required this.onTap,
+    this.onCancel,
   });
 
   final Order order;
   final String Function(double) formatAmount;
   final VoidCallback onTap;
+  final VoidCallback? onCancel;
 
   // A tab with no table still needs a name a cashier can say out loud, so it
   // falls back to a short uuid tail rather than the full identifier.
@@ -124,6 +153,13 @@ class _OpenOrderCard extends StatelessWidget {
                   ],
                 ),
               ),
+              if (onCancel != null)
+                IconButton(
+                  key: Key('cancel-order-${order.uuid}'),
+                  tooltip: tr(context, 'Cancel order'),
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: onCancel,
+                ),
             ],
           ),
         ),

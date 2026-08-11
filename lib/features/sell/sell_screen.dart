@@ -964,6 +964,11 @@ class _SellScreenState extends State<SellScreen> {
                 _totalRow('Delivery', widget.formatAmount(s.current.deliveryCost), muted: true),
               const SizedBox(height: 6),
             ],
+            // Tax is included in the prices, so it is shown as an "incl." line
+            // rather than added on; the total is unchanged.
+            if (s.current.taxTotal > 0.001)
+              _totalRow('Tax (incl.)', widget.formatAmount(s.current.taxTotal),
+                  key: const Key('tax-line'), muted: true),
             Row(children: [
               Text(tr(context, 'TOTAL'), style: const TextStyle(fontWeight: FontWeight.bold)),
               const Spacer(),
@@ -1171,6 +1176,9 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   late final TextEditingController _received =
       TextEditingController(text: widget.total.toStringAsFixed(2));
   final TextEditingController _tip = TextEditingController();
+  // The amount for the next split tender; defaults to the whole remaining balance
+  // so "part cash, rest card" is two taps, but any partial value can be entered.
+  final TextEditingController _tenderAmount = TextEditingController();
 
   @override
   void initState() {
@@ -1182,6 +1190,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   void dispose() {
     _received.dispose();
     _tip.dispose();
+    _tenderAmount.dispose();
     super.dispose();
   }
 
@@ -1201,10 +1210,17 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       : (_isCash ? _receivedAmount >= _grand - 0.001 : true);
 
   void _addTender() {
-    if (_method == null) return;
-    final amt = _remaining > 0 ? _remaining : 0.0;
-    setState(() => _tenders.add(
-        OrderPayment(methodId: _method!.id, amount: amt, label: _method!.name)));
+    if (_method == null || _remaining <= 0.001) return;
+    // Use the typed amount, capped at the remaining balance; an empty field means
+    // "the whole rest", so the common case stays one tap.
+    final typed = double.tryParse(_tenderAmount.text.trim());
+    final amt = (typed == null || typed <= 0)
+        ? _remaining
+        : (typed > _remaining ? _remaining : typed);
+    setState(() {
+      _tenders.add(OrderPayment(methodId: _method!.id, amount: amt, label: _method!.name));
+      _tenderAmount.clear();
+    });
   }
 
   void _confirm() {
@@ -1305,18 +1321,31 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                   title: Text(t.label ?? tr(context, 'Payment')),
                   trailing: Text(widget.format(t.amount)),
                 ),
+              Text(
+                  '${tr(context, 'Remaining')} ${widget.format(_remaining < 0 ? 0 : _remaining)}',
+                  key: const Key('remaining'),
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
               Row(children: [
                 Expanded(
-                  child: Text(
-                      '${tr(context, 'Remaining')} ${widget.format(_remaining < 0 ? 0 : _remaining)}',
-                      key: const Key('remaining')),
+                  child: TextField(
+                    key: const Key('tender-amount'),
+                    controller: _tenderAmount,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: '${tr(context, 'Amount')} (${_method?.name ?? ''})',
+                      hintText: tr(context, 'Rest of balance'),
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
                 ),
-                TextButton.icon(
+                const SizedBox(width: 8),
+                FilledButton.tonalIcon(
                   key: const Key('add-tender'),
                   onPressed: _remaining > 0.001 ? _addTender : null,
                   icon: const Icon(Icons.add),
-                  label: Text(
-                      '${tr(context, 'Add')} ${_method?.name ?? tr(context, 'tender')}'),
+                  label: Text(tr(context, 'Add')),
                 ),
               ]),
             ] else if (_isCash) ...[

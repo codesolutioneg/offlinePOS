@@ -120,6 +120,19 @@ class _TicketCard extends StatelessWidget {
     return table != null ? '$table · $type' : type;
   }
 
+  /// Minutes since the ticket was rung. The board polls every 10s, so this reflects
+  /// real waiting time and lets a cook work oldest-first.
+  int get _ageMinutes => DateTime.now().difference(order.createdAt).inMinutes;
+
+  /// Colour by how long the ticket has waited, independent of status, so an SLA
+  /// breach is obvious: green fresh, amber getting old, red overdue.
+  Color get _ageColor {
+    final m = _ageMinutes;
+    if (m >= 10) return Colors.red;
+    if (m >= 5) return Colors.orange;
+    return Colors.green;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -140,6 +153,18 @@ class _TicketCard extends StatelessWidget {
                     child: Text(_title(context),
                         style: const TextStyle(fontWeight: FontWeight.bold)),
                   ),
+                  // Age badge: how long the kitchen has had it, coloured by SLA.
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _ageColor,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('${_ageMinutes}m',
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(width: 6),
                   Text(_time),
                 ],
               ),

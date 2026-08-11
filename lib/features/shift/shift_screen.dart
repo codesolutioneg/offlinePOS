@@ -13,6 +13,7 @@ class ShiftScreen extends StatefulWidget {
     required this.formatAmount,
     this.cashMethodIds = const {},
     this.onCloseSync,
+    this.onPrintReport,
   });
 
   final ShiftStore store;
@@ -26,6 +27,10 @@ class ShiftScreen extends StatefulWidget {
   /// Pushes the shift's orders to Odoo as one batch when the shift closes, and
   /// returns a message describing the outcome. Null on a build with no server.
   final Future<String> Function()? onCloseSync;
+
+  /// Prints a shift report (X or Z) to the receipt printer. Null hides the print
+  /// action. Rows are (label, value) pairs.
+  final Future<void> Function(String title, List<(String, String)> rows)? onPrintReport;
 
   @override
   State<ShiftScreen> createState() => _ShiftScreenState();
@@ -195,6 +200,14 @@ class _ShiftScreenState extends State<ShiftScreen> {
         ),
       ]),
       const SizedBox(height: 16),
+      if (widget.onPrintReport != null)
+        OutlinedButton.icon(
+          key: const Key('print-x'),
+          icon: const Icon(Icons.print),
+          label: Text(tr(context, 'Print X read')),
+          onPressed: _printX,
+        ),
+      const SizedBox(height: 8),
       FilledButton.icon(
         key: const Key('close-shift'),
         style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
@@ -223,6 +236,30 @@ class _ShiftScreenState extends State<ShiftScreen> {
     ]);
   }
 
+  /// The report rows for an X (interim) or Z (close) reading.
+  List<(String, String)> _rows(dynamic sum, {bool withVariance = false}) => [
+        ('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
+        ('Cash sales', widget.formatAmount(sum.cashSales)),
+        ('Opening float', widget.formatAmount(sum.openingFloat)),
+        ('Cash in', widget.formatAmount(sum.cashIn)),
+        ('Cash out', widget.formatAmount(sum.cashOut)),
+        ('Expected in drawer', widget.formatAmount(sum.expectedCash)),
+        if (withVariance) ('Counted', widget.formatAmount(sum.countedCash ?? 0)),
+        if (withVariance) ('Variance', widget.formatAmount(sum.variance ?? 0)),
+      ];
+
+  /// Print an interim X reading without closing the shift.
+  Future<void> _printX() async {
+    final s = _shift;
+    if (s == null || widget.onPrintReport == null) return;
+    final sum = widget.store.summary(s, cashMethodIds: widget.cashMethodIds);
+    await widget.onPrintReport!('X Report', _rows(sum));
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(tr(context, 'X report sent to printer'))));
+    }
+  }
+
   void _showZ(Shift closed) {
     final sum = widget.store.summary(closed, cashMethodIds: widget.cashMethodIds);
     final variance = sum.variance ?? 0;
@@ -242,7 +279,16 @@ class _ShiftScreenState extends State<ShiftScreen> {
                   fontWeight: FontWeight.bold,
                   color: variance.abs() < 0.01 ? Colors.green.shade700 : Colors.red)),
         ]),
-        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Done')))],
+        actions: [
+          if (widget.onPrintReport != null)
+            TextButton.icon(
+              key: const Key('print-z'),
+              icon: const Icon(Icons.print),
+              label: Text(tr(ctx, 'Print')),
+              onPressed: () => widget.onPrintReport!('Z Report', _rows(sum, withVariance: true)),
+            ),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Done'))),
+        ],
       ),
     );
   }

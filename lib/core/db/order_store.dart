@@ -98,5 +98,11 @@ class OrderStore {
     save(order);
   }
 
+  /// Discard an order outright. Only safe for a draft or held order that was never
+  /// paid; a paid order must be reversed with a refund, never deleted.
+  void delete(String uuid) =>
+      _db.raw.execute('DELETE FROM orders WHERE uuid = ? AND state IN (?, ?)',
+          [uuid, OrderState.draft.name, OrderState.held.name]);
+
   int get count => _db.raw.select('SELECT COUNT(*) c FROM orders').first['c'] as int;
 }

@@ -55,6 +55,11 @@ class UserStore {
       .map(_map)
       .toList();
 
+  /// Everyone, active or not, so a manager can see and reactivate a cashier who was
+  /// deactivated; without this a deactivated cashier is stranded off the roster.
+  List<Cashier> all() =>
+      _db.raw.select('SELECT * FROM users ORDER BY active DESC, name').map(_map).toList();
+
   Cashier? byId(String id) {
     final rows = _db.raw.select('SELECT * FROM users WHERE id = ?', [id]);
     return rows.isEmpty ? null : _map(rows.first);
