@@ -19,10 +19,13 @@ class SettingsStore {
   static const _receiptFooter = 'receipt_footer';
   static const _quickComments = 'quick_comments';
   static const _discountReasons = 'discount_reasons';
+  static const _discountPercents = 'discount_percents';
+  static const _maxDiscountPercent = 'max_discount_percent';
   static const _categoryColors = 'category_colors';
   static const _categoryStations = 'category_stations';
   static const _receiptShowTax = 'receipt_show_tax';
   static const _language = 'language';
+  static const _unavailableProducts = 'unavailable_products';
 
   // ── generic accessors ────────────────────────────────────────────
   String? getString(String key) {
@@ -96,6 +99,25 @@ class SettingsStore {
 
   set discountReasons(List<String> v) => setStringList(_discountReasons, v);
 
+  /// The preset discount percentages offered as quick-pick chips when applying a
+  /// discount. Editable by a manager; a sensible default until then.
+  List<double> get discountPercents {
+    final v = getStringList(_discountPercents);
+    if (v.isEmpty) return const [5, 10, 15, 20];
+    return v.map((e) => double.tryParse(e) ?? 0).where((e) => e > 0).toList();
+  }
+
+  set discountPercents(List<double> v) => setStringList(
+      _discountPercents,
+      (v.toList()..sort()).map((e) => e.toStringAsFixed(e == e.roundToDouble() ? 0 : 1)).toList());
+
+  /// The largest discount a cashier may apply (0 = no cap). Guards against a
+  /// fat-fingered 100% off.
+  double get maxDiscountPercent =>
+      double.tryParse(getString(_maxDiscountPercent) ?? '') ?? 0;
+  set maxDiscountPercent(double v) =>
+      setString(_maxDiscountPercent, v <= 0 ? null : v.toStringAsFixed(0));
+
   /// Category id to colour (ARGB int), so the product grid can be colour-coded the
   /// way Dishflow does. Empty until a manager sets colours.
   Map<int, int> get categoryColors {
@@ -152,4 +174,22 @@ class SettingsStore {
   /// UI language code: 'en' or 'ar'. Drives translation and text direction.
   String get language => getString(_language) ?? 'en';
   set language(String code) => setString(_language, code);
+
+  /// Products marked sold-out ("86'd") on this till, so a run-out item can be
+  /// blocked mid-service without waiting for an Odoo catalogue change.
+  Set<int> get unavailableProducts =>
+      getStringList(_unavailableProducts).map((e) => int.tryParse(e) ?? -1).where((e) => e >= 0).toSet();
+
+  set unavailableProducts(Set<int> ids) =>
+      setStringList(_unavailableProducts, ids.map((e) => '$e').toList());
+
+  void setProductAvailable(int productId, bool available) {
+    final set = unavailableProducts;
+    if (available) {
+      set.remove(productId);
+    } else {
+      set.add(productId);
+    }
+    unavailableProducts = set;
+  }
 }

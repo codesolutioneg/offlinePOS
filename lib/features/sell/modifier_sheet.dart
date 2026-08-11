@@ -60,6 +60,18 @@ class _ModifierSheetState extends State<ModifierSheet> {
     });
   }
 
+  void _bump(ModifierGroup g, Modifier m, int delta) {
+    setState(() {
+      final sel = _picked.putIfAbsent(g.id, () => {});
+      final next = (sel[m.id] ?? 0) + delta;
+      if (next <= 0) {
+        sel.remove(m.id);
+      } else {
+        sel[m.id] = next;
+      }
+    });
+  }
+
   void _confirm() {
     final chosen = <ChosenModifier>[];
     for (final g in widget.groups) {
@@ -119,14 +131,39 @@ class _ModifierSheetState extends State<ModifierSheet> {
                       ]),
                     ),
                     for (final m in g.modifiers)
-                      CheckboxListTile(
-                        key: Key('mod-${m.id}'),
-                        dense: true,
-                        value: (_picked[g.id] ?? const {}).containsKey(m.id),
-                        onChanged: (_) => _toggle(g, m),
-                        title: Text(m.name),
-                        secondary: Text(_label(m)),
-                      ),
+                      Builder(builder: (context) {
+                        final qty = (_picked[g.id] ?? const {})[m.id] ?? 0;
+                        final selected = qty > 0;
+                        // Multi-select options can be taken more than once ("2x
+                        // extra cheese"): show a stepper once selected. Single-choice
+                        // groups stay a plain checkbox.
+                        final canRepeat = g.maxSelection != 1;
+                        return CheckboxListTile(
+                          key: Key('mod-${m.id}'),
+                          dense: true,
+                          value: selected,
+                          onChanged: (_) => _toggle(g, m),
+                          title: Text(m.name),
+                          subtitle: (selected && canRepeat)
+                              ? Row(mainAxisSize: MainAxisSize.min, children: [
+                                  IconButton(
+                                    key: Key('mod-${m.id}-minus'),
+                                    visualDensity: VisualDensity.compact,
+                                    icon: const Icon(Icons.remove_circle_outline, size: 18),
+                                    onPressed: () => _bump(g, m, -1),
+                                  ),
+                                  Text('$qty'),
+                                  IconButton(
+                                    key: Key('mod-${m.id}-plus'),
+                                    visualDensity: VisualDensity.compact,
+                                    icon: const Icon(Icons.add_circle_outline, size: 18),
+                                    onPressed: () => _bump(g, m, 1),
+                                  ),
+                                ])
+                              : null,
+                          secondary: Text(_label(m)),
+                        );
+                      }),
                   ],
                 ],
               ),

@@ -32,7 +32,11 @@ class SellScreen extends StatefulWidget {
     this.categoryColors = const {},
     this.quickComments = const ['No onions', 'Extra spicy', 'Well done', 'Allergy'],
     this.discountReasons = const [],
+    this.discountPercents = const [5, 10, 15, 20],
+    this.maxDiscountPercent = 0,
     this.authorize,
+    this.unavailableProducts = const {},
+    this.onToggleAvailable,
   });
 
   final PosSession session;
@@ -83,9 +87,19 @@ class SellScreen extends StatefulWidget {
   final List<String> quickComments;
   final List<String> discountReasons;
 
+  /// Configurable discount preset percentages and an optional cap (0 = none).
+  final List<double> discountPercents;
+  final double maxDiscountPercent;
+
   /// Gate for privileged actions (discount, void): returns true if approved. When
   /// null, actions are not gated.
   final Future<bool> Function()? authorize;
+
+  /// Products marked sold-out; their tiles are greyed and cannot be added.
+  final Set<int> unavailableProducts;
+
+  /// Toggle a product's availability (86 / un-86). Manager-gated by the caller.
+  final void Function(int productId, bool available)? onToggleAvailable;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -160,6 +174,29 @@ class _SellScreenState extends State<SellScreen> {
   void _changed(VoidCallback mutate) {
     setState(mutate);
     widget.onChanged?.call();
+  }
+
+  /// Block adding a sold-out item; otherwise ring it as normal.
+  void _tapProduct(Product product) {
+    if (widget.unavailableProducts.contains(product.id)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${product.name}: ${tr(context, 'sold out')}')));
+      return;
+    }
+    _tap(product);
+  }
+
+  /// 86 / un-86 a product, manager-gated.
+  Future<void> _toggleAvailable(Product product) async {
+    if (widget.authorize != null && !await widget.authorize!()) return;
+    final nowAvailable = widget.unavailableProducts.contains(product.id);
+    widget.onToggleAvailable?.call(product.id, nowAvailable);
+    if (mounted) {
+      _changed(() {});
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${product.name}: '
+              '${tr(context, nowAvailable ? 'available' : 'sold out')}')));
+    }
   }
 
   Future<void> _tap(Product product) async {
@@ -298,10 +335,23 @@ class _SellScreenState extends State<SellScreen> {
                 labelText: tr(ctx, 'Discount'), suffixText: '%', border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
+          // Quick-pick chips from the manager-configured presets, plus a 0 to clear.
           Wrap(spacing: 8, children: [
-            for (final q in const [0, 5, 10, 15, 20])
-              ActionChip(label: Text('$q%'), onPressed: () => ctrl.text = '$q'),
+            ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
+            for (final q in widget.discountPercents)
+              ActionChip(
+                label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
+                onPressed: () =>
+                    ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
+              ),
           ]),
+          if (widget.maxDiscountPercent > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                  '${tr(ctx, 'Max')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%',
+                  style: const TextStyle(color: Colors.black54, fontSize: 12)),
+            ),
           const SizedBox(height: 8),
           // A discount without a reason is what a manager cannot audit later, so the
           // reason is captured here rather than reconstructed from memory.
@@ -332,8 +382,18 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (result != null) {
+      var pct = result['pct'] as double;
+      // Enforce the configured cap so a mis-typed 100% off cannot go through.
+      if (widget.maxDiscountPercent > 0 && pct > widget.maxDiscountPercent) {
+        pct = widget.maxDiscountPercent;
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(
+                  '${tr(context, 'Capped at')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%')));
+        }
+      }
       final reason = (result['reason'] as String).isEmpty ? null : result['reason'] as String;
-      _changed(() => s.setDiscount(result['pct'] as double, reason: reason));
+      _changed(() => s.setDiscount(pct, reason: reason));
     }
   }
 
@@ -405,19 +465,40 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Future<void> _lineDiscount(OrderLine line) async {
+    // A line discount gives away money exactly like an order discount, so it gets
+    // the same manager gate and the same cap and presets.
+    if (widget.authorize != null && !await widget.authorize!()) return;
+    if (!mounted) return;
     final ctrl = TextEditingController(
         text: line.discountPercent > 0 ? line.discountPercent.toStringAsFixed(0) : '');
     final pct = await showDialog<double>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Discount ${line.name}'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(
-              labelText: tr(ctx, 'Line discount'), suffixText: '%', border: const OutlineInputBorder()),
-        ),
+        title: Text('${tr(ctx, 'Discount')} ${line.name}'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Line discount'), suffixText: '%', border: const OutlineInputBorder()),
+          ),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, children: [
+            ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
+            for (final q in widget.discountPercents)
+              ActionChip(
+                label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
+                onPressed: () => ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
+              ),
+          ]),
+          if (widget.maxDiscountPercent > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('${tr(ctx, 'Max')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%',
+                  style: const TextStyle(color: Colors.black54, fontSize: 12)),
+            ),
+        ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
@@ -427,7 +508,17 @@ class _SellScreenState extends State<SellScreen> {
         ],
       ),
     );
-    if (pct != null) _changed(() => s.setLineDiscount(line.uuid, pct));
+    if (pct == null) return;
+    var applied = pct;
+    if (widget.maxDiscountPercent > 0 && applied > widget.maxDiscountPercent) {
+      applied = widget.maxDiscountPercent;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                '${tr(context, 'Capped at')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%')));
+      }
+    }
+    _changed(() => s.setLineDiscount(line.uuid, applied));
   }
 
   Future<void> _voidLine(OrderLine line) async {
@@ -807,7 +898,11 @@ class _SellScreenState extends State<SellScreen> {
                       product: products[i],
                       price: widget.formatAmount(products[i].price),
                       color: _colorFor(products[i].categoryId),
-                      onTap: () => _tap(products[i]),
+                      unavailable: widget.unavailableProducts.contains(products[i].id),
+                      onTap: () => _tapProduct(products[i]),
+                      onToggleAvailable: widget.onToggleAvailable == null
+                          ? null
+                          : () => _toggleAvailable(products[i]),
                     ),
                   ),
           ),
@@ -1056,39 +1151,57 @@ class _ProductTile extends StatelessWidget {
     required this.price,
     required this.onTap,
     this.color,
+    this.unavailable = false,
+    this.onToggleAvailable,
   });
   final Product product;
   final String price;
   final VoidCallback onTap;
   final Color? color;
+  final bool unavailable;
+  final VoidCallback? onToggleAvailable;
 
   @override
-  Widget build(BuildContext context) => Card(
-        clipBehavior: Clip.antiAlias,
-        // A tinted fill plus a coloured top stripe, so the category reads at a
-        // glance without hurting the legibility of the name and price.
-        color: color?.withValues(alpha: 0.12),
-        child: InkWell(
-          key: Key('product-${product.id}'),
-          onTap: onTap,
-          child: Container(
-            decoration: color == null
-                ? null
-                : BoxDecoration(
-                    border: Border(top: BorderSide(color: color!, width: 4))),
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(product.name, textAlign: TextAlign.center, maxLines: 2,
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 6),
+  Widget build(BuildContext context) {
+    final tile = Card(
+      clipBehavior: Clip.antiAlias,
+      // A tinted fill plus a coloured top stripe, so the category reads at a
+      // glance without hurting the legibility of the name and price.
+      color: unavailable ? Colors.grey.shade300 : color?.withValues(alpha: 0.12),
+      child: InkWell(
+        key: Key('product-${product.id}'),
+        onTap: onTap,
+        // Long-press marks the item sold out or brings it back (manager-gated).
+        onLongPress: onToggleAvailable,
+        child: Container(
+          decoration: (color == null || unavailable)
+              ? null
+              : BoxDecoration(border: Border(top: BorderSide(color: color!, width: 4))),
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(product.name,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: unavailable
+                      ? const TextStyle(color: Colors.black45, decoration: TextDecoration.lineThrough)
+                      : null),
+              const SizedBox(height: 6),
+              if (unavailable)
+                Text(tr(context, 'Sold out'),
+                    key: Key('soldout-${product.id}'),
+                    style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 12))
+              else
                 Text(price, style: const TextStyle(fontWeight: FontWeight.bold)),
-              ],
-            ),
+            ],
           ),
         ),
-      );
+      ),
+    );
+    return tile;
+  }
 }
 
 class _LineTile extends StatelessWidget {

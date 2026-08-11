@@ -41,7 +41,7 @@ import '../features/orders/refund_screen.dart';
 import '../features/reports/reports_hub_screen.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
-import '../features/settings/discount_reasons_screen.dart';
+import '../features/settings/discount_settings_screen.dart';
 import '../features/settings/printers_screen.dart';
 import '../features/settings/quick_comments_screen.dart';
 import '../features/settings/receipt_designer_screen.dart';
@@ -345,7 +345,16 @@ class _PosAppState extends State<PosApp> {
               categoryColors: widget.settings.categoryColors,
               quickComments: widget.settings.quickComments,
               discountReasons: widget.settings.discountReasons,
+              discountPercents: widget.settings.discountPercents,
+              maxDiscountPercent: widget.settings.maxDiscountPercent,
               authorize: () => _authorizeManager(context),
+              unavailableProducts: widget.settings.unavailableProducts,
+              onToggleAvailable: (id, available) {
+                widget.settings.setProductAvailable(id, available);
+                widget.audit.record(session.cashierId,
+                    available ? 'product.available' : 'product.sold_out', detail: '$id');
+                setState(() {});
+              },
               onChanged: _publishActivity,
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
@@ -503,7 +512,7 @@ class _PosAppState extends State<PosApp> {
   void _openHistory(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => OrderHistoryScreen(
-        orders: widget.orders.recent(limit: 100),
+        orders: widget.orders.recent(limit: 1000),
         formatAmount: PosApp.money,
         onReprint: (order) => _printReceipt(order, reprint: true),
         onRefund: (order) => _openRefund(context, order),
@@ -671,10 +680,11 @@ class _PosAppState extends State<PosApp> {
         onTap: () => push(QuickCommentsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
-        title: 'Discount reasons',
+        title: 'Discounts',
+        subtitle: 'Percentages, cap, reasons',
         icon: Icons.percent,
         keyValue: 'set-discounts',
-        onTap: () => push(DiscountReasonsScreen(settings: widget.settings, onChanged: refresh)),
+        onTap: () => push(DiscountSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'Server (Odoo)',

@@ -10,7 +10,7 @@ import '../../domain/order.dart';
 /// recomputation of totals or payments, because a history screen that shows a
 /// different total than the receipt that was handed over is worse than one
 /// that shows nothing.
-class OrderHistoryScreen extends StatelessWidget {
+class OrderHistoryScreen extends StatefulWidget {
   const OrderHistoryScreen({
     super.key,
     required this.orders,
@@ -38,22 +38,115 @@ class OrderHistoryScreen extends StatelessWidget {
       uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: Text(tr(context, 'Order history'))),
-        body: orders.isEmpty
-            ? Center(child: Text(tr(context, 'No orders yet')))
-            : ListView.separated(
-                itemCount: orders.length,
-                separatorBuilder: (context, index) => const Divider(height: 1),
-                itemBuilder: (context, i) => _HistoryTile(
-                  key: Key('history-${orders[i].uuid}'),
-                  order: orders[i],
-                  formatAmount: formatAmount,
-                  onReprint: onReprint,
-                  onRefund: onRefund,
-                ),
+  State<OrderHistoryScreen> createState() => _OrderHistoryScreenState();
+}
+
+class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
+  String _search = '';
+  OrderType? _type; // null = any
+  bool _syncedOnly = false;
+  int _days = 0; // 0 = all, else last N days by local date
+
+  /// Orders matching the search box (ref / table / customer) and the filters.
+  List<Order> get _filtered {
+    final q = _search.trim().toLowerCase();
+    final now = DateTime.now();
+    final startOfToday = DateTime(now.year, now.month, now.day);
+    return widget.orders.where((o) {
+      if (_type != null && o.type != _type) return false;
+      if (_syncedOnly && o.state != OrderState.synced) return false;
+      if (_days > 0) {
+        final cutoff = startOfToday.subtract(Duration(days: _days - 1));
+        if (o.createdAt.toLocal().isBefore(cutoff)) return false;
+      }
+      if (q.isEmpty) return true;
+      return OrderHistoryScreen.shortRef(o.uuid).toLowerCase().contains(q) ||
+          (o.tableLabel ?? '').toLowerCase().contains(q) ||
+          (o.customerName ?? '').toLowerCase().contains(q);
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = _filtered;
+    return Scaffold(
+      appBar: AppBar(title: Text(tr(context, 'Order history'))),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: TextField(
+              key: const Key('history-search'),
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: tr(context, 'Search ref, table or customer'),
+                border: const OutlineInputBorder(),
+                isDense: true,
               ),
-      );
+              onChanged: (v) => setState(() => _search = v),
+            ),
+          ),
+          SizedBox(
+            height: 44,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              children: [
+                ChoiceChip(
+                  key: const Key('history-type-all'),
+                  label: Text(tr(context, 'All')),
+                  selected: _type == null,
+                  onSelected: (_) => setState(() => _type = null),
+                ),
+                for (final t in OrderType.values) ...[
+                  const SizedBox(width: 6),
+                  ChoiceChip(
+                    key: Key('history-type-${t.name}'),
+                    label: Text(tr(context, t.label)),
+                    selected: _type == t,
+                    onSelected: (_) => setState(() => _type = t),
+                  ),
+                ],
+                const SizedBox(width: 6),
+                FilterChip(
+                  key: const Key('history-synced'),
+                  label: Text(tr(context, 'Synced only')),
+                  selected: _syncedOnly,
+                  onSelected: (v) => setState(() => _syncedOnly = v),
+                ),
+                const SizedBox(width: 12),
+                for (final d in const [(0, 'All'), (1, 'Today'), (7, 'Last 7 days'), (30, 'Last 30 days')]) ...[
+                  const SizedBox(width: 6),
+                  ChoiceChip(
+                    key: Key('history-days-${d.$1}'),
+                    label: Text(tr(context, d.$2)),
+                    selected: _days == d.$1,
+                    onSelected: (_) => setState(() => _days = d.$1),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: shown.isEmpty
+                ? Center(child: Text(tr(context, 'No orders yet')))
+                : ListView.separated(
+                    itemCount: shown.length,
+                    separatorBuilder: (context, index) => const Divider(height: 1),
+                    itemBuilder: (context, i) => _HistoryTile(
+                      key: Key('history-${shown[i].uuid}'),
+                      order: shown[i],
+                      formatAmount: widget.formatAmount,
+                      onReprint: widget.onReprint,
+                      onRefund: widget.onRefund,
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _HistoryTile extends StatelessWidget {
