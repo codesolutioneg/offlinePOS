@@ -75,9 +75,23 @@ class _RefundScreenState extends State<RefundScreen> {
         unitPrice: l.unitPrice,
         discountPercent: l.discountPercent,
         categoryId: l.categoryId,
+        // Carry the tax rate so the refund books (and reports) the tax it reverses,
+        // rather than treating the returned money as untaxed.
+        taxRate: l.taxRate,
         modifiers: l.modifiers,
       ));
     }
+    // Return the money on the tender it came in on, so the refund is not silently
+    // booked to cash. A negative amount is money going back out. Partial refunds
+    // reverse only the refunded value against the original's primary method.
+    final refundPayments = o.payments.isNotEmpty
+        ? [
+            OrderPayment(
+                methodId: o.payments.first.methodId,
+                amount: -_refundTotal,
+                label: o.payments.first.label),
+          ]
+        : const <OrderPayment>[];
     final refund = Order(
       deviceId: o.deviceId,
       cashierId: o.cashierId,
@@ -87,6 +101,7 @@ class _RefundScreenState extends State<RefundScreen> {
       discountPercent: o.discountPercent,
       note: 'Refund of #${_shortRef(o)}: $reason',
       lines: lines,
+      payments: refundPayments,
     )
       ..refundOfUuid = o.uuid
       ..state = OrderState.paid;
