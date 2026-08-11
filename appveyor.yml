@@ -16,6 +16,13 @@ build_script:
       flutter --version
       flutter pub get;                 if ($LASTEXITCODE -ne 0) { throw "pub get failed" }
       flutter analyze;                 if ($LASTEXITCODE -ne 0) { throw "analyze failed" }
+      # The image's system sqlite3.dll is too old for the schema's ON CONFLICT
+      # (UPSERT) statements, so fetch a modern one and point the test loader at it.
+      Invoke-WebRequest "https://sqlite.org/2024/sqlite-dll-win-x64-3460100.zip" -OutFile sqlite.zip
+      if ($LASTEXITCODE -ne 0) { throw "sqlite download failed" }
+      Expand-Archive -Path sqlite.zip -DestinationPath sqlite-dll -Force
+      $env:SQLITE3_DLL = (Resolve-Path .\sqlite-dll\sqlite3.dll).Path
+      "Using sqlite: $env:SQLITE3_DLL"
       flutter test;                    if ($LASTEXITCODE -ne 0) { throw "tests failed" }
       flutter build windows --release --dart-define=APP_VERSION="$env:APPVEYOR_BUILD_VERSION"; if ($LASTEXITCODE -ne 0) { throw "windows build failed" }
       7z a offlinePOS-windows.zip .\build\windows\x64\runner\Release\*
