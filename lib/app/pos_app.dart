@@ -837,10 +837,15 @@ class _PosAppState extends State<PosApp> {
         categoryToStation: widget.settings.categoryStations);
     for (final entry in routed.entries) {
       final bytes = builder.build(order, only: entry.value, station: entry.key);
-      await _sendToStation(entry.key, bytes, 'kot-${order.uuid}');
-    }
-    for (final l in lines) {
-      l.printedToKitchen = true;
+      final ok = await _sendToStation(entry.key, bytes, 'kot-${order.uuid}');
+      // Only mark a line fired if its ticket reached a printer or the spool. A
+      // truly lost ticket leaves its lines un-fired so a later re-fire retries them
+      // rather than silently dropping food off the pass.
+      if (ok) {
+        for (final l in entry.value) {
+          l.printedToKitchen = true;
+        }
+      }
     }
     widget.orders.save(order);
   }
@@ -850,24 +855,32 @@ class _PosAppState extends State<PosApp> {
     await _sendToStation('kitchen', bytes, 'void-${order.uuid}-${line.uuid}');
   }
 
-  Future<void> _sendToStation(String station, List<int> bytes, String reference) async {
+  /// Send a kitchen ticket to [station]. Returns true if it reached a printer or was
+  /// safely spooled for retry, false if it was lost outright (so the caller can keep
+  /// the lines un-fired and retry later).
+  Future<bool> _sendToStation(String station, List<int> bytes, String reference) async {
     final payload = Uint8List.fromList(bytes);
     try {
       await RegistryPrinter(widget.printers, station).send(payload);
+      return true;
     } on PrinterUnavailable {
       // No station printer: fall back to the receipt printer, spooled if that is
       // down too, so the ticket is not simply lost.
       try {
         await _receiptPrinter.send(payload, reference: reference);
+        return true;
       } on PrinterUnavailable {
         // Held in the spool; the background flush will retry it.
+        return true;
       } catch (e) {
         widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
             detail: '$reference: $e');
+        return false;
       }
     } catch (e) {
       widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
           detail: '$reference: $e');
+      return false;
     }
   }
 
@@ -901,6 +914,10 @@ class _PosAppState extends State<PosApp> {
         // batch. Returns a message for the cashier: how it went, or that the
         // orders are safe and will sync once the connection is back.
         onCloseSync: () async {
+          // Sweep any paid sale that never reached the outbox back in first, so the
+          // count below reflects everything owed to the server, not just what
+          // happened to be queued.
+          await widget.sync.reconcilePending();
           final pendingBefore = widget.sync.pendingSales;
           if (pendingBefore == 0) return 'No orders to sync.';
           await widget.sync.flush();
