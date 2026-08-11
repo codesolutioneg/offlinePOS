@@ -34,4 +34,41 @@ class AuditLog {
   int get unsyncedCount => _db.raw
       .select('SELECT COUNT(*) c FROM audit_log WHERE synced_at IS NULL')
       .first['c'] as int;
+
+  /// Recent entries, newest first, optionally filtered by [event] and a time
+  /// window. Backs the manager's audit viewer and the activity report. Times are
+  /// compared as UTC ISO strings, which sort lexically the same as chronologically.
+  List<Map<String, Object?>> recent({
+    int limit = 500,
+    String? event,
+    DateTime? from,
+    DateTime? to,
+  }) {
+    final where = <String>[];
+    final args = <Object?>[];
+    if (event != null) {
+      where.add('event = ?');
+      args.add(event);
+    }
+    if (from != null) {
+      where.add('at >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.add('at <= ?');
+      args.add(to.toUtc().toIso8601String());
+    }
+    final clause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')} ';
+    args.add(limit);
+    return _db.raw
+        .select('SELECT * FROM audit_log ${clause}ORDER BY id DESC LIMIT ?', args)
+        .map((r) => {for (final k in r.keys) k: r[k]})
+        .toList();
+  }
+
+  /// The distinct event kinds recorded, for a filter dropdown.
+  List<String> events() => _db.raw
+      .select('SELECT DISTINCT event FROM audit_log ORDER BY event')
+      .map((r) => r['event'] as String)
+      .toList();
 }
