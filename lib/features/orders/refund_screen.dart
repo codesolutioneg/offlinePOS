@@ -81,17 +81,21 @@ class _RefundScreenState extends State<RefundScreen> {
         modifiers: l.modifiers,
       ));
     }
-    // Return the money on the tender it came in on, so the refund is not silently
-    // booked to cash. A negative amount is money going back out. Partial refunds
-    // reverse only the refunded value against the original's primary method.
-    final refundPayments = o.payments.isNotEmpty
-        ? [
-            OrderPayment(
-                methodId: o.payments.first.methodId,
-                amount: -_refundTotal,
-                label: o.payments.first.label),
-          ]
-        : const <OrderPayment>[];
+    // Return the money on the tenders it came in on, so the refund is not silently
+    // booked to cash and a split sale reverses each method in proportion. Negative
+    // amounts are money going back out; they sum to the refunded value. Dividing by
+    // the tendered sum keeps this correct for partial refunds and legacy rows whose
+    // payment amount held the cash tendered.
+    final tendered = o.payments.fold<double>(0.0, (s, p) => s + p.amount);
+    final refundPayments = (o.payments.isEmpty || tendered <= 0)
+        ? const <OrderPayment>[]
+        : [
+            for (final p in o.payments)
+              OrderPayment(
+                  methodId: p.methodId,
+                  amount: -(_refundTotal * p.amount / tendered),
+                  label: p.label),
+          ];
     final refund = Order(
       deviceId: o.deviceId,
       cashierId: o.cashierId,

@@ -58,6 +58,28 @@ void main() {
     expect(refund.refundOfUuid, original.uuid);
   });
 
+  testWidgets('a split-tender sale reverses each method in proportion', (t) async {
+    // 20 cash + 10 card = 30. A full refund must give back -20 cash and -10 card,
+    // not -30 on whichever tender was first.
+    final original = Order(
+      deviceId: 'd',
+      cashierId: 'c',
+      payments: const [
+        OrderPayment(methodId: 1, amount: 20, label: 'Cash'),
+        OrderPayment(methodId: 2, amount: 10, label: 'Card'),
+      ],
+    )..lines.add(OrderLine(productId: 1, name: 'Combo', quantity: 1, unitPrice: 30));
+
+    final refund = await openAndRefund(t, original);
+
+    expect(refund, isNotNull);
+    expect(refund!.payments.length, 2);
+    final cash = refund.payments.firstWhere((p) => p.methodId == 1);
+    final card = refund.payments.firstWhere((p) => p.methodId == 2);
+    expect(cash.amount, closeTo(-20, 0.001));
+    expect(card.amount, closeTo(-10, 0.001));
+  });
+
   testWidgets('a cash-tendered sale (no recorded payment) refunds without a tender',
       (t) async {
     final original = Order(deviceId: 'd', cashierId: 'c')
