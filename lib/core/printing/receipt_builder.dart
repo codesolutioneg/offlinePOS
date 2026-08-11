@@ -120,8 +120,12 @@ class ReceiptBuilder {
       for (final pay in order.payments) {
         p.row(pay.label ?? 'Payment', formatAmount(pay.amount));
       }
-      final received = order.cashReceived;
-      if (received != null && received - order.total > 0.001) {
+      // Orders stored before cash_received existed kept the tender in the payment
+      // amount, so fall back to the payment sum for their reprints. New orders
+      // settle to exactly the total, so this prints nothing unless there is change.
+      final received = order.cashReceived ??
+          order.payments.fold<double>(0.0, (s, pay) => s + pay.amount);
+      if (received - order.total > 0.001) {
         p.row('Received', formatAmount(received));
         p.row('Change', formatAmount(received - order.total));
       }

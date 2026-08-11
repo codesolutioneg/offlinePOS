@@ -67,6 +67,16 @@ void main() {
     expect(change, contains('10.00'));
   });
 
+  test('a legacy overpayment (tender in the amount, no cashReceived) still shows change', () {
+    // Orders from before cash_received existed kept the tendered note in the
+    // payment amount. Their reprints must still show the change.
+    final o = Order(deviceId: 'till-1', cashierId: 'sara')
+      ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10))
+      ..payments = [const OrderPayment(methodId: 1, amount: 20, label: 'Cash')];
+    final change = render(o).split('\n').firstWhere((l) => l.contains('Change'));
+    expect(change, contains('10.00'));
+  });
+
   test('an exact payment prints no change line', () {
     final o = Order(deviceId: 'till-1', cashierId: 'sara')
       ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10))
