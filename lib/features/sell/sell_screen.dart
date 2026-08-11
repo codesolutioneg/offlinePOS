@@ -794,17 +794,18 @@ class _SellScreenState extends State<SellScreen> {
         total: s.total,
         format: widget.formatAmount,
         methods: s.catalogue.paymentMethods(),
-        onConfirm: (payments, label, tip) {
+        onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
-          _complete(payments, label, tip);
+          _complete(payments, label, tip, cashReceived);
         },
       ),
     );
   }
 
-  void _complete(List<OrderPayment> payments, String label, double tip) {
+  void _complete(
+      List<OrderPayment> payments, String label, double tip, double? cashReceived) {
     if (tip > 0) s.setTip(tip);
-    final order = s.pay(payments: payments);
+    final order = s.pay(payments: payments, cashReceived: cashReceived);
     setState(() {});
     widget.onPaid?.call(order);
     if (!mounted) return;
@@ -1433,7 +1434,8 @@ class _PaymentSheet extends StatefulWidget {
   final double total;
   final String Function(double) format;
   final List<PaymentMethod> methods;
-  final void Function(List<OrderPayment> payments, String label, double tip) onConfirm;
+  final void Function(
+      List<OrderPayment> payments, String label, double tip, double? cashReceived) onConfirm;
 
   @override
   State<_PaymentSheet> createState() => _PaymentSheetState();
@@ -1512,17 +1514,20 @@ class _PaymentSheetState extends State<_PaymentSheet> {
         ? 'Split'
         : (_method?.name ?? 'Cash');
     final List<OrderPayment> payments;
+    double? cashReceived;
     if (_split) {
+      // Each tender is already capped at the remaining balance, so a split settles
+      // exactly the total with no change to account for.
       payments = List.of(_tenders);
     } else if (_method != null) {
-      // A cash overpayment records the full tendered amount so the receipt can show
-      // the change; a card is charged exactly the grand total.
-      final amt = _isCash ? _receivedAmount : _grand;
-      payments = [OrderPayment(methodId: _method!.id, amount: amt, label: _method!.name)];
+      // Book the amount due, never the note handed over: an overpayment is change,
+      // not revenue. The cash tendered is kept only for the receipt's change line.
+      payments = [OrderPayment(methodId: _method!.id, amount: _grand, label: _method!.name)];
+      if (_isCash && _receivedAmount > _grand + 0.001) cashReceived = _receivedAmount;
     } else {
       payments = <OrderPayment>[];
     }
-    widget.onConfirm(payments, label, _tipAmount);
+    widget.onConfirm(payments, label, _tipAmount, cashReceived);
   }
 
   List<double> _quickAmounts() {

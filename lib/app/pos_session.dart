@@ -226,10 +226,11 @@ class PosSession {
 
   /// Take payment. Writes locally, queues for the server, and starts a fresh order.
   /// Returns the completed order so the caller can print it.
-  Order pay({List<OrderPayment> payments = const []}) {
+  Order pay({List<OrderPayment> payments = const [], double? cashReceived}) {
     final order = current;
     order.state = OrderState.paid;
     order.payments = List.of(payments);
+    order.cashReceived = cashReceived;
     orders.save(order);
     outbox.enqueue('order.push', order.uuid, order.toServerPayload());
     audit.record(cashierId, 'order.paid', detail: order.uuid);

@@ -112,17 +112,19 @@ class ReceiptBuilder {
       ..bold(false)
       ..size();
 
-    // Tender breakdown and change. A split payment prints one line per tender; a
-    // cash overpayment prints the change the customer is owed.
+    // Tender breakdown and change. A split payment prints one line per tender.
+    // Payments store the settled amount, so a cash overpayment prints the cash
+    // received and the change owed from [cashReceived] rather than from the tender.
     if (order.payments.isNotEmpty) {
       p.feed();
-      var tendered = 0.0;
       for (final pay in order.payments) {
-        tendered += pay.amount;
         p.row(pay.label ?? 'Payment', formatAmount(pay.amount));
       }
-      final change = tendered - order.total;
-      if (change > 0.001) p.row('Change', formatAmount(change));
+      final received = order.cashReceived;
+      if (received != null && received - order.total > 0.001) {
+        p.row('Received', formatAmount(received));
+        p.row('Change', formatAmount(received - order.total));
+      }
     }
 
     if (footer != null) {

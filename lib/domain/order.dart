@@ -232,6 +232,12 @@ class Order {
 
   bool get isRefund => refundOfUuid != null;
 
+  /// Cash the customer handed over, when it exceeds what was due. Kept only so the
+  /// receipt can print the change; it is NOT the amount booked. The payment stores
+  /// the settled amount (what the sale was worth), so the drawer, the payment mix,
+  /// and the server all see revenue rather than the tendered note plus its change.
+  double? cashReceived;
+
   /// Set once the backend confirms. Never used as identity.
   int? serverId;
 
@@ -289,6 +295,7 @@ class Order {
         'tip': tip,
         'kitchen_status': kitchenStatus.name,
         'refund_of_uuid': refundOfUuid,
+        'cash_received': cashReceived,
         'lines': lines.map((l) => l.toMap()).toList(),
         'payments': payments.map((p) => p.toMap()).toList(),
       };
@@ -304,6 +311,10 @@ class Order {
     // zeroed on the wire. Leaving them set would let a server that also reads them
     // discount an already-discounted price a second time.
     m['discount_percent'] = 0;
+    // A locally-created customer has a synthetic negative id, not an Odoo partner.
+    // Never send it as partner_id (it would fail the foreign key); the name and
+    // phone still travel so the server can match or create the partner itself.
+    if (partnerId != null && partnerId! < 0) m['partner_id'] = null;
     m['lines'] = lines.map((l) {
       final lf = l.lineDiscountFactor * f;
       final lm = l.toMap();
@@ -347,7 +358,9 @@ class Order {
         payments: ((m['payments'] as List?) ?? const [])
             .map((e) => OrderPayment.fromMap((e as Map).cast<String, dynamic>()))
             .toList(),
-      )..serverId = m['server_id'] as int?;
+      )
+        ..serverId = m['server_id'] as int?
+        ..cashReceived = (m['cash_received'] as num?)?.toDouble();
 }
 
 /// One tender against a sale: which Odoo payment method, how much, and any tip

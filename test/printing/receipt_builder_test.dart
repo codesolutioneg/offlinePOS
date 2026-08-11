@@ -53,6 +53,27 @@ void main() {
     expect(render(o), contains('#$expected'));
   });
 
+  test('a cash overpayment prints the cash received and the change owed', () {
+    // Payment stores the settled amount; the change comes from cashReceived.
+    final o = Order(deviceId: 'till-1', cashierId: 'sara')
+      ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10))
+      ..payments = [const OrderPayment(methodId: 1, amount: 10, label: 'Cash')]
+      ..cashReceived = 20;
+    final s = render(o);
+    expect(s, contains('Received'));
+    expect(s, contains('Change'));
+    // The change line reads the tendered-minus-due, i.e. 10.00.
+    final change = s.split('\n').firstWhere((l) => l.contains('Change'));
+    expect(change, contains('10.00'));
+  });
+
+  test('an exact payment prints no change line', () {
+    final o = Order(deviceId: 'till-1', cashierId: 'sara')
+      ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10))
+      ..payments = [const OrderPayment(methodId: 1, amount: 10, label: 'Cash')];
+    expect(render(o), isNot(contains('Change')));
+  });
+
   test('narrow paper still ends flush right', () {
     final s = render(sample(), columns: 32);
     final total = s.split('\n').firstWhere((l) => l.contains('TOTAL'));

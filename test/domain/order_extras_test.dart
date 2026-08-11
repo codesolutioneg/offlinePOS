@@ -24,6 +24,33 @@ void main() {
     expect((m['payments'] as List).first['method_id'], 2);
   });
 
+  test('a cash overpayment books the settled amount, not the note tendered', () {
+    // The customer pays 20 for a 10 sale. Revenue is 10; the extra 10 is change, so
+    // the payment stores 10 and the cash received rides its own field for the
+    // receipt. This keeps the drawer, the payment mix and Odoo from over-counting.
+    final o = Order(deviceId: 'd', cashierId: 'c')
+      ..lines.add(line(10))
+      ..payments = [const OrderPayment(methodId: 1, amount: 10)]
+      ..cashReceived = 20;
+    expect(o.total, 10);
+    expect((o.toMap()['payments'] as List).first['amount'], 10);
+    expect(o.toMap()['cash_received'], 20);
+    expect(Order.fromMap(o.toMap()).cashReceived, 20);
+  });
+
+  test('a locally-created customer never leaks its synthetic id as partner_id', () {
+    final o = Order(deviceId: 'd', cashierId: 'c', partnerId: -123, customerName: 'Ali')
+      ..lines.add(line(5));
+    expect(o.toMap()['partner_id'], -123); // local persistence keeps the link
+    expect(o.toServerPayload()['partner_id'], isNull); // never sent to Odoo
+    expect(o.toServerPayload()['customer_name'], 'Ali'); // the name still travels
+  });
+
+  test('a real Odoo partner id is sent through unchanged', () {
+    final o = Order(deviceId: 'd', cashierId: 'c', partnerId: 42)..lines.add(line(5));
+    expect(o.toServerPayload()['partner_id'], 42);
+  });
+
   test('a restored draft is not discounted twice', () {
     final o = Order(deviceId: 'd', cashierId: 'c', discountPercent: 20)..lines.add(line(10));
     final back = Order.fromMap(o.toMap());
