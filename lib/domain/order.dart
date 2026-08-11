@@ -82,6 +82,7 @@ class OrderLine {
     this.note,
     this.discountPercent = 0,
     this.categoryId,
+    this.taxRate = 0,
     this.printedToKitchen = false,
   })  : uuid = uuid ?? Uuid.v4(),
         modifiers = modifiers ?? [];
@@ -102,6 +103,11 @@ class OrderLine {
   /// The product's category, kept on the line so a kitchen ticket can be routed
   /// to the right station without a second catalogue lookup at print time.
   final int? categoryId;
+
+  /// The line's tax rate as a percent (e.g. 14 for 14%), captured from the product
+  /// at the moment of sale. Prices are treated as tax-inclusive, so this is used
+  /// only to show the tax component; the amount the customer pays is unchanged.
+  final double taxRate;
 
   /// Whether this line has already been sent to the kitchen. Lets a re-fire print
   /// only the newly added lines rather than the whole ticket again.
@@ -126,6 +132,7 @@ class OrderLine {
         'note': note,
         'discount_percent': discountPercent,
         'category_id': categoryId,
+        'tax_rate': taxRate,
         'printed_to_kitchen': printedToKitchen,
       };
 
@@ -138,6 +145,7 @@ class OrderLine {
         note: m['note'] as String?,
         discountPercent: (m['discount_percent'] as num?)?.toDouble() ?? 0,
         categoryId: m['category_id'] as int?,
+        taxRate: (m['tax_rate'] as num?)?.toDouble() ?? 0,
         printedToKitchen: (m['printed_to_kitchen'] as bool?) ?? false,
         modifiers: ((m['modifiers'] as List?) ?? const [])
             .map((e) => OrderModifier.fromMap(e as Map<String, dynamic>))
@@ -233,6 +241,19 @@ class Order {
   /// What the customer pays: lines (each already net of its own discount), less
   /// the whole-order discount, plus delivery and tip.
   double get total => subtotal * discountFactor + deliveryCost + tip;
+
+  /// The tax already contained in the line prices (prices are tax-inclusive), after
+  /// the whole-order discount. Informational: it does not change [total]. The server
+  /// remains the source of truth for the tax actually booked.
+  double get taxTotal {
+    var t = 0.0;
+    for (final l in lines) {
+      if (l.taxRate <= 0) continue;
+      final net = l.total * discountFactor;
+      t += net - net / (1 + l.taxRate / 100);
+    }
+    return t;
+  }
 
   /// The trading day this sale belongs to, which decides the session it lands in
   /// on the server.

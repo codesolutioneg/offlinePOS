@@ -102,6 +102,21 @@ class AuthService {
   int failuresFor(String cashierId) => _guard.failures(cashierId);
 
   /// Enrol or update a cashier from a roster sync, hashing the PIN locally.
+  /// Authorise a privileged action (discount, void, refund, drawer) with a manager
+  /// PIN. Returns true if the PIN matches any active manager. A separate check from
+  /// [unlock] because the signed-in cashier need not sign out to get approval.
+  Future<bool> authorizeManager(String pin) async {
+    if (!_policy.isWellFormed(pin)) return false;
+    for (final m in _users.active().where((u) => u.isManager)) {
+      if (await _hasher.verify(pin, m.pinSalt, m.pinHash)) {
+        _audit.record(m.id, 'manager.authorized');
+        return true;
+      }
+    }
+    _audit.record('unknown', 'manager.authorization_failed');
+    return false;
+  }
+
   Future<Cashier> enrol({
     required String id,
     required String name,

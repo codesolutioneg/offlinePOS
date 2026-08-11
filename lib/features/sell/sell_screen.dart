@@ -31,6 +31,7 @@ class SellScreen extends StatefulWidget {
     this.categoryColors = const {},
     this.quickComments = const ['No onions', 'Extra spicy', 'Well done', 'Allergy'],
     this.discountReasons = const [],
+    this.authorize,
   });
 
   final PosSession session;
@@ -80,6 +81,10 @@ class SellScreen extends StatefulWidget {
   /// Manager-curated quick picks for line notes and discount reasons.
   final List<String> quickComments;
   final List<String> discountReasons;
+
+  /// Gate for privileged actions (discount, void): returns true if approved. When
+  /// null, actions are not gated.
+  final Future<bool> Function()? authorize;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -157,6 +162,14 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Future<void> _tap(Product product) async {
+    // A weighed item is priced per unit of weight, so ask for the weight instead
+    // of adding a single unit; the entered weight becomes the line quantity.
+    if (product.soldByWeight) {
+      final weight = await _askWeight(product);
+      if (weight == null || weight <= 0) return;
+      _changed(() => s.addProduct(product, qty: weight));
+      return;
+    }
     final groups = s.catalogue.modifierGroupsFor(product.id);
     if (groups.isEmpty) {
       _changed(() => s.addProduct(product));
@@ -172,6 +185,34 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (chosen != null) _changed(() => s.addProduct(product, chosen: chosen));
+  }
+
+  Future<double?> _askWeight(Product product) {
+    final ctrl = TextEditingController();
+    return showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Weight for ${product.name}'),
+        content: TextField(
+          key: const Key('weight-field'),
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(
+              labelText: 'Weight',
+              suffixText: 'x ${widget.formatAmount(product.price)}',
+              border: const OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            key: const Key('weight-ok'),
+            onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openCustomer() async {
@@ -235,6 +276,9 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Future<void> _openDiscount() async {
+    // A discount gives away money, so it needs manager approval.
+    if (widget.authorize != null && !await widget.authorize!()) return;
+    if (!mounted) return;
     final ctrl = TextEditingController(
         text: s.current.discountPercent > 0
             ? s.current.discountPercent.toStringAsFixed(0)
@@ -386,6 +430,9 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Future<void> _voidLine(OrderLine line) async {
+    // Voiding a line is a privileged action, so it needs manager approval first.
+    if (widget.authorize != null && !await widget.authorize!()) return;
+    if (!mounted) return;
     final reason = await _askReason('Void ${line.name}');
     if (reason == null) return;
     _changed(() {

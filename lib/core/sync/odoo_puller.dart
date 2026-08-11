@@ -19,11 +19,25 @@ class OdooPuller {
     );
     final products = await _searchRead(
       'product.product',
-      ['id', 'display_name', 'lst_price', 'pos_categ_ids', 'barcode', 'active', 'to_weight'],
+      ['id', 'display_name', 'lst_price', 'pos_categ_ids', 'barcode', 'active', 'to_weight',
+       'taxes_id'],
       [
         ['available_in_pos', '=', true]
       ],
     );
+    // Resolve each product's tax to a percent, so the till can show a tax
+    // breakdown. Optional: an Odoo that refuses account.tax simply leaves tax at
+    // zero rather than losing the catalogue.
+    final taxRate = <int, double>{};
+    try {
+      final taxes = await _searchRead('account.tax',
+          ['id', 'amount', 'amount_type'], [['amount_type', '=', 'percent']]);
+      for (final t in taxes) {
+        taxRate[t['id'] as int] = _num(t['amount']);
+      }
+    } catch (_) {
+      // no tax data; taxRate stays empty
+    }
     // Modifiers come from an optional add-on. On an Odoo without it, asking for
     // these models errors; degrade to no modifiers rather than losing the whole
     // catalogue (products and categories must still load).
@@ -138,6 +152,12 @@ class OdooPuller {
                 barcode: p['barcode'] is String ? p['barcode'] as String : null,
                 active: p['active'] != false,
                 soldByWeight: p['to_weight'] == true,
+                // First percent tax on the product, or 0 when none is resolvable.
+                taxRate: _ids(p['taxes_id'])
+                    .map((id) => taxRate[id])
+                    .whereType<double>()
+                    .firstOrNull ??
+                    0,
               ))
           .toList(),
       groups: mappedGroups,

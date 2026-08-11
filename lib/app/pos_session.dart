@@ -51,6 +51,7 @@ class PosSession {
       quantity: qty,
       unitPrice: product.price,
       categoryId: product.categoryId,
+      taxRate: product.taxRate,
       modifiers: [
         for (final c in chosen)
           OrderModifier(

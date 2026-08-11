@@ -34,10 +34,7 @@ import '../features/onboarding/wizard_overlay.dart';
 import '../features/orders/open_orders_screen.dart';
 import '../features/orders/order_history_screen.dart';
 import '../features/orders/refund_screen.dart';
-import '../features/reports/cashier_report_screen.dart';
-import '../features/reports/discounts_report_screen.dart';
-import '../features/reports/sales_by_time_report_screen.dart';
-import '../features/reports/sales_report_screen.dart';
+import '../features/reports/reports_hub_screen.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/discount_reasons_screen.dart';
@@ -258,6 +255,7 @@ class _PosAppState extends State<PosApp> {
         header: s.getString('receipt_header'),
         showCashier: s.getBool('receipt_show_cashier', fallback: true),
         showOrderType: s.getBool('receipt_show_ordertype', fallback: true),
+        showTax: s.receiptShowTax,
         openDrawer: isCash && !reprint,
         formatAmount: PosApp.money,
       ).build(order, reprint: reprint);
@@ -324,6 +322,7 @@ class _PosAppState extends State<PosApp> {
               categoryColors: widget.settings.categoryColors,
               quickComments: widget.settings.quickComments,
               discountReasons: widget.settings.discountReasons,
+              authorize: () => _authorizeManager(context),
               onChanged: _publishActivity,
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
@@ -482,6 +481,9 @@ class _PosAppState extends State<PosApp> {
 
   /// Refund a past sale: pick the lines, then record, queue and print the reversal.
   Future<void> _openRefund(BuildContext context, Order original) async {
+    // A refund returns money, so it needs manager approval before the flow opens.
+    if (!await _authorizeManager(context)) return;
+    if (!context.mounted) return;
     await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => RefundScreen(
         original: original,
@@ -500,37 +502,15 @@ class _PosAppState extends State<PosApp> {
     if (mounted) setState(() {});
   }
 
-  /// The reports hub: the day's completed sales, seen from several angles.
+  /// The reports hub, with a date-range filter over the recent completed sales.
   void _openReports(BuildContext context) {
-    void push(Widget s) => Navigator.of(context)
-        .push(MaterialPageRoute<void>(builder: (_) => s));
-    List<Order> orders() => widget.orders.recent(limit: 500);
-    push(SettingsHubScreen(entries: [
-      SettingsEntry(
-        title: 'Sales summary',
-        icon: Icons.summarize,
-        keyValue: 'rep-summary',
-        onTap: () => push(SalesReportScreen(orders: orders(), formatAmount: PosApp.money)),
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ReportsHubScreen(
+        allOrders: widget.orders.recent(limit: 1000),
+        categories: widget.catalogue.categories(),
+        formatAmount: PosApp.money,
       ),
-      SettingsEntry(
-        title: 'Discounts',
-        icon: Icons.percent,
-        keyValue: 'rep-discounts',
-        onTap: () => push(DiscountsReportScreen(orders: orders(), formatAmount: PosApp.money)),
-      ),
-      SettingsEntry(
-        title: 'Cashier performance',
-        icon: Icons.badge_outlined,
-        keyValue: 'rep-cashier',
-        onTap: () => push(CashierReportScreen(orders: orders(), formatAmount: PosApp.money)),
-      ),
-      SettingsEntry(
-        title: 'Sales by hour',
-        icon: Icons.schedule,
-        keyValue: 'rep-time',
-        onTap: () => push(SalesByTimeReportScreen(orders: orders(), formatAmount: PosApp.money)),
-      ),
-    ]));
+    ));
   }
 
   void _openKitchen(BuildContext context) {
@@ -661,6 +641,42 @@ class _PosAppState extends State<PosApp> {
         ),
     ];
     push(SettingsHubScreen(entries: entries));
+  }
+
+  /// Gate a privileged action behind manager approval. A manager already signed in
+  /// passes straight through; anyone else must enter a manager PIN.
+  Future<bool> _authorizeManager(BuildContext context) async {
+    if (widget.auth.signedIn?.isManager ?? false) return true;
+    final ctrl = TextEditingController();
+    final pin = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Manager approval'),
+        content: TextField(
+          key: const Key('manager-pin'),
+          controller: ctrl,
+          autofocus: true,
+          obscureText: true,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Manager PIN', border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            key: const Key('manager-ok'),
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Approve'),
+          ),
+        ],
+      ),
+    );
+    if (pin == null || pin.isEmpty) return false;
+    final ok = await widget.auth.authorizeManager(pin);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Manager approval failed')));
+    }
+    return ok;
   }
 
   // ── kitchen tickets ──────────────────────────────────────────────

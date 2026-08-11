@@ -18,6 +18,7 @@ class ReceiptBuilder {
     this.header,
     this.showCashier = true,
     this.showOrderType = true,
+    this.showTax = true,
     this.openDrawer = false,
   });
 
@@ -34,6 +35,7 @@ class ReceiptBuilder {
   /// Receipt-designer toggles.
   final bool showCashier;
   final bool showOrderType;
+  final bool showTax;
 
   /// Kick the cash drawer open at the end, for a cash sale.
   final bool openDrawer;
@@ -97,6 +99,13 @@ class ReceiptBuilder {
       }
       if (order.deliveryCost > 0) p.row('Delivery', formatAmount(order.deliveryCost));
       if (order.tip > 0) p.row('Tip', formatAmount(order.tip));
+    }
+    // Tax is shown as included in the total (prices are tax-inclusive), so the
+    // slip is a valid tax receipt without changing what the customer pays.
+    final tax = order.taxTotal;
+    if (showTax && tax > 0.001) {
+      p.row('Net', formatAmount(order.total - tax));
+      p.row('Tax', formatAmount(tax));
     }
     p.size(doubleHeight: true).bold(true)
       ..row('TOTAL', formatAmount(order.total))
