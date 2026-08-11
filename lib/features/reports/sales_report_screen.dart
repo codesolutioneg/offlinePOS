@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// One row in the item-sales table: a product's aggregated quantity and
@@ -54,11 +55,11 @@ class SalesReportScreen extends StatelessWidget {
   /// Groups every payment by its label, falling back to 'Cash' when a
   /// payment carries no label. A null label means the server would book it
   /// to cash, so the report shows the same thing the drawer will.
-  Map<String, double> _paymentMix() {
+  Map<String, double> _paymentMix(BuildContext context) {
     final mix = <String, double>{};
     for (final o in orders) {
       for (final p in o.payments) {
-        final label = p.label ?? 'Cash';
+        final label = p.label ?? tr(context, 'Cash');
         mix[label] = (mix[label] ?? 0) + p.amount;
       }
     }
@@ -106,25 +107,25 @@ class SalesReportScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final byType = _byType;
-    final paymentMix = _paymentMix();
+    final paymentMix = _paymentMix(context);
     final itemSales = _itemSales();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Sales report')),
+      appBar: AppBar(title: Text(tr(context, 'Sales report'))),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _sectionCard('Overview', [
-            _row('Orders', '${orders.length}'),
-            _row('Gross sales', formatAmount(_grossSales), bold: true),
-            _row('Discounts given', formatAmount(_totalDiscounts)),
-            _row('Delivery income', formatAmount(_deliveryIncome)),
-            _row('Tips', formatAmount(_totalTips)),
+          _sectionCard(tr(context, 'Overview'), [
+            _row(tr(context, 'Orders'), '${orders.length}'),
+            _row(tr(context, 'Gross sales'), formatAmount(_grossSales), bold: true),
+            _row(tr(context, 'Discounts given'), formatAmount(_totalDiscounts)),
+            _row(tr(context, 'Delivery income'), formatAmount(_deliveryIncome)),
+            _row(tr(context, 'Tips'), formatAmount(_totalTips)),
           ]),
           _sectionCard(
-            'Sales by order type',
+            tr(context, 'Sales by order type'),
             byType.isEmpty
-                ? [const Text('No orders')]
+                ? [Text(tr(context, 'No orders'))]
                 : byType.entries
                     .map((e) => _row(
                           '${e.key.label} (${e.value.count})',
@@ -133,9 +134,9 @@ class SalesReportScreen extends StatelessWidget {
                     .toList(),
           ),
           _sectionCard(
-            'Payment mix',
+            tr(context, 'Payment mix'),
             paymentMix.isEmpty
-                ? [const Text('No payments')]
+                ? [Text(tr(context, 'No payments'))]
                 : paymentMix.entries
                     .map((e) => _row(e.key, formatAmount(e.value)))
                     .toList(),
@@ -144,10 +145,10 @@ class SalesReportScreen extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Item sales', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                Text(tr(context, 'Item sales'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 const Divider(),
                 if (itemSales.isEmpty)
-                  const Text('No items sold')
+                  Text(tr(context, 'No items sold'))
                 else
                   // Bounded height list nested inside the outer scroll view, so a
                   // long menu doesn't need its own separate scroll gesture.

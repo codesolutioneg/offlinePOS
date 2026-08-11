@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
+import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
 
 /// Lets a manager tag each category with a colour, so the product grid on the
@@ -88,7 +89,7 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
           SimpleDialogOption(
             key: const Key('swatch-clear'),
             onPressed: () => Navigator.pop(ctx, _clearSwatch),
-            child: const Text('Clear'),
+            child: Text(tr(ctx, 'Clear')),
           ),
         ],
       ),
@@ -107,7 +108,7 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Category colours')),
+      appBar: AppBar(title: Text(tr(context, 'Category colours'))),
       body: ListView.builder(
         itemCount: widget.categories.length,
         itemBuilder: (context, index) {

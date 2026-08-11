@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/pos_session.dart';
+import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
 
 /// Modifier picker.
@@ -37,10 +38,10 @@ class _ModifierSheetState extends State<ModifierSheet> {
       final n = _countIn(g);
       if (g.isSatisfiedBy(n)) continue;
       if (g.maxSelection > 0 && n > g.maxSelection) {
-        return '${g.name}: at most ${g.maxSelection}';
+        return '${g.name}: ${tr(context, 'at most')} ${g.maxSelection}';
       }
       final need = (g.minSelection == 0 && g.required) ? 1 : g.minSelection;
-      return '${g.name}: choose ${need - n} more';
+      return '${g.name}: ${tr(context, 'choose')} ${need - n} ${tr(context, 'more')}';
     }
     return null;
   }
@@ -146,7 +147,7 @@ class _ModifierSheetState extends State<ModifierSheet> {
                 FilledButton(
                   key: const Key('confirm-modifiers'),
                   onPressed: _valid ? _confirm : null,
-                  child: const Text('Add to order'),
+                  child: Text(tr(context, 'Add to order')),
                 ),
               ]),
             ),

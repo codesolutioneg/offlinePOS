@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/db/sqlite_outbox_store.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/onboarding/wizard_store.dart';
 import '../../core/printing/printer_registry.dart';
 import '../../core/printing/printer_transport.dart';
@@ -129,11 +130,11 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   /// till with nowhere to send is not offline; it is unconfigured, and support has
   /// to be told which.
   String get _connection {
-    if (!widget.sync.hasDestination) return 'No server configured';
+    if (!widget.sync.hasDestination) return tr(context, 'No server configured');
     return switch (widget.sync.state) {
-      SyncState.idle => 'Online',
-      SyncState.working => 'Syncing',
-      SyncState.offline => 'Offline',
+      SyncState.idle => tr(context, 'Online'),
+      SyncState.working => tr(context, 'Syncing'),
+      SyncState.offline => tr(context, 'Offline'),
     };
   }
 
@@ -145,11 +146,11 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Diagnostics'),
+        title: Text(tr(context, 'Diagnostics')),
         actions: [
           IconButton(
             key: const Key('copy-status'),
-            tooltip: 'Copy for support',
+            tooltip: tr(context, 'Copy for support'),
             icon: const Icon(Icons.copy),
             // A cashier can send this in one message instead of reading numbers
             // out incorrectly.
@@ -165,66 +166,66 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
             Card(
               key: const Key('attention'),
               color: Colors.red.shade100,
-              child: const Padding(
-                padding: EdgeInsets.all(12),
-                child: Text('This till needs attention',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(tr(context, 'This till needs attention'),
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
               ),
             ),
           // First, because every one of these is money that never reached the
           // books. Nothing else on this screen outranks that.
           if (dead.isNotEmpty) ...[
-            const Text('Rejected sales',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            const Text(
-              'These never reached the server. Fix the cause, then retry.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
+            Text(tr(context, 'Rejected sales'),
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text(
+              tr(context, 'These never reached the server. Fix the cause, then retry.'),
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
             ),
             for (final e in dead)
               ListTile(
                 key: Key('dead-${e.id}'),
                 dense: true,
                 title: Text(e.payloadUuid),
-                subtitle: Text(e.lastError ?? 'unknown reason'),
+                subtitle: Text(e.lastError ?? tr(context, 'unknown reason')),
                 trailing: TextButton(
-                  child: const Text('Retry'),
+                  child: Text(tr(context, 'Retry')),
                   onPressed: () => setState(() => widget.outboxStore.revive(e.id)),
                 ),
               ),
             const Divider(),
           ],
-          _row('Device', s.deviceId, keyName: 'device'),
-          _row('App version', s.appVersion),
-          _row('Signed in', widget.cashierId ?? s.cashierId ?? '-'),
+          _row(tr(context, 'Device'), s.deviceId, keyName: 'device'),
+          _row(tr(context, 'App version'), s.appVersion),
+          _row(tr(context, 'Signed in'), widget.cashierId ?? s.cashierId ?? '-'),
           const Divider(),
-          _row('Connection', _connection, keyName: 'connection',
+          _row(tr(context, 'Connection'), _connection, keyName: 'connection',
               bad: !widget.sync.hasDestination),
           if (undeliverable.isNotEmpty)
-            _row('Nothing can send', undeliverable.join(', '),
+            _row(tr(context, 'Nothing can send'), undeliverable.join(', '),
                 keyName: 'undeliverable', bad: true),
-          _row('Sales waiting', '${widget.outboxStore.pendingSalesCount}',
+          _row(tr(context, 'Sales waiting'), '${widget.outboxStore.pendingSalesCount}',
               keyName: 'pending'),
-          _row('Everything waiting', '${s.pending}', keyName: 'queued'),
+          _row(tr(context, 'Everything waiting'), '${s.pending}', keyName: 'queued'),
           // The number that says how bad it is. A count alone hides whether it is
           // ten minutes or six days.
-          _row('Oldest waiting', _age(s.oldestPendingAge), keyName: 'oldest'),
-          _row('Rejected', '${s.dead}',
+          _row(tr(context, 'Oldest waiting'), _age(s.oldestPendingAge), keyName: 'oldest'),
+          _row(tr(context, 'Rejected'), '${s.dead}',
               keyName: 'dead', bad: s.dead > 0),
-          _row('Audit entries waiting', '${s.unsyncedAudit}'),
-          _row('Prices updated', _age(s.catalogueRefreshedAt == null
+          _row(tr(context, 'Audit entries waiting'), '${s.unsyncedAudit}'),
+          _row(tr(context, 'Prices updated'), _age(s.catalogueRefreshedAt == null
               ? null
               : DateTime.now().toUtc().difference(s.catalogueRefreshedAt!))),
           if (s.lastError != null)
-            _row('Last error', s.lastError!, keyName: 'last-error', bad: true),
+            _row(tr(context, 'Last error'), s.lastError!, keyName: 'last-error', bad: true),
           if (widget.printError != null)
-            _row('Receipt not built', widget.printError!,
+            _row(tr(context, 'Receipt not built'), widget.printError!,
                 keyName: 'print-error', bad: true),
           const SizedBox(height: 12),
           FilledButton.icon(
             key: const Key('sync-now'),
             onPressed: _syncing ? null : _syncNow,
             icon: const Icon(Icons.sync),
-            label: Text(_syncing ? 'Syncing...' : 'Sync now'),
+            label: Text(_syncing ? tr(context, 'Syncing...') : tr(context, 'Sync now')),
           ),
           ..._updateSection(),
           if (widget.printers != null) ..._printerSection(),
@@ -236,7 +237,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                 setState(() {});
               },
               icon: const Icon(Icons.help_outline),
-              label: const Text('Show the walkthroughs again'),
+              label: Text(tr(context, 'Show the walkthroughs again')),
             ),
         ],
       ),
@@ -247,12 +248,12 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     final updates = widget.updates;
     return [
       const SizedBox(height: 16),
-      const Text('Updates', style: TextStyle(fontWeight: FontWeight.bold)),
+      Text(tr(context, 'Updates'), style: const TextStyle(fontWeight: FontWeight.bold)),
       if (updates == null)
-        const Text(
-          'No update channel in this build. New versions are installed by hand.',
-          key: Key('no-updates'),
-          style: TextStyle(fontSize: 12, color: Colors.black54),
+        Text(
+          tr(context, 'No update channel in this build. New versions are installed by hand.'),
+          key: const Key('no-updates'),
+          style: const TextStyle(fontSize: 12, color: Colors.black54),
         )
       else ...[
         Text(updates.status.summary, key: const Key('update-summary')),
@@ -260,7 +261,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           key: const Key('check-update'),
           onPressed: _printerBusy == null ? _checkForUpdate : null,
           icon: const Icon(Icons.system_update),
-          label: Text(_printerBusy == 'update' ? 'Checking...' : 'Check now'),
+          label: Text(_printerBusy == 'update' ? tr(context, 'Checking...') : tr(context, 'Check now')),
         ),
       ],
     ];
@@ -274,11 +275,11 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     final spool = widget.spool;
     return [
       const SizedBox(height: 16),
-      const Text('Printers', style: TextStyle(fontWeight: FontWeight.bold)),
+      Text(tr(context, 'Printers'), style: const TextStyle(fontWeight: FontWeight.bold)),
       if (registry.printers.isEmpty)
-        const Text(
-          'No printer configured. Receipts are held until one is.',
-          style: TextStyle(fontSize: 12, color: Colors.black54),
+        Text(
+          tr(context, 'No printer configured. Receipts are held until one is.'),
+          style: const TextStyle(fontSize: 12, color: Colors.black54),
         ),
       for (final p in registry.printers)
         ListTile(
@@ -289,27 +290,27 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           onTap: () => _editPrinter(existing: p),
           trailing: TextButton(
             onPressed: _printerBusy == null ? () => _rescan(p.name) : null,
-            child: Text(_printerBusy == p.name ? 'Looking...' : 'Rescan'),
+            child: Text(_printerBusy == p.name ? tr(context, 'Looking...') : tr(context, 'Rescan')),
           ),
         ),
       TextButton.icon(
         key: const Key('find-printer'),
         onPressed: _printerBusy == null ? _findReceiptPrinter : null,
         icon: const Icon(Icons.search),
-        label: const Text('Find receipt printer'),
+        label: Text(tr(context, 'Find receipt printer')),
       ),
       TextButton.icon(
         key: const Key('add-printer'),
         onPressed: _printerBusy == null ? () => _editPrinter() : null,
         icon: const Icon(Icons.edit),
-        label: const Text('Enter a printer address'),
+        label: Text(tr(context, 'Enter a printer address')),
       ),
       if (spool != null && spool.hasSpooled) ...[
         TextButton.icon(
           key: const Key('reprint'),
           onPressed: _printerBusy == null ? _reprint : null,
           icon: const Icon(Icons.print),
-          label: Text('Reprint ${spool.spooledCount} held receipt(s)'),
+          label: Text('${tr(context, 'Reprint')} ${spool.spooledCount} ${tr(context, 'held receipt(s)')}'),
         ),
         // Which sales have no paper, and why the last attempt failed. A count
         // alone cannot tell support whether the printer is off, out of paper, or
@@ -322,8 +323,8 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                 ListTile(
                   key: Key('held-${job.id}'),
                   dense: true,
-                  title: Text(job.reference ?? 'receipt ${job.id}'),
-                  subtitle: Text(job.lastError ?? 'not attempted since it was held'),
+                  title: Text(job.reference ?? '${tr(context, 'receipt')} ${job.id}'),
+                  subtitle: Text(job.lastError ?? tr(context, 'not attempted since it was held')),
                 ),
             ],
           ),
@@ -333,16 +334,16 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   }
 
   String _printerLine(ConfiguredPrinter p) {
-    if (p.host == null) return 'never found';
+    if (p.host == null) return tr(context, 'never found');
     final seen = p.lastSeenAt == null
         ? '-'
         : _age(DateTime.now().difference(p.lastSeenAt!));
     // Says why the till is not sweeping, so "it just stopped looking" is never a
     // mystery on a support call.
     final held = widget.printers!.sweepHeldOffFor(p.name)
-        ? '  not searching (last sweep found nothing)'
+        ? '  ${tr(context, 'not searching (last sweep found nothing)')}'
         : '';
-    return '${p.host}:${p.port}  last seen $seen ago$held';
+    return '${p.host}:${p.port}  ${tr(context, 'last seen')} $seen ${tr(context, 'ago')}$held';
   }
 
   Widget _row(String label, String value, {String? keyName, bool bad = false}) =>
@@ -399,7 +400,7 @@ class _PrinterDialogState extends State<_PrinterDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        title: Text(widget.existing == null ? 'Add a printer' : 'Edit printer'),
+        title: Text(widget.existing == null ? tr(context, 'Add a printer') : tr(context, 'Edit printer')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -410,19 +411,19 @@ class _PrinterDialogState extends State<_PrinterDialog> {
               // fixed once a printer exists rather than silently orphaning its
               // held receipts.
               enabled: widget.existing == null,
-              decoration: const InputDecoration(
-                  labelText: 'Name (receipt, kitchen, bar)'),
+              decoration: InputDecoration(
+                  labelText: tr(context, 'Name (receipt, kitchen, bar)')),
             ),
             TextField(
               key: const Key('printer-host'),
               controller: _host,
-              decoration: const InputDecoration(labelText: 'Address'),
+              decoration: InputDecoration(labelText: tr(context, 'Address')),
             ),
             TextField(
               key: const Key('printer-port'),
               controller: _port,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Port'),
+              decoration: InputDecoration(labelText: tr(context, 'Port')),
             ),
           ],
         ),
@@ -432,11 +433,11 @@ class _PrinterDialogState extends State<_PrinterDialog> {
               key: const Key('printer-delete'),
               onPressed: () => Navigator.of(context).pop(
                   _PrinterEdit(widget.existing!.name, null, 0, deleted: true)),
-              child: const Text('Remove'),
+              child: Text(tr(context, 'Remove')),
             ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
+            child: Text(tr(context, 'Cancel')),
           ),
           FilledButton(
             key: const Key('printer-save'),
@@ -450,7 +451,7 @@ class _PrinterDialogState extends State<_PrinterDialog> {
                 int.tryParse(_port.text.trim()) ?? 9100,
               ));
             },
-            child: const Text('Save'),
+            child: Text(tr(context, 'Save')),
           ),
         ],
       );

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// One local hour-of-day bucket: how many orders were rung and how much they
@@ -52,9 +53,9 @@ class SalesByTimeReportScreen extends StatelessWidget {
     final hours = _byHour();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Sales by hour')),
+      appBar: AppBar(title: Text(tr(context, 'Sales by hour'))),
       body: orders.isEmpty
-          ? const Center(child: Text('No orders'))
+          ? Center(child: Text(tr(context, 'No orders')))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: _hoursCard(context, hours),
@@ -76,7 +77,7 @@ class SalesByTimeReportScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('By hour', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            Text(tr(context, 'By hour'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             const Divider(),
             ListView.builder(
               key: const Key('hourly-sales-list'),

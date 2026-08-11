@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// Refund some or all of a past sale. The cashier picks how many of each line to
@@ -92,7 +93,7 @@ class _RefundScreenState extends State<RefundScreen> {
   Widget build(BuildContext context) {
     final o = widget.original;
     return Scaffold(
-      appBar: AppBar(title: Text('Refund #${_shortRef(o)}')),
+      appBar: AppBar(title: Text('${tr(context, 'Refund')} #${_shortRef(o)}')),
       body: Column(
         children: [
           Expanded(
@@ -102,7 +103,7 @@ class _RefundScreenState extends State<RefundScreen> {
                   ListTile(
                     key: Key('refund-line-${l.uuid}'),
                     title: Text(l.name),
-                    subtitle: Text('Sold ${l.quantity.toStringAsFixed(0)} @ '
+                    subtitle: Text('${tr(context, 'Sold')} ${l.quantity.toStringAsFixed(0)} @ '
                         '${widget.formatAmount(l.unitPrice)}'),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                       IconButton(
@@ -125,8 +126,9 @@ class _RefundScreenState extends State<RefundScreen> {
                   child: TextField(
                     key: const Key('refund-reason'),
                     controller: _reason,
-                    decoration: const InputDecoration(
-                        labelText: 'Reason for refund', border: OutlineInputBorder()),
+                    decoration: InputDecoration(
+                        labelText: tr(context, 'Reason for refund'),
+                        border: const OutlineInputBorder()),
                     onChanged: (_) => setState(() {}),
                   ),
                 ),
@@ -138,7 +140,8 @@ class _RefundScreenState extends State<RefundScreen> {
               padding: const EdgeInsets.all(12),
               child: Row(children: [
                 Expanded(
-                  child: Text('Refund ${widget.formatAmount(_refundTotal)}',
+                  child: Text(
+                      '${tr(context, 'Refund')} ${widget.formatAmount(_refundTotal)}',
                       style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 ),
                 FilledButton.icon(
@@ -146,7 +149,7 @@ class _RefundScreenState extends State<RefundScreen> {
                   style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
                   onPressed: (_anySelected && _reason.text.trim().isNotEmpty) ? _confirm : null,
                   icon: const Icon(Icons.undo),
-                  label: const Text('Refund'),
+                  label: Text(tr(context, 'Refund')),
                 ),
               ]),
             ),

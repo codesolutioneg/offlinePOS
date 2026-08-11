@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// A tax report: net, tax and gross grouped by tax rate. Prices are tax-inclusive,
@@ -30,18 +31,18 @@ class TaxReportScreen extends StatelessWidget {
     final totalGross = byRate.values.fold(0.0, (s, v) => s + v[0]);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Tax report')),
+      appBar: AppBar(title: Text(tr(context, 'Tax report'))),
       body: rates.isEmpty
-          ? const Center(child: Text('No tax recorded (prices carry no tax rate)'))
+          ? Center(child: Text(tr(context, 'No tax recorded (prices carry no tax rate)')))
           : ListView(
               key: const Key('tax-list'),
               padding: const EdgeInsets.all(12),
               children: [
-                const Row(children: [
-                  Expanded(flex: 2, child: Text('Rate', style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(flex: 3, child: Text('Net', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(flex: 3, child: Text('Tax', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(flex: 3, child: Text('Gross', textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.bold))),
+                Row(children: [
+                  Expanded(flex: 2, child: Text(tr(context, 'Rate'), style: const TextStyle(fontWeight: FontWeight.bold))),
+                  Expanded(flex: 3, child: Text(tr(context, 'Net'), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.bold))),
+                  Expanded(flex: 3, child: Text(tr(context, 'Tax'), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.bold))),
+                  Expanded(flex: 3, child: Text(tr(context, 'Gross'), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.bold))),
                 ]),
                 const Divider(),
                 for (final r in rates)
@@ -57,7 +58,7 @@ class TaxReportScreen extends StatelessWidget {
                   ),
                 const Divider(),
                 Row(children: [
-                  const Expanded(flex: 2, child: Text('Total', style: TextStyle(fontWeight: FontWeight.bold))),
+                  Expanded(flex: 2, child: Text(tr(context, 'Total'), style: const TextStyle(fontWeight: FontWeight.bold))),
                   Expanded(flex: 3, child: Text(formatAmount(totalGross - totalTax), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.bold))),
                   Expanded(flex: 3, child: Text(formatAmount(totalTax), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.bold))),
                   Expanded(flex: 3, child: Text(formatAmount(totalGross), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.bold))),

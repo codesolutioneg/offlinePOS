@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/auth/auth_service.dart';
 import '../../core/auth/user_store.dart';
+import '../../core/i18n/l10n.dart';
 
 /// Staff management: add a cashier, change their role, reset a PIN, or deactivate.
 ///
@@ -106,10 +107,10 @@ class _RosterScreenState extends State<RosterScreen> {
   Widget build(BuildContext context) {
     final staff = widget.users.active();
     return Scaffold(
-      appBar: AppBar(title: const Text('Staff')),
+      appBar: AppBar(title: Text(tr(context, 'Staff'))),
       body: staff.isEmpty
-          ? const Center(
-              child: Text('No staff on this device yet', key: Key('no-staff')),
+          ? Center(
+              child: Text(tr(context, 'No staff on this device yet'), key: const Key('no-staff')),
             )
           : ListView.builder(
               itemCount: staff.length,
@@ -123,17 +124,17 @@ class _RosterScreenState extends State<RosterScreen> {
                     spacing: 8,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Chip(label: Text(c.isManager ? 'Manager' : 'Cashier')),
+                      Chip(label: Text(c.isManager ? tr(context, 'Manager') : tr(context, 'Cashier'))),
                       IconButton(
                         key: Key('edit-${c.id}'),
                         icon: const Icon(Icons.edit),
-                        tooltip: 'Edit',
+                        tooltip: tr(context, 'Edit'),
                         onPressed: () => _openEditDialog(c),
                       ),
                       IconButton(
                         key: Key('deactivate-${c.id}'),
                         icon: const Icon(Icons.person_off),
-                        tooltip: 'Deactivate',
+                        tooltip: tr(context, 'Deactivate'),
                         onPressed: () => _deactivate(c),
                       ),
                     ],
@@ -144,7 +145,7 @@ class _RosterScreenState extends State<RosterScreen> {
       floatingActionButton: FloatingActionButton(
         key: const Key('add-staff'),
         onPressed: _openAddDialog,
-        tooltip: 'Add staff',
+        tooltip: tr(context, 'Add staff'),
         child: const Icon(Icons.person_add),
       ),
     );
@@ -196,7 +197,7 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
   void _save() {
     final name = _name.text.trim();
     if (name.isEmpty) {
-      setState(() => _error = 'Name is required');
+      setState(() => _error = tr(context, 'Name is required'));
       return;
     }
     final pin = _pin.text;
@@ -204,7 +205,7 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
     if (pin.isNotEmpty || !_isEdit) {
       final wellFormed = pin.length >= 4 && pin.length <= 6 && RegExp(r'^\d+$').hasMatch(pin);
       if (!wellFormed) {
-        setState(() => _error = 'PIN must be 4 to 6 digits');
+        setState(() => _error = tr(context, 'PIN must be 4 to 6 digits'));
         return;
       }
     }
@@ -214,7 +215,7 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(_isEdit ? 'Edit staff' : 'Add staff'),
+      title: Text(_isEdit ? tr(context, 'Edit staff') : tr(context, 'Add staff')),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -222,17 +223,17 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
             TextField(
               key: const Key('staff-name'),
               controller: _name,
-              decoration: const InputDecoration(labelText: 'Name'),
+              decoration: InputDecoration(labelText: tr(context, 'Name')),
               textCapitalization: TextCapitalization.words,
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               key: const Key('staff-role'),
               initialValue: _role,
-              decoration: const InputDecoration(labelText: 'Role'),
-              items: const [
-                DropdownMenuItem(value: 'cashier', child: Text('Cashier')),
-                DropdownMenuItem(value: 'manager', child: Text('Manager')),
+              decoration: InputDecoration(labelText: tr(context, 'Role')),
+              items: [
+                DropdownMenuItem(value: 'cashier', child: Text(tr(context, 'Cashier'))),
+                DropdownMenuItem(value: 'manager', child: Text(tr(context, 'Manager'))),
               ],
               onChanged: (v) => setState(() => _role = v ?? _role),
             ),
@@ -244,8 +245,8 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
               keyboardType: TextInputType.number,
               maxLength: 6,
               decoration: InputDecoration(
-                labelText: _isEdit ? 'New PIN (leave blank to keep current)' : 'PIN',
-                hintText: '4 to 6 digits',
+                labelText: _isEdit ? tr(context, 'New PIN (leave blank to keep current)') : tr(context, 'PIN'),
+                hintText: tr(context, '4 to 6 digits'),
               ),
             ),
             if (_error != null)
@@ -264,12 +265,12 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
         TextButton(
           key: const Key('staff-form-cancel'),
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(tr(context, 'Cancel')),
         ),
         FilledButton(
           key: const Key('staff-form-save'),
           onPressed: _save,
-          child: const Text('Save'),
+          child: Text(tr(context, 'Save')),
         ),
       ],
     );

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
+import '../../core/i18n/l10n.dart';
 
 /// Manage the discount-reason quick picks shown on the discount dialog.
 ///
@@ -58,7 +59,7 @@ class _DiscountReasonsScreenState extends State<DiscountReasonsScreen> {
   Widget build(BuildContext context) {
     final reasons = widget.settings.discountReasons;
     return Scaffold(
-      appBar: AppBar(title: const Text('Discount reasons')),
+      appBar: AppBar(title: Text(tr(context, 'Discount reasons'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -69,7 +70,7 @@ class _DiscountReasonsScreenState extends State<DiscountReasonsScreen> {
               trailing: IconButton(
                 key: Key('delete-reason-$i'),
                 icon: const Icon(Icons.delete_outline),
-                tooltip: 'Remove',
+                tooltip: tr(context, 'Remove'),
                 onPressed: () => _remove(i),
               ),
             ),
@@ -80,10 +81,10 @@ class _DiscountReasonsScreenState extends State<DiscountReasonsScreen> {
                 child: TextField(
                   key: const Key('new-reason'),
                   controller: _newReason,
-                  decoration: const InputDecoration(
-                    labelText: 'New reason',
-                    hintText: 'e.g. Regular customer',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: tr(context, 'New reason'),
+                    hintText: tr(context, 'e.g. Regular customer'),
+                    border: const OutlineInputBorder(),
                   ),
                   onSubmitted: (_) => _add(),
                 ),
@@ -92,7 +93,7 @@ class _DiscountReasonsScreenState extends State<DiscountReasonsScreen> {
               FilledButton(
                 key: const Key('add-reason'),
                 onPressed: _add,
-                child: const Text('Add'),
+                child: Text(tr(context, 'Add')),
               ),
             ],
           ),

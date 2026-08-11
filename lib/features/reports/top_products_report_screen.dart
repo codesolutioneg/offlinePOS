@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// One product's tally across every order in the report window: how many
@@ -52,17 +53,17 @@ class TopProductsReportScreen extends StatelessWidget {
     final byQuantity = [...products]..sort((a, b) => b.quantity.compareTo(a.quantity));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Top products')),
+      appBar: AppBar(title: Text(tr(context, 'Top products'))),
       body: orders.isEmpty || products.isEmpty
-          ? const Center(child: Text('No orders'))
+          ? Center(child: Text(tr(context, 'No orders')))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _productCard(context, title: 'By revenue', key: const Key('top-by-revenue'), products: byRevenue, showRevenue: true),
+                  _productCard(context, title: tr(context, 'By revenue'), key: const Key('top-by-revenue'), products: byRevenue, showRevenue: true),
                   const SizedBox(height: 16),
-                  _productCard(context, title: 'By quantity', key: const Key('top-by-qty'), products: byQuantity, showRevenue: false),
+                  _productCard(context, title: tr(context, 'By quantity'), key: const Key('top-by-qty'), products: byQuantity, showRevenue: false),
                 ],
               ),
             ),

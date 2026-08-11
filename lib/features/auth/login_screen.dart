@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/auth/auth_service.dart';
 import '../../core/auth/user_store.dart';
+import '../../core/i18n/l10n.dart';
 
 /// PIN sign-in.
 ///
@@ -47,13 +48,13 @@ class _LoginScreenState extends State<LoginScreen> {
       _pin = '';
       _message = switch (result) {
         AuthOk() => null,
-        AuthRejected() => 'Incorrect PIN',
-        AuthMalformed() => 'PIN must be 4 to 6 digits',
+        AuthRejected() => tr(context, 'Incorrect PIN'),
+        AuthMalformed() => tr(context, 'PIN must be 4 to 6 digits'),
         // Say it is a lockout, not a wrong PIN, or the cashier keeps trying. The
         // wait doubles with each further failure, so it is quoted rather than
         // described as "a few minutes".
         AuthLockedOut(:final until) =>
-          'Too many attempts. Try again in ${_wait(until)}.',
+          '${tr(context, 'Too many attempts. Try again in')} ${_wait(until)}.',
       };
     });
     if (result is AuthOk) widget.onSignedIn(result.cashier);
@@ -84,9 +85,9 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Text('offlinePOS',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-              Text('Build ${const String.fromEnvironment('APP_VERSION', defaultValue: 'dev')}',
+              Text(tr(context, 'offlinePOS'),
+                  style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+              Text('${tr(context, 'Build')} ${const String.fromEnvironment('APP_VERSION', defaultValue: 'dev')}',
                   key: const Key('build-version'),
                   style: const TextStyle(fontSize: 11, color: Colors.black45)),
               const SizedBox(height: 24),
@@ -97,19 +98,18 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Padding(
                     padding: const EdgeInsets.all(12),
                     child: Text(
-                      'This till has no staff yet. Sign in as Setup with PIN '
-                      '${widget.provisioningPin}, then enrol the real roster. '
-                      'This code is new on every launch and stops appearing once '
-                      'staff are enrolled.',
+                      '${tr(context, 'This till has no staff yet. Sign in as Setup with PIN')} '
+                      '${widget.provisioningPin}'
+                      '${tr(context, ', then enrol the real roster. This code is new on every launch and stops appearing once staff are enrolled.')}',
                       textAlign: TextAlign.center,
                     ),
                   ),
                 ),
               if (staff.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('No cashiers on this device yet',
-                      key: Key('no-users')),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(tr(context, 'No cashiers on this device yet'),
+                      key: const Key('no-users')),
                 )
               else ...[
                 Wrap(
@@ -168,7 +168,7 @@ class _LoginScreenState extends State<LoginScreen> {
             FilledButton(
               key: const Key('pin-ok'),
               onPressed: _selected == null || _busy ? null : _submit,
-              child: const Text('OK'),
+              child: Text(tr(context, 'OK')),
             ),
           ],
         ),

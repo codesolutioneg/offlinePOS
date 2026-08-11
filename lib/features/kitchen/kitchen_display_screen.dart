@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// A live board of active kitchen tickets, one card per order, that a cook
@@ -60,18 +61,18 @@ class _KitchenDisplayScreenState extends State<KitchenDisplayScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Kitchen'),
+        title: Text(tr(context, 'Kitchen')),
         actions: [
           IconButton(
             key: const Key('kds-refresh'),
             onPressed: _refresh,
             icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh',
+            tooltip: tr(context, 'Refresh'),
           ),
         ],
       ),
       body: _orders.isEmpty
-          ? const Center(child: Text('No active tickets'))
+          ? Center(child: Text(tr(context, 'No active tickets')))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(12),
               child: Wrap(
@@ -113,9 +114,10 @@ class _TicketCard extends StatelessWidget {
     return '$hh:$mm';
   }
 
-  String get _title {
+  String _title(BuildContext context) {
     final table = order.tableLabel;
-    return table != null ? '$table · ${order.type.label}' : order.type.label;
+    final type = tr(context, order.type.label);
+    return table != null ? '$table · $type' : type;
   }
 
   @override
@@ -135,7 +137,7 @@ class _TicketCard extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text(_title,
+                    child: Text(_title(context),
                         style: const TextStyle(fontWeight: FontWeight.bold)),
                   ),
                   Text(_time),
@@ -147,14 +149,14 @@ class _TicketCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(order.kitchenStatus.label,
+                  Text(tr(context, order.kitchenStatus.label),
                       style: const TextStyle(color: Colors.black54, fontSize: 12)),
                   const SizedBox(height: 8),
                   for (final line in order.lines) _lineTile(line),
                   const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
-                    children: _actions(),
+                    children: _actions(context),
                   ),
                 ],
               ),
@@ -193,14 +195,14 @@ class _TicketCard extends StatelessWidget {
 
   // Only the next sensible move is offered: a ticket that has not started
   // cannot be marked Served, and one already served has nothing further to do.
-  List<Widget> _actions() {
+  List<Widget> _actions(BuildContext context) {
     switch (order.kitchenStatus) {
       case KitchenStatus.pending:
         return [
           FilledButton(
             key: Key('kds-${order.uuid}-start'),
             onPressed: () => onAdvance(order.uuid, KitchenStatus.preparing),
-            child: const Text('Start'),
+            child: Text(tr(context, 'Start')),
           ),
         ];
       case KitchenStatus.preparing:
@@ -208,7 +210,7 @@ class _TicketCard extends StatelessWidget {
           FilledButton(
             key: Key('kds-${order.uuid}-ready'),
             onPressed: () => onAdvance(order.uuid, KitchenStatus.ready),
-            child: const Text('Ready'),
+            child: Text(tr(context, 'Ready')),
           ),
         ];
       case KitchenStatus.ready:
@@ -216,7 +218,7 @@ class _TicketCard extends StatelessWidget {
           FilledButton(
             key: Key('kds-${order.uuid}-served'),
             onPressed: () => onAdvance(order.uuid, KitchenStatus.served),
-            child: const Text('Served'),
+            child: Text(tr(context, 'Served')),
           ),
         ];
       case KitchenStatus.served:

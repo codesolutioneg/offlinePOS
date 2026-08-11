@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+
+import '../core/i18n/l10n.dart';
 
 import '../core/audit/audit_log.dart';
 import '../core/auth/auth_service.dart';
@@ -153,6 +156,13 @@ class _PosAppState extends State<PosApp> {
   String? _printError;
   Timer? _background;
 
+  /// Drives the app language and text direction, seeded from the saved setting and
+  /// persisting any change.
+  late final LocaleController _locale = LocaleController(
+    Locale(widget.settings.language),
+    onChanged: (code) => widget.settings.language = code,
+  );
+
   /// One spool for the life of the app, above the registry rather than above an
   /// address: a receipt that could not print stays reprintable even if the printer
   /// comes back on a different lease.
@@ -291,17 +301,29 @@ class _PosAppState extends State<PosApp> {
   @override
   Widget build(BuildContext context) {
     final session = _session;
-    return MaterialApp(
-      title: 'offlinePOS',
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
-      home: session == null
-          ? LoginScreen(
-              auth: widget.auth,
-              users: widget.users,
-              onSignedIn: _signedIn,
-              provisioningPin: widget.provisioningPin,
-            )
-          : _selling(session),
+    // Rebuilds the whole app when the language changes; MaterialApp derives the
+    // Arabic right-to-left direction from the locale via the localization delegates.
+    return ValueListenableBuilder<Locale>(
+      valueListenable: _locale,
+      builder: (context, locale, _) => MaterialApp(
+        title: 'offlinePOS',
+        theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+        locale: locale,
+        supportedLocales: kSupportedLocales,
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        home: session == null
+            ? LoginScreen(
+                auth: widget.auth,
+                users: widget.users,
+                onSignedIn: _signedIn,
+                provisioningPin: widget.provisioningPin,
+              )
+            : _selling(session),
+      ),
     );
   }
 
@@ -372,7 +394,7 @@ class _PosAppState extends State<PosApp> {
           ListTile(
             key: const Key('nav-tables'),
             leading: const Icon(Icons.table_bar),
-            title: const Text('Tables'),
+            title: Text(tr(rootContext, 'Tables')),
             onTap: () {
               Navigator.pop(rootContext);
               _openFloor(rootContext, session);
@@ -381,7 +403,7 @@ class _PosAppState extends State<PosApp> {
           ListTile(
             key: const Key('nav-open-orders'),
             leading: const Icon(Icons.table_restaurant),
-            title: const Text('Open orders'),
+            title: Text(tr(rootContext, 'Open orders')),
             trailing: session.heldCount > 0 ? Chip(label: Text('${session.heldCount}')) : null,
             onTap: () {
               Navigator.pop(rootContext);
@@ -391,7 +413,7 @@ class _PosAppState extends State<PosApp> {
           ListTile(
             key: const Key('nav-history'),
             leading: const Icon(Icons.receipt_long),
-            title: const Text('Order history'),
+            title: Text(tr(rootContext, 'Order history')),
             onTap: () {
               Navigator.pop(rootContext);
               _openHistory(rootContext);
@@ -400,7 +422,7 @@ class _PosAppState extends State<PosApp> {
           ListTile(
             key: const Key('nav-kitchen'),
             leading: const Icon(Icons.soup_kitchen),
-            title: const Text('Kitchen display'),
+            title: Text(tr(rootContext, 'Kitchen display')),
             onTap: () {
               Navigator.pop(rootContext);
               _openKitchen(rootContext);
@@ -409,7 +431,7 @@ class _PosAppState extends State<PosApp> {
           ListTile(
             key: const Key('nav-report'),
             leading: const Icon(Icons.bar_chart),
-            title: const Text('Reports'),
+            title: Text(tr(rootContext, 'Reports')),
             onTap: () {
               Navigator.pop(rootContext);
               _openReports(rootContext);
@@ -418,7 +440,7 @@ class _PosAppState extends State<PosApp> {
           ListTile(
             key: const Key('nav-shift'),
             leading: const Icon(Icons.point_of_sale),
-            title: const Text('Shift / cash-up'),
+            title: Text(tr(rootContext, 'Shift / cash-up')),
             onTap: () {
               Navigator.pop(rootContext);
               _openShift(rootContext, session);
@@ -429,7 +451,7 @@ class _PosAppState extends State<PosApp> {
             ListTile(
               key: const Key('nav-staff'),
               leading: const Icon(Icons.badge_outlined),
-              title: const Text('Staff'),
+              title: Text(tr(rootContext, 'Staff')),
               onTap: () {
                 Navigator.pop(rootContext);
                 _openRoster(rootContext);
@@ -438,7 +460,7 @@ class _PosAppState extends State<PosApp> {
           ListTile(
             key: const Key('nav-settings'),
             leading: const Icon(Icons.settings),
-            title: const Text('Settings'),
+            title: Text(tr(rootContext, 'Settings')),
             onTap: () {
               Navigator.pop(rootContext);
               _openSettingsHub(rootContext);
@@ -447,7 +469,7 @@ class _PosAppState extends State<PosApp> {
           ListTile(
             key: const Key('nav-support'),
             leading: const Icon(Icons.support_agent),
-            title: const Text('Support & printers'),
+            title: Text(tr(rootContext, 'Support & printers')),
             onTap: () {
               Navigator.pop(rootContext);
               _openDiagnostics(rootContext);
@@ -580,6 +602,18 @@ class _PosAppState extends State<PosApp> {
     void push(Widget screen) => Navigator.of(context)
         .push(MaterialPageRoute<void>(builder: (_) => screen));
     final entries = <SettingsEntry>[
+      SettingsEntry(
+        title: _locale.isArabic ? 'Language: العربية' : 'Language: English',
+        subtitle: 'Switch English / العربية',
+        icon: Icons.language,
+        keyValue: 'set-language',
+        // Toggling rebuilds the whole app in the other language and flips the text
+        // direction; the hub is popped so the change is obvious.
+        onTap: () {
+          _locale.toggle();
+          Navigator.of(context).pop();
+        },
+      ),
       SettingsEntry(
         title: 'Shop & receipt',
         subtitle: 'Name, tax id, footer',

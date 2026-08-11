@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/printing/printer_registry.dart';
 import '../../domain/catalogue.dart';
 
@@ -50,7 +51,7 @@ class _PrintersScreenState extends State<PrintersScreen> {
     if (!mounted) return;
     setState(() {});
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$name: ${host ?? 'not found'}')),
+      SnackBar(content: Text('$name: ${host ?? tr(context, 'not found')}')),
     );
   }
 
@@ -87,21 +88,21 @@ class _PrintersScreenState extends State<PrintersScreen> {
       ..sort();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Printers & routing')),
+      appBar: AppBar(title: Text(tr(context, 'Printers & routing'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _sectionHeader(context, 'Printers'),
+          _sectionHeader(context, tr(context, 'Printers')),
           ..._printerRows(),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             key: const Key('add-printer'),
             onPressed: _addPrinter,
             icon: const Icon(Icons.add),
-            label: const Text('Add printer'),
+            label: Text(tr(context, 'Add printer')),
           ),
           const SizedBox(height: 24),
-          _sectionHeader(context, 'Kitchen routing'),
+          _sectionHeader(context, tr(context, 'Kitchen routing')),
           ..._routingRows(stations, assignments),
         ],
       ),
@@ -117,10 +118,10 @@ class _PrintersScreenState extends State<PrintersScreen> {
     final printers = widget.printers.printers.toList()
       ..sort((a, b) => a.name.compareTo(b.name));
     if (printers.isEmpty) {
-      return const [
+      return [
         Padding(
-          padding: EdgeInsets.symmetric(vertical: 8),
-          child: Text('No printers configured yet.'),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(tr(context, 'No printers configured yet.')),
         ),
       ];
     }
@@ -136,13 +137,13 @@ class _PrintersScreenState extends State<PrintersScreen> {
               children: [
                 IconButton(
                   key: Key('rescan-${printer.name}'),
-                  tooltip: 'Rescan',
+                  tooltip: tr(context, 'Rescan'),
                   icon: const Icon(Icons.refresh),
                   onPressed: () => _rescan(printer.name),
                 ),
                 IconButton(
                   key: Key('remove-${printer.name}'),
-                  tooltip: 'Remove',
+                  tooltip: tr(context, 'Remove'),
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () => _remove(printer.name),
                 ),
@@ -170,10 +171,10 @@ class _PrintersScreenState extends State<PrintersScreen> {
 
   List<Widget> _routingRows(List<String> stations, Map<int, String> assignments) {
     if (widget.categories.isEmpty) {
-      return const [
+      return [
         Padding(
-          padding: EdgeInsets.symmetric(vertical: 8),
-          child: Text('No categories to route yet.'),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(tr(context, 'No categories to route yet.')),
         ),
       ];
     }
@@ -186,9 +187,9 @@ class _PrintersScreenState extends State<PrintersScreen> {
             key: Key('route-station-${category.id}'),
             value: assignments[category.id],
             items: [
-              const DropdownMenuItem<String?>(
+              DropdownMenuItem<String?>(
                 value: null,
-                child: Text('Auto / kitchen'),
+                child: Text(tr(context, 'Auto / kitchen')),
               ),
               for (final station in stations)
                 DropdownMenuItem<String?>(value: station, child: Text(station)),
@@ -251,7 +252,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Add printer'),
+      title: Text(tr(context, 'Add printer')),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -260,10 +261,10 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
             TextField(
               key: const Key('printer-name'),
               controller: _name,
-              decoration: const InputDecoration(
-                labelText: 'Name',
-                hintText: 'e.g. kitchen',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: tr(context, 'Name'),
+                hintText: tr(context, 'e.g. kitchen'),
+                border: const OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 8),
@@ -285,10 +286,10 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
             TextField(
               key: const Key('printer-host'),
               controller: _host,
-              decoration: const InputDecoration(
-                labelText: 'Host (optional)',
-                hintText: 'e.g. 192.168.1.50',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: tr(context, 'Host (optional)'),
+                hintText: tr(context, 'e.g. 192.168.1.50'),
+                border: const OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 12),
@@ -296,9 +297,9 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
               key: const Key('printer-port'),
               controller: _port,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Port',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: tr(context, 'Port'),
+                border: const OutlineInputBorder(),
               ),
             ),
           ],
@@ -308,12 +309,12 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
         TextButton(
           key: const Key('cancel-add-printer'),
           onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
+          child: Text(tr(context, 'Cancel')),
         ),
         FilledButton(
           key: const Key('save-add-printer'),
           onPressed: _save,
-          child: const Text('Add'),
+          child: Text(tr(context, 'Add')),
         ),
       ],
     );

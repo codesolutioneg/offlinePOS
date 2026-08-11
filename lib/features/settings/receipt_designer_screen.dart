@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
+import '../../core/i18n/l10n.dart';
 
 /// Lets a manager pick what shows up on the printed customer receipt: a
 /// header line above the shop name, the existing footer, and toggles for the
@@ -58,22 +59,22 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     widget.settings.setBool(_showCashierKey, _showCashier);
     widget.settings.setBool(_showOrderTypeKey, _showOrderType);
     widget.onChanged();
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Receipt designer')),
+      appBar: AppBar(title: Text(tr(context, 'Receipt designer'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           TextField(
             key: const Key('receipt-header'),
             controller: _header,
-            decoration: const InputDecoration(
-              labelText: 'Header line',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: tr(context, 'Header line'),
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
@@ -82,42 +83,42 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
             controller: _footer,
             minLines: 2,
             maxLines: 5,
-            decoration: const InputDecoration(
-              labelText: 'Footer',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: tr(context, 'Footer'),
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           SwitchListTile(
             key: const Key('t-tax'),
-            title: const Text('Show tax id'),
+            title: Text(tr(context, 'Show tax id')),
             value: _showTax,
             onChanged: (v) => setState(() => _showTax = v),
           ),
           SwitchListTile(
             key: const Key('t-cashier'),
-            title: const Text('Show cashier'),
+            title: Text(tr(context, 'Show cashier')),
             value: _showCashier,
             onChanged: (v) => setState(() => _showCashier = v),
           ),
           SwitchListTile(
             key: const Key('t-ordertype'),
-            title: const Text('Show order type & table'),
+            title: Text(tr(context, 'Show order type & table')),
             value: _showOrderType,
             onChanged: (v) => setState(() => _showOrderType = v),
           ),
           const SizedBox(height: 8),
           // No print preview here: rendering a live receipt needs the printer
           // pipeline this screen intentionally stays decoupled from.
-          const Text(
-            'A live print preview is not shown here. Changes apply to the next printed receipt.',
-            style: TextStyle(color: Colors.grey),
+          Text(
+            tr(context, 'A live print preview is not shown here. Changes apply to the next printed receipt.'),
+            style: const TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 16),
           FilledButton(
             key: const Key('save-receipt'),
             onPressed: _save,
-            child: const Text('Save'),
+            child: Text(tr(context, 'Save')),
           ),
         ],
       ),

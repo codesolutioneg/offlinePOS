@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
+
 /// One entry in the settings hub: a titled row that opens a settings screen.
 class SettingsEntry {
   const SettingsEntry({
@@ -27,7 +29,7 @@ class SettingsHubScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Settings')),
+        appBar: AppBar(title: Text(tr(context, 'Settings'))),
         body: ListView.separated(
           itemCount: entries.length,
           separatorBuilder: (context, index) => const Divider(height: 1),

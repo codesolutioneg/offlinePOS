@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/db/table_store.dart';
+import '../../core/i18n/l10n.dart';
 
 /// The floor plan: tables drawn where the shop placed them, tapped to start or
 /// recall a dine-in order. In edit mode a manager lays the floor out by dragging
@@ -50,7 +51,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       });
 
   Future<void> _addTable() async {
-    final result = await _tableDialog(title: 'Add table');
+    final result = await _tableDialog(title: tr(context, 'Add table'));
     if (result == null) return;
     widget.store.add(
       name: result.name,
@@ -64,7 +65,8 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   }
 
   Future<void> _editTable(PosTable t) async {
-    final result = await _tableDialog(title: 'Table ${t.name}', initial: t);
+    final result =
+        await _tableDialog(title: '${tr(context, 'Table')} ${t.name}', initial: t);
     if (result == null) return;
     if (result.delete) {
       widget.store.remove(t.id);
@@ -82,19 +84,20 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('New section'),
+        title: Text(tr(ctx, 'New section')),
         content: TextField(
           key: const Key('section-name'),
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(
-              labelText: 'Section name (e.g. Terrace)', border: OutlineInputBorder()),
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Section name (e.g. Terrace)'),
+              border: const OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: const Text('Add')),
+              child: Text(tr(ctx, 'Add'))),
         ],
       ),
     );
@@ -116,14 +119,16 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             key: const Key('table-name'),
             controller: nameCtrl,
             autofocus: true,
-            decoration: const InputDecoration(labelText: 'Name / number', border: OutlineInputBorder()),
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Name / number'), border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           TextField(
             key: const Key('table-seats'),
             controller: seatsCtrl,
             keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Seats', border: OutlineInputBorder()),
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Seats'), border: const OutlineInputBorder()),
           ),
         ]),
         actions: [
@@ -131,9 +136,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             TextButton(
               key: const Key('table-delete'),
               onPressed: () => Navigator.pop(ctx, const _TableEdit.remove()),
-              child: const Text('Delete', style: TextStyle(color: Colors.red)),
+              child: Text(tr(ctx, 'Delete'), style: const TextStyle(color: Colors.red)),
             ),
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
             key: const Key('table-save'),
             onPressed: () {
@@ -142,7 +147,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               Navigator.pop(ctx,
                   _TableEdit(name: name, seats: int.tryParse(seatsCtrl.text.trim()) ?? 4));
             },
-            child: const Text('Save'),
+            child: Text(tr(ctx, 'Save')),
           ),
         ],
       ),
@@ -165,11 +170,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final tables = widget.store.inSection(_activeSection);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Tables'),
+        title: Text(tr(context, 'Tables')),
         actions: [
           IconButton(
             key: const Key('toggle-edit'),
-            tooltip: _editing ? 'Done' : 'Edit floor',
+            tooltip: _editing ? tr(context, 'Done') : tr(context, 'Edit floor'),
             icon: Icon(_editing ? Icons.check : Icons.edit),
             onPressed: () => setState(() => _editing = !_editing),
           ),
@@ -180,7 +185,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               key: const Key('add-table'),
               onPressed: _addTable,
               icon: const Icon(Icons.add),
-              label: const Text('Table'),
+              label: Text(tr(context, 'Table')),
             )
           : null,
       body: Column(
@@ -221,7 +226,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               ActionChip(
                 key: const Key('add-section'),
                 avatar: const Icon(Icons.add, size: 16),
-                label: const Text('Section'),
+                label: Text(tr(context, 'Section')),
                 onPressed: _addSection,
               ),
           ],
@@ -283,14 +288,14 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           children: [
             const Icon(Icons.table_restaurant, size: 48, color: Colors.black26),
             const SizedBox(height: 8),
-            const Text('No tables yet'),
+            Text(tr(context, 'No tables yet')),
             const SizedBox(height: 8),
             if (!_editing)
               FilledButton.icon(
                 key: const Key('empty-edit'),
                 onPressed: () => setState(() => _editing = true),
                 icon: const Icon(Icons.edit),
-                label: const Text('Set up the floor'),
+                label: Text(tr(context, 'Set up the floor')),
               ),
           ],
         ),
@@ -325,7 +330,7 @@ class _TableTile extends StatelessWidget {
             const SizedBox(width: 2),
             Text('${table.seats}', style: const TextStyle(fontSize: 12)),
           ]),
-          Text(occupied ? 'Occupied' : 'Free',
+          Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
               style: TextStyle(fontSize: 11, color: color)),
         ],
       ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// One row in the cashier table: a cashier's order count and revenue
@@ -64,9 +65,9 @@ class CashierReportScreen extends StatelessWidget {
     final overallAverage = totalOrders == 0 ? 0.0 : totalSales / totalOrders;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Cashier performance')),
+      appBar: AppBar(title: Text(tr(context, 'Cashier performance'))),
       body: cashiers.isEmpty
-          ? const Center(child: Text('No orders'))
+          ? Center(child: Text(tr(context, 'No orders')))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Card(
@@ -76,10 +77,10 @@ class CashierReportScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
-                        _headerCell('Cashier'),
-                        _headerCell('Orders'),
-                        _headerCell('Total sales'),
-                        _headerCell('Avg order'),
+                        _headerCell(tr(context, 'Cashier')),
+                        _headerCell(tr(context, 'Orders')),
+                        _headerCell(tr(context, 'Total sales')),
+                        _headerCell(tr(context, 'Avg order')),
                       ]),
                       const Divider(),
                       // Bounded height list nested inside the outer scroll view, so
@@ -110,7 +111,7 @@ class CashierReportScreen extends StatelessWidget {
                       Row(
                         key: const Key('cashier-report-overall-row'),
                         children: [
-                          _cell('Overall', bold: true),
+                          _cell(tr(context, 'Overall'), bold: true),
                           _cell('$totalOrders', bold: true),
                           _cell(formatAmount(totalSales), bold: true),
                           _cell(formatAmount(overallAverage), bold: true),

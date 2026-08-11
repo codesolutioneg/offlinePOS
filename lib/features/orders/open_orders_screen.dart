@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// Lists orders parked on a table or tab so a cashier can pick one back up.
@@ -22,9 +23,9 @@ class OpenOrdersScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Open orders')),
+      appBar: AppBar(title: Text(tr(context, 'Open orders'))),
       body: orders.isEmpty
-          ? const Center(child: Text('No open tables'))
+          ? Center(child: Text(tr(context, 'No open tables')))
           : ListView.builder(
               padding: const EdgeInsets.all(8),
               itemCount: orders.length,
@@ -57,7 +58,8 @@ class _OpenOrderCard extends StatelessWidget {
   String get _shortUuid =>
       order.uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
 
-  String get _label => order.tableLabel ?? 'Tab $_shortUuid';
+  String _label(BuildContext context) =>
+      order.tableLabel ?? '${tr(context, 'Tab')} $_shortUuid';
 
   String get _time {
     final local = order.createdAt.toLocal();
@@ -70,8 +72,9 @@ class _OpenOrderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final itemCount = order.lines.length;
     final preview = order.lines.take(3).map((l) => l.name).join(', ');
+    final label = _label(context);
     final subtitleParts = <String>[
-      order.type.label,
+      tr(context, order.type.label),
       if (order.guestCount != null) '${order.guestCount} guests',
       order.cashierId,
       _time,
@@ -87,7 +90,7 @@ class _OpenOrderCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               CircleAvatar(
-                child: Text(_label.length >= 2 ? _label.substring(0, 2) : _label),
+                child: Text(label.length >= 2 ? label.substring(0, 2) : label),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -97,7 +100,7 @@ class _OpenOrderCard extends StatelessWidget {
                     Row(
                       children: [
                         Expanded(
-                          child: Text(_label,
+                          child: Text(label,
                               style:
                                   const TextStyle(fontWeight: FontWeight.bold)),
                         ),

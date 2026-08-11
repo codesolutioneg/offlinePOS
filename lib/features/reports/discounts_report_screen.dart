@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// One row in the reason breakdown: how many orders cited this reason and how
@@ -89,7 +90,7 @@ class DiscountsReportScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!_hasDiscounts) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Discounts')),
+        appBar: AppBar(title: Text(tr(context, 'Discounts'))),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -99,13 +100,13 @@ class DiscountsReportScreen extends StatelessWidget {
               children: [
                 Icon(Icons.local_offer_outlined, size: 48, color: Theme.of(context).colorScheme.outline),
                 const SizedBox(height: 12),
-                const Text(
-                  'No discounts given',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                Text(
+                  tr(context, 'No discounts given'),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'Nothing was discounted in this range.',
+                Text(
+                  tr(context, 'Nothing was discounted in this range.'),
                   textAlign: TextAlign.center,
                 ),
               ],
@@ -118,25 +119,25 @@ class DiscountsReportScreen extends StatelessWidget {
     final reasons = _byReason();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Discounts')),
+      appBar: AppBar(title: Text(tr(context, 'Discounts'))),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _sectionCard('Overview', [
-            _row('Orders', '${orders.length}'),
-            _row('Discounted orders', '$_discountedOrderCount'),
-            _row('Total discount given', formatAmount(_grandTotal), bold: true),
-            _row('Order-level discounts', formatAmount(_totalOrderDiscount)),
-            _row('Line-level discounts', formatAmount(_totalLineDiscount)),
+          _sectionCard(tr(context, 'Overview'), [
+            _row(tr(context, 'Orders'), '${orders.length}'),
+            _row(tr(context, 'Discounted orders'), '$_discountedOrderCount'),
+            _row(tr(context, 'Total discount given'), formatAmount(_grandTotal), bold: true),
+            _row(tr(context, 'Order-level discounts'), formatAmount(_totalOrderDiscount)),
+            _row(tr(context, 'Line-level discounts'), formatAmount(_totalLineDiscount)),
           ]),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('By reason', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                Text(tr(context, 'By reason'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 const Divider(),
                 if (reasons.isEmpty)
-                  const Text('No order-level discounts')
+                  Text(tr(context, 'No order-level discounts'))
                 else
                   // Bounded height nested inside the outer scroll view, so a long
                   // list of reasons doesn't need its own separate scroll gesture.

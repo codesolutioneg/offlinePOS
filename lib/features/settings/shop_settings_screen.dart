@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
+import '../../core/i18n/l10n.dart';
 
 /// Lets a manager edit the shop identity that prints on the receipt, on the
 /// device, without a rebuild.
@@ -50,31 +51,31 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.receiptFooter = _receiptFooter.text.trim();
     widget.settings.receiptShowTax = _showTax;
     widget.onChanged();
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Shop & receipt')),
+      appBar: AppBar(title: Text(tr(context, 'Shop & receipt'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           TextField(
             key: const Key('shop-name'),
             controller: _shopName,
-            decoration: const InputDecoration(
-              labelText: 'Shop name',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: tr(context, 'Shop name'),
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             key: const Key('tax-id'),
             controller: _taxId,
-            decoration: const InputDecoration(
-              labelText: 'Tax id',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: tr(context, 'Tax id'),
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
@@ -83,15 +84,15 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             controller: _receiptFooter,
             minLines: 2,
             maxLines: 5,
-            decoration: const InputDecoration(
-              labelText: 'Receipt footer',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: tr(context, 'Receipt footer'),
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           SwitchListTile(
             key: const Key('show-tax'),
-            title: const Text('Show tax on receipt'),
+            title: Text(tr(context, 'Show tax on receipt')),
             value: _showTax,
             onChanged: (v) => setState(() => _showTax = v),
           ),
@@ -99,7 +100,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
           FilledButton(
             key: const Key('save-shop'),
             onPressed: _save,
-            child: const Text('Save'),
+            child: Text(tr(context, 'Save')),
           ),
         ],
       ),

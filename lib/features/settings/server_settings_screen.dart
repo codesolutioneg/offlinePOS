@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../core/sync/odoo_endpoint.dart';
 
 /// Point this till at an Odoo server.
@@ -58,18 +59,18 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       password: _pass.text.isEmpty ? null : _pass.text,
     );
     if (!e.isComplete) {
-      setState(() => _message = 'URL, database and login are all required.');
+      setState(() => _message = tr(context, 'URL, database and login are all required.'));
       return;
     }
     widget.store.save(e);
     widget.onSaved(e);
-    setState(() => _message = 'Saved. Queued sales will sync on the next attempt.');
+    setState(() => _message = tr(context, 'Saved. Queued sales will sync on the next attempt.'));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Server settings')),
+      appBar: AppBar(title: Text(tr(context, 'Server settings'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -77,16 +78,17 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
             key: const Key('local-test-warning'),
             color: Colors.amber.shade100,
             padding: const EdgeInsets.all(12),
-            child: const Text(
-              'For local testing. A live fleet points at a backend and never stores '
-              'an Odoo password on the till.',
+            child: Text(
+              tr(context,
+                  'For local testing. A live fleet points at a backend and never stores '
+                  'an Odoo password on the till.'),
             ),
           ),
           const SizedBox(height: 16),
-          _field(_url, 'Odoo URL', 'https://your-build.dev.odoo.com', 'url'),
-          _field(_db, 'Database', 'codesolutioneg-jouma-...', 'db'),
-          _field(_login, 'Login', 'you@example.com', 'login'),
-          _field(_pass, 'Password', '', 'pass', obscure: true),
+          _field(_url, tr(context, 'Odoo URL'), 'https://your-build.dev.odoo.com', 'url'),
+          _field(_db, tr(context, 'Database'), 'codesolutioneg-jouma-...', 'db'),
+          _field(_login, tr(context, 'Login'), 'you@example.com', 'login'),
+          _field(_pass, tr(context, 'Password'), '', 'pass', obscure: true),
           const SizedBox(height: 16),
           if (_message != null)
             Padding(
@@ -96,7 +98,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
           FilledButton(
             key: const Key('save-server'),
             onPressed: _save,
-            child: const Text('Save'),
+            child: Text(tr(context, 'Save')),
           ),
         ],
       ),

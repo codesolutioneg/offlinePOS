@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/pos_session.dart';
+import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
 import 'modifier_sheet.dart';
@@ -139,13 +140,13 @@ class _SellScreenState extends State<SellScreen> {
     final product = s.catalogue.byBarcode(code);
     if (product == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No product for barcode $code')));
+          SnackBar(content: Text('${tr(context, 'No product for barcode')} $code')));
       return;
     }
     _changed(() => s.addProduct(product));
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         key: const Key('scanned'),
-        content: Text('Added ${product.name}'),
+        content: Text('${tr(context, 'Added')} ${product.name}'),
         duration: const Duration(milliseconds: 900)));
   }
 
@@ -192,23 +193,23 @@ class _SellScreenState extends State<SellScreen> {
     return showDialog<double>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Weight for ${product.name}'),
+        title: Text('${tr(ctx, 'Weight for')} ${product.name}'),
         content: TextField(
           key: const Key('weight-field'),
           controller: ctrl,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           decoration: InputDecoration(
-              labelText: 'Weight',
+              labelText: tr(ctx, 'Weight'),
               suffixText: 'x ${widget.formatAmount(product.price)}',
               border: const OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
             key: const Key('weight-ok'),
             onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())),
-            child: const Text('Add'),
+            child: Text(tr(ctx, 'Add')),
           ),
         ],
       ),
@@ -223,7 +224,7 @@ class _SellScreenState extends State<SellScreen> {
         var results = s.catalogue.customers(limit: 30);
         return StatefulBuilder(
           builder: (ctx, setSt) => AlertDialog(
-            title: const Text('Customer'),
+            title: Text(tr(ctx, 'Customer')),
             content: SizedBox(
               width: 360,
               height: 420,
@@ -231,10 +232,10 @@ class _SellScreenState extends State<SellScreen> {
                 TextField(
                   controller: ctrl,
                   autofocus: true,
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.search),
-                    hintText: 'Search name or phone',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search),
+                    hintText: tr(ctx, 'Search name or phone'),
+                    border: const OutlineInputBorder(),
                     isDense: true,
                   ),
                   onChanged: (v) =>
@@ -243,7 +244,7 @@ class _SellScreenState extends State<SellScreen> {
                 const SizedBox(height: 8),
                 Expanded(
                   child: results.isEmpty
-                      ? const Center(child: Text('No customers'))
+                      ? Center(child: Text(tr(ctx, 'No customers')))
                       : ListView(children: [
                           for (final c in results)
                             ListTile(
@@ -260,9 +261,9 @@ class _SellScreenState extends State<SellScreen> {
               TextButton(
                 key: const Key('customer-clear'),
                 onPressed: () => Navigator.pop(ctx, 'clear'),
-                child: const Text('Walk-in'),
+                child: Text(tr(ctx, 'Walk-in')),
               ),
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
             ],
           ),
         );
@@ -287,14 +288,14 @@ class _SellScreenState extends State<SellScreen> {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Order discount'),
+        title: Text(tr(ctx, 'Order discount')),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           TextField(
             controller: ctrl,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-                labelText: 'Discount', suffixText: '%', border: OutlineInputBorder()),
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Discount'), suffixText: '%', border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           Wrap(spacing: 8, children: [
@@ -306,8 +307,8 @@ class _SellScreenState extends State<SellScreen> {
           // reason is captured here rather than reconstructed from memory.
           TextField(
             controller: reasonCtrl,
-            decoration: const InputDecoration(
-                labelText: 'Reason (optional)', border: OutlineInputBorder(), isDense: true),
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Reason (optional)'), border: const OutlineInputBorder(), isDense: true),
           ),
           if (widget.discountReasons.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -318,14 +319,14 @@ class _SellScreenState extends State<SellScreen> {
           ],
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
             key: const Key('apply-discount'),
             onPressed: () => Navigator.pop(ctx, {
               'pct': double.tryParse(ctrl.text.trim()) ?? 0,
               'reason': reasonCtrl.text.trim(),
             }),
-            child: const Text('Apply'),
+            child: Text(tr(ctx, 'Apply')),
           ),
         ],
       ),
@@ -346,14 +347,14 @@ class _SellScreenState extends State<SellScreen> {
           ListTile(
             key: const Key('line-note'),
             leading: const Icon(Icons.sticky_note_2_outlined),
-            title: const Text('Note for kitchen'),
+            title: Text(tr(ctx, 'Note for kitchen')),
             subtitle: line.note != null ? Text(line.note!) : null,
             onTap: () => Navigator.pop(ctx, 'note'),
           ),
           ListTile(
             key: const Key('line-discount'),
             leading: const Icon(Icons.percent),
-            title: const Text('Line discount'),
+            title: Text(tr(ctx, 'Line discount')),
             subtitle: line.discountPercent > 0
                 ? Text('${line.discountPercent.toStringAsFixed(0)}%')
                 : null,
@@ -362,7 +363,7 @@ class _SellScreenState extends State<SellScreen> {
           ListTile(
             key: const Key('line-void'),
             leading: const Icon(Icons.remove_circle_outline, color: Colors.red),
-            title: const Text('Void this line'),
+            title: Text(tr(ctx, 'Void this line')),
             onTap: () => Navigator.pop(ctx, 'void'),
           ),
         ]),
@@ -383,8 +384,8 @@ class _SellScreenState extends State<SellScreen> {
           TextField(
             controller: ctrl,
             autofocus: true,
-            decoration: const InputDecoration(
-                labelText: 'Kitchen note', border: OutlineInputBorder()),
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Kitchen note'), border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           Wrap(spacing: 8, children: [
@@ -393,10 +394,10 @@ class _SellScreenState extends State<SellScreen> {
           ]),
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: const Text('Save')),
+              child: Text(tr(ctx, 'Save'))),
         ],
       ),
     );
@@ -414,15 +415,15 @@ class _SellScreenState extends State<SellScreen> {
           controller: ctrl,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-              labelText: 'Line discount', suffixText: '%', border: OutlineInputBorder()),
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Line discount'), suffixText: '%', border: const OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
               key: const Key('apply-line-discount'),
               onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim()) ?? 0),
-              child: const Text('Apply')),
+              child: Text(tr(ctx, 'Apply'))),
         ],
       ),
     );
@@ -456,22 +457,22 @@ class _SellScreenState extends State<SellScreen> {
               key: const Key('void-reason'),
               controller: ctrl,
               autofocus: true,
-              decoration: const InputDecoration(
-                  labelText: 'Reason', border: OutlineInputBorder()),
+              decoration: InputDecoration(
+                  labelText: tr(ctx, 'Reason'), border: const OutlineInputBorder()),
               onChanged: (_) => setSt(() {}),
             ),
             const SizedBox(height: 8),
             Wrap(spacing: 8, children: [
               for (final r in const ['Customer changed', 'Wrong item', 'Out of stock', 'Kitchen error'])
-                ActionChip(label: Text(r), onPressed: () => setSt(() => ctrl.text = r)),
+                ActionChip(label: Text(tr(ctx, r)), onPressed: () => setSt(() => ctrl.text = r)),
             ]),
           ]),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
             FilledButton(
               key: const Key('confirm-reason'),
               onPressed: ctrl.text.trim().isEmpty ? null : () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: const Text('Confirm'),
+              child: Text(tr(ctx, 'Confirm')),
             ),
           ],
         ),
@@ -484,18 +485,18 @@ class _SellScreenState extends State<SellScreen> {
     final note = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Order note'),
+        title: Text(tr(ctx, 'Order note')),
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(
-              labelText: 'Note for the whole order', border: OutlineInputBorder()),
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Note for the whole order'), border: const OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: const Text('Save')),
+              child: Text(tr(ctx, 'Save'))),
         ],
       ),
     );
@@ -508,19 +509,19 @@ class _SellScreenState extends State<SellScreen> {
     final n = await showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Guests'),
+        title: Text(tr(ctx, 'Guests')),
         content: TextField(
           controller: ctrl,
           autofocus: true,
           keyboardType: TextInputType.number,
-          decoration: const InputDecoration(
-              labelText: 'Number of guests', border: OutlineInputBorder()),
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Number of guests'), border: const OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, int.tryParse(ctrl.text.trim())),
-              child: const Text('Set')),
+              child: Text(tr(ctx, 'Set'))),
         ],
       ),
     );
@@ -532,19 +533,19 @@ class _SellScreenState extends State<SellScreen> {
     final label = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Table / tab'),
+        title: Text(tr(ctx, 'Table / tab')),
         content: TextField(
           key: const Key('table-field'),
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(
-              labelText: 'Table number or name', border: OutlineInputBorder()),
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Table number or name'), border: const OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: const Text('Set')),
+              child: Text(tr(ctx, 'Set'))),
         ],
       ),
     );
@@ -560,37 +561,37 @@ class _SellScreenState extends State<SellScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delivery details'),
+        title: Text(tr(ctx, 'Delivery details')),
         content: SizedBox(
           width: 360,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
                 key: const Key('delivery-name'),
                 controller: name,
-                decoration: const InputDecoration(labelText: 'Customer name', border: OutlineInputBorder(), isDense: true)),
+                decoration: InputDecoration(labelText: tr(ctx, 'Customer name'), border: const OutlineInputBorder(), isDense: true)),
             const SizedBox(height: 8),
             TextField(
                 key: const Key('delivery-phone'),
                 controller: phone,
                 keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(labelText: 'Phone', border: OutlineInputBorder(), isDense: true)),
+                decoration: InputDecoration(labelText: tr(ctx, 'Phone'), border: const OutlineInputBorder(), isDense: true)),
             const SizedBox(height: 8),
             TextField(
                 key: const Key('delivery-address'),
                 controller: addr,
                 maxLines: 2,
-                decoration: const InputDecoration(labelText: 'Address', border: OutlineInputBorder(), isDense: true)),
+                decoration: InputDecoration(labelText: tr(ctx, 'Address'), border: const OutlineInputBorder(), isDense: true)),
             const SizedBox(height: 8),
             TextField(
                 key: const Key('delivery-cost'),
                 controller: cost,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Delivery charge', border: OutlineInputBorder(), isDense: true)),
+                decoration: InputDecoration(labelText: tr(ctx, 'Delivery charge'), border: const OutlineInputBorder(), isDense: true)),
           ]),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr(ctx, 'Save'))),
         ],
       ),
     );
@@ -608,10 +609,10 @@ class _SellScreenState extends State<SellScreen> {
     widget.onHold?.call();
     setState(() {});
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        key: Key('held'),
-        content: Text('Order parked. Recall it from Open orders.'),
-        duration: Duration(seconds: 2),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        key: const Key('held'),
+        content: Text(tr(context, 'Order parked. Recall it from Open orders.')),
+        duration: const Duration(seconds: 2),
       ));
     }
   }
@@ -659,8 +660,8 @@ class _SellScreenState extends State<SellScreen> {
     final products = s.catalogue.products(categoryId: _categoryId, search: _search);
     final o = s.current;
     final title = o.tableLabel != null
-        ? '${o.type.label} - ${o.tableLabel}'
-        : o.type.label;
+        ? '${tr(context, o.type.label)} - ${o.tableLabel}'
+        : tr(context, o.type.label);
     return Scaffold(
       drawer: widget.drawer,
       appBar: AppBar(
@@ -675,7 +676,7 @@ class _SellScreenState extends State<SellScreen> {
                 label: Text('${s.heldCount}'),
                 child: IconButton(
                   key: const Key('open-orders'),
-                  tooltip: 'Open orders',
+                  tooltip: tr(context, 'Open orders'),
                   icon: const Icon(Icons.table_restaurant),
                   onPressed: widget.onOpenOrders,
                 ),
@@ -683,7 +684,7 @@ class _SellScreenState extends State<SellScreen> {
             ),
           IconButton(
             key: const Key('new-order'),
-            tooltip: 'New order',
+            tooltip: tr(context, 'New order'),
             icon: const Icon(Icons.note_add_outlined),
             onPressed: s.hasLines ? _newOrder : null,
           ),
@@ -730,7 +731,8 @@ class _SellScreenState extends State<SellScreen> {
           children: [
             Icon(isOnline ? Icons.cloud_done : Icons.cloud_off, size: 18, color: color),
             const SizedBox(width: 4),
-            Text(isOnline ? 'Online' : 'Offline', style: TextStyle(color: color, fontSize: 13)),
+            Text(isOnline ? tr(context, 'Online') : tr(context, 'Offline'),
+                style: TextStyle(color: color, fontSize: 13)),
             if (pending > 0)
               Padding(
                 padding: const EdgeInsets.only(left: 6),
@@ -738,7 +740,7 @@ class _SellScreenState extends State<SellScreen> {
                   key: const Key('pending-count'),
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
-                  label: Text('$pending to sync', style: const TextStyle(fontSize: 11)),
+                  label: Text('$pending ${tr(context, 'to sync')}', style: const TextStyle(fontSize: 11)),
                 ),
               ),
           ],
@@ -774,7 +776,7 @@ class _SellScreenState extends State<SellScreen> {
                   // half-rung sale on screen loses whose sale it was.
                   onPressed: s.hasLines ? null : widget.onSignOut,
                   icon: const Icon(Icons.logout),
-                  label: const Text('End shift'),
+                  label: Text(tr(context, 'End shift')),
                 ),
               ),
             ),
@@ -782,10 +784,10 @@ class _SellScreenState extends State<SellScreen> {
             padding: const EdgeInsets.all(8),
             child: TextField(
               key: const Key('search'),
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
-                hintText: 'Search or scan',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: tr(context, 'Search or scan'),
+                border: const OutlineInputBorder(),
                 isDense: true,
               ),
               onChanged: (v) => setState(() => _search = v),
@@ -794,7 +796,7 @@ class _SellScreenState extends State<SellScreen> {
           SizedBox(height: 44, child: _categoryStrip()),
           Expanded(
             child: products.isEmpty
-                ? const Center(child: Text('No products'))
+                ? Center(child: Text(tr(context, 'No products')))
                 : GridView.builder(
                     padding: const EdgeInsets.all(8),
                     gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -819,7 +821,7 @@ class _SellScreenState extends State<SellScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       children: [
         ChoiceChip(
-          label: const Text('All'),
+          label: Text(tr(context, 'All')),
           selected: _categoryId == null,
           onSelected: (_) => setState(() => _categoryId = null),
         ),
@@ -842,7 +844,7 @@ class _SellScreenState extends State<SellScreen> {
           const Divider(height: 1),
           Expanded(
             child: !s.hasLines
-                ? const Center(child: Text('Start adding products'))
+                ? Center(child: Text(tr(context, 'Start adding products')))
                 : ListView(
                     children: [
                       for (final line in s.current.lines)
@@ -879,7 +881,7 @@ class _SellScreenState extends State<SellScreen> {
               for (final t in OrderType.values) ...[
                 ChoiceChip(
                   key: Key('order-type-${t.name.toLowerCase()}'),
-                  label: Text(t.label),
+                  label: Text(tr(context, t.label)),
                   selected: s.current.type == t,
                   onSelected: (_) => _changed(() => s.setOrderType(t)),
                 ),
@@ -897,12 +899,12 @@ class _SellScreenState extends State<SellScreen> {
       ListTile(
         dense: true,
         leading: const Icon(Icons.person_outline),
-        title: Text(o.customerName ?? 'Walk-in customer'),
+        title: Text(o.customerName ?? tr(context, 'Walk-in customer')),
         subtitle: o.customerPhone != null ? Text(o.customerPhone!) : null,
         trailing: TextButton(
           key: const Key('customer'),
           onPressed: o.type == OrderType.delivery ? _deliveryDetails : _openCustomer,
-          child: Text(o.customerName == null ? 'Add' : 'Change'),
+          child: Text(o.customerName == null ? tr(context, 'Add') : tr(context, 'Change')),
         ),
       ),
       Padding(
@@ -912,13 +914,17 @@ class _SellScreenState extends State<SellScreen> {
             ActionChip(
               key: const Key('table'),
               avatar: const Icon(Icons.table_bar, size: 16),
-              label: Text(o.tableLabel == null ? 'Table' : 'Table ${o.tableLabel}'),
+              label: Text(o.tableLabel == null
+                  ? tr(context, 'Table')
+                  : '${tr(context, 'Table')} ${o.tableLabel}'),
               onPressed: _setTable,
             ),
             ActionChip(
               key: const Key('guests'),
               avatar: const Icon(Icons.groups, size: 16),
-              label: Text(o.guestCount == null ? 'Guests' : '${o.guestCount} guests'),
+              label: Text(o.guestCount == null
+                  ? tr(context, 'Guests')
+                  : '${o.guestCount} ${tr(context, 'guests')}'),
               onPressed: _setGuests,
             ),
           ],
@@ -927,14 +933,14 @@ class _SellScreenState extends State<SellScreen> {
               key: const Key('delivery'),
               avatar: const Icon(Icons.delivery_dining, size: 16),
               label: Text(o.deliveryCost > 0
-                  ? 'Delivery ${widget.formatAmount(o.deliveryCost)}'
-                  : 'Delivery details'),
+                  ? '${tr(context, 'Delivery')} ${widget.formatAmount(o.deliveryCost)}'
+                  : tr(context, 'Delivery details')),
               onPressed: _deliveryDetails,
             ),
           ActionChip(
             key: const Key('order-note'),
             avatar: const Icon(Icons.notes, size: 16),
-            label: Text(o.note == null ? 'Note' : 'Note added'),
+            label: Text(o.note == null ? tr(context, 'Note') : tr(context, 'Note added')),
             onPressed: _orderNote,
           ),
         ]),
@@ -959,7 +965,7 @@ class _SellScreenState extends State<SellScreen> {
               const SizedBox(height: 6),
             ],
             Row(children: [
-              const Text('TOTAL', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text(tr(context, 'TOTAL'), style: const TextStyle(fontWeight: FontWeight.bold)),
               const Spacer(),
               Text(widget.formatAmount(s.total),
                   key: const Key('total'),
@@ -972,7 +978,9 @@ class _SellScreenState extends State<SellScreen> {
                   key: const Key('discount'),
                   onPressed: _openDiscount,
                   icon: const Icon(Icons.percent, size: 16),
-                  label: Text(s.current.discountPercent > 0 ? 'Edit discount' : 'Add discount'),
+                  label: Text(s.current.discountPercent > 0
+                      ? tr(context, 'Edit discount')
+                      : tr(context, 'Add discount')),
                 ),
               ),
           ],
@@ -986,7 +994,7 @@ class _SellScreenState extends State<SellScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(children: [
-        Text(label, key: key, style: style),
+        Text(tr(context, label), key: key, style: style),
         const Spacer(),
         Text(amount, style: style),
       ]),
@@ -1001,7 +1009,7 @@ class _SellScreenState extends State<SellScreen> {
               key: const Key('hold'),
               onPressed: s.hasLines ? _hold : null,
               icon: const Icon(Icons.pause_circle_outline),
-              label: const Text('Hold'),
+              label: Text(tr(context, 'Hold')),
             ),
           ),
           const SizedBox(width: 8),
@@ -1012,7 +1020,7 @@ class _SellScreenState extends State<SellScreen> {
               child: FilledButton(
                 key: const Key('pay'),
                 onPressed: s.hasLines ? _pay : null,
-                child: const Text('Payment'),
+                child: Text(tr(context, 'Payment')),
               ),
             ),
           ),
@@ -1113,7 +1121,7 @@ class _LineTile extends StatelessWidget {
                   '${m.unitPrice == 0 ? '' : '  ${format(m.total * line.quantity)}'}',
                   style: const TextStyle(fontSize: 12, color: Colors.green)),
             if (line.discountPercent > 0)
-              Text('   -${line.discountPercent.toStringAsFixed(0)}% discount',
+              Text('   -${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
                   style: TextStyle(fontSize: 12, color: Colors.orange.shade800)),
             if (line.note != null)
               Text('   ${line.note}',
@@ -1239,14 +1247,14 @@ class _PaymentSheetState extends State<_PaymentSheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(children: [
-              const Text('Payment',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(tr(context, 'Payment'),
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const Spacer(),
               // Split lets one bill be paid part cash, part card, which a single
               // shared-total field cannot express.
               FilterChip(
                 key: const Key('split-toggle'),
-                label: const Text('Split'),
+                label: Text(tr(context, 'Split')),
                 selected: _split,
                 onSelected: (v) => setState(() {
                   _split = v;
@@ -1258,7 +1266,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Total due'),
+                Text(tr(context, 'Total due')),
                 Text(widget.format(_grand),
                     key: const Key('pay-total'),
                     style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
@@ -1269,8 +1277,8 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               key: const Key('tip'),
               controller: _tip,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Tip (optional)', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(
+                labelText: tr(context, 'Tip (optional)'), border: const OutlineInputBorder(), isDense: true),
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
@@ -1288,25 +1296,27 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 ],
               )
             else
-              const Text('Cash', style: TextStyle(color: Colors.black54)),
+              Text(tr(context, 'Cash'), style: const TextStyle(color: Colors.black54)),
             if (_split) ...[
               const SizedBox(height: 12),
               for (final t in _tenders)
                 ListTile(
                   dense: true,
-                  title: Text(t.label ?? 'Payment'),
+                  title: Text(t.label ?? tr(context, 'Payment')),
                   trailing: Text(widget.format(t.amount)),
                 ),
               Row(children: [
                 Expanded(
-                  child: Text('Remaining ${widget.format(_remaining < 0 ? 0 : _remaining)}',
+                  child: Text(
+                      '${tr(context, 'Remaining')} ${widget.format(_remaining < 0 ? 0 : _remaining)}',
                       key: const Key('remaining')),
                 ),
                 TextButton.icon(
                   key: const Key('add-tender'),
                   onPressed: _remaining > 0.001 ? _addTender : null,
                   icon: const Icon(Icons.add),
-                  label: Text('Add ${_method?.name ?? 'tender'}'),
+                  label: Text(
+                      '${tr(context, 'Add')} ${_method?.name ?? tr(context, 'tender')}'),
                 ),
               ]),
             ] else if (_isCash) ...[
@@ -1315,9 +1325,9 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 key: const Key('received'),
                 controller: _received,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Amount received',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: tr(context, 'Amount received'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
                 onChanged: (_) => setState(() {}),
@@ -1339,7 +1349,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Change'),
+                Text(tr(context, 'Change')),
                 Text(_change >= 0 ? widget.format(_change) : '-',
                     key: const Key('change'),
                     style: TextStyle(
@@ -1354,13 +1364,13 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               child: FilledButton(
                 key: const Key('confirm-payment'),
                 onPressed: _covered ? _confirm : null,
-                child: Text('Charge ${widget.format(_grand)}'),
+                child: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
               ),
             ),
             const SizedBox(height: 4),
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
+              child: Text(tr(context, 'Cancel')),
             ),
           ],
         ),

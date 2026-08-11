@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
 
@@ -64,9 +65,9 @@ class CategoryReportScreen extends StatelessWidget {
     final totalRevenue = categoriesData.fold(0.0, (s, c) => s + c.revenue);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Category performance')),
+      appBar: AppBar(title: Text(tr(context, 'Category performance'))),
       body: orders.isEmpty || categoriesData.isEmpty
-          ? const Center(child: Text('No orders'))
+          ? Center(child: Text(tr(context, 'No orders')))
           : ListView.builder(
               key: const Key('category-list'),
               padding: const EdgeInsets.all(16),

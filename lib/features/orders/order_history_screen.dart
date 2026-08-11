@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// Past orders: what a cashier opens to answer "what did that table actually
@@ -38,9 +39,9 @@ class OrderHistoryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Order history')),
+        appBar: AppBar(title: Text(tr(context, 'Order history'))),
         body: orders.isEmpty
-            ? const Center(child: Text('No orders yet'))
+            ? Center(child: Text(tr(context, 'No orders yet')))
             : ListView.separated(
                 itemCount: orders.length,
                 separatorBuilder: (context, index) => const Divider(height: 1),
@@ -87,11 +88,11 @@ class _HistoryTile extends StatelessWidget {
     return ListTile(
       title: Text(
           '$time  ${OrderHistoryScreen.shortRef(order.uuid)}  ${formatAmount(order.total)}'),
-      subtitle: Text(order.type.label),
+      subtitle: Text(tr(context, order.type.label)),
       trailing: badge == null
           ? null
           : Chip(
-              label: Text(badge),
+              label: Text(tr(context, badge)),
               visualDensity: VisualDensity.compact,
             ),
       onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
@@ -127,43 +128,45 @@ class OrderDetailScreen extends StatelessWidget {
     await onReprint(order);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Receipt sent to printer')),
+      SnackBar(content: Text(tr(context, 'Receipt sent to printer'))),
     );
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
-            title: Text('Order ${OrderHistoryScreen.shortRef(order.uuid)}')),
+            title: Text(
+                '${tr(context, 'Order')} ${OrderHistoryScreen.shortRef(order.uuid)}')),
         body: ListView(
           padding: const EdgeInsets.all(12),
           children: [
             for (final line in order.lines) _lineTile(line),
             const Divider(),
             if (order.discountPercent > 0)
-              _adjustmentRow('Discount', '-${order.discountPercent.toStringAsFixed(0)}%'),
+              _adjustmentRow(tr(context, 'Discount'),
+                  '-${order.discountPercent.toStringAsFixed(0)}%'),
             if (order.deliveryCost != 0)
-              _adjustmentRow('Delivery', formatAmount(order.deliveryCost)),
-            if (order.tip != 0) _adjustmentRow('Tip', formatAmount(order.tip)),
+              _adjustmentRow(tr(context, 'Delivery'), formatAmount(order.deliveryCost)),
+            if (order.tip != 0) _adjustmentRow(tr(context, 'Tip'), formatAmount(order.tip)),
             const Divider(),
             Row(children: [
-              const Text('TOTAL', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text(tr(context, 'TOTAL'), style: const TextStyle(fontWeight: FontWeight.bold)),
               const Spacer(),
               Text(formatAmount(order.total),
                   style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             ]),
             const SizedBox(height: 12),
-            const Text('Payment', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(tr(context, 'Payment'), style: const TextStyle(fontWeight: FontWeight.bold)),
             for (final p in order.payments)
               Row(children: [
-                Expanded(child: Text(p.label ?? 'Cash')),
+                Expanded(child: Text(p.label ?? tr(context, 'Cash'))),
                 Text(formatAmount(p.amount)),
               ]),
             const SizedBox(height: 20),
             FilledButton(
               key: Key('reprint-${order.uuid}'),
               onPressed: () => _reprint(context),
-              child: const Text('Reprint receipt'),
+              child: Text(tr(context, 'Reprint receipt')),
             ),
             // A refund is offered only on a real sale, never on a refund itself, so
             // a return cannot be refunded again.
@@ -173,7 +176,7 @@ class OrderDetailScreen extends StatelessWidget {
                 key: Key('refund-${order.uuid}'),
                 onPressed: () => onRefund!(order),
                 icon: const Icon(Icons.undo),
-                label: const Text('Refund'),
+                label: Text(tr(context, 'Refund')),
               ),
             ],
           ],

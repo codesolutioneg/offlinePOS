@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
+import '../../core/i18n/l10n.dart';
 
 /// Manage the kitchen-note quick picks a cashier taps on the line-note dialog
 /// (things like "No onions").
@@ -61,13 +62,13 @@ class _QuickCommentsScreenState extends State<QuickCommentsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Quick notes')),
+      appBar: AppBar(title: Text(tr(context, 'Quick notes'))),
       body: Column(
         children: [
           Expanded(
             child: _comments.isEmpty
-                ? const Center(
-                    child: Text('No quick notes yet', key: Key('no-comments')),
+                ? Center(
+                    child: Text(tr(context, 'No quick notes yet'), key: const Key('no-comments')),
                   )
                 : ListView.builder(
                     itemCount: _comments.length,
@@ -78,7 +79,7 @@ class _QuickCommentsScreenState extends State<QuickCommentsScreen> {
                         trailing: IconButton(
                           key: Key('delete-comment-$index'),
                           icon: const Icon(Icons.delete_outline),
-                          tooltip: 'Remove',
+                          tooltip: tr(context, 'Remove'),
                           onPressed: () => _remove(index),
                         ),
                       );
@@ -93,10 +94,10 @@ class _QuickCommentsScreenState extends State<QuickCommentsScreen> {
                   child: TextField(
                     key: const Key('new-comment'),
                     controller: _newComment,
-                    decoration: const InputDecoration(
-                      labelText: 'New quick note',
-                      hintText: 'e.g. No onions',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: tr(context, 'New quick note'),
+                      hintText: tr(context, 'e.g. No onions'),
+                      border: const OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _add(),
                   ),
@@ -105,7 +106,7 @@ class _QuickCommentsScreenState extends State<QuickCommentsScreen> {
                 FilledButton(
                   key: const Key('add-comment'),
                   onPressed: _add,
-                  child: const Text('Add'),
+                  child: Text(tr(context, 'Add')),
                 ),
               ],
             ),

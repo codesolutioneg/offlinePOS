@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/db/shift_store.dart';
+import '../../core/i18n/l10n.dart';
 import '../../domain/shift.dart';
 
 /// Open a shift with a float, record cash in/out, and close with the X/Z count.
@@ -54,10 +55,10 @@ class _ShiftScreenState extends State<ShiftScreen> {
           decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, double.tryParse(c.text.trim())),
-              child: const Text('OK')),
+              child: Text(tr(ctx, 'OK'))),
         ],
       ),
     );
@@ -78,17 +79,17 @@ class _ShiftScreenState extends State<ShiftScreen> {
             controller: amountC,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Amount', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr(ctx, 'Amount'), border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           TextField(
             controller: reasonC,
-            decoration: const InputDecoration(
-                labelText: 'Reason (optional)', border: OutlineInputBorder()),
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Reason (optional)'), border: const OutlineInputBorder()),
           ),
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
             onPressed: () {
               final a = double.tryParse(amountC.text.trim());
@@ -98,7 +99,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
               }
               Navigator.pop(ctx, (amount: a, reason: reasonC.text.trim()));
             },
-            child: const Text('OK'),
+            child: Text(tr(ctx, 'OK')),
           ),
         ],
       ),
@@ -118,7 +119,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
   Widget build(BuildContext context) {
     final s = _shift;
     return Scaffold(
-      appBar: AppBar(title: const Text('Shift')),
+      appBar: AppBar(title: Text(tr(context, 'Shift'))),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: s == null ? _closedView() : _openView(s),
@@ -128,14 +129,14 @@ class _ShiftScreenState extends State<ShiftScreen> {
 
   Widget _closedView() => Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('No shift is open', style: TextStyle(fontSize: 18)),
+          Text(tr(context, 'No shift is open'), style: const TextStyle(fontSize: 18)),
           const SizedBox(height: 12),
           FilledButton.icon(
             key: const Key('open-shift'),
             icon: const Icon(Icons.play_arrow),
-            label: const Text('Open shift'),
+            label: Text(tr(context, 'Open shift')),
             onPressed: () async {
-              final f = await _promptAmount('Open shift', label: 'Opening float');
+              final f = await _promptAmount(tr(context, 'Open shift'), label: tr(context, 'Opening float'));
               if (f != null) {
                 widget.store.openShift(openingFloat: f, cashierId: widget.cashierId);
                 _refresh();
@@ -148,21 +149,21 @@ class _ShiftScreenState extends State<ShiftScreen> {
   Widget _openView(Shift s) {
     final sum = widget.store.summary(s, cashMethodIds: widget.cashMethodIds);
     return ListView(children: [
-      Text('Open since ${s.openedAt.toLocal()}',
+      Text('${tr(context, 'Open since')} ${s.openedAt.toLocal()}',
           style: const TextStyle(color: Colors.black54)),
       const Divider(),
-      _row('Opening float', widget.formatAmount(sum.openingFloat)),
-      _row('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
-      _row('Cash sales', widget.formatAmount(sum.cashSales)),
-      _row('Cash in', widget.formatAmount(sum.cashIn)),
-      _row('Cash out', widget.formatAmount(sum.cashOut)),
+      _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),
+      _row('${tr(context, 'Sales')} (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
+      _row(tr(context, 'Cash sales'), widget.formatAmount(sum.cashSales)),
+      _row(tr(context, 'Cash in'), widget.formatAmount(sum.cashIn)),
+      _row(tr(context, 'Cash out'), widget.formatAmount(sum.cashOut)),
       const Divider(),
-      _row('Expected in drawer', widget.formatAmount(sum.expectedCash), bold: true),
+      _row(tr(context, 'Expected in drawer'), widget.formatAmount(sum.expectedCash), bold: true),
       if (s.movements.isNotEmpty) ...[
         const Divider(),
-        const Text('Cash movements', style: TextStyle(fontWeight: FontWeight.bold)),
+        Text(tr(context, 'Cash movements'), style: const TextStyle(fontWeight: FontWeight.bold)),
         ...s.movements.map((m) => _row(
-              '${m.type == 'in' ? 'In' : 'Out'}${m.reason.isEmpty ? '' : ' (${m.reason})'}',
+              '${m.type == 'in' ? tr(context, 'In') : tr(context, 'Out')}${m.reason.isEmpty ? '' : ' (${m.reason})'}',
               widget.formatAmount(m.amount),
             )),
       ],
@@ -171,9 +172,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
         OutlinedButton.icon(
           key: const Key('cash-in'),
           icon: const Icon(Icons.add),
-          label: const Text('Cash in'),
+          label: Text(tr(context, 'Cash in')),
           onPressed: () async {
-            final m = await _promptMovement('Cash in');
+            final m = await _promptMovement(tr(context, 'Cash in'));
             if (m != null) {
               widget.store.addMovement('in', m.amount, reason: m.reason);
               _refresh();
@@ -183,9 +184,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
         OutlinedButton.icon(
           key: const Key('cash-out'),
           icon: const Icon(Icons.remove),
-          label: const Text('Cash out'),
+          label: Text(tr(context, 'Cash out')),
           onPressed: () async {
-            final m = await _promptMovement('Cash out');
+            final m = await _promptMovement(tr(context, 'Cash out'));
             if (m != null) {
               widget.store.addMovement('out', m.amount, reason: m.reason);
               _refresh();
@@ -198,9 +199,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
         key: const Key('close-shift'),
         style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
         icon: const Icon(Icons.stop),
-        label: const Text('Close shift (Z)'),
+        label: Text(tr(context, 'Close shift (Z)')),
         onPressed: () async {
-          final counted = await _promptAmount('Close shift', label: 'Counted cash');
+          final counted = await _promptAmount(tr(context, 'Close shift'), label: tr(context, 'Counted cash'));
           if (counted == null) return;
           final closed = widget.store.closeShift(countedCash: counted);
           if (mounted) _showZ(closed);
@@ -228,20 +229,20 @@ class _ShiftScreenState extends State<ShiftScreen> {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Z report'),
+        title: Text(tr(ctx, 'Z report')),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Sales: ${sum.salesCount}   ${widget.formatAmount(sum.salesTotal)}'),
-          Text('Cash sales: ${widget.formatAmount(sum.cashSales)}'),
-          Text('Opening float: ${widget.formatAmount(sum.openingFloat)}'),
-          Text('Cash in: ${widget.formatAmount(sum.cashIn)}    Cash out: ${widget.formatAmount(sum.cashOut)}'),
-          Text('Expected: ${widget.formatAmount(sum.expectedCash)}'),
-          Text('Counted: ${widget.formatAmount(sum.countedCash ?? 0)}'),
-          Text('Variance: ${widget.formatAmount(variance)}',
+          Text('${tr(ctx, 'Sales')}: ${sum.salesCount}   ${widget.formatAmount(sum.salesTotal)}'),
+          Text('${tr(ctx, 'Cash sales')}: ${widget.formatAmount(sum.cashSales)}'),
+          Text('${tr(ctx, 'Opening float')}: ${widget.formatAmount(sum.openingFloat)}'),
+          Text('${tr(ctx, 'Cash in')}: ${widget.formatAmount(sum.cashIn)}    ${tr(ctx, 'Cash out')}: ${widget.formatAmount(sum.cashOut)}'),
+          Text('${tr(ctx, 'Expected')}: ${widget.formatAmount(sum.expectedCash)}'),
+          Text('${tr(ctx, 'Counted')}: ${widget.formatAmount(sum.countedCash ?? 0)}'),
+          Text('${tr(ctx, 'Variance')}: ${widget.formatAmount(variance)}',
               style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: variance.abs() < 0.01 ? Colors.green.shade700 : Colors.red)),
         ]),
-        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Done')))],
       ),
     );
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 
 /// One payment method's tally across the report window: how many tenders
@@ -59,9 +60,9 @@ class PaymentAnalysisReportScreen extends StatelessWidget {
     final grandTotal = methods.fold(0.0, (s, m) => s + m.amount);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Payment analysis')),
+      appBar: AppBar(title: Text(tr(context, 'Payment analysis'))),
       body: orders.isEmpty || methods.isEmpty
-          ? const Center(child: Text('No orders'))
+          ? Center(child: Text(tr(context, 'No orders')))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -74,7 +75,7 @@ class PaymentAnalysisReportScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'How customers paid',
+                            tr(context, 'How customers paid'),
                             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                           ),
                           const Divider(),
@@ -170,8 +171,8 @@ class PaymentAnalysisReportScreen extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
-          const Expanded(
-            child: Text('Grand total', style: TextStyle(fontWeight: FontWeight.bold)),
+          Expanded(
+            child: Text(tr(context, 'Grand total'), style: const TextStyle(fontWeight: FontWeight.bold)),
           ),
           Text(
             formatAmount(grandTotal),

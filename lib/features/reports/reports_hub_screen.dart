@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
 import 'cashier_report_screen.dart';
@@ -19,11 +20,11 @@ import 'top_products_report_screen.dart';
 enum ReportRange { today, yesterday, last7, all }
 
 extension _RangeLabel on ReportRange {
-  String get label => switch (this) {
-        ReportRange.today => 'Today',
-        ReportRange.yesterday => 'Yesterday',
-        ReportRange.last7 => 'Last 7 days',
-        ReportRange.all => 'All',
+  String label(BuildContext context) => switch (this) {
+        ReportRange.today => tr(context, 'Today'),
+        ReportRange.yesterday => tr(context, 'Yesterday'),
+        ReportRange.last7 => tr(context, 'Last 7 days'),
+        ReportRange.all => tr(context, 'All'),
       };
 }
 
@@ -74,7 +75,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   Widget build(BuildContext context) {
     final count = _filtered.length;
     return Scaffold(
-      appBar: AppBar(title: const Text('Reports')),
+      appBar: AppBar(title: Text(tr(context, 'Reports'))),
       body: Column(
         children: [
           Padding(
@@ -85,7 +86,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                 for (final r in ReportRange.values)
                   ChoiceChip(
                     key: Key('range-${r.name}'),
-                    label: Text(r.label),
+                    label: Text(r.label(context)),
                     selected: _range == r,
                     onSelected: (_) => setState(() => _range = r),
                   ),
@@ -97,22 +98,22 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
           Expanded(
             child: ListView(
               children: [
-                _tile('Sales summary', Icons.summarize, 'rep-summary',
+                _tile(tr(context, 'Sales summary'), Icons.summarize, 'rep-summary',
                     (o) => SalesReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile('Tax', Icons.receipt, 'rep-tax',
+                _tile(tr(context, 'Tax'), Icons.receipt, 'rep-tax',
                     (o) => TaxReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile('Top products', Icons.star, 'rep-top',
+                _tile(tr(context, 'Top products'), Icons.star, 'rep-top',
                     (o) => TopProductsReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile('Category performance', Icons.category, 'rep-category',
+                _tile(tr(context, 'Category performance'), Icons.category, 'rep-category',
                     (o) => CategoryReportScreen(
                         orders: o, categories: widget.categories, formatAmount: widget.formatAmount)),
-                _tile('Payment analysis', Icons.payments, 'rep-payment',
+                _tile(tr(context, 'Payment analysis'), Icons.payments, 'rep-payment',
                     (o) => PaymentAnalysisReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile('Discounts', Icons.percent, 'rep-discounts',
+                _tile(tr(context, 'Discounts'), Icons.percent, 'rep-discounts',
                     (o) => DiscountsReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile('Cashier performance', Icons.badge_outlined, 'rep-cashier',
+                _tile(tr(context, 'Cashier performance'), Icons.badge_outlined, 'rep-cashier',
                     (o) => CashierReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile('Sales by hour', Icons.schedule, 'rep-time',
+                _tile(tr(context, 'Sales by hour'), Icons.schedule, 'rep-time',
                     (o) => SalesByTimeReportScreen(orders: o, formatAmount: widget.formatAmount)),
               ],
             ),
