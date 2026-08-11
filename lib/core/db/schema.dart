@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 10;
+  static const int version = 11;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -313,6 +313,20 @@ class Schema {
       )
       ''',
       'CREATE INDEX idx_local_customers_name ON local_customers(name)',
+    ],
+
+    // v10 -> v11: staff attendance (clock in/out), separate from the cash-drawer
+    // shift so several cashiers can be on the clock against one till.
+    [
+      '''
+      CREATE TABLE attendance (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        staff_id  TEXT NOT NULL,
+        clock_in  TEXT NOT NULL,
+        clock_out TEXT
+      )
+      ''',
+      'CREATE INDEX idx_attendance_staff ON attendance(staff_id)',
     ],
   ];
 }
