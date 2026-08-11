@@ -864,20 +864,25 @@ class _PosAppState extends State<PosApp> {
       await RegistryPrinter(widget.printers, station).send(payload);
       return true;
     } on PrinterUnavailable {
-      // No station printer: fall back to the receipt printer, spooled if that is
-      // down too, so the ticket is not simply lost.
+      // No station printer: fall back to the receipt printer. It persists the ticket
+      // to the spool on any failure before rethrowing, so once we hand it over the
+      // ticket is durable and the background flush will print it. That counts as
+      // delivered: firing the lines here is what stops a re-fire duplicating it.
       try {
         await _receiptPrinter.send(payload, reference: reference);
-        return true;
       } on PrinterUnavailable {
         // Held in the spool; the background flush will retry it.
-        return true;
       } catch (e) {
-        widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
+        // Also spooled (SpooledPrinter persists before it rethrows); note it for
+        // diagnostics but still treat the ticket as delivered.
+        widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.spooled',
             detail: '$reference: $e');
-        return false;
       }
+      return true;
     } catch (e) {
+      // The station printer failed with something other than "unavailable", so the
+      // ticket reached neither a printer nor the spool: keep the lines un-fired so a
+      // later re-fire retries them.
       widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
           detail: '$reference: $e');
       return false;
