@@ -43,9 +43,11 @@ class OdooWiring {
       post: _post,
     );
     _outbox.register('order.push', _orderSender);
-    _outbox.register('audit.push', _orderSender);
-    // Best-effort telemetry with no server sink yet: acknowledge it so it drains
-    // cleanly instead of showing as "nothing can send" on the Support screen.
+    // Audit and heartbeat have no server sink yet, so they are acknowledged locally
+    // and drained. They must NOT go through the order sender: that posts to
+    // sale.order/create_from_offline_pos, which would book audit rows as sales. The
+    // local audit log stays the record; a dedicated endpoint is the follow-up.
+    _outbox.register('audit.push', (_) async {});
     _outbox.register('device.status', (_) async {});
   }
 

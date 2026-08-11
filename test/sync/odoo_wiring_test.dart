@@ -45,6 +45,23 @@ void main() {
     expect(booked, isNotEmpty);
   });
 
+  test('audit entries drain locally and are never posted as sale orders', () async {
+    final store = MemStore();
+    final outbox = Outbox(store: store, senders: {});
+    var orderCalls = 0;
+    Future<HttpReply> fake(Uri u, Map<String,String> h, String b) async {
+      if (u.path.contains('authenticate')) { return HttpReply(200, '{"result":{"uid":2}}', headers: const {'set-cookie':'session_id=abc; Path=/'}); }
+      orderCalls++; return HttpReply(200, '{"result":[{"status":"created"}]}');
+    }
+    final wiring = OdooWiring(outbox: outbox, post: fake);
+    wiring.configure(const OdooEndpoint(baseUrl:'https://s', db:'d', login:'u', password:'p'));
+    await outbox.enqueue('audit.push', 'audit-1', {'event':'order.paid'});
+    // Acknowledged and cleared, not parked, and it must not reach sale.order.
+    expect(await outbox.drain(), 1);
+    expect(store.dead, isEmpty);
+    expect(orderCalls, 0);
+  });
+
   test('disable stops pushing so a mispointed till queues instead', () async {
     final store = MemStore();
     final outbox = Outbox(store: store, senders: {});
