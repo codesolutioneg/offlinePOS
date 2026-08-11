@@ -5,6 +5,7 @@ class CashMovement {
     required this.amount,
     required this.at,
     this.reason = '',
+    this.category,
   });
 
   final String type;
@@ -12,10 +13,15 @@ class CashMovement {
   final String reason;
   final DateTime at;
 
+  /// For a paid-out (an expense), which bucket it belongs to (Transport, Food,
+  /// Supplies, ...). Null for a plain drawer movement or a paid-in.
+  final String? category;
+
   Map<String, dynamic> toMap() => {
         'type': type,
         'amount': amount,
         'reason': reason,
+        'category': category,
         'at': at.toIso8601String(),
       };
 
@@ -23,6 +29,7 @@ class CashMovement {
         type: (m['type'] ?? 'in') as String,
         amount: (m['amount'] as num).toDouble(),
         reason: (m['reason'] ?? '') as String,
+        category: m['category'] as String?,
         at: DateTime.parse(m['at'] as String),
       );
 }

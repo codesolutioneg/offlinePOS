@@ -14,6 +14,7 @@ class ShiftScreen extends StatefulWidget {
     this.cashMethodIds = const {},
     this.onCloseSync,
     this.onPrintReport,
+    this.expenseCategories = const ['Transport', 'Food', 'Supplies', 'Maintenance', 'Other'],
   });
 
   final ShiftStore store;
@@ -31,6 +32,10 @@ class ShiftScreen extends StatefulWidget {
   /// Prints a shift report (X or Z) to the receipt printer. Null hides the print
   /// action. Rows are (label, value) pairs.
   final Future<void> Function(String title, List<(String, String)> rows)? onPrintReport;
+
+  /// The buckets offered when recording a paid-out (an expense), so petty cash is
+  /// categorised rather than an unexplained drawer swing.
+  final List<String> expenseCategories;
 
   @override
   State<ShiftScreen> createState() => _ShiftScreenState();
@@ -80,41 +85,64 @@ class _ShiftScreenState extends State<ShiftScreen> {
   /// An amount plus a short reason, so a paid-in/out is auditable rather than an
   /// unexplained swing in the drawer. Returns null if cancelled or the amount is
   /// not a number.
-  Future<({double amount, String reason})?> _promptMovement(String title) {
+  /// An amount plus a short reason, and for a paid-out an expense category, so a
+  /// drawer swing is auditable. [categories] non-empty shows the category picker.
+  Future<({double amount, String reason, String? category})?> _promptMovement(
+    String title, {
+    List<String> categories = const [],
+  }) {
     final amountC = TextEditingController();
     final reasonC = TextEditingController();
-    return showDialog<({double amount, String reason})>(
+    String? category = categories.isEmpty ? null : categories.first;
+    return showDialog<({double amount, String reason, String? category})>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(
-            controller: amountC,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(labelText: tr(ctx, 'Amount'), border: const OutlineInputBorder()),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: reasonC,
-            decoration: InputDecoration(
-                labelText: tr(ctx, 'Reason (optional)'), border: const OutlineInputBorder()),
-          ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-            onPressed: () {
-              final a = double.tryParse(amountC.text.trim());
-              if (a == null) {
-                Navigator.pop(ctx);
-                return;
-              }
-              Navigator.pop(ctx, (amount: a, reason: reasonC.text.trim()));
-            },
-            child: Text(tr(ctx, 'OK')),
-          ),
-        ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(title),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: amountC,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration:
+                  InputDecoration(labelText: tr(ctx, 'Amount'), border: const OutlineInputBorder()),
+            ),
+            const SizedBox(height: 8),
+            if (categories.isNotEmpty)
+              DropdownButtonFormField<String>(
+                key: const Key('expense-category'),
+                initialValue: category,
+                decoration: InputDecoration(
+                    labelText: tr(ctx, 'Category'), border: const OutlineInputBorder()),
+                items: [
+                  for (final c in categories)
+                    DropdownMenuItem(value: c, child: Text(tr(ctx, c))),
+                ],
+                onChanged: (v) => setLocal(() => category = v),
+              ),
+            if (categories.isNotEmpty) const SizedBox(height: 8),
+            TextField(
+              controller: reasonC,
+              decoration: InputDecoration(
+                  labelText: tr(ctx, 'Reason (optional)'), border: const OutlineInputBorder()),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+            FilledButton(
+              onPressed: () {
+                final a = double.tryParse(amountC.text.trim());
+                if (a == null) {
+                  Navigator.pop(ctx);
+                  return;
+                }
+                Navigator.pop(ctx,
+                    (amount: a, reason: reasonC.text.trim(), category: category));
+              },
+              child: Text(tr(ctx, 'OK')),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -176,10 +204,17 @@ class _ShiftScreenState extends State<ShiftScreen> {
       if (s.movements.isNotEmpty) ...[
         const Divider(),
         Text(tr(context, 'Cash movements'), style: const TextStyle(fontWeight: FontWeight.bold)),
-        ...s.movements.map((m) => _row(
-              '${m.type == 'in' ? tr(context, 'In') : tr(context, 'Out')}${m.reason.isEmpty ? '' : ' (${m.reason})'}',
-              widget.formatAmount(m.amount),
-            )),
+        ...s.movements.map((m) {
+          final tag = m.category != null ? tr(context, m.category!) : null;
+          final note = [
+            ?tag,
+            if (m.reason.isNotEmpty) m.reason,
+          ].join(' - ');
+          return _row(
+            '${m.type == 'in' ? tr(context, 'In') : tr(context, 'Out')}${note.isEmpty ? '' : ' ($note)'}',
+            widget.formatAmount(m.amount),
+          );
+        }),
       ],
       const SizedBox(height: 16),
       Wrap(spacing: 8, children: [
@@ -201,10 +236,12 @@ class _ShiftScreenState extends State<ShiftScreen> {
           icon: const Icon(Icons.remove),
           label: Text(tr(context, 'Cash out')),
           onPressed: () async {
-            final m = await _promptMovement(tr(context, 'Cash out'));
+            final m = await _promptMovement(tr(context, 'Cash out'),
+                categories: widget.expenseCategories);
             if (!mounted) return;
             if (m != null) {
-              widget.store.addMovement('out', m.amount, reason: m.reason);
+              widget.store.addMovement('out', m.amount,
+                  reason: m.reason, category: m.category);
               _refresh();
             }
           },

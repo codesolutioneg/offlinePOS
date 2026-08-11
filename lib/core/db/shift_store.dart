@@ -40,11 +40,15 @@ class ShiftStore {
         id: shiftId, openedAt: opened, openingFloat: openingFloat, cashierId: cashierId);
   }
 
-  void addMovement(String type, double amount, {String reason = ''}) {
+  void addMovement(String type, double amount, {String reason = '', String? category}) {
     final s = currentOpenShift();
     if (s == null) throw StateError('No open shift.');
     s.movements.add(CashMovement(
-        type: type, amount: amount, reason: reason, at: DateTime.now().toUtc()));
+        type: type,
+        amount: amount,
+        reason: reason,
+        category: category,
+        at: DateTime.now().toUtc()));
     _db.raw.execute('UPDATE shifts SET movements = ? WHERE id = ?',
         [jsonEncode(s.movements.map((m) => m.toMap()).toList()), s.id]);
   }

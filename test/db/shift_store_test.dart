@@ -34,6 +34,15 @@ void main() {
     expect(shifts.currentOpenShift(), isNull);
   });
 
+  test('a paid-out carries an expense category that round-trips through storage', () {
+    shifts.openShift(openingFloat: 100, cashierId: 'c1');
+    shifts.addMovement('out', 30, reason: 'taxi', category: 'Transport');
+    final reread = ShiftStore(db).currentOpenShift()!;
+    final out = reread.movements.single;
+    expect(out.category, 'Transport');
+    expect(out.reason, 'taxi');
+  });
+
   test('only one shift can be open at a time', () {
     shifts.openShift(openingFloat: 0, cashierId: 'c1');
     expect(() => shifts.openShift(openingFloat: 0, cashierId: 'c1'), throwsStateError);
