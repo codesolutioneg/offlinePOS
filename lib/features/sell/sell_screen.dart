@@ -42,6 +42,8 @@ class SellScreen extends StatefulWidget {
     this.onToggleFavourite,
     this.gridColumns = 0,
     this.extraCustomers,
+    this.tables,
+    this.heldOrders,
   });
 
   final PosSession session;
@@ -122,6 +124,14 @@ class SellScreen extends StatefulWidget {
   /// Local (till-created) customers matching a query, merged into the picker so a
   /// customer added on the device is reusable.
   final List<Customer> Function(String query)? extraCustomers;
+
+  /// The floor's table labels, offered as quick picks when moving items to another
+  /// table. Null falls back to free text.
+  final List<String> Function()? tables;
+
+  /// The other open (held) orders, for merging another table into this one. Null
+  /// disables merge.
+  final List<Order> Function()? heldOrders;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -479,6 +489,16 @@ class _SellScreenState extends State<SellScreen> {
                 : null,
             onTap: () => Navigator.pop(ctx, 'discount'),
           ),
+          if (s.current.type == OrderType.dineIn)
+            ListTile(
+              key: const Key('line-seat'),
+              leading: const Icon(Icons.person_pin_circle_outlined),
+              title: Text(tr(ctx, 'Assign to guest')),
+              subtitle: line.seat != null
+                  ? Text('${tr(ctx, 'Guest')} ${line.seat}')
+                  : null,
+              onTap: () => Navigator.pop(ctx, 'seat'),
+            ),
           ListTile(
             key: const Key('line-void'),
             leading: const Icon(Icons.remove_circle_outline, color: Colors.red),
@@ -490,7 +510,37 @@ class _SellScreenState extends State<SellScreen> {
     );
     if (action == 'note') await _lineNote(line);
     if (action == 'discount') await _lineDiscount(line);
+    if (action == 'seat') await _assignSeat(line);
     if (action == 'void') await _voidLine(line);
+  }
+
+  /// Ask which guest a line belongs to (0/blank clears it), for splitting the bill
+  /// by cover later. A number pad, because seats are 1..N.
+  Future<void> _assignSeat(OrderLine line) async {
+    final ctrl = TextEditingController(text: line.seat?.toString() ?? '');
+    final seat = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Assign to guest')),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Guest number'), border: const OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, 0),
+              child: Text(tr(ctx, 'Clear'))),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, int.tryParse(ctrl.text.trim()) ?? 0),
+              child: Text(tr(ctx, 'Set'))),
+        ],
+      ),
+    );
+    if (seat == null) return;
+    _changed(() => s.setLineSeat(line.uuid, seat > 0 ? seat : null));
   }
 
   Future<void> _lineNote(OrderLine line) async {
@@ -819,6 +869,295 @@ class _SellScreenState extends State<SellScreen> {
     ));
   }
 
+  // ── dine-in bill: split by guest, pay selected, move, merge ──────
+
+  /// The charge for a subset of the current order's lines, with the whole-order
+  /// discount applied (it is a percentage, so it applies to each check's lines).
+  double _linesTotal(Iterable<OrderLine> lines) =>
+      lines.fold(0.0, (a, l) => a + l.total) * s.current.discountFactor;
+
+  /// Take payment for a subset of the current order as its own check, leaving the
+  /// rest of the table open. Reuses the payment sheet and the normal post-payment
+  /// path (kitchen fire for any un-fired lines, receipt print).
+  void _payLines(List<OrderLine> lines, {String? label}) {
+    if (lines.isEmpty) return;
+    final ids = lines.map((l) => l.uuid).toList();
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => _PaymentSheet(
+        total: _linesTotal(lines),
+        format: widget.formatAmount,
+        methods: s.catalogue.paymentMethods(),
+        onConfirm: (payments, payLabel, tip, cashReceived) {
+          Navigator.pop(ctx);
+          final check = s.payCheck(ids,
+              payments: payments, cashReceived: cashReceived, tip: tip);
+          setState(() {});
+          widget.onPaid?.call(check);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            key: const Key('check-complete'),
+            content: Text('${label ?? tr(context, 'Check')}: '
+                '${widget.formatAmount(check.total)} ($payLabel). '
+                '${s.hasLines ? tr(context, 'Rest of the table stays open.') : tr(context, 'Table closed.')}'),
+            duration: const Duration(seconds: 3),
+          ));
+        },
+      ),
+    );
+  }
+
+  /// The dine-in bill menu: split by guest, pay selected items, move items to
+  /// another table, or merge another table in. Mirrors a table-service till.
+  Future<void> _billOptions() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            key: const Key('bill-split-guest'),
+            leading: const Icon(Icons.groups_2_outlined),
+            title: Text(tr(ctx, 'Split by guest')),
+            subtitle: Text(tr(ctx, 'Pay each guest separately')),
+            onTap: () => Navigator.pop(ctx, 'guest'),
+          ),
+          ListTile(
+            key: const Key('bill-pay-selected'),
+            leading: const Icon(Icons.checklist),
+            title: Text(tr(ctx, 'Pay selected items')),
+            onTap: () => Navigator.pop(ctx, 'selected'),
+          ),
+          ListTile(
+            key: const Key('bill-move'),
+            leading: const Icon(Icons.drive_file_move_outline),
+            title: Text(tr(ctx, 'Move items to another table')),
+            onTap: () => Navigator.pop(ctx, 'move'),
+          ),
+          ListTile(
+            key: const Key('bill-merge'),
+            leading: const Icon(Icons.merge_type),
+            title: Text(tr(ctx, 'Merge another table in')),
+            onTap: () => Navigator.pop(ctx, 'merge'),
+          ),
+        ]),
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'guest':
+        await _splitByGuest();
+      case 'selected':
+        await _pickLines(
+            title: tr(context, 'Pay selected items'),
+            confirmLabel: tr(context, 'Pay'),
+            onConfirm: (lines) => _payLines(lines, label: tr(context, 'Check')));
+      case 'move':
+        await _moveItems();
+      case 'merge':
+        await _mergeTable();
+    }
+  }
+
+  /// One row per guest with its subtotal and a Pay button; unassigned lines are a
+  /// "Shared" group paid together. Paying a guest carves their check off the table.
+  Future<void> _splitByGuest() async {
+    Map<int?, List<OrderLine>> byGuest() {
+      final map = <int?, List<OrderLine>>{};
+      for (final l in s.current.lines) {
+        map.putIfAbsent(l.seat, () => []).add(l);
+      }
+      return map;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
+        final groups = byGuest();
+        final seats = groups.keys.toList()
+          ..sort((a, b) => (a ?? 1 << 30).compareTo(b ?? 1 << 30));
+        if (s.current.lines.isEmpty) {
+          // Table cleared while splitting: close the sheet.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (Navigator.of(ctx).canPop()) Navigator.pop(ctx);
+          });
+        }
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(tr(ctx, 'Split by guest'),
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            for (final seat in seats)
+              ListTile(
+                key: Key('guest-${seat ?? 'shared'}'),
+                title: Text(seat == null
+                    ? tr(ctx, 'Shared')
+                    : '${tr(ctx, 'Guest')} $seat'),
+                subtitle: Text(groups[seat]!.map((l) => l.name).join(', '),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                trailing: FilledButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _payLines(groups[seat]!,
+                        label: seat == null
+                            ? tr(context, 'Shared')
+                            : '${tr(context, 'Guest')} $seat');
+                  },
+                  child: Text(widget.formatAmount(_linesTotal(groups[seat]!))),
+                ),
+              ),
+          ]),
+        );
+      }),
+    );
+  }
+
+  /// A checklist of the current lines; the callback gets the chosen ones. Shared by
+  /// "pay selected" and "move items".
+  Future<void> _pickLines({
+    required String title,
+    required String confirmLabel,
+    required void Function(List<OrderLine> lines) onConfirm,
+  }) async {
+    final selected = <String>{};
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
+        final lines = s.current.lines;
+        final chosen = lines.where((l) => selected.contains(l.uuid)).toList();
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+              16, 8, 16, 16 + MediaQuery.of(ctx).viewInsets.bottom),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(title,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final l in lines)
+                    CheckboxListTile(
+                      key: Key('pick-${l.uuid}'),
+                      value: selected.contains(l.uuid),
+                      title: Text(l.name),
+                      subtitle: Text(widget.formatAmount(l.total)),
+                      onChanged: (v) => setSheet(() =>
+                          v == true ? selected.add(l.uuid) : selected.remove(l.uuid)),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                key: const Key('pick-confirm'),
+                onPressed: chosen.isEmpty
+                    ? null
+                    : () {
+                        Navigator.pop(ctx);
+                        onConfirm(chosen);
+                      },
+                child: Text('$confirmLabel (${chosen.length})'),
+              ),
+            ),
+          ]),
+        );
+      }),
+    );
+  }
+
+  /// Pick lines and a destination table, then move them onto that table's tab.
+  Future<void> _moveItems() async {
+    await _pickLines(
+      title: tr(context, 'Move items to another table'),
+      confirmLabel: tr(context, 'Choose table'),
+      onConfirm: (lines) async {
+        final label = await _promptTableLabel();
+        if (label == null || label.isEmpty) return;
+        final ids = lines.map((l) => l.uuid).toSet();
+        _changed(() => s.moveLinesToTable(ids, label));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${lines.length} ${tr(context, 'item(s) moved to table')} $label'),
+        ));
+      },
+    );
+  }
+
+  Future<String?> _promptTableLabel() {
+    final ctrl = TextEditingController();
+    final tables = widget.tables?.call() ?? const <String>[];
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Destination table')),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (tables.isNotEmpty)
+            Wrap(
+              spacing: 6,
+              children: [
+                for (final t in tables)
+                  ActionChip(label: Text(t), onPressed: () => Navigator.pop(ctx, t)),
+              ],
+            ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: ctrl,
+            autofocus: tables.isEmpty,
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Table'), border: const OutlineInputBorder()),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: Text(tr(ctx, 'OK'))),
+        ],
+      ),
+    );
+  }
+
+  /// Pick another open table's order and fold it into this one.
+  Future<void> _mergeTable() async {
+    final others = (widget.heldOrders?.call() ?? const <Order>[])
+        .where((o) => o.uuid != s.current.uuid && o.lines.isNotEmpty)
+        .toList();
+    if (others.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr(context, 'No other open tables to merge'))));
+      return;
+    }
+    final uuid = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(shrinkWrap: true, children: [
+          for (final o in others)
+            ListTile(
+              key: Key('merge-${o.uuid}'),
+              leading: const Icon(Icons.table_bar),
+              title: Text(o.tableLabel ?? tr(ctx, 'Tab')),
+              subtitle: Text('${o.lines.length} ${tr(ctx, 'item(s)')}'),
+              trailing: Text(widget.formatAmount(o.total)),
+              onTap: () => Navigator.pop(ctx, o.uuid),
+            ),
+        ]),
+      ),
+    );
+    if (uuid == null) return;
+    _changed(() => s.mergeOrderInto(uuid));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(tr(context, 'Tables merged'))));
+  }
+
   @override
   Widget build(BuildContext context) {
     var products = s.catalogue.products(categoryId: _categoryId, search: _search);
@@ -1125,6 +1464,13 @@ class _SellScreenState extends State<SellScreen> {
                   : '${o.guestCount} ${tr(context, 'guests')}'),
               onPressed: _setGuests,
             ),
+            if (s.hasLines)
+              ActionChip(
+                key: const Key('bill-options'),
+                avatar: const Icon(Icons.call_split, size: 16),
+                label: Text(tr(context, 'Split / move')),
+                onPressed: _billOptions,
+              ),
           ],
           if (o.type == OrderType.delivery)
             ActionChip(
@@ -1379,6 +1725,23 @@ class _LineTile extends StatelessWidget {
         onTap: onTapLine,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         title: Row(children: [
+          if (line.seat != null) ...[
+            Container(
+              key: Key('seat-badge-${line.uuid}'),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.indigo.shade50,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.indigo.shade200),
+              ),
+              child: Text('G${line.seat}',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.indigo.shade700)),
+            ),
+            const SizedBox(width: 6),
+          ],
           Expanded(
               child: Text(line.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
           Text(amount, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),

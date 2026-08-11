@@ -381,6 +381,8 @@ class _PosAppState extends State<PosApp> {
               },
               gridColumns: widget.settings.gridColumns,
               extraCustomers: (q) => widget.customers.search(query: q, limit: 30),
+              tables: () => widget.tables.all().map((t) => t.name).toList(),
+              heldOrders: () => widget.orders.held(),
               onChanged: _publishActivity,
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
