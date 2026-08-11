@@ -301,13 +301,28 @@ class PosSession {
     return check;
   }
 
+  /// Bake an order-level discount into the given lines' own discount, so lines that
+  /// leave the order (moved or merged) keep the price they had rather than picking
+  /// up the destination order's discount instead. A no-op when there is no
+  /// whole-order discount to carry.
+  static void _carryOrderDiscount(double orderDiscountPercent, List<OrderLine> lines) {
+    if (orderDiscountPercent <= 0) return;
+    final f = 1 - orderDiscountPercent.clamp(0, 100) / 100;
+    for (final l in lines) {
+      final combined = l.lineDiscountFactor * f;
+      l.discountPercent = (1 - combined) * 100;
+    }
+  }
+
   /// Move a subset of the current order's lines onto another table's open tab
   /// (creating one if the table has none), then leave the rest here. Returns the
-  /// target order. Used for "move items to another table".
+  /// target order. Used for "move items to another table". A whole-order discount on
+  /// the source is folded into the moved lines so their price does not change.
   Order moveLinesToTable(Set<String> lineUuids, String targetTableLabel) {
     final order = current;
     final taken = order.lines.where((l) => lineUuids.contains(l.uuid)).toList();
     if (taken.isEmpty) return order;
+    _carryOrderDiscount(order.discountPercent, taken);
     final target = orders.held().firstWhere(
           (o) => o.tableLabel == targetTableLabel && o.uuid != order.uuid,
           orElse: () => Order(
@@ -336,6 +351,9 @@ class PosSession {
   void mergeOrderInto(String sourceUuid) {
     final source = orders.byUuid(sourceUuid);
     if (source == null || source.uuid == current.uuid) return;
+    // Keep the source table's discount with its items rather than dropping it or
+    // re-pricing them under this table's discount.
+    _carryOrderDiscount(source.discountPercent, source.lines);
     current.lines.addAll(source.lines);
     orders.save(current);
     orders.delete(source.uuid);

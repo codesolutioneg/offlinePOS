@@ -124,6 +124,40 @@ void main() {
       expect(session.current.lines.single.productId, 10); // pizza stays on table 1
     });
 
+    test('moving a line off a discounted table keeps its discounted price', () {
+      session.setTable('1');
+      session.addProduct(pizza); // 100
+      session.setDiscount(10); // whole-order 10%
+      expect(session.current.lines.single.total, 100); // line total is pre-order-discount
+      final move = {lineFor(10)};
+
+      final target = session.moveLinesToTable(move, '2');
+
+      // The moved line now owns the 10% as a line discount, so it is worth 90 on a
+      // fresh (undiscounted) table rather than snapping back to 100.
+      expect(target.lines.single.total, closeTo(90, 0.001));
+    });
+
+    test('merging a discounted table keeps that table\'s items discounted', () {
+      // A 20%-discounted tab on table 2 with a 50 item -> worth 40.
+      session.setTable('2');
+      session.addProduct(cake); // 40
+      session.setDiscount(20);
+      session.hold();
+      final held = orders.held().single;
+
+      // Merge it into a fresh, undiscounted table 1.
+      session.setTable('1');
+      session.addProduct(pizza); // 100, no discount
+      session.mergeOrderInto(held.uuid);
+
+      final merged =
+          session.current.lines.firstWhere((l) => l.productId == 12);
+      expect(merged.total, closeTo(32, 0.001)); // 40 * 0.8
+      // The undiscounted pizza is untouched.
+      expect(session.current.lines.firstWhere((l) => l.productId == 10).total, 100);
+    });
+
     test('merging another order folds its lines in and discards the source', () {
       // Park an order on table 2.
       session.setTable('2');
