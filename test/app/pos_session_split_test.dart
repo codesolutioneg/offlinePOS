@@ -180,6 +180,18 @@ void main() {
       expect(session.current.lines.firstWhere((l) => l.productId == 10).total, 100);
     });
 
+    test('moving onto the order\'s own table is a no-op, not a duplicate tab', () {
+      session.setTable('7');
+      session.addProduct(pizza);
+      session.addProduct(cola);
+
+      session.moveLinesToTable({lineFor(11)}, '7'); // same table
+
+      // Nothing moved, and no second tab was opened for table 7.
+      expect(session.current.lines, hasLength(2));
+      expect(orders.held().where((o) => o.tableLabel == '7'), isEmpty);
+    });
+
     test('merging another order folds its lines in and discards the source', () {
       // Park an order on table 2.
       session.setTable('2');

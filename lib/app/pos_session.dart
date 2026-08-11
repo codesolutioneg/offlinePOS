@@ -331,6 +331,9 @@ class PosSession {
   /// the source is folded into the moved lines so their price does not change.
   Order moveLinesToTable(Set<String> lineUuids, String targetTableLabel) {
     final order = current;
+    // Moving onto the table the order is already on would fork a duplicate tab for
+    // the same table, so it is a no-op.
+    if (targetTableLabel == order.tableLabel) return order;
     final taken = order.lines.where((l) => lineUuids.contains(l.uuid)).toList();
     if (taken.isEmpty) return order;
     _carryOrderDiscount(order.discountPercent, taken);

@@ -66,7 +66,9 @@ class ActivityReportScreen extends StatelessWidget {
     if (parts.length < 3) return null;
     return _VoidedLine(
       item: parts[1],
-      reason: parts[2],
+      // The reason is free text and may itself contain '|', so keep everything
+      // after the second separator rather than only the first segment.
+      reason: parts.sublist(2).join('|'),
       actor: (row['actor'] as String?) ?? '',
       at: DateTime.parse(row['at'] as String),
     );
