@@ -8,6 +8,7 @@ import '../core/i18n/l10n.dart';
 
 import '../core/audit/audit_log.dart';
 import '../core/auth/auth_service.dart';
+import '../core/auth/permissions.dart';
 import '../core/auth/user_store.dart';
 import '../core/config/till_config.dart';
 import '../core/db/catalogue_store.dart';
@@ -34,6 +35,7 @@ import '../core/sync/sync_service.dart';
 import '../core/updates/update_service.dart';
 import '../domain/order.dart';
 import '../features/admin/attendance_screen.dart';
+import '../features/admin/roles_permissions_screen.dart';
 import '../features/admin/roster_screen.dart';
 import '../features/support/audit_log_screen.dart';
 import '../features/auth/login_screen.dart';
@@ -416,7 +418,7 @@ class _PosAppState extends State<PosApp> {
               discountReasons: widget.settings.discountReasons,
               discountPercents: widget.settings.discountPercents,
               maxDiscountPercent: widget.settings.maxDiscountPercent,
-              authorize: () => _authorizeManager(context),
+              authorize: (p) => _authorize(p, context),
               unavailableProducts: widget.settings.unavailableProducts,
               onToggleAvailable: (id, available) {
                 widget.settings.setProductAvailable(id, available);
@@ -532,9 +534,11 @@ class _PosAppState extends State<PosApp> {
             key: const Key('nav-report'),
             leading: const Icon(Icons.bar_chart),
             title: Text(tr(rootContext, 'Reports')),
-            onTap: () {
+            onTap: () async {
               Navigator.pop(rootContext);
-              _openReports(rootContext);
+              if (await _authorize(Permission.viewReports, rootContext)) {
+                if (rootContext.mounted) _openReports(rootContext);
+              }
             },
           ),
           ListTile(
@@ -616,7 +620,7 @@ class _PosAppState extends State<PosApp> {
         // Discarding a parked order is money not taken, so it is manager-gated and
         // audited, then the list is popped so the change is visible.
         onCancel: (order) async {
-          if (!await _authorizeManager(sheetContext)) return;
+          if (!await _authorize(Permission.cancelOrder, sheetContext)) return;
           // Anything the kitchen already started must be told to stop: fire a void
           // slip for each fired line before the order is discarded, so cancelling a
           // sent order does not silently leave food cooking.
@@ -648,8 +652,8 @@ class _PosAppState extends State<PosApp> {
 
   /// Refund a past sale: pick the lines, then record, queue and print the reversal.
   Future<void> _openRefund(BuildContext context, Order original) async {
-    // A refund returns money, so it needs manager approval before the flow opens.
-    if (!await _authorizeManager(context)) return;
+    // A refund returns money, so it needs the refund permission before the flow opens.
+    if (!await _authorize(Permission.refund, context)) return;
     if (!context.mounted) return;
     await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => RefundScreen(
@@ -756,15 +760,14 @@ class _PosAppState extends State<PosApp> {
 
   /// The settings hub: one door onto everything a manager configures on the device.
   void _openSettingsHub(BuildContext context) {
-    final isManager = widget.auth.signedIn?.isManager ?? false;
     void refresh() => setState(() {});
     void push(Widget screen) => Navigator.of(context)
         .push(MaterialPageRoute<void>(builder: (_) => screen));
-    // Sensitive config (server credentials, printers, shop identity) is manager-only
-    // so a cashier cannot repoint the till or rewrite the receipt; a manager passes
-    // straight through.
-    Future<void> pushGated(Widget screen) async {
-      if (!await _authorizeManager(context)) return;
+    // Sensitive config (server credentials, printers, shop identity) is gated by the
+    // matching permission so a cashier cannot repoint the till or rewrite the
+    // receipt; a manager, or a role granted the permission, passes straight through.
+    Future<void> pushGated(Permission p, Widget screen) async {
+      if (!await _authorize(p, context)) return;
       push(screen);
     }
     final entries = <SettingsEntry>[
@@ -787,7 +790,8 @@ class _PosAppState extends State<PosApp> {
         icon: Icons.store,
         keyValue: 'set-shop',
         group: 'Shop',
-        onTap: () => pushGated(ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
+        onTap: () => pushGated(Permission.openSettings,
+            ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'Receipt designer',
@@ -805,7 +809,7 @@ class _PosAppState extends State<PosApp> {
         icon: Icons.print,
         keyValue: 'set-printers',
         group: 'Hardware',
-        onTap: () => pushGated(PrintersScreen(
+        onTap: () => pushGated(Permission.managePrinters, PrintersScreen(
             printers: widget.printers,
             settings: widget.settings,
             categories: widget.catalogue.categories(),
@@ -893,18 +897,35 @@ class _PosAppState extends State<PosApp> {
         keyValue: 'set-server',
         group: 'Server',
         onTap: () async {
-          final ok = await _authorizeManager(context);
+          final ok = await _authorize(Permission.openSettings, context);
           if (ok && context.mounted) _openSettings(context);
         },
       ),
-      if (isManager)
-        SettingsEntry(
-          title: 'Staff',
-          icon: Icons.badge_outlined,
-          keyValue: 'set-staff',
-          group: 'People & customers',
-          onTap: () => _openRoster(context),
-        ),
+      SettingsEntry(
+        title: 'Staff',
+        icon: Icons.badge_outlined,
+        keyValue: 'set-staff',
+        group: 'People & customers',
+        onTap: () async {
+          final ok = await _authorize(Permission.manageStaff, context);
+          if (ok && context.mounted) _openRoster(context);
+        },
+      ),
+      // Editing who can do what is manager-only and not delegatable: a cashier must
+      // not be able to widen their own permissions, so this always asks for a manager.
+      SettingsEntry(
+        title: 'Roles & permissions',
+        subtitle: 'What each role can do without a manager',
+        icon: Icons.admin_panel_settings_outlined,
+        keyValue: 'set-roles',
+        group: 'People & customers',
+        onTap: () async {
+          final ok = await _authorizeManager(context);
+          if (ok && context.mounted) {
+            push(RolesPermissionsScreen(settings: widget.settings, onChanged: refresh));
+          }
+        },
+      ),
     ];
     push(SettingsHubScreen(entries: entries));
   }
@@ -944,6 +965,23 @@ class _PosAppState extends State<PosApp> {
           SnackBar(content: Text(tr(context, 'Manager approval failed'))));
     }
     return ok;
+  }
+
+  /// Gate a privileged action behind the signed-in cashier's role permissions.
+  ///
+  /// If their role may do [p] on its own, it passes with no prompt. Otherwise it
+  /// falls back to the manager-PIN dialog so a manager can approve on the spot. A
+  /// denial that is neither self-permitted nor manager-approved is audited so a
+  /// blocked action still leaves a trail.
+  Future<bool> _authorize(Permission p, BuildContext context) async {
+    final cashier = widget.auth.signedIn;
+    final role = cashier?.role ?? 'cashier';
+    if (widget.settings.roleCan(role, p)) return true;
+    final approved = await _authorizeManager(context);
+    if (!approved) {
+      widget.audit.record(cashier?.id ?? 'unknown', 'permission.denied', detail: p.key);
+    }
+    return approved;
   }
 
   // ── kitchen tickets ──────────────────────────────────────────────
@@ -1087,6 +1125,12 @@ class _PosAppState extends State<PosApp> {
         // batch. Returns a message for the cashier: how it went, or that the
         // orders are safe and will sync once the connection is back.
         onCloseSync: () async {
+          // Closing the shift pushes the day's sales, so it is gated: the cashier's
+          // role may allow it outright, otherwise a manager approves before anything
+          // is swept up or sent.
+          if (context.mounted && !await _authorize(Permission.closeShift, context)) {
+            return 'Manager approval required to close the shift.';
+          }
           // Sweep any paid sale that never reached the outbox back in first, so the
           // count below reflects everything owed to the server, not just what
           // happened to be queued.

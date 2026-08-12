@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/pos_session.dart';
+import '../../core/auth/permissions.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
@@ -112,9 +113,10 @@ class SellScreen extends StatefulWidget {
   final List<double> discountPercents;
   final double maxDiscountPercent;
 
-  /// Gate for privileged actions (discount, void): returns true if approved. When
-  /// null, actions are not gated.
-  final Future<bool> Function()? authorize;
+  /// Gate for privileged actions: called with the specific [Permission] the action
+  /// needs and returns true if the cashier's role allows it or a manager approves.
+  /// When null, actions are not gated.
+  final Future<bool> Function(Permission)? authorize;
 
   /// Products marked sold-out; their tiles are greyed and cannot be added.
   final Set<int> unavailableProducts;
@@ -263,7 +265,7 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (action == null) return;
-    if (widget.authorize != null && !await widget.authorize!()) return;
+    if (widget.authorize != null && !await widget.authorize!(Permission.priceOverride)) return;
     if (action == 'avail') {
       widget.onToggleAvailable?.call(product.id, soldOut);
     } else if (action == 'fave') {
@@ -370,8 +372,8 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Future<void> _openDiscount() async {
-    // A discount gives away money, so it needs manager approval.
-    if (widget.authorize != null && !await widget.authorize!()) return;
+    // A discount gives away money, so it needs the discount permission.
+    if (widget.authorize != null && !await widget.authorize!(Permission.applyDiscount)) return;
     if (!mounted) return;
     final ctrl = TextEditingController(
         text: s.current.discountPercent > 0
@@ -633,8 +635,8 @@ class _SellScreenState extends State<SellScreen> {
 
   Future<void> _lineDiscount(OrderLine line) async {
     // A line discount gives away money exactly like an order discount, so it gets
-    // the same manager gate and the same cap and presets.
-    if (widget.authorize != null && !await widget.authorize!()) return;
+    // the same permission gate and the same cap and presets.
+    if (widget.authorize != null && !await widget.authorize!(Permission.applyDiscount)) return;
     if (!mounted) return;
     final ctrl = TextEditingController(
         text: line.discountPercent > 0 ? line.discountPercent.toStringAsFixed(0) : '');
@@ -690,8 +692,8 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Future<void> _voidLine(OrderLine line) async {
-    // Voiding a line is a privileged action, so it needs manager approval first.
-    if (widget.authorize != null && !await widget.authorize!()) return;
+    // Voiding a line is a privileged action, so it needs the void permission first.
+    if (widget.authorize != null && !await widget.authorize!(Permission.voidLine)) return;
     if (!mounted) return;
     final reason = await _askReason('Void ${line.name}');
     if (reason == null) return;
