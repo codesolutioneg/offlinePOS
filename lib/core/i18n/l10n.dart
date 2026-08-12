@@ -334,4 +334,6 @@ const Map<String, String> _ar = {
   'Test print': 'طباعة تجريبية',
   'test receipt sent': 'أُرسل الإيصال التجريبي',
   'not reachable': 'غير قابلة للوصول',
+  'Split into single items': 'تقسيم إلى أصناف مفردة',
+  'So you can change one on its own': 'حتى تُعدّل واحداً بمفرده',
 };

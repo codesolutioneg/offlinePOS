@@ -505,6 +505,14 @@ class _SellScreenState extends State<SellScreen> {
                   : null,
               onTap: () => Navigator.pop(ctx, 'seat'),
             ),
+          if (line.quantity > 1 && line.quantity == line.quantity.roundToDouble())
+            ListTile(
+              key: const Key('line-split-units'),
+              leading: const Icon(Icons.splitscreen_outlined),
+              title: Text(tr(ctx, 'Split into single items')),
+              subtitle: Text(tr(ctx, 'So you can change one on its own')),
+              onTap: () => Navigator.pop(ctx, 'split-units'),
+            ),
           ListTile(
             key: const Key('line-void'),
             leading: const Icon(Icons.remove_circle_outline, color: Colors.red),
@@ -517,6 +525,7 @@ class _SellScreenState extends State<SellScreen> {
     if (action == 'note') await _lineNote(line);
     if (action == 'discount') await _lineDiscount(line);
     if (action == 'seat') await _assignSeat(line);
+    if (action == 'split-units') _changed(() => s.splitLineToUnits(line.uuid));
     if (action == 'void') await _voidLine(line);
   }
 

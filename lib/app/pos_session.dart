@@ -105,7 +105,10 @@ class PosSession {
 
   static bool _sameModifiers(List<OrderModifier> a, List<OrderModifier> b) {
     if (a.length != b.length) return false;
-    String key(OrderModifier m) => '${m.modifierId}:${m.quantity}:${m.unitPrice}';
+    // Include every field that reaches the server payload, so a refreshed modifier
+    // with a new backing product or name is not folded under the old one.
+    String key(OrderModifier m) =>
+        '${m.modifierId}:${m.productId}:${m.name}:${m.quantity}:${m.unitPrice}';
     final ak = a.map(key).toList()..sort();
     final bk = b.map(key).toList()..sort();
     for (var i = 0; i < ak.length; i++) {
@@ -319,6 +322,44 @@ class PosSession {
       ));
     } else {
       line.seat = s;
+    }
+    orders.save(current);
+  }
+
+  /// Explode a consolidated multi-unit line into that many single-unit lines, so a
+  /// cashier can note, discount, seat, move or pay one unit on its own after repeat
+  /// taps merged them. A no-op on a single-unit or fractional line.
+  void splitLineToUnits(String lineUuid) {
+    final idx = current.lines.indexWhere((l) => l.uuid == lineUuid);
+    if (idx < 0) return;
+    final line = current.lines[idx];
+    if (line.quantity <= 1 || line.quantity != line.quantity.roundToDouble()) return;
+    final n = line.quantity.toInt();
+    line.quantity = 1;
+    for (var i = 1; i < n; i++) {
+      current.lines.insert(
+        idx + i,
+        OrderLine(
+          productId: line.productId,
+          name: line.name,
+          quantity: 1,
+          unitPrice: line.unitPrice,
+          categoryId: line.categoryId,
+          taxRate: line.taxRate,
+          note: line.note,
+          discountPercent: line.discountPercent,
+          printedToKitchen: line.printedToKitchen,
+          modifiers: [
+            for (final m in line.modifiers)
+              OrderModifier(
+                  modifierId: m.modifierId,
+                  productId: m.productId,
+                  name: m.name,
+                  quantity: m.quantity,
+                  unitPrice: m.unitPrice),
+          ],
+        ),
+      );
     }
     orders.save(current);
   }

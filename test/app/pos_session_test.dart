@@ -93,6 +93,16 @@ void main() {
     expect(session.current.lines.length, 2);
   });
 
+  test('splitting a consolidated line explodes it into single-unit lines', () {
+    session.addProduct(pizza);
+    session.addProduct(pizza);
+    session.addProduct(pizza); // one line, qty 3
+    session.splitLineToUnits(session.current.lines.single.uuid);
+    expect(session.current.lines.length, 3);
+    expect(session.current.lines.every((l) => l.quantity == 1), isTrue);
+    expect(session.total, 750);
+  });
+
   test('assigning a guest to a consolidated line peels one unit onto that guest', () {
     session.addProduct(pizza);
     session.addProduct(pizza); // consolidated -> one line, qty 2
