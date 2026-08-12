@@ -808,10 +808,12 @@ class _PosAppState extends State<PosApp> {
         icon: Icons.receipt_long,
         keyValue: 'set-receipt',
         group: 'Shop',
-        onTap: () => push(ReceiptDesignerScreen(
-            settings: widget.settings,
-            onChanged: refresh,
-            onTestPrint: () => _printReceipt(_sampleOrder(), reprint: true))),
+        onTap: () => pushGated(
+            Permission.openSettings,
+            ReceiptDesignerScreen(
+                settings: widget.settings,
+                onChanged: refresh,
+                onTestPrint: () => _printReceipt(_sampleOrder(), reprint: true))),
       ),
       SettingsEntry(
         title: 'Printers & kitchen routing',
