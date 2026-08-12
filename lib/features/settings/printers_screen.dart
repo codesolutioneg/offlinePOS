@@ -608,7 +608,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
       actions: [
         TextButton(
           key: const Key('cancel-add-printer'),
-          onPressed: () => Navigator.of(context).pop(false),
+          onPressed: () => Navigator.of(context).pop(),
           child: Text(tr(context, 'Cancel')),
         ),
         FilledButton(
