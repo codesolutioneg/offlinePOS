@@ -349,6 +349,7 @@ class PosSession {
           note: line.note,
           discountPercent: line.discountPercent,
           printedToKitchen: line.printedToKitchen,
+          seat: line.seat,
           modifiers: [
             for (final m in line.modifiers)
               OrderModifier(
