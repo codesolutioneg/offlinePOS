@@ -22,9 +22,21 @@ class TableFloorScreen extends StatefulWidget {
     required this.onOpenTable,
     this.occupiedInfo = const {},
     this.formatAmount,
+    this.pickMode = false,
+    this.exclude,
   });
 
   final TableStore store;
+
+  /// When true the screen is a table chooser, not the manager floor: the edit
+  /// tools are hidden and a tap just reports the picked table. It is the same
+  /// drawn plan, with the same section tabs and occupancy colours, so choosing a
+  /// table to seat looks exactly like the floor the manager laid out.
+  final bool pickMode;
+
+  /// One table name to hide while picking (the source table when moving items to
+  /// another one, so you cannot move a bill onto the table it is already on).
+  final String? exclude;
 
   /// Table names that currently have a held order, so those tiles read as occupied.
   final Set<String> occupiedLabels;
@@ -307,22 +319,62 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     _reload();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final tables = widget.store.inSection(_activeSection);
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(tr(context, 'Tables')),
+  /// Prompt for a table not drawn on the floor and pop the picker with it, so a
+  /// one-off table (a pushed-together pair, an outdoor extra) is still reachable.
+  Future<void> _pickOther() async {
+    final ctrl = TextEditingController();
+    final label = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Other table')),
+        content: TextField(
+          key: const Key('other-table-field'),
+          controller: ctrl,
+          autofocus: true,
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Table name / number'), border: const OutlineInputBorder()),
+        ),
         actions: [
-          IconButton(
-            key: const Key('toggle-edit'),
-            tooltip: _editing ? tr(context, 'Done') : tr(context, 'Edit floor'),
-            icon: Icon(_editing ? Icons.check : Icons.edit),
-            onPressed: () => setState(() => _editing = !_editing),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: Text(tr(ctx, 'Set'))),
         ],
       ),
-      floatingActionButton: _editing
+    );
+    if (!mounted || label == null || label.isEmpty) return;
+    // Report it through the same callback a tapped tile uses; the shell pops the
+    // picker with this name.
+    widget.onOpenTable(PosTable(id: 'custom', name: label));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tables = widget.store
+        .inSection(_activeSection)
+        .where((t) => widget.exclude == null || t.name != widget.exclude)
+        .toList();
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(tr(context, widget.pickMode ? 'Choose a table' : 'Tables')),
+        actions: [
+          if (widget.pickMode)
+            TextButton.icon(
+              key: const Key('pick-other'),
+              onPressed: _pickOther,
+              icon: const Icon(Icons.edit_note),
+              label: Text(tr(context, 'Other')),
+            )
+          else
+            IconButton(
+              key: const Key('toggle-edit'),
+              tooltip: _editing ? tr(context, 'Done') : tr(context, 'Edit floor'),
+              icon: Icon(_editing ? Icons.check : Icons.edit),
+              onPressed: () => setState(() => _editing = !_editing),
+            ),
+        ],
+      ),
+      floatingActionButton: _editing && !widget.pickMode
           ? Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -348,6 +400,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       body: Column(
         children: [
           _sectionStrip(),
+          if (widget.pickMode) _legend(),
           const Divider(height: 1),
           Expanded(
             child: tables.isEmpty
@@ -440,6 +493,23 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       ),
     );
   }
+
+  /// A Free/Occupied colour key, shown only while picking so a waiter reads the
+  /// tile colours without guessing.
+  Widget _legend() => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+        child: Row(children: [
+          _legendDot(AppColors.tableFree, tr(context, 'Free')),
+          const SizedBox(width: 14),
+          _legendDot(AppColors.tableOccupied, tr(context, 'Occupied')),
+        ]),
+      );
+
+  Widget _legendDot(Color c, String label) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(width: 12, height: 12, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+        const SizedBox(width: 5),
+        Text(label, style: const TextStyle(fontSize: 12)),
+      ]);
 
   Widget _sectionStrip() => SizedBox(
         height: 48,

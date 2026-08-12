@@ -471,6 +471,10 @@ class _PosAppState extends State<PosApp> {
                   .map((t) => t.name)
                   .toList(),
               heldOrders: () => widget.orders.held(),
+              // Seat a dine-in (or move a bill) on the real floor plan, not a flat
+              // list, so choosing a table looks like the floor the manager drew.
+              onPickTable: ({exclude}) =>
+                  _pickTableFromFloor(context, session, exclude: exclude),
               onChanged: _publishActivity,
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
@@ -773,10 +777,13 @@ class _PosAppState extends State<PosApp> {
 
   /// The floor plan. Tapping a table recalls the order parked on it, or starts a
   /// fresh dine-in seated at it, then drops back to the sell screen.
-  void _openFloor(BuildContext context, PosSession session) {
+  /// Which tables read as occupied right now, and their running total + age, from
+  /// the held orders plus the one on screen. Shared by the floor plan and the table
+  /// picker so both colour tables identically.
+  ({Set<String> occupied, Map<String, ({double total, DateTime since})> info})
+      _floorOccupancy(PosSession session) {
     final held = widget.orders.held();
     final occupied = held.map((o) => o.tableLabel).whereType<String>().toSet();
-    // Running total + open-since per occupied table, for the floor tiles.
     final info = <String, ({double total, DateTime since})>{
       for (final o in held)
         if (o.tableLabel != null) o.tableLabel!: (total: o.total, since: o.createdAt),
@@ -788,11 +795,36 @@ class _PosAppState extends State<PosApp> {
       occupied.add(active.tableLabel!);
       info[active.tableLabel!] = (total: active.total, since: active.createdAt);
     }
+    return (occupied: occupied, info: info);
+  }
+
+  /// Choose a table on the same drawn floor plan the manager laid out, with the
+  /// section tabs and occupancy colours, and return the chosen name. Used by the
+  /// sell screen for seating a dine-in and for moving a bill to another table.
+  Future<String?> _pickTableFromFloor(BuildContext context, PosSession session,
+      {String? exclude}) {
+    final occ = _floorOccupancy(session);
+    return Navigator.of(context).push(MaterialPageRoute<String>(
+      builder: (routeContext) => TableFloorScreen(
+        store: widget.tables,
+        pickMode: true,
+        exclude: exclude,
+        occupiedLabels: occ.occupied,
+        occupiedInfo: occ.info,
+        formatAmount: PosApp.money,
+        onOpenTable: (t) => Navigator.of(routeContext).pop(t.name),
+      ),
+    ));
+  }
+
+  void _openFloor(BuildContext context, PosSession session) {
+    final occ = _floorOccupancy(session);
+    final occupied = occ.occupied;
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => TableFloorScreen(
         store: widget.tables,
         occupiedLabels: occupied,
-        occupiedInfo: info,
+        occupiedInfo: occ.info,
         formatAmount: PosApp.money,
         onOpenTable: (t) {
           // Tapping the table the current order is already seated at just returns

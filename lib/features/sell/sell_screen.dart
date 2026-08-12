@@ -50,6 +50,7 @@ class SellScreen extends StatefulWidget {
     this.extraCustomers,
     this.tables,
     this.heldOrders,
+    this.onPickTable,
     this.onResendToKitchen,
   });
 
@@ -144,6 +145,12 @@ class SellScreen extends StatefulWidget {
   /// The other open (held) orders, for merging another table into this one. Null
   /// disables merge.
   final List<Order> Function()? heldOrders;
+
+  /// Choose a table on the drawn floor plan (with section tabs and occupancy),
+  /// returning the chosen name or null if cancelled. When null the screen falls
+  /// back to its own flat-grid table sheet. [exclude] hides one table (the source
+  /// when moving a bill to another table).
+  final Future<String?> Function({String? exclude})? onPickTable;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -802,6 +809,10 @@ class _SellScreenState extends State<SellScreen> {
   /// ones. Falls back to free-text for a table that is not on the floor yet.
   /// [exclude] hides one label (used when moving items, to hide the source table).
   Future<String?> _pickTable({String? exclude}) async {
+    // Prefer the real floor plan (spatial layout + section tabs) when the shell
+    // wires it; the flat-grid sheet below is the fallback for tests or a host that
+    // has no floor store.
+    if (widget.onPickTable != null) return widget.onPickTable!(exclude: exclude);
     final tables =
         (widget.tables?.call() ?? const <String>[]).where((t) => t != exclude).toList();
     final held = <String, Order>{

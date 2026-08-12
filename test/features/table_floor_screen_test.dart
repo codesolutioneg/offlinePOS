@@ -18,12 +18,16 @@ void main() {
   Widget app({
     Set<String> occupied = const {},
     void Function(PosTable)? onOpenTable,
+    bool pickMode = false,
+    String? exclude,
   }) =>
       MaterialApp(
         home: TableFloorScreen(
           store: tables,
           occupiedLabels: occupied,
           onOpenTable: onOpenTable ?? (_) {},
+          pickMode: pickMode,
+          exclude: exclude,
         ),
       );
 
@@ -39,6 +43,44 @@ void main() {
     await t.pump();
 
     expect(opened?.id, table.id);
+  });
+
+  testWidgets('pick mode is the same drawn plan: taps report the table, no edit tools', (t) async {
+    final table = tables.add(name: 'T1');
+    PosTable? picked;
+    await t.pumpWidget(app(pickMode: true, onOpenTable: (tap) => picked = tap));
+
+    // Titled as a chooser, with the occupancy legend, and no floor-edit affordance.
+    expect(find.text('Choose a table'), findsOneWidget);
+    expect(find.byKey(const Key('toggle-edit')), findsNothing);
+    expect(find.byKey(const Key('pick-other')), findsOneWidget);
+
+    await t.tap(find.byKey(Key('table-tile-${table.id}')));
+    await t.pump();
+    expect(picked?.name, 'T1');
+  });
+
+  testWidgets('pick mode hides the excluded table so a bill cannot move onto itself', (t) async {
+    tables.add(name: 'T1');
+    final t2 = tables.add(name: 'T2');
+    await t.pumpWidget(app(pickMode: true, exclude: 'T1'));
+
+    expect(find.text('T1'), findsNothing);
+    expect(find.byKey(Key('table-tile-${t2.id}')), findsOneWidget);
+  });
+
+  testWidgets('pick mode Other reports a free-text table not on the floor', (t) async {
+    tables.add(name: 'T1');
+    String? picked;
+    await t.pumpWidget(app(pickMode: true, onOpenTable: (tap) => picked = tap.name));
+
+    await t.tap(find.byKey(const Key('pick-other')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('other-table-field')), 'Terrace-9');
+    await t.tap(find.text('Set'));
+    await t.pumpAndSettle();
+
+    expect(picked, 'Terrace-9');
   });
 
   testWidgets('a divider is drawn but never tapped to open an order', (t) async {
