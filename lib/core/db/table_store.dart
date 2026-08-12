@@ -1,6 +1,18 @@
 import '../../domain/identity.dart';
 import 'database.dart';
 
+/// How a floor element is drawn: a real shape for a seatable table, or
+/// [divider] for a wall/aisle marker that only marks a section split and is
+/// never opened for an order.
+enum TableShape { square, round, rectangle, divider }
+
+TableShape _shapeFromDb(String? v) {
+  for (final s in TableShape.values) {
+    if (s.name == v) return s;
+  }
+  return TableShape.square;
+}
+
 /// A table on the shop floor: which section it sits in, how many it seats, and
 /// where on the floor it is drawn.
 class PosTable {
@@ -12,6 +24,7 @@ class PosTable {
     this.x = 0,
     this.y = 0,
     this.sequence = 0,
+    this.shape = TableShape.square,
   });
 
   final String id;
@@ -25,6 +38,11 @@ class PosTable {
   final double x;
   final double y;
   final int sequence;
+  final TableShape shape;
+
+  /// A divider is a visual wall/aisle marker, not a seatable table: it never
+  /// shows as occupied and is never tapped to open an order.
+  bool get isDivider => shape == TableShape.divider;
 
   PosTable copyWith({
     String? name,
@@ -33,6 +51,7 @@ class PosTable {
     double? x,
     double? y,
     int? sequence,
+    TableShape? shape,
   }) =>
       PosTable(
         id: id,
@@ -42,6 +61,7 @@ class PosTable {
         x: x ?? this.x,
         y: y ?? this.y,
         sequence: sequence ?? this.sequence,
+        shape: shape ?? this.shape,
       );
 }
 
@@ -90,6 +110,7 @@ class TableStore {
     int seats = 4,
     double? x,
     double? y,
+    TableShape shape = TableShape.square,
   }) {
     final seq = _nextSequence(section);
     final table = PosTable(
@@ -100,6 +121,7 @@ class TableStore {
       x: x ?? (seq % 5).toDouble(),
       y: y ?? (seq ~/ 5).toDouble(),
       sequence: seq,
+      shape: shape,
     );
     upsert(table);
     return table;
@@ -117,12 +139,12 @@ class TableStore {
   }
 
   void upsert(PosTable t) => _db.raw.execute(
-        'INSERT INTO pos_tables (id, section, name, seats, pos_x, pos_y, sequence) '
-        'VALUES (?,?,?,?,?,?,?) '
+        'INSERT INTO pos_tables (id, section, name, seats, pos_x, pos_y, sequence, shape) '
+        'VALUES (?,?,?,?,?,?,?,?) '
         'ON CONFLICT(id) DO UPDATE SET section=excluded.section, name=excluded.name, '
         'seats=excluded.seats, pos_x=excluded.pos_x, pos_y=excluded.pos_y, '
-        'sequence=excluded.sequence',
-        [t.id, t.section, t.name, t.seats, t.x, t.y, t.sequence],
+        'sequence=excluded.sequence, shape=excluded.shape',
+        [t.id, t.section, t.name, t.seats, t.x, t.y, t.sequence, t.shape.name],
       );
 
   void remove(String id) =>
@@ -148,5 +170,6 @@ class TableStore {
         x: (r['pos_x'] as num).toDouble(),
         y: (r['pos_y'] as num).toDouble(),
         sequence: r['sequence'] as int,
+        shape: _shapeFromDb(r['shape'] as String?),
       );
 }

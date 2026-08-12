@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 11;
+  static const int version = 12;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -327,6 +327,13 @@ class Schema {
       )
       ''',
       'CREATE INDEX idx_attendance_staff ON attendance(staff_id)',
+    ],
+
+    // v11 -> v12: table shape, so the floor editor can draw a table as square,
+    // round, or rectangular, and drop a wall/divider (a pos_tables row of its
+    // own shape) to mark a section split.
+    [
+      "ALTER TABLE pos_tables ADD COLUMN shape TEXT NOT NULL DEFAULT 'square'",
     ],
   ];
 }

@@ -43,4 +43,46 @@ void main() {
     tables.remove(t.id);
     expect(tables.sections(), ['Main']);
   });
+
+  test('a table shape defaults to square and round-trips through the store', () {
+    final square = tables.add(name: 'S1');
+    expect(square.shape, TableShape.square);
+    expect(square.isDivider, false);
+
+    final round = tables.add(name: 'R1', shape: TableShape.round);
+    expect(round.shape, TableShape.round);
+    expect(tables.byId(round.id)!.shape, TableShape.round);
+
+    final rect = tables.add(name: 'X1', shape: TableShape.rectangle);
+    expect(tables.byId(rect.id)!.shape, TableShape.rectangle);
+  });
+
+  test('a divider is stored with zero seats and never reads as a normal table', () {
+    final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
+    expect(wall.isDivider, true);
+    expect(wall.seats, 0);
+
+    final reloaded = tables.byId(wall.id)!;
+    expect(reloaded.isDivider, true);
+    expect(reloaded.shape, TableShape.divider);
+  });
+
+  test('copyWith changes shape without touching the rest of the table', () {
+    final t = tables.add(name: 'C1');
+    final round = t.copyWith(shape: TableShape.round);
+    expect(round.shape, TableShape.round);
+    expect(round.name, t.name);
+    expect(round.id, t.id);
+
+    tables.upsert(round);
+    expect(tables.byId(t.id)!.shape, TableShape.round);
+  });
+
+  test('an unrecognised shape value on disk falls back to square rather than crashing', () {
+    final t = tables.add(name: 'Legacy');
+    // Simulate a row written before the shape column existed getting some other
+    // stray value; the mapper must not choke on it.
+    db.raw.execute('UPDATE pos_tables SET shape = ? WHERE id = ?', ['bogus', t.id]);
+    expect(tables.byId(t.id)!.shape, TableShape.square);
+  });
 }
