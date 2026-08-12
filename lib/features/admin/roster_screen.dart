@@ -16,10 +16,17 @@ class RosterScreen extends StatefulWidget {
     required this.users,
     required this.auth,
     required this.onChanged,
+    this.canAssignManager = true,
   });
 
   final UserStore users;
   final AuthService auth;
+
+  /// Whether the person on this screen may create or touch manager accounts. A
+  /// cashier who reaches the roster through the `manageStaff` permission must not
+  /// be able to mint a manager (or reset a manager's PIN) and self-promote, so
+  /// the caller passes false unless a real manager is signed in.
+  final bool canAssignManager;
 
   /// Called after any change so the caller can refresh whatever list it is
   /// holding of the roster (this screen owns no state the caller can see).
@@ -33,7 +40,7 @@ class _RosterScreenState extends State<RosterScreen> {
   Future<void> _openAddDialog() async {
     final result = await showDialog<_StaffFormResult>(
       context: context,
-      builder: (_) => const _StaffFormDialog(),
+      builder: (_) => _StaffFormDialog(canAssignManager: widget.canAssignManager),
     );
     if (result == null) return;
     // The id is derived from the name rather than typed, so a cashier's login
@@ -60,7 +67,7 @@ class _RosterScreenState extends State<RosterScreen> {
   Future<void> _openEditDialog(Cashier cashier) async {
     final result = await showDialog<_StaffFormResult>(
       context: context,
-      builder: (_) => _StaffFormDialog(existing: cashier),
+      builder: (_) => _StaffFormDialog(existing: cashier, canAssignManager: widget.canAssignManager),
     );
     if (result == null) return;
     if (result.pin.isEmpty) {
@@ -147,6 +154,9 @@ class _RosterScreenState extends State<RosterScreen> {
               itemCount: staff.length,
               itemBuilder: (context, index) {
                 final c = staff[index];
+                // A non-manager may see manager rows but not touch them: editing one
+                // resets its PIN, which would be a self-promotion path.
+                final locked = c.isManager && !widget.canAssignManager;
                 return ListTile(
                   key: Key('staff-${c.id}'),
                   title: Text(c.name, overflow: TextOverflow.ellipsis),
@@ -156,28 +166,30 @@ class _RosterScreenState extends State<RosterScreen> {
                           : '${c.isManager ? tr(context, 'Manager') : tr(context, 'Cashier')} · ${tr(context, 'inactive')}'),
                   // Actions live in an overflow menu so a long name can never push
                   // buttons off the row.
-                  trailing: PopupMenuButton<String>(
-                    key: Key('staff-menu-${c.id}'),
-                    onSelected: (v) {
-                      if (v == 'edit') _openEditDialog(c);
-                      if (v == 'deactivate') _deactivate(c);
-                      if (v == 'reactivate') _reactivate(c);
-                    },
-                    itemBuilder: (_) => [
-                      PopupMenuItem(
-                          key: Key('edit-${c.id}'), value: 'edit', child: Text(tr(context, 'Edit'))),
-                      if (c.active)
-                        PopupMenuItem(
-                            key: Key('deactivate-${c.id}'),
-                            value: 'deactivate',
-                            child: Text(tr(context, 'Deactivate')))
-                      else
-                        PopupMenuItem(
-                            key: Key('reactivate-${c.id}'),
-                            value: 'reactivate',
-                            child: Text(tr(context, 'Reactivate'))),
-                    ],
-                  ),
+                  trailing: locked
+                      ? const Icon(Icons.lock_outline)
+                      : PopupMenuButton<String>(
+                          key: Key('staff-menu-${c.id}'),
+                          onSelected: (v) {
+                            if (v == 'edit') _openEditDialog(c);
+                            if (v == 'deactivate') _deactivate(c);
+                            if (v == 'reactivate') _reactivate(c);
+                          },
+                          itemBuilder: (_) => [
+                            PopupMenuItem(
+                                key: Key('edit-${c.id}'), value: 'edit', child: Text(tr(context, 'Edit'))),
+                            if (c.active)
+                              PopupMenuItem(
+                                  key: Key('deactivate-${c.id}'),
+                                  value: 'deactivate',
+                                  child: Text(tr(context, 'Deactivate')))
+                            else
+                              PopupMenuItem(
+                                  key: Key('reactivate-${c.id}'),
+                                  value: 'reactivate',
+                                  child: Text(tr(context, 'Reactivate'))),
+                          ],
+                        ),
                 );
               },
             ),
@@ -202,9 +214,10 @@ class _StaffFormResult {
 /// the current PIN, so a manager is not forced to invent a new one just to fix
 /// a typo in a name.
 class _StaffFormDialog extends StatefulWidget {
-  const _StaffFormDialog({this.existing});
+  const _StaffFormDialog({this.existing, this.canAssignManager = true});
 
   final Cashier? existing;
+  final bool canAssignManager;
 
   @override
   State<_StaffFormDialog> createState() => _StaffFormDialogState();
@@ -248,7 +261,10 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
         return;
       }
     }
-    Navigator.of(context).pop(_StaffFormResult(name: name, role: _role, pin: pin));
+    // Belt-and-braces: even if the manager option were somehow selected, a caller
+    // without the right may never save a manager account.
+    final role = (!widget.canAssignManager && _role == 'manager') ? 'cashier' : _role;
+    Navigator.of(context).pop(_StaffFormResult(name: name, role: role, pin: pin));
   }
 
   @override
@@ -272,7 +288,9 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
               decoration: InputDecoration(labelText: tr(context, 'Role')),
               items: [
                 DropdownMenuItem(value: 'cashier', child: Text(tr(context, 'Cashier'))),
-                DropdownMenuItem(value: 'manager', child: Text(tr(context, 'Manager'))),
+                // Only an actual manager can hand out the manager role.
+                if (widget.canAssignManager)
+                  DropdownMenuItem(value: 'manager', child: Text(tr(context, 'Manager'))),
               ],
               onChanged: (v) => setState(() => _role = v ?? _role),
             ),

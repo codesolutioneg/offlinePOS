@@ -710,6 +710,10 @@ class _PosAppState extends State<PosApp> {
         users: widget.users,
         auth: widget.auth,
         onChanged: () => setState(() {}),
+        // Only a signed-in manager may mint or edit manager accounts. A cashier who
+        // reaches here via the manageStaff permission can manage cashiers only, so
+        // the manager role stays out of reach and self-promotion is impossible.
+        canAssignManager: widget.auth.signedIn?.isManager ?? false,
       ),
     ));
   }

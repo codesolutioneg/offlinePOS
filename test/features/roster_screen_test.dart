@@ -27,11 +27,12 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Widget app() => MaterialApp(
+  Widget app({bool canAssignManager = true}) => MaterialApp(
         home: RosterScreen(
           users: users,
           auth: auth,
           onChanged: () => changedCount++,
+          canAssignManager: canAssignManager,
         ),
       );
 
@@ -91,5 +92,43 @@ void main() {
     expect(users.byId('sara')!.active, isFalse);
     expect(find.byKey(const Key('staff-sara')), findsNothing);
     expect(changedCount, 1);
+  });
+
+  testWidgets('without manager rights the manager role cannot be chosen', (t) async {
+    await t.pumpWidget(app(canAssignManager: false));
+
+    await t.tap(find.byKey(const Key('add-staff')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('staff-role')));
+    await t.pumpAndSettle();
+
+    // The dropdown offers Cashier only; Manager is not an option.
+    expect(find.text('Manager'), findsNothing);
+    expect(find.text('Cashier'), findsWidgets);
+  });
+
+  testWidgets('without manager rights a new staff member is never enrolled as manager', (t) async {
+    await t.pumpWidget(app(canAssignManager: false));
+
+    await t.tap(find.byKey(const Key('add-staff')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('staff-name')), 'Omar');
+    await t.enterText(find.byKey(const Key('staff-pin')), '4321');
+    await t.tap(find.byKey(const Key('staff-form-save')));
+    await t.pumpAndSettle();
+
+    final omar = users.active().firstWhere((c) => c.name == 'Omar');
+    expect(omar.isManager, isFalse);
+  });
+
+  testWidgets('without manager rights an existing manager row is locked, not editable', (t) async {
+    await auth.enrol(id: 'boss', name: 'Boss', pin: '9999', role: 'manager');
+    await t.pumpWidget(app(canAssignManager: false));
+
+    // The manager row shows a lock and exposes no action menu to reset the PIN.
+    expect(find.byKey(const Key('staff-boss')), findsOneWidget);
+    expect(find.byKey(const Key('staff-menu-boss')), findsNothing);
+    // A plain cashier stays fully editable.
+    expect(find.byKey(const Key('staff-menu-sara')), findsOneWidget);
   });
 }
