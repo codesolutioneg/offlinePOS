@@ -83,6 +83,25 @@ void main() {
     expect(picked, 'Terrace-9');
   });
 
+  testWidgets('pick mode Other with an empty value reports it, to clear a table', (t) async {
+    tables.add(name: 'T1');
+    String? picked;
+    var reported = false;
+    await t.pumpWidget(app(pickMode: true, onOpenTable: (tap) {
+      picked = tap.name;
+      reported = true;
+    }));
+
+    await t.tap(find.byKey(const Key('pick-other')));
+    await t.pumpAndSettle();
+    // Leave the field blank and confirm: the set-table flow reads '' as "clear".
+    await t.tap(find.text('Set'));
+    await t.pumpAndSettle();
+
+    expect(reported, isTrue);
+    expect(picked, '');
+  });
+
   testWidgets('a divider is drawn but never tapped to open an order', (t) async {
     final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
     bool tapped = false;

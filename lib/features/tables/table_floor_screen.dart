@@ -342,9 +342,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         ],
       ),
     );
-    if (!mounted || label == null || label.isEmpty) return;
-    // Report it through the same callback a tapped tile uses; the shell pops the
-    // picker with this name.
+    // Cancel (null) does nothing; an empty value is reported so the set-table flow
+    // can clear a table assigned by mistake (setTable('')). A tile tap and this
+    // share the one callback; the shell pops the picker with the name.
+    if (!mounted || label == null) return;
     widget.onOpenTable(PosTable(id: 'custom', name: label));
   }
 
