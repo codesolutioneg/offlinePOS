@@ -84,9 +84,15 @@ class PosSession {
   /// printed to the kitchen.
   OrderLine? _mergeableLineFor(OrderLine line) {
     for (final l in current.lines) {
+      // Every captured field must match, not just the id: a catalogue refresh can
+      // change a product's tax, category or name while its price holds, and merging
+      // across that would book the new units under the old line's stale metadata.
       if (l.printedToKitchen ||
           l.productId != line.productId ||
           l.unitPrice != line.unitPrice ||
+          l.taxRate != line.taxRate ||
+          l.categoryId != line.categoryId ||
+          l.name != line.name ||
           l.note != null ||
           l.discountPercent != 0 ||
           l.seat != null) {

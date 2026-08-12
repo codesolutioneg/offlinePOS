@@ -272,24 +272,27 @@ class _PosAppState extends State<PosApp> {
           .toSet();
       final isCash = order.payments.isEmpty ||
           order.payments.any((p) => cashIds.contains(p.methodId));
-      final bytes = ReceiptBuilder(
-        shopName: s.shopName ?? widget.config.shopName,
-        taxId: s.receiptShowTax ? (s.taxId ?? widget.config.taxId) : null,
-        footer: s.receiptFooter ?? widget.config.receiptFooter,
-        header: s.getString('receipt_header'),
-        columns: s.receiptColumns,
-        showCashier: s.getBool('receipt_show_cashier', fallback: true),
-        showOrderType: s.getBool('receipt_show_ordertype', fallback: true),
-        showTax: s.receiptShowTax,
-        openDrawer: isCash && !reprint && s.openDrawerOnSale,
-        formatAmount: PosApp.money,
-      ).build(order, reprint: reprint);
+      Uint8List build({required bool openDrawer}) => ReceiptBuilder(
+            shopName: s.shopName ?? widget.config.shopName,
+            taxId: s.receiptShowTax ? (s.taxId ?? widget.config.taxId) : null,
+            footer: s.receiptFooter ?? widget.config.receiptFooter,
+            header: s.getString('receipt_header'),
+            columns: s.receiptColumns,
+            showCashier: s.getBool('receipt_show_cashier', fallback: true),
+            showOrderType: s.getBool('receipt_show_ordertype', fallback: true),
+            showTax: s.receiptShowTax,
+            openDrawer: openDrawer,
+            formatAmount: PosApp.money,
+          ).build(order, reprint: reprint);
       // A reprint uses a distinct reference so it does not collide with the
       // original in the spool's dedupe; extra copies get their own suffix so the
-      // dedupe does not fold them into one.
+      // dedupe does not fold them into one. Only the first copy carries the drawer
+      // kick, so a two-copy cash sale opens the drawer once, not twice.
       final base = reprint ? 'reprint-${order.uuid}' : order.uuid;
+      final wantDrawer = isCash && !reprint && s.openDrawerOnSale;
       for (var i = 0; i < s.receiptCopies; i++) {
-        await _receiptPrinter.send(bytes, reference: i == 0 ? base : '$base-c$i');
+        await _receiptPrinter.send(build(openDrawer: wantDrawer && i == 0),
+            reference: i == 0 ? base : '$base-c$i');
       }
     } on PrinterUnavailable {
       // Already held in the spool by [SpooledPrinter]. Surfacing it here would put a
