@@ -407,7 +407,12 @@ class _PosAppState extends State<PosApp> {
               },
               gridColumns: widget.settings.gridColumns,
               extraCustomers: (q) => widget.customers.search(query: q, limit: 30),
-              tables: () => widget.tables.all().map((t) => t.name).toList(),
+              // Dividers are floor decoration, never a table an order sits at.
+              tables: () => widget.tables
+                  .all()
+                  .where((t) => !t.isDivider)
+                  .map((t) => t.name)
+                  .toList(),
               heldOrders: () => widget.orders.held(),
               onChanged: _publishActivity,
               onSignOut: _signOut,
@@ -950,8 +955,14 @@ class _PosAppState extends State<PosApp> {
     }
     for (final l in lines) {
       final stations = stationsOf[l.uuid] ?? const <String>{};
-      if (stations.isNotEmpty && !stations.any(failed.contains)) {
+      final delivered = stations.where((st) => !failed.contains(st));
+      if (stations.isNotEmpty && delivered.length == stations.length) {
         l.printedToKitchen = true;
+        // Remember exactly where it went, so a later void follows it even if the
+        // routing is changed afterwards.
+        for (final st in delivered) {
+          if (!l.firedStations.contains(st)) l.firedStations.add(st);
+        }
       }
     }
     widget.orders.save(order);
@@ -959,12 +970,15 @@ class _PosAppState extends State<PosApp> {
 
   Future<void> _fireVoid(Order order, OrderLine line, String reason) async {
     final bytes = KitchenTicketBuilder().buildVoid(order, line, reason);
-    // Route the cancel to the same station(s) the line was cooked at, or a line
-    // sent to the bar/grill keeps cooking because only the default kitchen heard it.
-    final stations = routeToStations([line],
-            categoryToStations: widget.settings.categoryStations,
-            productToStations: widget.settings.productStations)
-        .keys;
+    // Void goes to the station(s) this line was actually fired to; only when that
+    // was not recorded (older orders) do we fall back to the current routing.
+    final stations = line.firedStations.isNotEmpty
+        ? line.firedStations
+        : routeToStations([line],
+                categoryToStations: widget.settings.categoryStations,
+                productToStations: widget.settings.productStations)
+            .keys
+            .toList();
     for (final station in stations) {
       await _sendToStation(station, bytes, 'void-${order.uuid}-${line.uuid}-$station');
     }

@@ -85,8 +85,10 @@ class OrderLine {
     this.taxRate = 0,
     this.printedToKitchen = false,
     this.seat,
+    List<String>? firedStations,
   })  : uuid = uuid ?? Uuid.v4(),
-        modifiers = modifiers ?? [];
+        modifiers = modifiers ?? [],
+        firedStations = firedStations ?? [];
 
   final String uuid;
   final int productId;
@@ -113,6 +115,10 @@ class OrderLine {
   /// Whether this line has already been sent to the kitchen. Lets a re-fire print
   /// only the newly added lines rather than the whole ticket again.
   bool printedToKitchen;
+
+  /// The station name(s) this line's ticket was actually sent to, recorded at fire
+  /// time so a later void reaches the same printer even if routing changed since.
+  final List<String> firedStations;
 
   /// Which guest/seat this line belongs to, for dine-in bill splitting (1-based).
   /// Null means unassigned (shared / not yet split). Drives split-by-guest and the
@@ -141,6 +147,7 @@ class OrderLine {
         'tax_rate': taxRate,
         'printed_to_kitchen': printedToKitchen,
         'seat': seat,
+        'fired_stations': firedStations,
       };
 
   factory OrderLine.fromMap(Map<String, dynamic> m) => OrderLine(
@@ -155,6 +162,8 @@ class OrderLine {
         taxRate: (m['tax_rate'] as num?)?.toDouble() ?? 0,
         printedToKitchen: (m['printed_to_kitchen'] as bool?) ?? false,
         seat: m['seat'] as int?,
+        firedStations:
+            ((m['fired_stations'] as List?) ?? const []).map((e) => e.toString()).toList(),
         modifiers: ((m['modifiers'] as List?) ?? const [])
             .map((e) => OrderModifier.fromMap(e as Map<String, dynamic>))
             .toList(),
