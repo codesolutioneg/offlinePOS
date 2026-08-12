@@ -195,6 +195,13 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
           ),
           if (header.isNotEmpty)
             Text(header, textAlign: TextAlign.center, style: mono),
+          // The tax id prints under the shop name when Show tax id is on, so the
+          // preview must react to that toggle to be trustworthy.
+          if (_showTax && (widget.settings.taxId?.trim().isNotEmpty ?? false))
+            Text(widget.settings.taxId!.trim(),
+                key: const Key('receipt-preview-taxid'),
+                textAlign: TextAlign.center,
+                style: mono),
           const SizedBox(height: 4),
           Text(_sampleBody(columns), key: const Key('receipt-preview-body'), style: mono),
           if (footer.isNotEmpty) ...[
