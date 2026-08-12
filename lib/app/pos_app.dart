@@ -588,6 +588,12 @@ class _PosAppState extends State<PosApp> {
         // audited, then the list is popped so the change is visible.
         onCancel: (order) async {
           if (!await _authorizeManager(sheetContext)) return;
+          // Anything the kitchen already started must be told to stop: fire a void
+          // slip for each fired line before the order is discarded, so cancelling a
+          // sent order does not silently leave food cooking.
+          for (final line in order.lines.where((l) => l.printedToKitchen)) {
+            unawaited(_fireVoid(order, line, 'Order cancelled'));
+          }
           widget.orders.delete(order.uuid);
           widget.audit.record(session.cashierId, 'order.cancelled', detail: order.uuid);
           if (sheetContext.mounted) Navigator.of(sheetContext).pop();
@@ -771,6 +777,7 @@ class _PosAppState extends State<PosApp> {
             printers: widget.printers,
             settings: widget.settings,
             categories: widget.catalogue.categories(),
+            products: widget.catalogue.products(),
             onChanged: refresh,
             // Send a sample receipt straight to the chosen printer so a manager can
             // prove THAT printer is wired. No receipt-printer fallback here: a test
@@ -920,8 +927,11 @@ class _PosAppState extends State<PosApp> {
     // Route each line to its category's station, so a multi-station kitchen sends
     // hot food and bar drinks to different printers. Unmapped categories fall to
     // the single default kitchen.
+    // A line routes to a per-item printer override if set, else its category's
+    // station(s), else the default kitchen; a line can print at several stations.
     final routed = routeToStations(lines,
-        categoryToStation: widget.settings.categoryStations);
+        categoryToStations: widget.settings.categoryStations,
+        productToStations: widget.settings.productStations);
     for (final entry in routed.entries) {
       final bytes = builder.build(order, only: entry.value, station: entry.key);
       final ok = await _sendToStation(entry.key, bytes, 'kot-${order.uuid}');

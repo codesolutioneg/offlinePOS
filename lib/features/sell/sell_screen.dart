@@ -295,7 +295,10 @@ class _SellScreenState extends State<SellScreen> {
         confirmLabel: tr(context, 'Add'),
       );
 
-  Future<void> _openCustomer() async {
+  /// Search the existing customers (Odoo partners + till-local) and return the one
+  /// picked, so a delivery is attached to a known customer rather than re-typed and
+  /// duplicated. Null if cancelled.
+  Future<Customer?> _pickExistingCustomer() async {
     final ctrl = TextEditingController();
     final result = await showDialog<Object?>(
       context: context,
@@ -353,11 +356,7 @@ class _SellScreenState extends State<SellScreen> {
         );
       },
     );
-    if (result is Customer) {
-      _changed(() => s.setCustomer(result));
-    } else if (result == 'clear') {
-      _changed(() => s.setCustomer(null));
-    }
+    return result is Customer ? result : null;
   }
 
   Future<void> _openDiscount() async {
@@ -830,11 +829,30 @@ class _SellScreenState extends State<SellScreen> {
         text: s.current.deliveryCost > 0 ? s.current.deliveryCost.toStringAsFixed(2) : '');
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
         title: Text(tr(ctx, 'Delivery details')),
         content: SizedBox(
           width: 360,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // Check for an existing customer before typing a new one, so a regular
+            // is not duplicated on every order.
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const Key('delivery-find-existing'),
+                icon: const Icon(Icons.person_search),
+                label: Text(tr(ctx, 'Find existing customer')),
+                onPressed: () async {
+                  final c = await _pickExistingCustomer();
+                  if (c == null) return;
+                  setSt(() {
+                    name.text = c.name;
+                    if (c.phone != null) phone.text = c.phone!;
+                  });
+                },
+              ),
+            ),
             TextField(
                 key: const Key('delivery-name'),
                 controller: name,
@@ -863,6 +881,7 @@ class _SellScreenState extends State<SellScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr(ctx, 'Save'))),
         ],
+        ),
       ),
     );
     if (ok == true) {
@@ -1494,29 +1513,50 @@ class _SellScreenState extends State<SellScreen> {
   Widget _contextBar() {
     final o = s.current;
     return Column(children: [
-      ListTile(
-        dense: true,
-        leading: const Icon(Icons.person_outline),
-        title: Text(o.customerName ?? tr(context, 'Walk-in customer')),
-        subtitle: o.customerPhone != null ? Text(o.customerPhone!) : null,
-        trailing: TextButton(
-          key: const Key('customer'),
-          onPressed: o.type == OrderType.delivery ? _deliveryDetails : _openCustomer,
-          child: Text(o.customerName == null ? tr(context, 'Add') : tr(context, 'Change')),
+      // Only delivery needs a customer (a name to call and an address to send to);
+      // a dine-in or takeaway sale has no "walk-in" to capture.
+      if (o.type == OrderType.delivery)
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.person_pin_circle_outlined),
+          title: Text(o.customerName ?? tr(context, 'Delivery customer')),
+          subtitle: (o.customerPhone == null && o.customerAddress == null)
+              ? null
+              : Text([o.customerPhone, o.customerAddress]
+                  .whereType<String>()
+                  .where((e) => e.isNotEmpty)
+                  .join('  ·  ')),
+          trailing: TextButton(
+            key: const Key('customer'),
+            onPressed: _deliveryDetails,
+            child: Text(o.customerName == null ? tr(context, 'Add') : tr(context, 'Change')),
+          ),
         ),
-      ),
+      // Dine-in starts at the table: if none is chosen, nudge to pick one first.
+      if (o.type == OrderType.dineIn && o.tableLabel == null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton.tonalIcon(
+              key: const Key('choose-table'),
+              icon: const Icon(Icons.table_restaurant),
+              label: Text(tr(context, 'Choose a table')),
+              onPressed: _setTable,
+            ),
+          ),
+        ),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Wrap(spacing: 8, runSpacing: 4, children: [
           if (o.type == OrderType.dineIn) ...[
-            ActionChip(
-              key: const Key('table'),
-              avatar: const Icon(Icons.table_bar, size: 16),
-              label: Text(o.tableLabel == null
-                  ? tr(context, 'Table')
-                  : '${tr(context, 'Table')} ${o.tableLabel}'),
-              onPressed: _setTable,
-            ),
+            if (o.tableLabel != null)
+              ActionChip(
+                key: const Key('table'),
+                avatar: const Icon(Icons.table_bar, size: 16),
+                label: Text('${tr(context, 'Table')} ${o.tableLabel}'),
+                onPressed: _setTable,
+              ),
             ActionChip(
               key: const Key('guests'),
               avatar: const Icon(Icons.groups, size: 16),
