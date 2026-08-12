@@ -215,8 +215,16 @@ class ReceiptBuilder {
       removed += l.total;
     }
     p.rule(divider);
+    // A whole-order discount scales what the customer would actually have paid for
+    // the removed lines, so the REMOVED figure nets it off rather than printing the
+    // gross line sum. It is itemised so the numbers reconcile on the slip.
+    if (order.discountPercent > 0) {
+      p.row('Subtotal', formatAmount(removed));
+      p.row('Order discount ${_pct(order.discountPercent)}%',
+          '-${formatAmount(removed * order.discountPercent / 100)}');
+    }
     p.size(doubleHeight: true).bold(true)
-      ..row('REMOVED', formatAmount(removed))
+      ..row('REMOVED', formatAmount(removed * order.discountFactor))
       ..bold(false)
       ..size();
     if (reason != null && reason.isNotEmpty) p.feed().line('Reason: $reason');

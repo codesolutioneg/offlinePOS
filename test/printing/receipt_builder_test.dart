@@ -199,6 +199,19 @@ void main() {
     expect(s, contains('sara'));
   });
 
+  test('a deletion slip nets the removed total against a whole-order discount', () {
+    final o = Order(deviceId: 'till-1', cashierId: 'sara', discountPercent: 20)
+      ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 100));
+    final bytes = ReceiptBuilder(shopName: 'JOUMA', formatAmount: (v) => v.toStringAsFixed(2))
+        .buildDeletion(o, o.lines, title: 'ITEM VOIDED', at: DateTime.utc(2026, 1, 2));
+    final s = strippedText(bytes);
+    // Line gross 100, order discount 20% -> customer share removed is 80.
+    expect(s, contains('Subtotal'));
+    expect(s, contains('Order discount 20%'));
+    expect(s, contains('REMOVED'));
+    expect(s, contains('80.00'));
+  });
+
   test('a deletion slip never kicks the drawer', () {
     final o = sample();
     final bytes = ReceiptBuilder(shopName: 'JOUMA', formatAmount: (v) => v.toStringAsFixed(2))
