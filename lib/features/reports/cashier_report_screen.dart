@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
+import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart';
 
 /// One row in the cashier table: a cashier's order count and revenue
@@ -67,7 +68,11 @@ class CashierReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Cashier performance'))),
       body: cashiers.isEmpty
-          ? Center(child: Text(tr(context, 'No orders')))
+          ? EmptyState(
+              icon: Icons.bar_chart_outlined,
+              title: tr(context, 'No orders'),
+              message: tr(context, 'Cashier totals will show up once orders come in'),
+            )
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Card(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
+import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart';
 
 /// Past orders: what a cashier opens to answer "what did that table actually
@@ -130,7 +131,11 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
           const Divider(height: 1),
           Expanded(
             child: shown.isEmpty
-                ? Center(child: Text(tr(context, 'No orders yet')))
+                ? EmptyState(
+                    icon: Icons.receipt_long_outlined,
+                    title: tr(context, 'No orders yet'),
+                    message: tr(context, 'Completed sales will show up here'),
+                  )
                 : ListView.separated(
                     itemCount: shown.length,
                     separatorBuilder: (context, index) => const Divider(height: 1),
@@ -220,9 +225,7 @@ class OrderDetailScreen extends StatelessWidget {
   Future<void> _reprint(BuildContext context) async {
     await onReprint(order);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(tr(context, 'Receipt sent to printer'))),
-    );
+    showToast(context, tr(context, 'Receipt sent to printer'), kind: ToastKind.success);
   }
 
   @override

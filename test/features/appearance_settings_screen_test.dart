@@ -67,4 +67,17 @@ void main() {
     expect(settings.categoryColors.containsKey(2), isFalse);
     expect(changedCount, 1);
   });
+
+  testWidgets('shows an empty state instead of a blank screen with no categories',
+      (t) async {
+    await t.pumpWidget(MaterialApp(
+      home: AppearanceSettingsScreen(
+        settings: settings,
+        categories: const [],
+        onChanged: () => changedCount++,
+      ),
+    ));
+
+    expect(find.text('No categories yet'), findsOneWidget);
+  });
 }

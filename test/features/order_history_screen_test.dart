@@ -40,4 +40,17 @@ void main() {
       expect(find.byKey(Key('history-${order.uuid}')), findsOneWidget);
     }
   });
+
+  testWidgets('shows an empty state instead of a blank list with no orders',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: OrderHistoryScreen(
+        orders: const [],
+        formatAmount: (v) => v.toStringAsFixed(2),
+        onReprint: (_) async {},
+      ),
+    ));
+
+    expect(find.text('No orders yet'), findsOneWidget);
+  });
 }

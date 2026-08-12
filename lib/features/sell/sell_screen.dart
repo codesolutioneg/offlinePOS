@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../app/pos_session.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/widgets/feedback.dart';
 import '../../core/widgets/numeric_keypad.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
@@ -202,15 +203,15 @@ class _SellScreenState extends State<SellScreen> {
     if (code.length < 3) return;
     final product = s.catalogue.byBarcode(code);
     if (product == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${tr(context, 'No product for barcode')} $code')));
+      showToast(context, '${tr(context, 'No product for barcode')} $code',
+          kind: ToastKind.error);
       return;
     }
     _changed(() => s.addProduct(product));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    showToast(context, '${tr(context, 'Added')} ${product.name}',
+        kind: ToastKind.success,
         key: const Key('scanned'),
-        content: Text('${tr(context, 'Added')} ${product.name}'),
-        duration: const Duration(milliseconds: 900)));
+        duration: const Duration(milliseconds: 900));
   }
 
   // A fresh catalogue landed from the server: rebuild so the grid re-queries it.
@@ -228,8 +229,8 @@ class _SellScreenState extends State<SellScreen> {
   /// Block adding a sold-out item; otherwise ring it as normal.
   void _tapProduct(Product product) {
     if (widget.unavailableProducts.contains(product.id)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${product.name}: ${tr(context, 'sold out')}')));
+      showToast(context, '${product.name}: ${tr(context, 'sold out')}',
+          kind: ToastKind.error);
       return;
     }
     _tap(product);
@@ -442,9 +443,10 @@ class _SellScreenState extends State<SellScreen> {
       if (widget.maxDiscountPercent > 0 && pct > widget.maxDiscountPercent) {
         pct = widget.maxDiscountPercent;
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(
-                  '${tr(context, 'Capped at')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%')));
+          showToast(
+              context,
+              '${tr(context, 'Capped at')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%',
+              kind: ToastKind.info);
         }
       }
       final reason = (result['reason'] as String).isEmpty ? null : result['reason'] as String;
@@ -678,9 +680,10 @@ class _SellScreenState extends State<SellScreen> {
     if (widget.maxDiscountPercent > 0 && applied > widget.maxDiscountPercent) {
       applied = widget.maxDiscountPercent;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                '${tr(context, 'Capped at')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%')));
+        showToast(
+            context,
+            '${tr(context, 'Capped at')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%',
+            kind: ToastKind.info);
       }
     }
     _changed(() => s.setLineDiscount(line.uuid, applied));
@@ -979,11 +982,10 @@ class _SellScreenState extends State<SellScreen> {
     widget.onHold?.call();
     setState(() {});
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        key: const Key('held'),
-        content: Text(tr(context, 'Order parked. Recall it from Open orders.')),
-        duration: const Duration(seconds: 2),
-      ));
+      showToast(context, tr(context, 'Order parked. Recall it from Open orders.'),
+          kind: ToastKind.success,
+          key: const Key('held'),
+          duration: const Duration(seconds: 2));
     }
   }
 
@@ -996,11 +998,10 @@ class _SellScreenState extends State<SellScreen> {
     widget.onSendToKitchen?.call();
     setState(() {});
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        key: const Key('sent-kitchen'),
-        content: Text(tr(context, 'Sent to kitchen.')),
-        duration: const Duration(seconds: 2),
-      ));
+      showToast(context, tr(context, 'Sent to kitchen.'),
+          kind: ToastKind.success,
+          key: const Key('sent-kitchen'),
+          duration: const Duration(seconds: 2));
     }
   }
 
@@ -1020,11 +1021,10 @@ class _SellScreenState extends State<SellScreen> {
     if (ok != true) return;
     widget.onResendToKitchen?.call();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      key: const Key('resent-kitchen'),
-      content: Text(tr(context, 'Sent to kitchen.')),
-      duration: const Duration(seconds: 2),
-    ));
+    showToast(context, tr(context, 'Sent to kitchen.'),
+        kind: ToastKind.success,
+        key: const Key('resent-kitchen'),
+        duration: const Duration(seconds: 2));
   }
 
   void _pay() {
@@ -1054,12 +1054,13 @@ class _SellScreenState extends State<SellScreen> {
     if (!mounted) return;
     // The sale is saved on this till now; it is sent to Odoo with the rest of the
     // shift's orders at close, so the message does not promise an instant sync.
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      key: const Key('sale-complete'),
-      content: Text('Sale complete: ${widget.formatAmount(order.total)} ($label). '
-          'Saved on this till.'),
-      duration: const Duration(seconds: 3),
-    ));
+    showToast(
+        context,
+        'Sale complete: ${widget.formatAmount(order.total)} ($label). '
+            'Saved on this till.',
+        kind: ToastKind.success,
+        key: const Key('sale-complete'),
+        duration: const Duration(seconds: 3));
   }
 
   // ── dine-in bill: split by guest, pay selected, move, merge ──────
@@ -1090,13 +1091,14 @@ class _SellScreenState extends State<SellScreen> {
           setState(() {});
           widget.onPaid?.call(check);
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            key: const Key('check-complete'),
-            content: Text('${label ?? tr(context, 'Check')}: '
-                '${widget.formatAmount(check.total)} ($payLabel). '
-                '${s.hasLines ? tr(context, 'Rest of the table stays open.') : tr(context, 'Table closed.')}'),
-            duration: const Duration(seconds: 3),
-          ));
+          showToast(
+              context,
+              '${label ?? tr(context, 'Check')}: '
+                  '${widget.formatAmount(check.total)} ($payLabel). '
+                  '${s.hasLines ? tr(context, 'Rest of the table stays open.') : tr(context, 'Table closed.')}',
+              kind: ToastKind.success,
+              key: const Key('check-complete'),
+              duration: const Duration(seconds: 3));
         },
       ),
     );
@@ -1286,9 +1288,8 @@ class _SellScreenState extends State<SellScreen> {
         final ids = lines.map((l) => l.uuid).toSet();
         _changed(() => s.moveLinesToTable(ids, label));
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${lines.length} ${tr(context, 'item(s) moved to table')} $label'),
-        ));
+        showToast(context, '${lines.length} ${tr(context, 'item(s) moved to table')} $label',
+            kind: ToastKind.success);
       },
     );
   }
@@ -1299,8 +1300,7 @@ class _SellScreenState extends State<SellScreen> {
         .where((o) => o.uuid != s.current.uuid && o.lines.isNotEmpty)
         .toList();
     if (others.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(tr(context, 'No other open tables to merge'))));
+      showToast(context, tr(context, 'No other open tables to merge'), kind: ToastKind.error);
       return;
     }
     final uuid = await showModalBottomSheet<String>(
@@ -1322,8 +1322,7 @@ class _SellScreenState extends State<SellScreen> {
     if (uuid == null) return;
     _changed(() => s.mergeOrderInto(uuid));
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(tr(context, 'Tables merged'))));
+    showToast(context, tr(context, 'Tables merged'), kind: ToastKind.success);
   }
 
   @override
@@ -1472,7 +1471,11 @@ class _SellScreenState extends State<SellScreen> {
           SizedBox(height: 44, child: _categoryStrip()),
           Expanded(
             child: products.isEmpty
-                ? Center(child: Text(tr(context, 'No products')))
+                ? EmptyState(
+                    icon: Icons.inventory_2_outlined,
+                    title: tr(context, 'No products'),
+                    message: tr(context, 'Try a different search or category'),
+                  )
                 : GridView.builder(
                     padding: const EdgeInsets.all(8),
                     // A fixed column count when the manager set a grid density,
@@ -1551,7 +1554,11 @@ class _SellScreenState extends State<SellScreen> {
           const Divider(height: 1),
           Expanded(
             child: !s.hasLines
-                ? Center(child: Text(tr(context, 'Start adding products')))
+                ? EmptyState(
+                    icon: Icons.shopping_cart_outlined,
+                    title: tr(context, 'Start adding products'),
+                    message: tr(context, 'Tap a product to add it to the order'),
+                  )
                 : ListView(
                     children: [
                       for (final line in s.current.lines)

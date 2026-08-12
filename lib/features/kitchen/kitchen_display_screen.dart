@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart';
 
 /// The dark surface a kitchen board sits on and the slightly lighter card tone
@@ -137,11 +138,12 @@ class _KitchenDisplayScreenState extends State<KitchenDisplayScreen> {
       body: Container(
         color: _kdsBackground,
         child: _orders.isEmpty
-            ? Center(
-                child: Text(
-                  tr(context, 'No active tickets'),
-                  style: const TextStyle(color: Colors.white70, fontSize: 16),
-                ),
+            ? EmptyState(
+                icon: Icons.soup_kitchen_outlined,
+                title: tr(context, 'No active tickets'),
+                message: tr(context, 'Orders sent to the kitchen will show up here'),
+                iconColor: Colors.white38,
+                textColor: Colors.white70,
               )
             : LayoutBuilder(
                 builder: (context, constraints) {

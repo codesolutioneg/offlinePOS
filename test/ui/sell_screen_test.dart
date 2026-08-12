@@ -185,6 +185,20 @@ void main() {
     expect(find.text('Margherita'), findsNothing);
   });
 
+  testWidgets('a search with no matches shows an empty state instead of a blank grid',
+      (t) async {
+    await t.pumpWidget(app());
+    await t.enterText(find.byKey(const Key('search')), 'nothing matches this');
+    await t.pumpAndSettle();
+    expect(find.text('No products'), findsOneWidget);
+  });
+
+  testWidgets('an empty order shows an empty state guiding the cashier to add a product',
+      (t) async {
+    await t.pumpWidget(app());
+    expect(find.text('Start adding products'), findsOneWidget);
+  });
+
   group('a shift can be changed on the device', () {
     testWidgets('there is a way out, so a handover does not mean killing the app',
         (t) async {

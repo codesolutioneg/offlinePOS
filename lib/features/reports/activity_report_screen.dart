@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/audit/audit_log.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart';
 
 /// A parsed 'line.voided' audit row. The raw detail is
@@ -149,19 +150,34 @@ class ActivityReportScreen extends StatelessWidget {
           _sectionCard(
             tr(context, 'Refunds'),
             refunds.isEmpty
-                ? [Text(tr(context, 'No refunds'))]
+                ? [
+                    EmptyState(
+                      icon: Icons.undo,
+                      title: tr(context, 'No refunds'),
+                    ),
+                  ]
                 : refunds.map((o) => _refundTile(context, o)).toList(),
           ),
           _sectionCard(
             tr(context, 'Voided lines'),
             voided.isEmpty
-                ? [Text(tr(context, 'No voided lines'))]
+                ? [
+                    EmptyState(
+                      icon: Icons.remove_circle_outline,
+                      title: tr(context, 'No voided lines'),
+                    ),
+                  ]
                 : voided.map((v) => _voidedTile(context, v)).toList(),
           ),
           _sectionCard(
             tr(context, 'Cancelled orders'),
             cancelled.isEmpty
-                ? [Text(tr(context, 'No cancelled orders'))]
+                ? [
+                    EmptyState(
+                      icon: Icons.cancel_outlined,
+                      title: tr(context, 'No cancelled orders'),
+                    ),
+                  ]
                 : cancelled.map((c) => _cancelledTile(context, c)).toList(),
           ),
         ]),
