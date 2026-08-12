@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/audit/audit_log.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/theme/app_colors.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
 import 'activity_report_screen.dart';
@@ -207,22 +208,26 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
             child: ListView(
               children: [
                 _tile(tr(context, 'Sales summary'), Icons.summarize, 'rep-summary',
+                    AppColors.info,
                     (o) => SalesReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Tax'), Icons.receipt, 'rep-tax',
+                _tile(tr(context, 'Tax'), Icons.receipt, 'rep-tax', const Color(0xFF2563EB),
                     (o) => TaxReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Top products'), Icons.star, 'rep-top',
+                _tile(tr(context, 'Top products'), Icons.star, 'rep-top', const Color(0xFF0EA5E9),
                     (o) => TopProductsReportScreen(orders: o, formatAmount: widget.formatAmount)),
                 _tile(tr(context, 'Category performance'), Icons.category, 'rep-category',
+                    const Color(0xFF6366F1),
                     (o) => CategoryReportScreen(
                         orders: o, categories: widget.categories, formatAmount: widget.formatAmount)),
                 _tile(tr(context, 'Payment analysis'), Icons.payments, 'rep-payment',
+                    const Color(0xFF06B6D4),
                     (o) => PaymentAnalysisReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Discounts'), Icons.percent, 'rep-discounts',
+                _tile(tr(context, 'Discounts'), Icons.percent, 'rep-discounts', AppColors.warning,
                     (o) => DiscountsReportScreen(orders: o, formatAmount: widget.formatAmount)),
                 _tile(tr(context, 'Cashier performance'), Icons.badge_outlined, 'rep-cashier',
+                    const Color(0xFFEA580C),
                     (o) => CashierReportScreen(orders: o, formatAmount: widget.formatAmount)),
                 _tile(tr(context, 'Cancelled, voided & refunded'), Icons.gpp_bad,
-                    'rep-activity',
+                    'rep-activity', AppColors.error,
                     (o) => ActivityReportScreen(
                           orders: o,
                           audit: widget.audit,
@@ -231,6 +236,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                           to: _windowTo,
                         )),
                 _tile(tr(context, 'Sales by hour'), Icons.schedule, 'rep-time',
+                    const Color(0xFF14B8A6),
                     (o) => SalesByTimeReportScreen(orders: o, formatAmount: widget.formatAmount)),
               ],
             ),
@@ -240,12 +246,33 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     );
   }
 
-  Widget _tile(String title, IconData icon, String key, Widget Function(List<Order>) build) =>
-      ListTile(
+  /// A rounded, bordered card with a coloured icon badge, tinted per report
+  /// family so financial reports and audit/oversight reports read apart in the
+  /// list rather than as one flat wall of grey tiles.
+  Widget _tile(String title, IconData icon, String key, Color color,
+          Widget Function(List<Order>) build) =>
+      Card(
         key: Key(key),
-        leading: Icon(icon),
-        title: Text(title),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => _open(build),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: color.withValues(alpha: 0.25)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ListTile(
+          leading: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          title: Text(title),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _open(build),
+        ),
       );
 }

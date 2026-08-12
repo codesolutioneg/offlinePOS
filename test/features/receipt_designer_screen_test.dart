@@ -106,4 +106,39 @@ void main() {
     expect(settings.receiptDividerStyle, 'dots');
     expect(settings.receiptShowTable, true);
   });
+
+  testWidgets('the live preview reflects the header text and the cashier toggle',
+      (t) async {
+    tallWindow(t);
+    await t.pumpWidget(app());
+
+    expect(find.descendant(of: find.byKey(const Key('receipt-preview')), matching: find.text('Cairo Diner')),
+        findsNothing);
+
+    await t.enterText(find.byKey(const Key('receipt-header')), 'Cairo Diner');
+    await t.pump();
+
+    expect(find.descendant(of: find.byKey(const Key('receipt-preview')), matching: find.text('Cairo Diner')),
+        findsOneWidget);
+
+    // The cashier line only prints on the receipt (and shows in the preview)
+    // while the toggle is on.
+    expect(find.textContaining('Cashier:'), findsOneWidget);
+    await t.tap(find.byKey(const Key('t-cashier')));
+    await t.pump();
+    expect(find.textContaining('Cashier:'), findsNothing);
+  });
+
+  testWidgets('the preview narrows when 58 mm paper is selected', (t) async {
+    tallWindow(t);
+    await t.pumpWidget(app());
+
+    final wideBox = t.getSize(find.byKey(const Key('receipt-preview')));
+
+    await t.tap(find.byKey(const Key('t-papersize-58')), warnIfMissed: false);
+    await t.pump();
+
+    final narrowBox = t.getSize(find.byKey(const Key('receipt-preview')));
+    expect(narrowBox.width, lessThan(wideBox.width));
+  });
 }

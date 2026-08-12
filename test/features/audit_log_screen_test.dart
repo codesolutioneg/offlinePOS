@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/audit/audit_log.dart';
 import 'package:offline_pos/core/db/database.dart';
+import 'package:offline_pos/core/theme/app_colors.dart';
 import 'package:offline_pos/features/support/audit_log_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -60,6 +61,24 @@ void main() {
     await t.pumpAndSettle();
 
     expect(find.text('Audit log copied as CSV'), findsOneWidget);
+  });
+
+  testWidgets('each event family is tinted its own colour', (t) async {
+    await t.pumpWidget(app());
+
+    Color iconColorOf(int id) => t
+        .widget<Icon>(find.descendant(
+          of: find.byKey(Key('audit-row-$id')),
+          matching: find.byType(Icon),
+        ))
+        .color!;
+
+    // Ids follow insertion order from setUp above: 1 = order.paid,
+    // 2 = line.voided, 3 = order.cancelled (the list itself renders newest
+    // first, but the row keys are the stable ids).
+    expect(iconColorOf(1), AppColors.success); // order.paid
+    expect(iconColorOf(2), AppColors.error); // line.voided
+    expect(iconColorOf(3), AppColors.error); // order.cancelled
   });
 
   testWidgets('an empty audit trail shows the empty state', (t) async {

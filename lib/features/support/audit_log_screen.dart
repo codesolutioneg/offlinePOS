@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/audit/audit_log.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/theme/app_colors.dart';
 
 /// Read-only viewer over the append-only audit trail: every void, cancel,
 /// refund, discount and payment a cashier has taken on this till, with who
@@ -29,12 +30,25 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
   /// kinds get added over time and a viewer that only recognised today's list
   /// would silently start showing the fallback icon for anything new.
   IconData _iconFor(String event) {
-    if (event.contains('paid')) return Icons.payments;
+    if (event.contains('paid') || event.contains('created')) return Icons.payments;
     if (event.contains('refund')) return Icons.undo;
     if (event.contains('void')) return Icons.remove_circle_outline;
     if (event.contains('cancel')) return Icons.cancel_outlined;
     if (event.contains('discount')) return Icons.percent;
     return Icons.info_outline;
+  }
+
+  /// Colour by the same event family as [_iconFor], so the icon tint and the
+  /// row's accent agree: green for a completed sale, red for anything undone
+  /// (refund/void/cancel), amber for a discount, and a neutral grey/blue for
+  /// everything else rather than guessing at a colour for events not yet known.
+  Color _colorFor(String event) {
+    if (event.contains('paid') || event.contains('created')) return AppColors.success;
+    if (event.contains('refund') || event.contains('void') || event.contains('cancel')) {
+      return AppColors.error;
+    }
+    if (event.contains('discount')) return AppColors.warning;
+    return AppColors.info;
   }
 
   /// The stored `at` is UTC ISO8601; a manager reading this on the till wants
@@ -126,14 +140,28 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
                       final event = r['event'] as String;
                       final actor = r['actor'] as String;
                       final detail = r['detail'] as String?;
-                      return ListTile(
-                        key: Key('audit-row-${r['id']}'),
-                        leading: Icon(_iconFor(event)),
-                        title: Text('${_localTime(r['at'] as String)}  $event'),
-                        subtitle: Text(detail == null
-                            ? '${tr(context, 'Actor')}: $actor'
-                            : '${tr(context, 'Actor')}: $actor\n$detail'),
-                        isThreeLine: detail != null,
+                      final color = _colorFor(event);
+                      return Container(
+                        decoration: BoxDecoration(
+                          border: Border(left: BorderSide(color: color, width: 3)),
+                        ),
+                        child: ListTile(
+                          key: Key('audit-row-${r['id']}'),
+                          leading: Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.15),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(_iconFor(event), color: color, size: 20),
+                          ),
+                          title: Text('${_localTime(r['at'] as String)}  $event'),
+                          subtitle: Text(detail == null
+                              ? '${tr(context, 'Actor')}: $actor'
+                              : '${tr(context, 'Actor')}: $actor\n$detail'),
+                          isThreeLine: detail != null,
+                        ),
                       );
                     },
                   ),
