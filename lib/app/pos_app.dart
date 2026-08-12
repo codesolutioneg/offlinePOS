@@ -284,6 +284,52 @@ class _PosAppState extends State<PosApp> {
   /// Built as printer bytes, never rasterised, and never awaited by the screen that
   /// took the money: the sale is committed before this runs, so a printer that is
   /// off costs a spooled reprint and nothing else.
+  /// A receipt builder wired to the current on-device settings, so the sale slip,
+  /// the deletion slip and the sample all lay out identically. [openDrawer] is only
+  /// ever true for a cash sale's first copy.
+  ReceiptBuilder _receiptBuilder({bool openDrawer = false}) {
+    final s = widget.settings;
+    return ReceiptBuilder(
+      shopName: s.shopName ?? widget.config.shopName,
+      taxId: s.receiptShowTax ? (s.taxId ?? widget.config.taxId) : null,
+      footer: s.receiptFooter ?? widget.config.receiptFooter,
+      header: s.getString('receipt_header'),
+      columns: s.receiptColumns,
+      showCashier: s.getBool('receipt_show_cashier', fallback: true),
+      showOrderType: s.getBool('receipt_show_ordertype', fallback: true),
+      showTax: s.receiptShowTax,
+      showDateTime: s.receiptShowDateTime,
+      showNumber: s.receiptShowNumber,
+      showTable: s.receiptShowTable,
+      showPayment: s.receiptShowPayment,
+      showItemPrice: s.receiptShowItemPrice,
+      dividerStyle: s.receiptDividerStyle,
+      openDrawer: openDrawer,
+      formatAmount: PosApp.money,
+    );
+  }
+
+  /// Print a record slip when items are voided or an order is cancelled, so every
+  /// removal leaves a paper trail at the till alongside the audit entry. Spooled
+  /// like any receipt: a record slip that missed the printer is reprinted, not lost.
+  Future<void> _printDeletion(Order order, List<OrderLine> lines,
+      {required String title, String? reason}) async {
+    if (lines.isEmpty) return;
+    final bytes = _receiptBuilder().buildDeletion(
+      order,
+      lines,
+      title: title,
+      at: DateTime.now(),
+      actor: _session?.cashierId,
+      reason: reason,
+    );
+    try {
+      await _receiptPrinter.send(bytes, reference: 'void-slip-${order.uuid}-${DateTime.now().microsecondsSinceEpoch}');
+    } on PrinterUnavailable {
+      // Held in the spool; the background flush reprints it.
+    }
+  }
+
   Future<void> _printReceipt(Order order, {bool reprint = false}) async {
     try {
       // On-device settings win over the compile-time defaults, so a manager can
@@ -299,24 +345,8 @@ class _PosAppState extends State<PosApp> {
           .toSet();
       final isCash = order.payments.isEmpty ||
           order.payments.any((p) => cashIds.contains(p.methodId));
-      Uint8List build({required bool openDrawer}) => ReceiptBuilder(
-            shopName: s.shopName ?? widget.config.shopName,
-            taxId: s.receiptShowTax ? (s.taxId ?? widget.config.taxId) : null,
-            footer: s.receiptFooter ?? widget.config.receiptFooter,
-            header: s.getString('receipt_header'),
-            columns: s.receiptColumns,
-            showCashier: s.getBool('receipt_show_cashier', fallback: true),
-            showOrderType: s.getBool('receipt_show_ordertype', fallback: true),
-            showTax: s.receiptShowTax,
-            showDateTime: s.receiptShowDateTime,
-            showNumber: s.receiptShowNumber,
-            showTable: s.receiptShowTable,
-            showPayment: s.receiptShowPayment,
-            showItemPrice: s.receiptShowItemPrice,
-            dividerStyle: s.receiptDividerStyle,
-            openDrawer: openDrawer,
-            formatAmount: PosApp.money,
-          ).build(order, reprint: reprint);
+      Uint8List build({required bool openDrawer}) =>
+          _receiptBuilder(openDrawer: openDrawer).build(order, reprint: reprint);
       // A reprint uses a distinct reference so it does not collide with the
       // original in the spool's dedupe; extra copies get their own suffix so the
       // dedupe does not fold them into one. Only the first copy carries the drawer
@@ -459,8 +489,13 @@ class _PosAppState extends State<PosApp> {
               // already-printed flag.
               onResendToKitchen: () => unawaited(
                   _fireKitchen(session.current, only: session.current.lines, resend: true)),
-              onLineVoided: (line, reason) =>
-                  unawaited(_fireVoid(session.current, line, reason)),
+              onLineVoided: (line, reason) {
+                // The kitchen slip stops the line being cooked; the deletion slip is
+                // the till's own record that an item was taken off, with the amount.
+                unawaited(_fireVoid(session.current, line, reason));
+                unawaited(_printDeletion(session.current, [line],
+                    title: 'ITEM VOIDED', reason: reason));
+              },
               onPaid: (order) {
                 _publishActivity();
                 // A straight counter sale never held, so its lines reach the
@@ -640,6 +675,10 @@ class _PosAppState extends State<PosApp> {
               .where((l) => l.printedToKitchen || l.firedStations.isNotEmpty)) {
             unawaited(_fireVoid(order, line, 'Order cancelled'));
           }
+          // The till's own record that the whole order was discarded, listing every
+          // line and the total removed, printed alongside the audit entry.
+          unawaited(_printDeletion(order, order.lines,
+              title: 'ORDER CANCELLED', reason: 'Order cancelled'));
           widget.orders.delete(order.uuid);
           widget.audit.record(session.cashierId, 'order.cancelled', detail: order.uuid);
           if (sheetContext.mounted) Navigator.of(sheetContext).pop();

@@ -170,6 +170,47 @@ void main() {
     expect(render(sample(), dividerStyle: 'squiggle'), contains('-' * 42));
   });
 
+  test('a refunded order is banner-marked so it cannot pass as a new sale', () {
+    final o = Order(deviceId: 'till-1', cashierId: 'sara', refundOfUuid: 'orig-1')
+      ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10));
+    final s = render(o);
+    expect(s, contains('REFUND'));
+    expect(s, contains('TOTAL'));
+  });
+
+  test('a deletion slip lists the removed lines, the total removed and the reason', () {
+    final o = sample();
+    final bytes = ReceiptBuilder(shopName: 'JOUMA', formatAmount: (v) => v.toStringAsFixed(2))
+        .buildDeletion(
+      o,
+      o.lines,
+      title: 'ITEM VOIDED',
+      at: DateTime.utc(2026, 1, 2, 9, 30),
+      actor: 'sara',
+      reason: 'wrong table',
+    );
+    final s = strippedText(bytes);
+    expect(s, contains('ITEM VOIDED'));
+    expect(s, contains('Pizza'));
+    expect(s, contains('REMOVED'));
+    // 2 x 250 plus cheese at 7 per unit x 2 = 514 for the line.
+    expect(s, contains('514.00'));
+    expect(s, contains('wrong table'));
+    expect(s, contains('sara'));
+  });
+
+  test('a deletion slip never kicks the drawer', () {
+    final o = sample();
+    final bytes = ReceiptBuilder(shopName: 'JOUMA', formatAmount: (v) => v.toStringAsFixed(2))
+        .buildDeletion(o, o.lines, title: 'ORDER CANCELLED', at: DateTime.utc(2026, 1, 2));
+    // ESC p (0x1b 0x70) is the drawer-kick sequence; a record slip must not carry it.
+    var kicks = false;
+    for (var i = 0; i + 1 < bytes.length; i++) {
+      if (bytes[i] == 0x1b && bytes[i + 1] == 0x70) kicks = true;
+    }
+    expect(kicks, isFalse);
+  });
+
   test('a menu in any script still produces a receipt', () {
     // Building a receipt used to throw on a product name outside Latin-1, which
     // for a euro-priced or Arabic menu is every receipt. It threw before the spool

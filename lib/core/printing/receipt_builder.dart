@@ -69,7 +69,9 @@ class ReceiptBuilder {
       ..size();
     if (header != null && header!.isNotEmpty) p.centred(header!);
     if (taxId != null) p.line(taxId!);
-    // A reprint is marked so a duplicate slip cannot be passed off as a second sale.
+    // A reprint is marked so a duplicate slip cannot be passed off as a second sale;
+    // a refund is marked so a returned sale is never mistaken for a new one.
+    if (order.isRefund) p.centred('*** REFUND ***');
     if (reprint) p.centred('*** REPRINT ***');
     p.align(EscPosAlign.left).rule(divider);
 
@@ -174,6 +176,54 @@ class ReceiptBuilder {
     // Kick the drawer before the cut on a cash sale, so the till opens as the
     // receipt prints rather than needing a separate command.
     if (openDrawer) p.openDrawer();
+    return (p..cut()).build();
+  }
+
+  /// A record slip for removed items or a cancelled order, printed on the receipt
+  /// printer so a void or cancel always leaves a paper trail at the till. This is
+  /// not a kitchen ticket: it documents what was taken off and why, with the amount
+  /// removed, for the drawer and the customer. [at] is the moment of removal (the
+  /// caller's clock), [actor] who did it, [reason] why.
+  Uint8List buildDeletion(
+    Order order,
+    List<OrderLine> lines, {
+    required String title,
+    required DateTime at,
+    String? reason,
+    String? actor,
+  }) {
+    final p = EscPos(columns: columns)..reset();
+    final divider = _dividerChars[dividerStyle] ?? '-';
+
+    p.align(EscPosAlign.center)
+      ..bold(true)
+      ..line(shopName)
+      ..bold(false);
+    p.size(doubleHeight: true).centred('*** $title ***').size();
+    p.align(EscPosAlign.left).rule(divider);
+
+    p.line('${_stamp(at)}  #${_shortRef(order)}');
+    if (actor != null) p.line('Cashier: $actor');
+    if (order.type == OrderType.dineIn && order.tableLabel != null) {
+      p.line('Table ${order.tableLabel}');
+    }
+    p.rule(divider);
+
+    var removed = 0.0;
+    for (final l in lines) {
+      p.row('${_qty(l.quantity)} x ${l.name}', formatAmount(l.total));
+      removed += l.total;
+    }
+    p.rule(divider);
+    p.size(doubleHeight: true).bold(true)
+      ..row('REMOVED', formatAmount(removed))
+      ..bold(false)
+      ..size();
+    if (reason != null && reason.isNotEmpty) p.feed().line('Reason: $reason');
+
+    p.feed(2);
+    // Never kick the drawer on a deletion slip: removing an item does not open the
+    // till.
     return (p..cut()).build();
   }
 
