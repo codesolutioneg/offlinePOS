@@ -899,7 +899,11 @@ class _PosAppState extends State<PosApp> {
         icon: Icons.percent,
         keyValue: 'set-discounts',
         group: 'Shop',
-        onTap: () => push(DiscountSettingsScreen(settings: widget.settings, onChanged: refresh)),
+        // The discount cap is what the apply-discount grant is bounded by, so
+        // editing it must clear the same manager gate: otherwise a cashier allowed
+        // to discount could raise the cap and discount without limit.
+        onTap: () => pushGated(Permission.openSettings,
+            DiscountSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'Server (Odoo)',
