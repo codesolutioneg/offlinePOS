@@ -166,6 +166,11 @@ class SpooledPrinter implements PrinterTransport {
     }
   }
 
+  /// Send immediately, bypassing the spool: on failure it throws and queues
+  /// nothing. For payloads that must not be replayed later, above all a cash-drawer
+  /// kick, which would pop the till open unexpectedly when the backlog flushes.
+  Future<void> sendNow(Uint8List bytes) => _inner.send(bytes);
+
   /// Retry the backlog, oldest first. Stops at the first failure so the order in
   /// which tickets print is preserved.
   ///

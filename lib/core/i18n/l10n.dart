@@ -500,4 +500,5 @@ const Map<String, String> _ar = {
   'No sale (open drawer)': 'بدون بيع (فتح الدرج)',
   'NO SALE': 'بدون بيع',
   'Drawer opened': 'تم فتح الدرج',
+  'Printer unavailable, drawer not opened': 'الطابعة غير متاحة، لم يُفتح الدرج',
 };

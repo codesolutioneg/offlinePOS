@@ -1140,10 +1140,15 @@ class _PosAppState extends State<PosApp> {
       ..openDrawer()
       ..cut();
     try {
-      await _receiptPrinter.send(slip.build(), reference: 'nosale-${DateTime.now().microsecondsSinceEpoch}');
+      // Immediate-or-nothing: a drawer pulse must never be spooled, or the till
+      // could pop open unexpectedly when the backlog flushes later.
+      await _receiptPrinter.sendNow(slip.build());
     } on PrinterUnavailable {
-      // The slip is spooled and the drawer will kick when the printer returns; the
-      // audit entry below still records the intent so nothing is silently lost.
+      widget.audit.record(who, 'drawer.nosale.failed');
+      if (context.mounted) {
+        showToast(context, tr(context, 'Printer unavailable, drawer not opened'), kind: ToastKind.error);
+      }
+      return;
     }
     widget.audit.record(who, 'drawer.nosale');
     if (context.mounted) showToast(context, tr(context, 'Drawer opened'), kind: ToastKind.success);
