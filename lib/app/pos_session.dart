@@ -295,6 +295,28 @@ class PosSession {
 
   // ── dine-in: seats, split, move, merge ──────────────────────────
 
+  /// Schedule one line to fire to the kitchen [afterMinutes] from now (0 clears
+  /// the timer). Course firing: "send the mains 15 minutes after the starters".
+  void setLineFireDelay(String lineUuid, int afterMinutes) {
+    final line = current.lines.firstWhere((l) => l.uuid == lineUuid);
+    line.fireAt = afterMinutes > 0
+        ? DateTime.now().toUtc().add(Duration(minutes: afterMinutes))
+        : null;
+    orders.save(current);
+  }
+
+  /// Schedule the whole order to fire [afterMinutes] from now (0 clears it), so a
+  /// cashier can hold a whole ticket back a set time before it hits the kitchen.
+  void setOrderFireDelay(int afterMinutes) {
+    final at = afterMinutes > 0
+        ? DateTime.now().toUtc().add(Duration(minutes: afterMinutes))
+        : null;
+    for (final l in current.lines) {
+      if (!l.printedToKitchen) l.fireAt = at;
+    }
+    orders.save(current);
+  }
+
   /// Tag a line with the guest/seat it belongs to (null clears it). Drives
   /// split-by-guest and the per-seat kitchen ticket.
   ///
@@ -317,6 +339,7 @@ class PosSession {
         discountPercent: line.discountPercent,
         printedToKitchen: line.printedToKitchen,
         firedStations: List.of(line.firedStations),
+        fireAt: line.fireAt,
         seat: s,
         modifiers: [
           for (final m in line.modifiers)
@@ -358,6 +381,7 @@ class PosSession {
           discountPercent: line.discountPercent,
           printedToKitchen: line.printedToKitchen,
           firedStations: List.of(line.firedStations),
+          fireAt: line.fireAt,
           seat: line.seat,
           modifiers: [
             for (final m in line.modifiers)

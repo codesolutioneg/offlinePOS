@@ -110,6 +110,35 @@ void main() {
     });
   });
 
+  group('course firing (timed)', () {
+    test('a line timer sets a future fireAt and marks the line timed', () {
+      session.addProduct(pizza);
+      final uuid = lineFor(10);
+      session.setLineFireDelay(uuid, 15);
+      final line = session.current.lines.single;
+      expect(line.fireAt, isNotNull);
+      expect(line.isTimed, isTrue);
+      expect(line.dueAt(DateTime.now().toUtc()), isFalse); // not due yet
+      expect(line.dueAt(DateTime.now().toUtc().add(const Duration(minutes: 16))), isTrue);
+    });
+
+    test('a zero delay clears the timer so the line fires now', () {
+      session.addProduct(pizza);
+      final uuid = lineFor(10);
+      session.setLineFireDelay(uuid, 15);
+      session.setLineFireDelay(uuid, 0);
+      expect(session.current.lines.single.fireAt, isNull);
+      expect(session.current.lines.single.dueAt(DateTime.now().toUtc()), isTrue);
+    });
+
+    test('a whole-order delay times every unsent line', () {
+      session.addProduct(pizza);
+      session.addProduct(cola);
+      session.setOrderFireDelay(20);
+      expect(session.current.lines.every((l) => l.isTimed), isTrue);
+    });
+  });
+
   group('move & merge', () {
     test('moving lines to another table opens a tab there and trims here', () {
       session.setTable('1');

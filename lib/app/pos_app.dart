@@ -209,11 +209,26 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _catchUp() async {
+    _fireDueTimedLines();
     if (_receiptPrinter.hasSpooled) await _receiptPrinter.flush();
     if (mounted) setState(() {});
     // An update is the least important thing this app does, so it runs last and
     // its own gate decides whether anything actually happens.
     await widget.updates?.check();
+  }
+
+  /// Fire any course-timed lines whose timer has elapsed on a committed order.
+  /// This is what makes "fire the mains 15 minutes after the starters" happen on
+  /// its own: the delayed lines were held back at Send, and this sends them when
+  /// their time comes.
+  void _fireDueTimedLines() {
+    final now = DateTime.now().toUtc();
+    for (final o in [...widget.orders.held(), ...widget.orders.awaitingSync()]) {
+      final due = o.lines
+          .where((l) => l.fireAt != null && !l.printedToKitchen && l.dueAt(now))
+          .toList();
+      if (due.isNotEmpty) unawaited(_fireKitchen(o, only: due));
+    }
   }
 
   void _signedIn(Cashier cashier) {
@@ -929,7 +944,12 @@ class _PosAppState extends State<PosApp> {
   /// kitchen printer answers, the ticket falls back to the receipt printer so a
   /// slip still comes out that staff can carry to the pass.
   Future<void> _fireKitchen(Order order, {List<OrderLine>? only, bool resend = false}) async {
-    final lines = only ?? order.lines.where((l) => !l.printedToKitchen).toList();
+    // A normal Send fires only lines that are due now; a course-timed line with a
+    // future timer is held back until the ticker fires it. An explicit `only` list
+    // (a resend, or the ticker's due lines) is honoured as given.
+    final now = DateTime.now().toUtc();
+    final lines =
+        only ?? order.lines.where((l) => !l.printedToKitchen && l.dueAt(now)).toList();
     if (lines.isEmpty) return;
     final builder = KitchenTicketBuilder();
     // Route each line to its category's station, so a multi-station kitchen sends

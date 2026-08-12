@@ -85,6 +85,7 @@ class OrderLine {
     this.taxRate = 0,
     this.printedToKitchen = false,
     this.seat,
+    this.fireAt,
     List<String>? firedStations,
   })  : uuid = uuid ?? Uuid.v4(),
         modifiers = modifiers ?? [],
@@ -120,6 +121,17 @@ class OrderLine {
   /// time so a later void reaches the same printer even if routing changed since.
   final List<String> firedStations;
 
+  /// When this line should be fired to the kitchen. Null fires immediately with the
+  /// rest of the order; a future time holds it back for course firing ("fire the
+  /// mains 15 minutes after the starters"). Cleared once fired.
+  DateTime? fireAt;
+
+  /// A course-fired line still waiting for its time.
+  bool get isTimed => fireAt != null && !printedToKitchen;
+
+  /// Whether this line is due to fire now (no timer, or the timer has elapsed).
+  bool dueAt(DateTime now) => fireAt == null || !fireAt!.isAfter(now);
+
   /// Which guest/seat this line belongs to, for dine-in bill splitting (1-based).
   /// Null means unassigned (shared / not yet split). Drives split-by-guest and the
   /// per-seat kitchen ticket.
@@ -148,6 +160,7 @@ class OrderLine {
         'printed_to_kitchen': printedToKitchen,
         'seat': seat,
         'fired_stations': firedStations,
+        'fire_at': fireAt?.toIso8601String(),
       };
 
   factory OrderLine.fromMap(Map<String, dynamic> m) => OrderLine(
@@ -164,6 +177,7 @@ class OrderLine {
         seat: m['seat'] as int?,
         firedStations:
             ((m['fired_stations'] as List?) ?? const []).map((e) => e.toString()).toList(),
+        fireAt: m['fire_at'] == null ? null : DateTime.parse(m['fire_at'] as String),
         modifiers: ((m['modifiers'] as List?) ?? const [])
             .map((e) => OrderModifier.fromMap(e as Map<String, dynamic>))
             .toList(),
