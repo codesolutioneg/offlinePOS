@@ -317,6 +317,7 @@ const Map<String, String> _ar = {
   'Clock out': 'تسجيل انصراف',
   // status colours / dine-in visuals
   'Sent': 'أُرسل',
+  'All sent': 'تم إرسال الكل',
   'free': 'مجاني',
   'New items': 'أصناف جديدة',
   'Held': 'معلّق',

@@ -1628,68 +1628,85 @@ class _SellScreenState extends State<SellScreen> {
     );
   }
 
-  Widget _actions() => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-        child: Column(children: [
-          Row(children: [
-            Expanded(
-              child: SizedBox(
-                height: 52,
-                child: OutlinedButton(
-                  key: const Key('send-kitchen'),
-                  onPressed: (s.hasLines && widget.onSendToKitchen != null)
-                      ? _sendToKitchen
-                      : null,
-                  // Long-press re-fires the whole ticket (a lost or re-requested KOT).
-                  onLongPress: (s.hasLines && widget.onResendToKitchen != null)
-                      ? _resendToKitchen
-                      : null,
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.soup_kitchen, size: 20),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(tr(context, 'Send to kitchen'),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                    ),
-                  ]),
+  Widget _actions() {
+    final unsent = s.current.lines.where((l) => !l.printedToKitchen).length;
+    final canFire = s.hasLines && widget.onSendToKitchen != null && unsent > 0;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      child: Column(children: [
+        Row(children: [
+          Expanded(
+            child: SizedBox(
+              height: 52,
+              child: OutlinedButton(
+                key: const Key('send-kitchen'),
+                // Reads its state by colour and count: blue with "(N)" when there is
+                // food to fire, muted once everything is already in the kitchen.
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: canFire ? AppColors.info : Colors.grey,
+                  side: BorderSide(
+                      color: canFire ? AppColors.info : Colors.grey.shade400),
                 ),
+                onPressed: canFire ? _sendToKitchen : null,
+                // Long-press re-fires the whole ticket (a lost or re-requested KOT).
+                onLongPress: (s.hasLines && widget.onResendToKitchen != null)
+                    ? _resendToKitchen
+                    : null,
+                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Icon(unsent > 0 ? Icons.soup_kitchen : Icons.check_circle, size: 20),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                        unsent > 0
+                            ? '${tr(context, 'Send to kitchen')} ($unsent)'
+                            : tr(context, 'All sent'),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                ]),
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: SizedBox(
-                height: 52,
-                child: OutlinedButton(
-                  key: const Key('hold'),
-                  onPressed: s.hasLines ? _hold : null,
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.pause_circle_outline, size: 20),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(tr(context, 'Hold'),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                    ),
-                  ]),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SizedBox(
+              height: 52,
+              child: OutlinedButton(
+                key: const Key('hold'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.held,
+                  side: BorderSide(color: AppColors.held.withValues(alpha: 0.6)),
                 ),
+                onPressed: s.hasLines ? _hold : null,
+                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  const Icon(Icons.pause_circle_outline, size: 20),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(tr(context, 'Hold'),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                ]),
               ),
-            ),
-          ]),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            height: 68,
-            child: FilledButton.icon(
-              key: const Key('pay'),
-              style: FilledButton.styleFrom(
-                textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              onPressed: s.hasLines ? _pay : null,
-              icon: const Icon(Icons.payments, size: 26),
-              label: Text('${tr(context, 'Pay')}  ${widget.formatAmount(s.total)}'),
             ),
           ),
         ]),
-      );
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          height: 68,
+          child: FilledButton.icon(
+            key: const Key('pay'),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            onPressed: s.hasLines ? _pay : null,
+            icon: const Icon(Icons.payments, size: 26),
+            label: Text('${tr(context, 'Pay')}  ${widget.formatAmount(s.total)}'),
+          ),
+        ),
+      ]),
+    );
+  }
 }
 
 class _StaleBanner extends StatelessWidget {
