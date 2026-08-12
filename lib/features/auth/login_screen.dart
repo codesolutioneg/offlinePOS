@@ -180,6 +180,18 @@ class _LoginScreenState extends State<LoginScreen> {
             controller: controller,
             focusNode: focusNode,
             textCapitalization: TextCapitalization.words,
+            // Editing the name after choosing someone drops the selection, so the
+            // keypad can never send a PIN to the previously picked account on a
+            // shared till. Re-picking a suggestion sets it again.
+            onChanged: (text) {
+              if (_selected != null && text != _selected!.name) {
+                setState(() {
+                  _selected = null;
+                  _pin = '';
+                  _message = null;
+                });
+              }
+            },
             decoration: InputDecoration(
               labelText: tr(context, 'Search your name'),
               prefixIcon: const Icon(Icons.search),

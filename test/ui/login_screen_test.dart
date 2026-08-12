@@ -144,6 +144,28 @@ void main() {
     expect(signedIn?.id, 'staff-3');
   });
 
+  testWidgets('editing the search after choosing someone drops the selection', (t) async {
+    for (var i = 0; i < 7; i++) {
+      await auth.enrol(id: 'staff-$i', name: 'Staff $i', pin: '1234');
+    }
+    await t.pumpWidget(app());
+    await t.pumpAndSettle();
+
+    await t.enterText(find.byKey(const Key('account-search')), 'Staff 3');
+    await t.pumpAndSettle();
+    await t.tap(find.text('Staff 3').last);
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('signing-in-as')), findsOneWidget);
+    expect(t.widget<FilledButton>(find.byKey(const Key('pin-ok'))).onPressed, isNotNull);
+
+    // The next cashier types a different name without tapping a suggestion: the old
+    // selection is cleared and the keypad locks until someone is picked again.
+    await t.enterText(find.byKey(const Key('account-search')), 'Staff 5');
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('signing-in-as')), findsNothing);
+    expect(t.widget<FilledButton>(find.byKey(const Key('pin-ok'))).onPressed, isNull);
+  });
+
   testWidgets('a device with no cashiers says so instead of hanging', (t) async {
     final empty = Db.open(':memory:');
     await t.pumpWidget(MaterialApp(
