@@ -395,6 +395,40 @@ const Map<String, String> _ar = {
   'min': 'دقيقة',
   'Course timing (whole order)': 'توقيت الطبقات (الطلب كامل)',
   'Hold the order back a set time before the kitchen': 'تأخير الطلب مدة قبل إرساله للمطبخ',
+  // confirmations
+  'Close the shift?': 'إغلاق الوردية؟',
+  'This cannot be undone.': 'لا يمكن التراجع عن هذا.',
+  'Delete table': 'حذف الطاولة',
+  'This removes the table from the floor.': 'يؤدي هذا إلى إزالة الطاولة من الصالة.',
+  'Delete section': 'حذف القسم',
+  'and its': 'و',
+  'tables?': 'طاولاته؟',
+  'Cancel order': 'إلغاء الطلب',
+  'Cancel this order?': 'إلغاء هذا الطلب؟',
+  'The parked order will be discarded. This cannot be undone.':
+      'سيتم تجاهل الطلب المعلّق. لا يمكن التراجع.',
+  'Keep': 'إبقاء',
+  'Discard': 'تجاهل',
+  // empty states
+  'Tap a product to add it to the order': 'اضغط على منتج لإضافته للطلب',
+  'Try a different search or category': 'جرّب بحثاً أو قسماً آخر',
+  'Orders sent to the kitchen will show up here': 'ستظهر الطلبات المُرسلة للمطبخ هنا',
+  'Completed sales will show up here': 'ستظهر المبيعات المكتملة هنا',
+  'Cashier totals will show up once orders come in':
+      'ستظهر إجماليات الكاشير عند ورود الطلبات',
+  'No categories yet': 'لا توجد أقسام بعد',
+  'Add categories to the catalogue to colour-code them here':
+      'أضِف أقساماً للكتالوج لتلوينها هنا',
+  // receipt preview + misc
+  'Preview': 'معاينة',
+  'Your shop': 'متجرك',
+  'Added': 'أُضيف',
+  'Order': 'طلب',
+  'Shift': 'الوردية',
+  'Receipt sent to printer': 'أُرسل الإيصال للطابعة',
+  'X report sent to printer': 'أُرسل تقرير X للطابعة',
+  'Search ref, table or customer': 'ابحث بالرقم أو الطاولة أو العميل',
+  'Synced only': 'المتزامنة فقط',
   // settings hub groups
   'Shop': 'المتجر',
   'Hardware': 'الأجهزة',
