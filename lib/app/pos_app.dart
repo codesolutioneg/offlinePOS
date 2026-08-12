@@ -728,6 +728,7 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Switch English / العربية',
         icon: Icons.language,
         keyValue: 'set-language',
+        group: 'Language',
         // Toggling rebuilds the whole app in the other language and flips the text
         // direction; the hub is popped so the change is obvious.
         onTap: () {
@@ -740,6 +741,7 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Name, tax id, footer',
         icon: Icons.store,
         keyValue: 'set-shop',
+        group: 'Shop',
         onTap: () => pushGated(ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
@@ -747,6 +749,7 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Header, footer, what prints',
         icon: Icons.receipt_long,
         keyValue: 'set-receipt',
+        group: 'Shop',
         onTap: () => push(ReceiptDesignerScreen(
             settings: widget.settings,
             onChanged: refresh,
@@ -756,6 +759,7 @@ class _PosAppState extends State<PosApp> {
         title: 'Printers & kitchen routing',
         icon: Icons.print,
         keyValue: 'set-printers',
+        group: 'Hardware',
         onTap: () => pushGated(PrintersScreen(
             printers: widget.printers,
             settings: widget.settings,
@@ -780,6 +784,7 @@ class _PosAppState extends State<PosApp> {
         title: 'Category colours',
         icon: Icons.palette,
         keyValue: 'set-appearance',
+        group: 'Shop',
         onTap: () => push(AppearanceSettingsScreen(
             settings: widget.settings,
             categories: widget.catalogue.categories(),
@@ -790,6 +795,7 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Tiles per row',
         icon: Icons.grid_view,
         keyValue: 'set-grid',
+        group: 'Shop',
         onTap: () async {
           final n = await showDialog<int>(
             context: context,
@@ -815,12 +821,14 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Add / search till customers',
         icon: Icons.people_outline,
         keyValue: 'set-customers',
+        group: 'People & customers',
         onTap: () => push(CustomerManagementScreen(store: widget.customers, onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'Quick notes',
         icon: Icons.sticky_note_2_outlined,
         keyValue: 'set-notes',
+        group: 'Shop',
         onTap: () => push(QuickCommentsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
@@ -828,6 +836,7 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Percentages, cap, reasons',
         icon: Icons.percent,
         keyValue: 'set-discounts',
+        group: 'Shop',
         onTap: () => push(DiscountSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
@@ -835,6 +844,7 @@ class _PosAppState extends State<PosApp> {
         subtitle: 'Where sales sync at shift close',
         icon: Icons.dns,
         keyValue: 'set-server',
+        group: 'Server',
         onTap: () async {
           final ok = await _authorizeManager(context);
           if (ok && context.mounted) _openSettings(context);
@@ -845,6 +855,7 @@ class _PosAppState extends State<PosApp> {
           title: 'Staff',
           icon: Icons.badge_outlined,
           keyValue: 'set-staff',
+          group: 'People & customers',
           onTap: () => _openRoster(context),
         ),
     ];

@@ -21,29 +21,37 @@ class CustomerStore {
     return _toCustomer(uuid, name, phone);
   }
 
+  /// Overwrite a local customer's details. Phone and address are optional on the
+  /// form, so clearing one writes null back rather than keeping the old value.
   void update(String id, {required String name, String? phone, String? address}) =>
       _db.raw.execute(
         'UPDATE local_customers SET name = ?, phone = ?, address = ? WHERE id = ?',
         [name, phone, address, id],
       );
 
+  /// Forget a local customer. Orders already taken keep the name and phone they
+  /// were booked with, so this does not rewrite history.
   void remove(String id) =>
       _db.raw.execute('DELETE FROM local_customers WHERE id = ?', [id]);
 
   /// Local customers, optionally filtered by name or phone, newest first.
-  List<Customer> search({String? query, int limit = 50}) {
+  List<Customer> search({String? query, int limit = 50}) => rows(query: query, limit: limit)
+      .map((r) => _toCustomer(r['id'] as String, r['name'] as String, r['phone'] as String?,
+          address: r['address'] as String?))
+      .toList();
+
+  /// The raw rows behind [search], same filter and order. [Customer] carries only
+  /// the synthetic negative id and no address, so a screen that has to edit or
+  /// delete a row reads these to get the local string id and the full details.
+  List<Map<String, Object?>> rows({String? query, int limit = 50}) {
     final q = (query ?? '').trim();
-    final rows = q.isEmpty
+    return q.isEmpty
         ? _db.raw.select(
             'SELECT * FROM local_customers ORDER BY created_at DESC LIMIT ?', [limit])
         : _db.raw.select(
             'SELECT * FROM local_customers WHERE name LIKE ? OR phone LIKE ? '
             'ORDER BY created_at DESC LIMIT ?',
             ['%$q%', '%$q%', limit]);
-    return rows
-        .map((r) => _toCustomer(r['id'] as String, r['name'] as String, r['phone'] as String?,
-            address: r['address'] as String?))
-        .toList();
   }
 
   /// The raw row for an id, for the edit form (address is not on [Customer]).
