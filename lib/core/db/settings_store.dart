@@ -214,4 +214,16 @@ class SettingsStore {
   /// Product-grid density: tiles per row. 0 = auto (fit by width).
   int get gridColumns => int.tryParse(getString(_gridColumns) ?? '') ?? 0;
   set gridColumns(int n) => setString(_gridColumns, n <= 0 ? null : '$n');
+
+  /// Receipt paper width in characters: 42 for 80mm (default), 32 for 58mm.
+  int get receiptColumns => int.tryParse(getString('receipt_columns') ?? '') ?? 42;
+  set receiptColumns(int n) => setString('receipt_columns', '$n');
+
+  /// How many copies of each receipt to print (1-3).
+  int get receiptCopies => int.tryParse(getString('receipt_copies') ?? '') ?? 1;
+  set receiptCopies(int n) => setString('receipt_copies', '${n.clamp(1, 3)}');
+
+  /// Kick the cash drawer open on a cash sale. On by default.
+  bool get openDrawerOnSale => getBool('open_drawer_on_sale', fallback: true);
+  set openDrawerOnSale(bool v) => setBool('open_drawer_on_sale', v);
 }

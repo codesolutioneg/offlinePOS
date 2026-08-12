@@ -325,4 +325,12 @@ const Map<String, String> _ar = {
   'Other / custom': 'أخرى / مخصص',
   'This table': 'هذه الطاولة',
   'No tables yet. Add them in Settings.': 'لا توجد طاولات بعد. أضِفها من الإعدادات.',
+  // printers & receipt
+  'Receipt & paper': 'الإيصال والورق',
+  'Paper width': 'عرض الورق',
+  'Copies': 'عدد النسخ',
+  'Open cash drawer on cash sale': 'فتح درج النقود عند البيع النقدي',
+  'Not found': 'غير موجودة',
+  'Test print': 'طباعة تجريبية',
+  'test receipt sent': 'أُرسل الإيصال التجريبي',
 };

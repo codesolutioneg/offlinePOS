@@ -277,16 +277,20 @@ class _PosAppState extends State<PosApp> {
         taxId: s.receiptShowTax ? (s.taxId ?? widget.config.taxId) : null,
         footer: s.receiptFooter ?? widget.config.receiptFooter,
         header: s.getString('receipt_header'),
+        columns: s.receiptColumns,
         showCashier: s.getBool('receipt_show_cashier', fallback: true),
         showOrderType: s.getBool('receipt_show_ordertype', fallback: true),
         showTax: s.receiptShowTax,
-        openDrawer: isCash && !reprint,
+        openDrawer: isCash && !reprint && s.openDrawerOnSale,
         formatAmount: PosApp.money,
       ).build(order, reprint: reprint);
       // A reprint uses a distinct reference so it does not collide with the
-      // original in the spool's dedupe.
-      await _receiptPrinter.send(bytes,
-          reference: reprint ? 'reprint-${order.uuid}' : order.uuid);
+      // original in the spool's dedupe; extra copies get their own suffix so the
+      // dedupe does not fold them into one.
+      final base = reprint ? 'reprint-${order.uuid}' : order.uuid;
+      for (var i = 0; i < s.receiptCopies; i++) {
+        await _receiptPrinter.send(bytes, reference: i == 0 ? base : '$base-c$i');
+      }
     } on PrinterUnavailable {
       // Already held in the spool by [SpooledPrinter]. Surfacing it here would put a
       // dialog between the cashier and the next customer.
@@ -747,7 +751,19 @@ class _PosAppState extends State<PosApp> {
             printers: widget.printers,
             settings: widget.settings,
             categories: widget.catalogue.categories(),
-            onChanged: refresh)),
+            onChanged: refresh,
+            // Send a sample receipt to the chosen printer so a manager can prove it
+            // is wired before a customer is standing there.
+            onTestPrint: (name) async {
+              final s = widget.settings;
+              final bytes = ReceiptBuilder(
+                shopName: s.shopName ?? widget.config.shopName,
+                footer: s.receiptFooter ?? widget.config.receiptFooter,
+                columns: s.receiptColumns,
+                formatAmount: PosApp.money,
+              ).build(_sampleOrder(), reprint: true);
+              await _sendToStation(name, bytes, 'test-$name');
+            })),
       ),
       SettingsEntry(
         title: 'Category colours',

@@ -50,6 +50,9 @@ void main() {
       );
 
   testWidgets('both sections render with nothing configured yet', (t) async {
+    // Tall surface so the lazy ListView builds the routing rows below the fold.
+    await t.binding.setSurfaceSize(const Size(1200, 2400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(app());
 
     expect(find.text('Printers & routing'), findsOneWidget);
@@ -107,6 +110,8 @@ void main() {
   testWidgets('routing a category to a station persists it to the settings store',
       (t) async {
     printers.remember('kitchen', host: '192.168.1.50');
+    await t.binding.setSurfaceSize(const Size(1200, 2400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(app());
 
     // Driven directly through the callback rather than opening the overlay

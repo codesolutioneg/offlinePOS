@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/printing/printer_registry.dart';
+import '../../core/theme/app_colors.dart';
 import '../../domain/catalogue.dart';
 
 /// Assumed to exist even before a manager ever opens this screen, so a single
@@ -26,11 +27,15 @@ class PrintersScreen extends StatefulWidget {
     required this.settings,
     required this.categories,
     required this.onChanged,
+    this.onTestPrint,
   });
 
   final PrinterRegistry printers;
   final SettingsStore settings;
   final List<Category> categories;
+
+  /// Sends a test receipt to the named printer. Null hides the test action.
+  final Future<void> Function(String printerName)? onTestPrint;
 
   /// Called after every printer or routing change, so the caller can refresh
   /// or persist whatever it holds derived from either store.
@@ -92,7 +97,7 @@ class _PrintersScreenState extends State<PrintersScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _sectionHeader(context, tr(context, 'Printers')),
+          _sectionHeader(context, tr(context, 'Printers'), Icons.print, AppColors.info),
           ..._printerRows(),
           const SizedBox(height: 8),
           OutlinedButton.icon(
@@ -102,17 +107,100 @@ class _PrintersScreenState extends State<PrintersScreen> {
             label: Text(tr(context, 'Add printer')),
           ),
           const SizedBox(height: 24),
-          _sectionHeader(context, tr(context, 'Kitchen routing')),
+          _sectionHeader(
+              context, tr(context, 'Receipt & paper'), Icons.receipt_long, AppColors.primary),
+          _receiptOptions(),
+          const SizedBox(height: 24),
+          _sectionHeader(context, tr(context, 'Kitchen routing'), Icons.restaurant, AppColors.warning),
           ..._routingRows(stations, assignments),
         ],
       ),
     );
   }
 
-  Widget _sectionHeader(BuildContext context, String title) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+  Widget _sectionHeader(BuildContext context, String title, IconData icon, Color color) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 10, top: 4),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
+            child: Icon(icon, size: 18, color: color),
+          ),
+          const SizedBox(width: 8),
+          Text(title,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+        ]),
       );
+
+  /// Paper width, copies and the cash-drawer kick, so a manager tunes the receipt
+  /// to their actual printer instead of accepting one hard-coded shape.
+  Widget _receiptOptions() {
+    final cols = widget.settings.receiptColumns;
+    final copies = widget.settings.receiptCopies;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Text(tr(context, 'Paper width'), style: const TextStyle(fontWeight: FontWeight.w600)),
+            const Spacer(),
+            SegmentedButton<int>(
+              key: const Key('paper-width'),
+              segments: const [
+                ButtonSegment(value: 42, label: Text('80 mm')),
+                ButtonSegment(value: 32, label: Text('58 mm')),
+              ],
+              selected: {cols == 32 ? 32 : 42},
+              onSelectionChanged: (s) {
+                widget.settings.receiptColumns = s.first;
+                _notify();
+              },
+            ),
+          ]),
+          const Divider(),
+          Row(children: [
+            Text(tr(context, 'Copies'), style: const TextStyle(fontWeight: FontWeight.w600)),
+            const Spacer(),
+            IconButton(
+                key: const Key('copies-minus'),
+                icon: const Icon(Icons.remove_circle_outline),
+                onPressed: copies > 1
+                    ? () {
+                        widget.settings.receiptCopies = copies - 1;
+                        _notify();
+                      }
+                    : null),
+            Text('$copies', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            IconButton(
+                key: const Key('copies-plus'),
+                icon: const Icon(Icons.add_circle_outline),
+                onPressed: copies < 3
+                    ? () {
+                        widget.settings.receiptCopies = copies + 1;
+                        _notify();
+                      }
+                    : null),
+          ]),
+          const Divider(),
+          SwitchListTile(
+            key: const Key('open-drawer'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Open cash drawer on cash sale')),
+            value: widget.settings.openDrawerOnSale,
+            onChanged: (v) {
+              widget.settings.openDrawerOnSale = v;
+              _notify();
+            },
+          ),
+        ]),
+      ),
+    );
+  }
 
   List<Widget> _printerRows() {
     final printers = widget.printers.printers.toList()
@@ -127,31 +215,63 @@ class _PrintersScreenState extends State<PrintersScreen> {
     }
     return [
       for (final printer in printers)
-        Card(
-          key: Key('printer-${printer.name}'),
-          child: ListTile(
-            title: Text(printer.name),
-            subtitle: Text(_describe(printer)),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  key: Key('rescan-${printer.name}'),
-                  tooltip: tr(context, 'Rescan'),
-                  icon: const Icon(Icons.refresh),
-                  onPressed: () => _rescan(printer.name),
-                ),
-                IconButton(
-                  key: Key('remove-${printer.name}'),
-                  tooltip: tr(context, 'Remove'),
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () => _remove(printer.name),
-                ),
-              ],
+        Builder(builder: (context) {
+          final known = printer.host != null;
+          final statusColor = known ? AppColors.success : Colors.grey;
+          // A "kitchen"/"bar" printer prints tickets; anything else is a receipt
+          // printer. Inferred from the name, which is all the registry stores.
+          final isKitchen = RegExp('kitchen|bar|grill', caseSensitive: false)
+              .hasMatch(printer.name);
+          return Card(
+            key: Key('printer-${printer.name}'),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: statusColor.withValues(alpha: 0.15),
+                foregroundColor: statusColor,
+                child: Icon(isKitchen ? Icons.soup_kitchen : Icons.receipt_long),
+              ),
+              title: Row(children: [
+                Flexible(child: Text(printer.name, overflow: TextOverflow.ellipsis)),
+                const SizedBox(width: 8),
+                StatusChip(
+                    known ? tr(context, 'Ready') : tr(context, 'Not found'), statusColor),
+              ]),
+              subtitle: Text(_describe(printer)),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (widget.onTestPrint != null)
+                    IconButton(
+                      key: Key('test-${printer.name}'),
+                      tooltip: tr(context, 'Test print'),
+                      icon: const Icon(Icons.print_outlined),
+                      onPressed: () => _testPrint(printer.name),
+                    ),
+                  IconButton(
+                    key: Key('rescan-${printer.name}'),
+                    tooltip: tr(context, 'Rescan'),
+                    icon: const Icon(Icons.refresh),
+                    onPressed: () => _rescan(printer.name),
+                  ),
+                  IconButton(
+                    key: Key('remove-${printer.name}'),
+                    tooltip: tr(context, 'Remove'),
+                    icon: const Icon(Icons.delete_outline, color: AppColors.error),
+                    onPressed: () => _remove(printer.name),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ),
+          );
+        }),
     ];
+  }
+
+  Future<void> _testPrint(String name) async {
+    await widget.onTestPrint?.call(name);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name: ${tr(context, 'test receipt sent')}')));
   }
 
   String _describe(ConfiguredPrinter printer) {
