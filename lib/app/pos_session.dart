@@ -89,6 +89,7 @@ class PosSession {
       // across that would book the new units under the old line's stale metadata.
       if (l.printedToKitchen ||
           l.firedStations.isNotEmpty ||
+          l.fireAt != null ||
           l.productId != line.productId ||
           l.unitPrice != line.unitPrice ||
           l.taxRate != line.taxRate ||

@@ -223,7 +223,16 @@ class _PosAppState extends State<PosApp> {
   /// their time comes.
   void _fireDueTimedLines() {
     final now = DateTime.now().toUtc();
-    for (final o in [...widget.orders.held(), ...widget.orders.awaitingSync()]) {
+    // Include the order on the counter: a cashier can set a timer and Send while the
+    // table stays open (draft), and its delayed lines must still fire on time.
+    final orders = <Order>[
+      if (_session != null) _session!.current,
+      ...widget.orders.held(),
+      ...widget.orders.awaitingSync(),
+    ];
+    final seen = <String>{};
+    for (final o in orders) {
+      if (!seen.add(o.uuid)) continue;
       final due = o.lines
           .where((l) => l.fireAt != null && !l.printedToKitchen && l.dueAt(now))
           .toList();
