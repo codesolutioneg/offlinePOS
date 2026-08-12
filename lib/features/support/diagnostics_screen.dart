@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/auth/permissions.dart';
 import '../../core/db/sqlite_outbox_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/onboarding/wizard_store.dart';
@@ -30,6 +31,7 @@ class DiagnosticsScreen extends StatefulWidget {
     this.wizards,
     this.cashierId,
     this.printError,
+    this.authorize,
   });
 
   final SyncService sync;
@@ -54,6 +56,11 @@ class DiagnosticsScreen extends StatefulWidget {
   /// The last receipt that could not even be built. Distinct from a printer that
   /// is off, and invisible everywhere else.
   final String? printError;
+
+  /// Gate for adding, editing or forgetting a printer here: it is the same
+  /// managePrinters right the Settings printer screen uses, so support cannot be a
+  /// back door around it. Reprint and find-printer stay open to any cashier.
+  final Future<bool> Function(Permission)? authorize;
 
   @override
   State<DiagnosticsScreen> createState() => _DiagnosticsScreenState();
@@ -102,6 +109,12 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   /// refuses to guess: several printers on the subnet and none of them saying who
   /// it is. Without this there is no route to a working printer at all.
   Future<void> _editPrinter({ConfiguredPrinter? existing}) async {
+    // Adding, repointing or forgetting a printer is manager-gated, exactly as in
+    // Settings, so Support is not a way around the printer permission.
+    if (widget.authorize != null && !await widget.authorize!(Permission.managePrinters)) {
+      return;
+    }
+    if (!mounted) return;
     final result = await showDialog<_PrinterEdit>(
       context: context,
       builder: (_) => _PrinterDialog(existing: existing),

@@ -17,6 +17,8 @@ void main() {
                 builder: (_) => RefundScreen(
                   original: original,
                   formatAmount: (v) => v.toStringAsFixed(2),
+                  actingCashierId: 'bob',
+                  deviceId: 'till-2',
                   onRefund: (r) => captured = r,
                 ),
               ),
@@ -56,6 +58,10 @@ void main() {
     expect(p.label, 'Card');
     expect(p.amount, lessThan(0));
     expect(refund.refundOfUuid, original.uuid);
+    // The money-out is booked against the cashier and till processing the refund,
+    // not the original sale's cashier ('c') or device ('d').
+    expect(refund.cashierId, 'bob');
+    expect(refund.deviceId, 'till-2');
   });
 
   testWidgets('a split-tender sale reverses each method in proportion', (t) async {

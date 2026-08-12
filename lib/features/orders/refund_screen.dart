@@ -16,11 +16,19 @@ class RefundScreen extends StatefulWidget {
     required this.original,
     required this.formatAmount,
     required this.onRefund,
+    required this.actingCashierId,
+    required this.deviceId,
   });
 
   final Order original;
   final String Function(double) formatAmount;
   final void Function(Order refund) onRefund;
+
+  /// The cashier processing the refund and the till it is processed on, so the
+  /// money-out is booked and audited against whoever actually gave it back, not the
+  /// cashier who rang the original sale (possibly on another device).
+  final String actingCashierId;
+  final String deviceId;
 
   @override
   State<RefundScreen> createState() => _RefundScreenState();
@@ -97,8 +105,8 @@ class _RefundScreenState extends State<RefundScreen> {
                   label: p.label),
           ];
     final refund = Order(
-      deviceId: o.deviceId,
-      cashierId: o.cashierId,
+      deviceId: widget.deviceId,
+      cashierId: widget.actingCashierId,
       type: o.type,
       partnerId: o.partnerId,
       customerName: o.customerName,

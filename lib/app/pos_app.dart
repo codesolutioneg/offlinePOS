@@ -721,6 +721,9 @@ class _PosAppState extends State<PosApp> {
       builder: (_) => RefundScreen(
         original: original,
         formatAmount: PosApp.money,
+        // Book the money-out against the cashier and till actually processing it.
+        actingCashierId: _session?.cashierId ?? original.cashierId,
+        deviceId: widget.deviceId,
         onRefund: (refund) {
           // A refund is a durable order like a sale: saved, queued to sync, audited,
           // and a slip printed for the customer.
@@ -1332,6 +1335,7 @@ class _PosAppState extends State<PosApp> {
         wizards: widget.wizards,
         cashierId: _session?.cashierId,
         printError: _printError,
+        authorize: (p) => _authorize(p, context),
       ),
     ));
   }

@@ -5,10 +5,20 @@ import 'package:offline_pos/core/db/catalogue_store.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
+import 'package:offline_pos/core/auth/permissions.dart';
+import 'package:offline_pos/core/printing/printer_discovery.dart';
+import 'package:offline_pos/core/printing/printer_registry.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/features/support/diagnostics_screen.dart';
 
 import '../db/sqlite_loader.dart';
+
+class _NoPrintersOnTheWire extends PrinterDiscovery {
+  @override
+  Future<bool> probe(String host, {int? port}) async => false;
+  @override
+  Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async => const [];
+}
 
 void main() {
   late Db db;
@@ -48,6 +58,31 @@ void main() {
     return MaterialApp(
         home: DiagnosticsScreen(sync: wired, outboxStore: store));
   }
+
+  testWidgets('adding a printer here is gated by managePrinters', (t) async {
+    Permission? asked;
+    final printers = PrinterRegistry(discovery: _NoPrintersOnTheWire());
+    await t.pumpWidget(MaterialApp(
+      home: DiagnosticsScreen(
+        sync: sync,
+        outboxStore: store,
+        printers: printers,
+        authorize: (p) async {
+          asked = p;
+          return false; // deny, as a cashier without the permission
+        },
+      ),
+    ));
+    await t.scrollUntilVisible(find.byKey(const Key('add-printer')), 300,
+        scrollable: find.byType(Scrollable).first);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('add-printer')));
+    await t.pumpAndSettle();
+
+    // The permission was checked and, denied, the printer dialog never opened.
+    expect(asked, Permission.managePrinters);
+    expect(find.byKey(const Key('printer-name')), findsNothing);
+  });
 
   testWidgets('shows what support needs to identify the till', (t) async {
     await t.pumpWidget(app());
