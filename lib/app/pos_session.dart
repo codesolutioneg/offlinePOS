@@ -185,8 +185,14 @@ class PosSession {
   void setOrderType(OrderType type) {
     current.type = type;
     if (type != OrderType.delivery) {
+      // Dine-in and takeaway carry no customer, so switching away from delivery
+      // clears the whole customer, not just the address, or a stale partner would
+      // ride along on a sale whose UI no longer shows (or lets you clear) it.
       current.deliveryCost = 0;
       current.customerAddress = null;
+      current.partnerId = null;
+      current.customerName = null;
+      current.customerPhone = null;
     }
     orders.save(current);
   }
