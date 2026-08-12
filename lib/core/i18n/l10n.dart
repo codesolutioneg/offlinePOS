@@ -497,4 +497,7 @@ const Map<String, String> _ar = {
   'Configure printers and kitchen routing': 'إعداد الطابعات وتوجيه المطبخ',
   'Change shop, receipt and server settings': 'تغيير إعدادات المتجر والإيصال والخادم',
   'See sales and activity reports': 'عرض تقارير المبيعات والنشاط',
+  'No sale (open drawer)': 'بدون بيع (فتح الدرج)',
+  'NO SALE': 'بدون بيع',
+  'Drawer opened': 'تم فتح الدرج',
 };

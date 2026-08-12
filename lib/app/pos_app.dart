@@ -22,6 +22,7 @@ import '../core/db/table_store.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
+import '../core/widgets/feedback.dart';
 import '../core/printing/kitchen_ticket.dart';
 import '../core/printing/printer_registry.dart';
 import '../core/printing/printer_transport.dart';
@@ -557,6 +558,15 @@ class _PosAppState extends State<PosApp> {
             onTap: () {
               Navigator.pop(rootContext);
               _openAttendance(rootContext);
+            },
+          ),
+          ListTile(
+            key: const Key('nav-nosale'),
+            leading: const Icon(Icons.money_off),
+            title: Text(tr(rootContext, 'No sale (open drawer)')),
+            onTap: () {
+              Navigator.pop(rootContext);
+              unawaited(_openDrawerNoSale(rootContext));
             },
           ),
           const Divider(),
@@ -1108,6 +1118,35 @@ class _PosAppState extends State<PosApp> {
           detail: '$reference: $e');
       return false;
     }
+  }
+
+  /// Kick the cash drawer open outside a sale (to make change, drop a float),
+  /// printing a short NO SALE slip so the open is on paper. Permissioned, and
+  /// audit-logged so an out-of-sale open is always traceable.
+  Future<void> _openDrawerNoSale(BuildContext context) async {
+    // Read the one translated word the slip needs before any await, so the printed
+    // text does not depend on the context surviving the permission prompt.
+    final noSale = tr(context, 'NO SALE');
+    if (!await _authorize(Permission.openDrawer, context)) return;
+    final who = _session?.cashierId ?? 'system';
+    final slip = EscPos()
+      ..align(EscPosAlign.center)
+      ..bold(true)
+      ..line(noSale)
+      ..bold(false)
+      ..align(EscPosAlign.left)
+      ..line(who)
+      ..feed(1)
+      ..openDrawer()
+      ..cut();
+    try {
+      await _receiptPrinter.send(slip.build(), reference: 'nosale-${DateTime.now().microsecondsSinceEpoch}');
+    } on PrinterUnavailable {
+      // The slip is spooled and the drawer will kick when the printer returns; the
+      // audit entry below still records the intent so nothing is silently lost.
+    }
+    widget.audit.record(who, 'drawer.nosale');
+    if (context.mounted) showToast(context, tr(context, 'Drawer opened'), kind: ToastKind.success);
   }
 
   void _openSettings(BuildContext context) {
