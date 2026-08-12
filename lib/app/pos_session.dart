@@ -65,8 +65,47 @@ class PosSession {
           ),
       ],
     );
-    current.lines.add(line);
+    // Consolidate: tapping the same product again bumps the existing line's
+    // quantity instead of stacking a duplicate row, the way a till is expected to
+    // behave. Only an identical line that has not been fired to the kitchen yet
+    // merges: a line already sent, discounted, noted or seat-tagged stays its own
+    // row so the kitchen delta and the split maths stay correct.
+    final match = _mergeableLineFor(line);
+    if (match != null) {
+      match.quantity += qty;
+    } else {
+      current.lines.add(line);
+    }
     orders.save(current);
+  }
+
+  /// An existing line the freshly built [line] can fold into, or null. Identical
+  /// means same product and modifiers, no note/line-discount/seat, and not yet
+  /// printed to the kitchen.
+  OrderLine? _mergeableLineFor(OrderLine line) {
+    for (final l in current.lines) {
+      if (l.printedToKitchen ||
+          l.productId != line.productId ||
+          l.unitPrice != line.unitPrice ||
+          l.note != null ||
+          l.discountPercent != 0 ||
+          l.seat != null) {
+        continue;
+      }
+      if (_sameModifiers(l.modifiers, line.modifiers)) return l;
+    }
+    return null;
+  }
+
+  static bool _sameModifiers(List<OrderModifier> a, List<OrderModifier> b) {
+    if (a.length != b.length) return false;
+    String key(OrderModifier m) => '${m.modifierId}:${m.quantity}:${m.unitPrice}';
+    final ak = a.map(key).toList()..sort();
+    final bk = b.map(key).toList()..sort();
+    for (var i = 0; i < ak.length; i++) {
+      if (ak[i] != bk[i]) return false;
+    }
+    return true;
   }
 
   /// Remove a line the cashier is still building (no reason needed pre-fire).

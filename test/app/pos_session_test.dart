@@ -58,11 +58,39 @@ void main() {
     expect(session.total, 514);
   });
 
-  test('two identical products stay separate lines so their modifiers cannot merge', () {
+  test('adding the same product again consolidates onto one line', () {
+    session.addProduct(pizza);
+    session.addProduct(pizza);
+    expect(session.current.lines.single.quantity, 2);
+    expect(session.total, 500);
+  });
+
+  test('identical products with the same modifiers consolidate', () {
+    session.addProduct(pizza, chosen: const [ChosenModifier(cheese)]);
+    session.addProduct(pizza, chosen: const [ChosenModifier(cheese)]);
+    expect(session.current.lines.single.quantity, 2);
+    expect(session.total, 2 * (250 + 7));
+  });
+
+  test('different modifiers keep the products on separate lines', () {
     session.addProduct(pizza, chosen: const [ChosenModifier(cheese)]);
     session.addProduct(pizza, chosen: const [ChosenModifier(tenPct)]);
     expect(session.current.lines.length, 2);
     expect(session.total, 250 + 7 + 250 + 25);
+  });
+
+  test('a line already sent to the kitchen is not merged into by a new add', () {
+    session.addProduct(pizza);
+    session.current.lines.single.printedToKitchen = true;
+    session.addProduct(pizza);
+    expect(session.current.lines.length, 2);
+  });
+
+  test('a seat-tagged line is not merged into, so split maths stays intact', () {
+    session.addProduct(pizza);
+    session.setLineSeat(session.current.lines.single.uuid, 1);
+    session.addProduct(pizza);
+    expect(session.current.lines.length, 2);
   });
 
   test('setting quantity to zero removes the line', () {
