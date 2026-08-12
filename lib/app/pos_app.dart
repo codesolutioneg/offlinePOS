@@ -490,9 +490,13 @@ class _PosAppState extends State<PosApp> {
               onResendToKitchen: () => unawaited(
                   _fireKitchen(session.current, only: session.current.lines, resend: true)),
               onLineVoided: (line, reason) {
-                // The kitchen slip stops the line being cooked; the deletion slip is
-                // the till's own record that an item was taken off, with the amount.
-                unawaited(_fireVoid(session.current, line, reason));
+                // The deletion slip is the till's own record that an item was taken
+                // off, printed for every void. The kitchen cancel slip only fires
+                // when the kitchen already has a copy, or it would send a cancel for
+                // food that was never ordered to the pass.
+                if (line.printedToKitchen || line.firedStations.isNotEmpty) {
+                  unawaited(_fireVoid(session.current, line, reason));
+                }
                 unawaited(_printDeletion(session.current, [line],
                     title: 'ITEM VOIDED', reason: reason));
               },

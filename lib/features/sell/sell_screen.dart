@@ -700,13 +700,10 @@ class _SellScreenState extends State<SellScreen> {
     _changed(() {
       s.voidLine(line.uuid, reason);
     });
-    // If it had been fired to the kitchen, the shell prints a cancel slip so the
-    // line stops cooking. jouma's deleted-line audit, on paper.
-    // Fire a cancel slip if the kitchen has a copy, even one fired to only some of
-    // several stations.
-    if (line.printedToKitchen || line.firedStations.isNotEmpty) {
-      widget.onLineVoided?.call(line, reason);
-    }
+    // Every void is reported so the shell can print the till's deletion slip; the
+    // shell decides separately whether the line also needs a kitchen cancel slip
+    // (only when the kitchen already has a copy).
+    widget.onLineVoided?.call(line, reason);
   }
 
   /// A required reason, with quick picks. Returns null on cancel.
