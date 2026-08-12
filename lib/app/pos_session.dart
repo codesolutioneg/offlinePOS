@@ -88,6 +88,7 @@ class PosSession {
       // change a product's tax, category or name while its price holds, and merging
       // across that would book the new units under the old line's stale metadata.
       if (l.printedToKitchen ||
+          l.firedStations.isNotEmpty ||
           l.productId != line.productId ||
           l.unitPrice != line.unitPrice ||
           l.taxRate != line.taxRate ||
