@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../auth/permissions.dart';
 import 'database.dart';
 
 /// On-device configuration a manager can change without a rebuild: shop name and
@@ -29,6 +30,7 @@ class SettingsStore {
   static const _unavailableProducts = 'unavailable_products';
   static const _favourites = 'favourite_products';
   static const _gridColumns = 'grid_columns';
+  static const _rolePermissions = 'role_permissions';
 
   // ── generic accessors ────────────────────────────────────────────
   String? getString(String key) {
@@ -330,4 +332,62 @@ class SettingsStore {
   /// 'equals', 'dots' or 'stars'.
   String get receiptDividerStyle => getString('receipt_divider_style') ?? 'line';
   set receiptDividerStyle(String v) => setString('receipt_divider_style', v);
+
+  // ── role permissions ─────────────────────────────────────────────
+  // Per role name, the set of permission keys that role may exercise WITHOUT
+  // stopping for a manager PIN. Managers are never stored here: they are
+  // unrestricted by definition, so reducing them is not allowed.
+
+  /// The base a plain cashier starts with before a manager configures anything:
+  /// harmless day-to-day actions that should never need approval.
+  static const _cashierDefaults = {Permission.reprint, Permission.viewReports};
+
+  /// The raw stored map, role -> set of permission keys. Unparsable or missing data
+  /// reads as empty so a corrupt value falls back to defaults rather than throwing.
+  Map<String, Set<String>> get _rolePermissionMap {
+    final v = getString(_rolePermissions);
+    if (v == null) return {};
+    try {
+      return (jsonDecode(v) as Map).map((k, val) => MapEntry(
+          k as String, (val as List).map((e) => e.toString()).toSet()));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// The permissions [role] may perform without manager approval.
+  ///
+  /// A manager always gets every permission and cannot be reduced. Any other role
+  /// returns its configured set; a 'cashier' with nothing saved falls back to a
+  /// sensible base ([reprint], [viewReports]), and an unknown custom role starts
+  /// with none.
+  Set<Permission> permissionsFor(String role) {
+    if (role == 'manager') return Permission.values.toSet();
+    final map = _rolePermissionMap;
+    if (!map.containsKey(role)) {
+      return role == 'cashier' ? {..._cashierDefaults} : <Permission>{};
+    }
+    return map[role]!.map(Permission.fromKey).whereType<Permission>().toSet();
+  }
+
+  /// Grant or revoke one permission for [role]. A no-op for 'manager', who stays
+  /// unrestricted. Seeds from the role's current effective set so toggling one
+  /// permission never wipes the defaults a role started with.
+  void setRolePermission(String role, Permission p, bool enabled) {
+    if (role == 'manager') return;
+    final map = _rolePermissionMap;
+    final current =
+        map[role] ?? permissionsFor(role).map((e) => e.key).toSet();
+    if (enabled) {
+      current.add(p.key);
+    } else {
+      current.remove(p.key);
+    }
+    map[role] = current;
+    setString(_rolePermissions,
+        jsonEncode(map.map((k, val) => MapEntry(k, val.toList()))));
+  }
+
+  /// Whether [role] may do [p] without a manager PIN.
+  bool roleCan(String role, Permission p) => permissionsFor(role).contains(p);
 }
