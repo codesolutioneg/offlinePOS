@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../app/pos_session.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/widgets/numeric_keypad.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
 import 'modifier_sheet.dart';
@@ -287,41 +288,12 @@ class _SellScreenState extends State<SellScreen> {
     if (chosen != null) _changed(() => s.addProduct(product, chosen: chosen));
   }
 
-  Future<double?> _askWeight(Product product) {
-    final ctrl = TextEditingController();
-    return showDialog<double>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSt) {
-          final valid = (double.tryParse(ctrl.text.trim()) ?? 0) > 0;
-          return AlertDialog(
-            title: Text('${tr(ctx, 'Weight for')} ${product.name}'),
-            content: TextField(
-              key: const Key('weight-field'),
-              controller: ctrl,
-              autofocus: true,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                  labelText: tr(ctx, 'Weight'),
-                  suffixText: 'x ${widget.formatAmount(product.price)}',
-                  border: const OutlineInputBorder()),
-              onChanged: (_) => setSt(() {}),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-              FilledButton(
-                key: const Key('weight-ok'),
-                // Disabled until a positive weight is entered, so pressing Add can
-                // never silently do nothing.
-                onPressed: valid ? () => Navigator.pop(ctx, double.parse(ctrl.text.trim())) : null,
-                child: Text(tr(ctx, 'Add')),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
+  Future<double?> _askWeight(Product product) => promptNumber(
+        context,
+        title: '${tr(context, 'Weight for')} ${product.name}',
+        decimal: true,
+        confirmLabel: tr(context, 'Add'),
+      );
 
   Future<void> _openCustomer() async {
     final ctrl = TextEditingController();

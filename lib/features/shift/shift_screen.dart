@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/db/shift_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/widgets/numeric_keypad.dart';
 import '../../domain/shift.dart';
 
 /// Open a shift with a float, record cash in/out, and close with the X/Z count.
@@ -60,31 +61,11 @@ class _ShiftScreenState extends State<ShiftScreen> {
     return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
   }
 
-  Future<double?> _promptAmount(String title, {String label = 'Amount'}) {
-    final c = TextEditingController();
-    return showDialog<double>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-              onPressed: () {
-                // A float or count is never negative; a bad entry cancels rather
-                // than poisoning the drawer maths.
-                final v = double.tryParse(c.text.trim());
-                Navigator.pop(ctx, (v != null && v >= 0) ? v : null);
-              },
-              child: Text(tr(ctx, 'OK'))),
-        ],
-      ),
-    );
+  Future<double?> _promptAmount(String title, {String label = 'Amount'}) async {
+    // A touch number pad rather than the OS keyboard: this is a till, and a float
+    // or a cash count is never negative, so a bad entry just cancels.
+    final v = await promptNumber(context, title: label, decimal: true);
+    return (v != null && v >= 0) ? v : null;
   }
 
   /// An amount plus a short reason, so a paid-in/out is auditable rather than an
