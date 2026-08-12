@@ -718,27 +718,35 @@ class _TableTile extends StatelessWidget {
         border: Border.all(color: color, width: 2),
         borderRadius: round ? BorderRadius.circular(999) : BorderRadius.circular(12),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(table.name,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          const SizedBox(height: 2),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.event_seat, size: 13),
-            const SizedBox(width: 2),
-            Text('${table.seats}', style: const TextStyle(fontSize: 12)),
-          ]),
-          if (occupied && total != null)
-            Text(total!,
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
-          if (occupied && ageMinutes != null)
-            Text('${ageMinutes}m',
-                style: const TextStyle(fontSize: 11, color: Colors.black54))
-          else
-            Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
-                style: TextStyle(fontSize: 11, color: color)),
-        ],
+      // A short rectangle tile cannot fit the full name+seats+status stack at full
+      // size, so scale the content down to fit rather than overflow the fixed
+      // height. A square/round tile is roomy enough that nothing scales.
+      child: Center(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(table.name,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              const SizedBox(height: 2),
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Icon(Icons.event_seat, size: 13),
+                const SizedBox(width: 2),
+                Text('${table.seats}', style: const TextStyle(fontSize: 12)),
+              ]),
+              if (occupied && total != null)
+                Text(total!,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
+              if (occupied && ageMinutes != null)
+                Text('${ageMinutes}m',
+                    style: const TextStyle(fontSize: 11, color: Colors.black54))
+              else
+                Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
+                    style: TextStyle(fontSize: 11, color: color)),
+            ],
+          ),
+        ),
       ),
     );
   }

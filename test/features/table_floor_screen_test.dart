@@ -111,6 +111,18 @@ void main() {
     expect(find.byKey(const Key('pick-other')), findsOneWidget);
   });
 
+  testWidgets('an occupied rectangle table lays out without overflowing its tile', (t) async {
+    tables.add(name: 'T3', seats: 6, shape: TableShape.rectangle);
+    await t.pumpWidget(app(
+      occupied: const {'T3'},
+    ));
+    await t.pumpAndSettle();
+    // The short rectangle tile used to overflow by a few pixels once it carried
+    // the occupancy line; the content now scales to fit, so no layout exception.
+    expect(t.takeException(), isNull);
+    expect(find.text('T3'), findsOneWidget);
+  });
+
   testWidgets('a divider is drawn but never tapped to open an order', (t) async {
     final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
     bool tapped = false;
