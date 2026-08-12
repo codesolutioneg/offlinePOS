@@ -4,11 +4,26 @@ import 'package:offline_pos/domain/order.dart';
 
 import 'strip_escpos.dart';
 
-String render(Order o, {int columns = 42}) {
+String render(
+  Order o, {
+  int columns = 42,
+  bool showDateTime = true,
+  bool showNumber = true,
+  bool showTable = true,
+  bool showPayment = true,
+  bool showItemPrice = true,
+  String dividerStyle = 'line',
+}) {
   final bytes = ReceiptBuilder(
     shopName: 'JOUMA',
     columns: columns,
     footer: 'Thank you',
+    showDateTime: showDateTime,
+    showNumber: showNumber,
+    showTable: showTable,
+    showPayment: showPayment,
+    showItemPrice: showItemPrice,
+    dividerStyle: dividerStyle,
     formatAmount: (v) => v.toStringAsFixed(2),
   ).build(o);
   return strippedText(bytes);
@@ -88,6 +103,71 @@ void main() {
     final s = render(sample(), columns: 32);
     final total = s.split('\n').firstWhere((l) => l.contains('TOTAL'));
     expect(total.trimRight().length, 32);
+  });
+
+  test('the time of sale prints in local time and can be switched off', () {
+    final at = DateTime.utc(2026, 3, 9, 21, 5);
+    final o = Order(deviceId: 'till-1', cashierId: 'sara', createdAt: at)
+      ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10));
+    final local = at.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    final stamp =
+        '${local.year}-${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
+
+    expect(render(o), contains(stamp));
+    expect(render(o, showDateTime: false), isNot(contains(stamp)));
+  });
+
+  test('the order number can be switched off without losing the time', () {
+    final o = sample();
+    final ref = o.uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
+    final s = render(o, showNumber: false);
+    expect(s, isNot(contains('#$ref')));
+    expect(s, contains('${o.createdAt.toLocal().year}-'));
+  });
+
+  test('a dine-in table and its covers print on one line', () {
+    final o = Order(deviceId: 'till-1', cashierId: 'sara')
+      ..tableLabel = 'A3'
+      ..guestCount = 4
+      ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10));
+    expect(render(o), contains('Table A3 - 4 guests'));
+    expect(render(o, showTable: false), isNot(contains('Table A3')));
+  });
+
+  test('a takeaway with no table prints no table line, toggle or not', () {
+    final o = Order(deviceId: 'till-1', cashierId: 'sara', type: OrderType.takeaway)
+      ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10));
+    expect(render(o), isNot(contains('Table')));
+    expect(render(o), isNot(contains('null')));
+  });
+
+  test('hiding the payment method keeps the change owed', () {
+    final o = Order(deviceId: 'till-1', cashierId: 'sara')
+      ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10))
+      ..payments = [const OrderPayment(methodId: 1, amount: 10, label: 'Visa')]
+      ..cashReceived = 20;
+    expect(render(o), contains('Visa'));
+    final s = render(o, showPayment: false);
+    expect(s, isNot(contains('Visa')));
+    expect(s, contains('Change'));
+  });
+
+  test('hiding item prices keeps names and quantities but drops the amounts', () {
+    final s = render(sample(), showItemPrice: false);
+    expect(s, contains('2 x Pizza'));
+    expect(s, contains('+ Extra Cheese'));
+    // No per-item amount, but the total still prints: the customer still pays.
+    expect(s, isNot(contains('500.00')));
+    expect(s, contains('514.00'));
+  });
+
+  test('the divider style sets the separator character across the paper width', () {
+    final stars = render(sample(), dividerStyle: 'stars', columns: 32);
+    expect(stars, contains('*' * 32));
+    expect(stars, isNot(contains('-' * 32)));
+    // An unknown style falls back to a dashed rule rather than printing nothing.
+    expect(render(sample(), dividerStyle: 'squiggle'), contains('-' * 42));
   });
 
   test('a menu in any script still produces a receipt', () {

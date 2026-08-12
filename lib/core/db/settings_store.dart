@@ -226,4 +226,34 @@ class SettingsStore {
   /// Kick the cash drawer open on a cash sale. On by default.
   bool get openDrawerOnSale => getBool('open_drawer_on_sale', fallback: true);
   set openDrawerOnSale(bool v) => setBool('open_drawer_on_sale', v);
+
+  // ── receipt designer: what prints ────────────────────────────────
+  // All on by default, so a till that never visits the designer prints the full
+  // slip it printed before these existed.
+
+  /// Print the time of sale near the top of the receipt.
+  bool get receiptShowDateTime => getBool('receipt_show_datetime', fallback: true);
+  set receiptShowDateTime(bool v) => setBool('receipt_show_datetime', v);
+
+  /// Print the order's own reference (#ABC123).
+  bool get receiptShowNumber => getBool('receipt_show_number', fallback: true);
+  set receiptShowNumber(bool v) => setBool('receipt_show_number', v);
+
+  /// Print the table and cover count on a dine-in slip.
+  bool get receiptShowTable => getBool('receipt_show_table', fallback: true);
+  set receiptShowTable(bool v) => setBool('receipt_show_table', v);
+
+  /// Print how the sale was tendered (one line per payment).
+  bool get receiptShowPayment => getBool('receipt_show_payment', fallback: true);
+  set receiptShowPayment(bool v) => setBool('receipt_show_payment', v);
+
+  /// Print the amount column next to each item. Off leaves names and quantities,
+  /// which is what a packing slip wants.
+  bool get receiptShowItemPrice => getBool('receipt_show_itemprice', fallback: true);
+  set receiptShowItemPrice(bool v) => setBool('receipt_show_itemprice', v);
+
+  /// Which character the receipt's separator lines are drawn with: 'line',
+  /// 'equals', 'dots' or 'stars'.
+  String get receiptDividerStyle => getString('receipt_divider_style') ?? 'line';
+  set receiptDividerStyle(String v) => setString('receipt_divider_style', v);
 }

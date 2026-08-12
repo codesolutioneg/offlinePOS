@@ -19,6 +19,12 @@ class ReceiptBuilder {
     this.showCashier = true,
     this.showOrderType = true,
     this.showTax = true,
+    this.showDateTime = true,
+    this.showNumber = true,
+    this.showTable = true,
+    this.showPayment = true,
+    this.showItemPrice = true,
+    this.dividerStyle = 'line',
     this.openDrawer = false,
   });
 
@@ -36,12 +42,24 @@ class ReceiptBuilder {
   final bool showCashier;
   final bool showOrderType;
   final bool showTax;
+  final bool showDateTime;
+  final bool showNumber;
+  final bool showTable;
+  final bool showPayment;
+  final bool showItemPrice;
+
+  /// Which character separator lines are drawn with, as stored by the receipt
+  /// designer. Anything unrecognised falls back to a dashed rule.
+  final String dividerStyle;
+
+  static const _dividerChars = {'line': '-', 'equals': '=', 'dots': '.', 'stars': '*'};
 
   /// Kick the cash drawer open at the end, for a cash sale.
   final bool openDrawer;
 
   Uint8List build(Order order, {bool reprint = false}) {
     final p = EscPos(columns: columns)..reset();
+    final divider = _dividerChars[dividerStyle] ?? '-';
 
     p.align(EscPosAlign.center)
       ..size(doubleWidth: true, doubleHeight: true)
@@ -53,27 +71,43 @@ class ReceiptBuilder {
     if (taxId != null) p.line(taxId!);
     // A reprint is marked so a duplicate slip cannot be passed off as a second sale.
     if (reprint) p.centred('*** REPRINT ***');
-    p.align(EscPosAlign.left).rule();
+    p.align(EscPosAlign.left).rule(divider);
 
     // Where the sale was served, so a delivery or table sale reads differently
     // from a counter one on the same roll.
-    if (showOrderType) {
-      p.line(order.type.label + (order.tableLabel != null ? '  Table ${order.tableLabel}' : ''));
-      if (order.guestCount != null) p.line('Guests: ${order.guestCount}');
+    if (showOrderType) p.line(order.type.label);
+    // Table and covers, only for a dine-in that actually carries them: a counter
+    // sale must never print "Table null".
+    if (showTable && order.type == OrderType.dineIn) {
+      final seating = [
+        if (order.tableLabel != null) 'Table ${order.tableLabel}',
+        if (order.guestCount != null) '${order.guestCount} guests',
+      ].join(' - ');
+      if (seating.isNotEmpty) p.line(seating);
     }
-    p.line('${_stamp(order.createdAt)}  #${_shortRef(order)}');
+    // Time of sale and the order's own reference, each on its own toggle but sharing
+    // a line when both print.
+    final stamped = [
+      if (showDateTime) _stamp(order.createdAt),
+      if (showNumber) '#${_shortRef(order)}',
+    ].join('  ');
+    if (stamped.isNotEmpty) p.line(stamped);
     if (showCashier) p.line('Cashier: ${order.cashierId}');
     if (order.customerName != null) p.line('Customer: ${order.customerName}');
-    p.rule();
+    p.rule(divider);
 
     for (final l in order.lines) {
       // The base price is printed on the header and each modifier's amount below it,
       // so the printed parts add up to the line total rather than counting the
       // modifiers twice. A per-line discount prints as its own negative line, so
       // header + modifiers - discount reconciles to what the customer pays.
-      p.row('${_qty(l.quantity)} x ${l.name}', formatAmount(l.quantity * l.unitPrice));
+      // With prices hidden the slip becomes a packing list: names and quantities
+      // still print, the amount column does not.
+      p.row('${_qty(l.quantity)} x ${l.name}',
+          showItemPrice ? formatAmount(l.quantity * l.unitPrice) : '');
       for (final m in l.modifiers) {
-        final amount = m.unitPrice == 0 ? '' : formatAmount(l.quantity * m.total);
+        final amount =
+            (!showItemPrice || m.unitPrice == 0) ? '' : formatAmount(l.quantity * m.total);
         p.row('   + ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}', amount);
       }
       if (l.discountPercent > 0) {
@@ -83,7 +117,7 @@ class ReceiptBuilder {
       if (l.note != null && l.note!.isNotEmpty) p.line('   ${l.note}');
     }
 
-    p.rule();
+    p.rule(divider);
     // Show the breakdown only when there is one, so a plain sale stays a plain
     // receipt but a discounted delivery with a tip is fully itemised.
     final hasBreakdown = order.discountPercent > 0 ||
@@ -117,8 +151,10 @@ class ReceiptBuilder {
     // received and the change owed from [cashReceived] rather than from the tender.
     if (order.payments.isNotEmpty) {
       p.feed();
-      for (final pay in order.payments) {
-        p.row(pay.label ?? 'Payment', formatAmount(pay.amount));
+      if (showPayment) {
+        for (final pay in order.payments) {
+          p.row(pay.label ?? 'Payment', formatAmount(pay.amount));
+        }
       }
       // Orders stored before cash_received existed kept the tender in the payment
       // amount, so fall back to the payment sum for their reprints. New orders
