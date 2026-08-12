@@ -964,7 +964,9 @@ class _PosAppState extends State<PosApp> {
       final ok = await _sendToStation(station, bytes, 'kot-${order.uuid}-$station');
       if (!ok) continue;
       for (final l in pending) {
-        l.firedStations.add(station);
+        // Dedupe: a deliberate resend must not append the same station twice, or a
+        // later void would send duplicate cancel slips to it.
+        if (!l.firedStations.contains(station)) l.firedStations.add(station);
       }
     }
     for (final l in lines) {
