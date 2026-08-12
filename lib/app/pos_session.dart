@@ -309,6 +309,7 @@ class PosSession {
         note: line.note,
         discountPercent: line.discountPercent,
         printedToKitchen: line.printedToKitchen,
+        firedStations: List.of(line.firedStations),
         seat: s,
         modifiers: [
           for (final m in line.modifiers)
@@ -349,6 +350,7 @@ class PosSession {
           note: line.note,
           discountPercent: line.discountPercent,
           printedToKitchen: line.printedToKitchen,
+          firedStations: List.of(line.firedStations),
           seat: line.seat,
           modifiers: [
             for (final m in line.modifiers)

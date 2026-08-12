@@ -937,32 +937,33 @@ class _PosAppState extends State<PosApp> {
     final routed = routeToStations(lines,
         categoryToStations: widget.settings.categoryStations,
         productToStations: widget.settings.productStations);
-    // Send to each station, remembering which failed, so a line that fans out to
-    // more than one printer is only marked fired once EVERY station it needs got
-    // it. Marking on the first success would let a resend skip the line and a
-    // failed station never gets its copy.
-    final failed = <String>{};
-    for (final entry in routed.entries) {
-      final bytes = builder.build(order, only: entry.value, station: entry.key);
-      final ok = await _sendToStation(entry.key, bytes, 'kot-${order.uuid}-${entry.key}');
-      if (!ok) failed.add(entry.key);
-    }
+    // Which stations each line needs, so a line is marked fully fired only once
+    // every station it routes to has its copy.
     final stationsOf = <String, Set<String>>{};
     for (final entry in routed.entries) {
       for (final l in entry.value) {
         stationsOf.putIfAbsent(l.uuid, () => {}).add(entry.key);
       }
     }
+    // Send per station, but only the lines that have NOT already reached it: a
+    // resend after a partial failure must not reprint at a station that already got
+    // the ticket. A line records each station it lands at, so retries are idempotent
+    // per station and a later void follows it even if routing changes.
+    for (final entry in routed.entries) {
+      final station = entry.key;
+      final pending = entry.value.where((l) => !l.firedStations.contains(station)).toList();
+      if (pending.isEmpty) continue;
+      final bytes = builder.build(order, only: pending, station: station);
+      final ok = await _sendToStation(station, bytes, 'kot-${order.uuid}-$station');
+      if (!ok) continue;
+      for (final l in pending) {
+        l.firedStations.add(station);
+      }
+    }
     for (final l in lines) {
       final stations = stationsOf[l.uuid] ?? const <String>{};
-      final delivered = stations.where((st) => !failed.contains(st));
-      if (stations.isNotEmpty && delivered.length == stations.length) {
+      if (stations.isNotEmpty && stations.every(l.firedStations.contains)) {
         l.printedToKitchen = true;
-        // Remember exactly where it went, so a later void follows it even if the
-        // routing is changed afterwards.
-        for (final st in delivered) {
-          if (!l.firedStations.contains(st)) l.firedStations.add(st);
-        }
       }
     }
     widget.orders.save(order);
