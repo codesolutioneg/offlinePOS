@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -158,15 +160,22 @@ class _SellScreenState extends State<SellScreen> {
 
   PosSession get s => widget.session;
 
+  // Keeps the course-fire countdown badges ticking down while the cart is open.
+  Timer? _fireTick;
+
   @override
   void initState() {
     super.initState();
     widget.catalogueChanged?.addListener(_onCatalogueChanged);
+    _fireTick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted && s.current.lines.any((l) => l.isTimed)) setState(() {});
+    });
   }
 
   @override
   void dispose() {
     widget.catalogueChanged?.removeListener(_onCatalogueChanged);
+    _fireTick?.cancel();
     _scanFocus.dispose();
     super.dispose();
   }
@@ -484,6 +493,16 @@ class _SellScreenState extends State<SellScreen> {
               subtitle: Text(tr(ctx, 'So you can change one on its own')),
               onTap: () => Navigator.pop(ctx, 'split-units'),
             ),
+          if (!line.printedToKitchen)
+            ListTile(
+              key: const Key('line-timer'),
+              leading: const Icon(Icons.timer_outlined),
+              title: Text(tr(ctx, 'Fire timing')),
+              subtitle: line.fireAt != null
+                  ? Text('${tr(ctx, 'Fires in')} ${_minsUntil(line.fireAt!)}')
+                  : Text(tr(ctx, 'Send to the kitchen after a delay')),
+              onTap: () => Navigator.pop(ctx, 'timer'),
+            ),
           ListTile(
             key: const Key('line-void'),
             leading: const Icon(Icons.remove_circle_outline, color: Colors.red),
@@ -497,7 +516,58 @@ class _SellScreenState extends State<SellScreen> {
     if (action == 'discount') await _lineDiscount(line);
     if (action == 'seat') await _assignSeat(line);
     if (action == 'split-units') _changed(() => s.splitLineToUnits(line.uuid));
+    if (action == 'timer') await _setFireTiming(lineUuid: line.uuid);
     if (action == 'void') await _voidLine(line);
+  }
+
+  /// Minutes from now until [at], as a short "14m" / "now" label.
+  static String _minsUntil(DateTime at) {
+    final m = at.toUtc().difference(DateTime.now().toUtc()).inMinutes;
+    return m <= 0 ? 'now' : '${m}m';
+  }
+
+  /// Choose a fire delay for one line (lineUuid) or, when lineUuid is null, the
+  /// whole order. Course firing: the chosen items hold back and auto-fire when the
+  /// timer elapses.
+  Future<void> _setFireTiming({String? lineUuid}) async {
+    final choice = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+                lineUuid == null
+                    ? tr(ctx, 'Fire the whole order after')
+                    : tr(ctx, 'Fire this item after'),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              for (final m in const [0, 5, 10, 15, 20, 30, 45])
+                ChoiceChip(
+                  key: Key('fire-in-$m'),
+                  label: Text(m == 0 ? tr(ctx, 'Send now') : '$m ${tr(ctx, 'min')}'),
+                  selected: false,
+                  onSelected: (_) => Navigator.pop(ctx, m),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ]),
+      ),
+    );
+    if (choice == null) return;
+    _changed(() {
+      if (lineUuid == null) {
+        s.setOrderFireDelay(choice);
+      } else {
+        s.setLineFireDelay(lineUuid, choice);
+      }
+    });
   }
 
   /// Ask which guest a line belongs to (0/blank clears it), for splitting the bill
@@ -1064,11 +1134,20 @@ class _SellScreenState extends State<SellScreen> {
             title: Text(tr(ctx, 'Merge another table in')),
             onTap: () => Navigator.pop(ctx, 'merge'),
           ),
+          ListTile(
+            key: const Key('bill-timing'),
+            leading: const Icon(Icons.timer_outlined),
+            title: Text(tr(ctx, 'Course timing (whole order)')),
+            subtitle: Text(tr(ctx, 'Hold the order back a set time before the kitchen')),
+            onTap: () => Navigator.pop(ctx, 'timing'),
+          ),
         ]),
       ),
     );
     if (!mounted) return;
     switch (action) {
+      case 'timing':
+        await _setFireTiming();
       case 'guest':
         await _splitByGuest();
       case 'selected':
@@ -1943,6 +2022,10 @@ class _LineTile extends StatelessWidget {
           if (sent) ...[
             StatusChip(tr(context, 'Sent'), AppColors.sent, icon: Icons.check),
             const SizedBox(width: 6),
+          ] else if (line.isTimed) ...[
+            StatusChip(_fireCountdown(line.fireAt!), AppColors.pending,
+                icon: Icons.timer_outlined),
+            const SizedBox(width: 6),
           ],
           Text(amount, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
         ]),
@@ -1986,6 +2069,12 @@ class _LineTile extends StatelessWidget {
             onPressed: onRemove),
       ),
     );
+  }
+
+  /// A short "in 14m" / "due" label for a course-timed line.
+  static String _fireCountdown(DateTime at) {
+    final m = at.toUtc().difference(DateTime.now().toUtc()).inMinutes;
+    return m <= 0 ? 'due' : 'in ${m}m';
   }
 
   Widget _tag(String text, Color color, {Key? key}) => Container(

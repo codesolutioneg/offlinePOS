@@ -385,6 +385,16 @@ const Map<String, String> _ar = {
   'Rectangle': 'مستطيل',
   'Divider': 'فاصل',
   'Section name (e.g. Terrace)': 'اسم القسم (مثل التراس)',
+  // timed / course firing
+  'Fire timing': 'توقيت الإرسال',
+  'Fires in': 'يُرسل خلال',
+  'Send to the kitchen after a delay': 'إرسال للمطبخ بعد مهلة',
+  'Fire the whole order after': 'إرسال الطلب كامل بعد',
+  'Fire this item after': 'إرسال هذا الصنف بعد',
+  'Send now': 'إرسال الآن',
+  'min': 'دقيقة',
+  'Course timing (whole order)': 'توقيت الطبقات (الطلب كامل)',
+  'Hold the order back a set time before the kitchen': 'تأخير الطلب مدة قبل إرساله للمطبخ',
   // settings hub groups
   'Shop': 'المتجر',
   'Hardware': 'الأجهزة',
