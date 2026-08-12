@@ -23,6 +23,7 @@ class SettingsStore {
   static const _maxDiscountPercent = 'max_discount_percent';
   static const _categoryColors = 'category_colors';
   static const _categoryStations = 'category_stations';
+  static const _productStations = 'product_stations';
   static const _receiptShowTax = 'receipt_show_tax';
   static const _language = 'language';
   static const _unavailableProducts = 'unavailable_products';
@@ -146,32 +147,90 @@ class SettingsStore {
     categoryColors = map;
   }
 
-  /// Category id to kitchen station (printer name), so a multi-station kitchen
-  /// routes each item to the right printer. Empty means everything goes to the
-  /// single default kitchen.
-  Map<int, String> get categoryStations {
+  /// Category id to kitchen station(s) (printer names), so a multi-station kitchen
+  /// can route one category to several printers at once (e.g. a shared side that
+  /// prints at both the grill and the expo pass). Empty means everything goes to
+  /// the single default kitchen.
+  ///
+  /// A value saved before a category could have more than one station is a bare
+  /// string rather than a list; that is read as a one-item list so old data keeps
+  /// working without a migration.
+  Map<int, List<String>> get categoryStations {
     final v = getString(_categoryStations);
     if (v == null) return const {};
     try {
-      return (jsonDecode(v) as Map)
-          .map((k, val) => MapEntry(int.parse(k as String), val as String));
+      return (jsonDecode(v) as Map).map((k, val) => MapEntry(
+          int.parse(k as String), _asStationList(val)));
     } catch (_) {
       return const {};
     }
   }
 
-  set categoryStations(Map<int, String> v) => setString(
+  set categoryStations(Map<int, List<String>> v) => setString(
       _categoryStations, jsonEncode(v.map((k, val) => MapEntry('$k', val))));
 
-  void setCategoryStation(int categoryId, String? station) {
-    final map = Map<int, String>.from(categoryStations);
-    if (station == null || station.isEmpty) {
+  /// Adds or removes one station from a category's routing without disturbing any
+  /// other station already set on it, so a category can be pointed at several
+  /// printers one toggle at a time.
+  void setCategoryStation(int categoryId, String station, bool enabled) {
+    final map = <int, List<String>>{
+      for (final entry in categoryStations.entries) entry.key: List.of(entry.value),
+    };
+    final stations = List<String>.from(map[categoryId] ?? const []);
+    if (enabled) {
+      if (!stations.contains(station)) stations.add(station);
+    } else {
+      stations.remove(station);
+    }
+    if (stations.isEmpty) {
       map.remove(categoryId);
     } else {
-      map[categoryId] = station;
+      map[categoryId] = stations;
     }
     categoryStations = map;
   }
+
+  /// Product id to kitchen station(s), overriding its category's routing for just
+  /// that product. Empty means every product routes by whatever its category is
+  /// set to (or the default kitchen if neither is set).
+  Map<int, List<String>> get productStations {
+    final v = getString(_productStations);
+    if (v == null) return const {};
+    try {
+      return (jsonDecode(v) as Map).map((k, val) => MapEntry(
+          int.parse(k as String), _asStationList(val)));
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  set productStations(Map<int, List<String>> v) => setString(
+      _productStations, jsonEncode(v.map((k, val) => MapEntry('$k', val))));
+
+  /// Adds or removes one station from a product's override routing, mirroring
+  /// [setCategoryStation] but per-product.
+  void setProductStation(int productId, String station, bool enabled) {
+    final map = <int, List<String>>{
+      for (final entry in productStations.entries) entry.key: List.of(entry.value),
+    };
+    final stations = List<String>.from(map[productId] ?? const []);
+    if (enabled) {
+      if (!stations.contains(station)) stations.add(station);
+    } else {
+      stations.remove(station);
+    }
+    if (stations.isEmpty) {
+      map.remove(productId);
+    } else {
+      map[productId] = stations;
+    }
+    productStations = map;
+  }
+
+  /// A decoded routing value as a list of station names, whether it was saved as
+  /// the old single string or the current list.
+  List<String> _asStationList(Object? val) =>
+      val is List ? val.map((e) => e.toString()).toList() : [val.toString()];
 
   /// UI language code: 'en' or 'ar'. Drives translation and text direction.
   String get language => getString(_language) ?? 'en';

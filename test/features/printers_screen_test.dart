@@ -29,6 +29,10 @@ void main() {
     Category(id: 1, name: 'Mains'),
     Category(id: 2, name: 'Drinks'),
   ];
+  final products = const [
+    Product(id: 10, name: 'Burger', price: 8, categoryId: 1),
+    Product(id: 11, name: 'Cola', price: 2, categoryId: 2),
+  ];
   int changedCount = 0;
 
   setUpAll(useSystemSqlite);
@@ -40,103 +44,250 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Widget app() => MaterialApp(
+  Widget app({List<Product> withProducts = const []}) => MaterialApp(
         home: PrintersScreen(
           printers: printers,
           settings: settings,
           categories: categories,
+          products: withProducts,
           onChanged: () => changedCount++,
         ),
       );
 
-  testWidgets('both sections render with nothing configured yet', (t) async {
-    // Tall surface so the lazy ListView builds the routing rows below the fold.
-    await t.binding.setSurfaceSize(const Size(1200, 2400));
+  Future<void> tall(WidgetTester t) async {
+    await t.binding.setSurfaceSize(const Size(1200, 3600));
     addTearDown(() => t.binding.setSurfaceSize(null));
-    await t.pumpWidget(app());
+  }
 
-    expect(find.text('Printers & routing'), findsOneWidget);
-    expect(find.text('Printers'), findsOneWidget);
-    expect(find.text('Kitchen routing'), findsOneWidget);
-    expect(find.byKey(const Key('add-printer')), findsOneWidget);
-    expect(find.byKey(const Key('route-1')), findsOneWidget);
-    expect(find.byKey(const Key('route-2')), findsOneWidget);
+  group('printers', () {
+    testWidgets('both sections render with nothing configured yet', (t) async {
+      await tall(t);
+      await t.pumpWidget(app());
+
+      expect(find.text('Printers & routing'), findsOneWidget);
+      expect(find.text('Printers'), findsOneWidget);
+      expect(find.text('Kitchen routing'), findsOneWidget);
+      expect(find.byKey(const Key('add-printer')), findsOneWidget);
+      expect(find.byKey(const Key('route-1')), findsOneWidget);
+      expect(find.byKey(const Key('route-2')), findsOneWidget);
+    });
+
+    testWidgets('item routing is hidden when no products are supplied', (t) async {
+      await tall(t);
+      await t.pumpWidget(app());
+      expect(find.text('Item routing'), findsNothing);
+    });
+
+    testWidgets('item routing appears once products are supplied', (t) async {
+      await tall(t);
+      await t.pumpWidget(app(withProducts: products));
+      expect(find.text('Item routing'), findsOneWidget);
+    });
+
+    testWidgets('adding a printer remembers it in the registry and shows a row',
+        (t) async {
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('add-printer')));
+      await t.pumpAndSettle();
+
+      await t.enterText(find.byKey(const Key('printer-name')), 'kitchen');
+      await t.enterText(find.byKey(const Key('printer-host')), '192.168.1.50');
+      await t.tap(find.byKey(const Key('save-add-printer')));
+      await t.pumpAndSettle();
+
+      expect(printers['kitchen'], isNotNull);
+      expect(printers['kitchen']!.host, '192.168.1.50');
+      expect(find.byKey(const Key('printer-kitchen')), findsOneWidget);
+      expect(changedCount, 1);
+    });
+
+    testWidgets('a name suggestion chip fills the name field', (t) async {
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('add-printer')));
+      await t.pumpAndSettle();
+
+      await t.tap(find.byKey(const Key('suggest-printer-name-bar')));
+      await t.pumpAndSettle();
+
+      final field = t.widget<TextField>(find.byKey(const Key('printer-name')));
+      expect(field.controller!.text, 'bar');
+    });
+
+    testWidgets('removing a printer forgets it from the registry', (t) async {
+      printers.remember('kitchen', host: '192.168.1.50');
+      await t.pumpWidget(app());
+      expect(find.byKey(const Key('printer-kitchen')), findsOneWidget);
+
+      await t.tap(find.byKey(const Key('remove-kitchen')));
+      await t.pumpAndSettle();
+
+      expect(printers['kitchen'], isNull);
+      expect(find.byKey(const Key('printer-kitchen')), findsNothing);
+      expect(changedCount, 1);
+    });
   });
 
-  testWidgets('adding a printer remembers it in the registry and shows a row',
-      (t) async {
-    await t.pumpWidget(app());
+  group('editing a printer', () {
+    testWidgets('opens pre-filled with the current name, host and port', (t) async {
+      printers.remember('kitchen', host: '192.168.1.50', port: 9100);
+      await t.pumpWidget(app());
 
-    await t.tap(find.byKey(const Key('add-printer')));
-    await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('edit-kitchen')));
+      await t.pumpAndSettle();
 
-    await t.enterText(find.byKey(const Key('printer-name')), 'kitchen');
-    await t.enterText(find.byKey(const Key('printer-host')), '192.168.1.50');
-    await t.tap(find.byKey(const Key('save-add-printer')));
-    await t.pumpAndSettle();
+      expect(t.widget<TextField>(find.byKey(const Key('printer-name'))).controller!.text,
+          'kitchen');
+      expect(t.widget<TextField>(find.byKey(const Key('printer-host'))).controller!.text,
+          '192.168.1.50');
+      expect(t.widget<TextField>(find.byKey(const Key('printer-port'))).controller!.text,
+          '9100');
+    });
 
-    expect(printers['kitchen'], isNotNull);
-    expect(printers['kitchen']!.host, '192.168.1.50');
-    expect(find.byKey(const Key('printer-kitchen')), findsOneWidget);
-    expect(changedCount, 1);
+    testWidgets('saving a new host under the same name re-remembers it there', (t) async {
+      printers.remember('kitchen', host: '192.168.1.50', port: 9100);
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('edit-kitchen')));
+      await t.pumpAndSettle();
+      await t.enterText(find.byKey(const Key('printer-host')), '192.168.1.99');
+      await t.tap(find.byKey(const Key('save-add-printer')));
+      await t.pumpAndSettle();
+
+      expect(printers['kitchen'], isNotNull);
+      expect(printers['kitchen']!.host, '192.168.1.99');
+      expect(changedCount, 1);
+    });
+
+    testWidgets('renaming forgets the old name and remembers the new one', (t) async {
+      printers.remember('kitchen', host: '192.168.1.50', port: 9100);
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('edit-kitchen')));
+      await t.pumpAndSettle();
+      await t.enterText(find.byKey(const Key('printer-name')), 'grill');
+      await t.tap(find.byKey(const Key('save-add-printer')));
+      await t.pumpAndSettle();
+
+      expect(printers['kitchen'], isNull);
+      expect(printers['grill'], isNotNull);
+      expect(printers['grill']!.host, '192.168.1.50');
+      expect(printers['grill']!.port, 9100);
+      expect(find.byKey(const Key('printer-grill')), findsOneWidget);
+    });
   });
 
-  testWidgets('a name suggestion chip fills the name field', (t) async {
-    await t.pumpWidget(app());
+  group('category routing', () {
+    testWidgets('toggling a station chip on adds it to that category alone', (t) async {
+      printers.remember('kitchen', host: '10.0.0.1');
+      printers.remember('bar', host: '10.0.0.2');
+      await tall(t);
+      await t.pumpWidget(app());
 
-    await t.tap(find.byKey(const Key('add-printer')));
-    await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('route-station-1-bar')));
+      await t.pumpAndSettle();
 
-    await t.tap(find.byKey(const Key('suggest-printer-name-bar')));
-    await t.pumpAndSettle();
+      expect(settings.categoryStations[1], ['bar']);
+      expect(settings.categoryStations.containsKey(2), isFalse);
+      expect(changedCount, 1);
+    });
 
-    final field = t.widget<TextField>(find.byKey(const Key('printer-name')));
-    expect(field.controller!.text, 'bar');
+    testWidgets('a category can be routed to more than one station at once', (t) async {
+      printers.remember('kitchen', host: '10.0.0.1');
+      printers.remember('bar', host: '10.0.0.2');
+      await tall(t);
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('route-station-1-kitchen')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('route-station-1-bar')));
+      await t.pumpAndSettle();
+
+      expect(settings.categoryStations[1], unorderedEquals(['kitchen', 'bar']));
+      expect(changedCount, 2);
+    });
+
+    testWidgets('toggling a selected chip off removes just that station', (t) async {
+      settings.setCategoryStation(1, 'kitchen', true);
+      settings.setCategoryStation(1, 'bar', true);
+      printers.remember('kitchen', host: '10.0.0.1');
+      printers.remember('bar', host: '10.0.0.2');
+      await tall(t);
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('route-station-1-bar')));
+      await t.pumpAndSettle();
+
+      expect(settings.categoryStations[1], ['kitchen']);
+      expect(changedCount, 1);
+    });
+
+    testWidgets('a stale station assignment still shows its chip', (t) async {
+      settings.setCategoryStation(1, 'long-gone', true);
+      await tall(t);
+      await t.pumpWidget(app());
+
+      expect(find.byKey(const Key('route-station-1-long-gone')), findsOneWidget);
+    });
   });
 
-  testWidgets('removing a printer forgets it from the registry', (t) async {
-    printers.remember('kitchen', host: '192.168.1.50');
-    await t.pumpWidget(app());
-    expect(find.byKey(const Key('printer-kitchen')), findsOneWidget);
+  group('per-product routing', () {
+    testWidgets('ticking a product under the picked printer overrides its category',
+        (t) async {
+      printers.remember('kitchen', host: '10.0.0.1');
+      printers.remember('bar', host: '10.0.0.2');
+      await tall(t);
+      await t.pumpWidget(app(withProducts: products));
 
-    await t.tap(find.byKey(const Key('remove-kitchen')));
-    await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('product-station-pick-bar')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('product-route-10')));
+      await t.pumpAndSettle();
 
-    expect(printers['kitchen'], isNull);
-    expect(find.byKey(const Key('printer-kitchen')), findsNothing);
-    expect(changedCount, 1);
-  });
+      expect(settings.productStations[10], ['bar']);
+      expect(changedCount, 1);
+    });
 
-  testWidgets('routing a category to a station persists it to the settings store',
-      (t) async {
-    printers.remember('kitchen', host: '192.168.1.50');
-    await t.binding.setSurfaceSize(const Size(1200, 2400));
-    addTearDown(() => t.binding.setSurfaceSize(null));
-    await t.pumpWidget(app());
+    testWidgets('unticking a product removes it from that station only', (t) async {
+      settings.setProductStation(10, 'bar', true);
+      settings.setProductStation(10, 'kitchen', true);
+      printers.remember('kitchen', host: '10.0.0.1');
+      printers.remember('bar', host: '10.0.0.2');
+      await tall(t);
+      await t.pumpWidget(app(withProducts: products));
 
-    // Driven directly through the callback rather than opening the overlay
-    // menu: the closed selector and the printer row above it can both show
-    // the text 'kitchen', which makes a tap-by-text finder ambiguous. The
-    // callback is what setState and the settings write actually depend on.
-    final dropdown =
-        t.widget<DropdownButton<String?>>(find.byKey(const Key('route-station-1')));
-    dropdown.onChanged!('kitchen');
-    await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('product-station-pick-bar')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('product-route-10')));
+      await t.pumpAndSettle();
 
-    expect(settings.categoryStations[1], 'kitchen');
-    expect(changedCount, 1);
-  });
+      expect(settings.productStations[10], ['kitchen']);
+    });
 
-  testWidgets('routing a category back to auto clears the station', (t) async {
-    settings.setCategoryStation(1, 'kitchen');
-    await t.pumpWidget(app());
+    testWidgets('the category filter narrows the checklist', (t) async {
+      await tall(t);
+      await t.pumpWidget(app(withProducts: products));
 
-    final dropdown =
-        t.widget<DropdownButton<String?>>(find.byKey(const Key('route-station-1')));
-    dropdown.onChanged!(null);
-    await t.pumpAndSettle();
+      expect(find.byKey(const Key('product-route-10')), findsOneWidget);
+      expect(find.byKey(const Key('product-route-11')), findsOneWidget);
 
-    expect(settings.categoryStations.containsKey(1), isFalse);
-    expect(changedCount, 1);
+      await t.tap(find.byKey(const Key('product-category-2')));
+      await t.pumpAndSettle();
+
+      expect(find.byKey(const Key('product-route-10')), findsNothing);
+      expect(find.byKey(const Key('product-route-11')), findsOneWidget);
+    });
+
+    testWidgets('the search box narrows the checklist by name', (t) async {
+      await tall(t);
+      await t.pumpWidget(app(withProducts: products));
+
+      await t.enterText(find.byKey(const Key('product-search')), 'cola');
+      await t.pumpAndSettle();
+
+      expect(find.byKey(const Key('product-route-10')), findsNothing);
+      expect(find.byKey(const Key('product-route-11')), findsOneWidget);
+    });
   });
 }

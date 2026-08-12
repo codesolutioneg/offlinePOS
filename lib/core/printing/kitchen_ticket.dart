@@ -100,22 +100,34 @@ class KitchenTicketBuilder {
   }
 }
 
-/// Groups an order's lines by the kitchen station that should cook them, so each
-/// station's printer gets only its own items.
+/// Groups an order's lines by the kitchen station(s) that should cook them, so
+/// each station's printer gets its own items and a line that belongs at more
+/// than one station (a shared side, or a category routed to two printers) prints
+/// at every one of them rather than just the first.
 ///
-/// Routing is by product category: the shop maps a category id to a station name
-/// (a configured printer such as 'kitchen' or 'bar'). Anything unmapped falls to
+/// A line's route is decided in this order: [productToStations] for its exact
+/// product, if that product has any stations set; otherwise [categoryToStations]
+/// for its category, if that category has any stations set; otherwise
 /// [fallbackStation], because a line with no route must still reach a kitchen
-/// rather than silently vanish. Returns station name -> the lines for it.
+/// rather than silently vanish. Returns station name -> the lines routed to it.
 Map<String, List<OrderLine>> routeToStations(
   List<OrderLine> lines, {
-  Map<int, String> categoryToStation = const {},
+  Map<int, List<String>> categoryToStations = const {},
+  Map<int, List<String>> productToStations = const {},
   String fallbackStation = 'kitchen',
 }) {
   final byStation = <String, List<OrderLine>>{};
   for (final l in lines) {
-    final station = categoryToStation[l.categoryId] ?? fallbackStation;
-    byStation.putIfAbsent(station, () => []).add(l);
+    final productOverride = productToStations[l.productId];
+    final categoryStations = categoryToStations[l.categoryId];
+    final stations = (productOverride != null && productOverride.isNotEmpty)
+        ? productOverride
+        : (categoryStations != null && categoryStations.isNotEmpty)
+            ? categoryStations
+            : [fallbackStation];
+    for (final station in stations) {
+      byStation.putIfAbsent(station, () => []).add(l);
+    }
   }
   return byStation;
 }
