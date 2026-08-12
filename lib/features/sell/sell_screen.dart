@@ -544,7 +544,7 @@ class _SellScreenState extends State<SellScreen> {
         ],
       ),
     );
-    if (seat == null) return;
+    if (seat == null || !mounted) return;
     _changed(() => s.setLineSeat(line.uuid, seat > 0 ? seat : null));
   }
 
@@ -1108,7 +1108,7 @@ class _SellScreenState extends State<SellScreen> {
       confirmLabel: tr(context, 'Choose table'),
       onConfirm: (lines) async {
         final label = await _promptTableLabel();
-        if (label == null || label.isEmpty) return;
+        if (label == null || label.isEmpty || !mounted) return;
         final ids = lines.map((l) => l.uuid).toSet();
         _changed(() => s.moveLinesToTable(ids, label));
         if (!mounted) return;

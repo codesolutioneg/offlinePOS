@@ -75,7 +75,12 @@ class _ShiftScreenState extends State<ShiftScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, double.tryParse(c.text.trim())),
+              onPressed: () {
+                // A float or count is never negative; a bad entry cancels rather
+                // than poisoning the drawer maths.
+                final v = double.tryParse(c.text.trim());
+                Navigator.pop(ctx, (v != null && v >= 0) ? v : null);
+              },
               child: Text(tr(ctx, 'OK'))),
         ],
       ),
@@ -131,8 +136,11 @@ class _ShiftScreenState extends State<ShiftScreen> {
             TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
             FilledButton(
               onPressed: () {
+                // A cash movement is a positive amount; its direction is the in/out
+                // button, so a zero or negative entry is a mistake, not a reverse
+                // movement that would silently swing the drawer the wrong way.
                 final a = double.tryParse(amountC.text.trim());
-                if (a == null) {
+                if (a == null || a <= 0) {
                   Navigator.pop(ctx);
                   return;
                 }
