@@ -126,6 +126,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         await _tableDialog(title: '${tr(context, 'Table')} ${t.name}', initial: t);
     if (result == null) return;
     if (result.delete) {
+      if (!mounted) return;
+      final confirmed = await _confirmDeleteTable(t.name);
+      if (confirmed != true || !mounted) return;
       widget.store.remove(t.id);
     } else {
       // Keep names unique so an order is never recalled onto the wrong table; a
@@ -136,6 +139,26 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     }
     _reload();
   }
+
+  /// A table removed here is gone with no trace, so a manager confirms before
+  /// [TableStore.remove] rather than losing the tile on a mistap of the delete
+  /// button next to the dialog's own save action.
+  Future<bool?> _confirmDeleteTable(String name) => showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('${tr(ctx, 'Delete table')} $name?'),
+          content: Text(tr(ctx, 'This removes the table from the floor.')),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr(ctx, 'Cancel'))),
+            FilledButton(
+              key: const Key('confirm-delete-table'),
+              style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(tr(ctx, 'Delete')),
+            ),
+          ],
+        ),
+      );
 
   Future<void> _addSection() async {
     final ctrl = TextEditingController();
@@ -387,9 +410,35 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         setState(() => _section = name);
       }
     } else if (action == 'delete') {
+      final confirmed = await _confirmDeleteSection(section);
+      if (confirmed != true || !mounted) return;
       widget.store.deleteSection(section);
       _reload();
     }
+  }
+
+  /// Deleting a section takes every table in it with it, so the confirmation
+  /// states the count up front rather than leaving the manager to discover the
+  /// loss table by table.
+  Future<bool?> _confirmDeleteSection(String section) {
+    final count = widget.store.inSection(section).length;
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${tr(ctx, 'Delete section')} \'$section\' ${tr(ctx, 'and its')} $count '
+            '${tr(ctx, 'tables?')}'),
+        content: Text(tr(ctx, 'This cannot be undone.')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('confirm-delete-section'),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Delete')),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _sectionStrip() => SizedBox(

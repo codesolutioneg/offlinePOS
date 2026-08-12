@@ -57,6 +57,7 @@ class OpenOrdersScreen extends StatelessWidget {
                                   child: Text(tr(ctx, 'Keep'))),
                               FilledButton(
                                   key: const Key('confirm-cancel-order'),
+                                  style: FilledButton.styleFrom(backgroundColor: AppColors.error),
                                   onPressed: () => Navigator.pop(ctx, true),
                                   child: Text(tr(ctx, 'Discard'))),
                             ],

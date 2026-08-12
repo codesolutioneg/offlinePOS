@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/db/shift_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/theme/app_colors.dart';
 import '../../core/widgets/numeric_keypad.dart';
 import '../../domain/shift.dart';
 
@@ -161,18 +162,21 @@ class _ShiftScreenState extends State<ShiftScreen> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(tr(context, 'No shift is open'), style: const TextStyle(fontSize: 18)),
           const SizedBox(height: 12),
-          FilledButton.icon(
-            key: const Key('open-shift'),
-            icon: const Icon(Icons.play_arrow),
-            label: Text(tr(context, 'Open shift')),
-            onPressed: () async {
-              final f = await _promptAmount(tr(context, 'Open shift'), label: tr(context, 'Opening float'));
-              if (!mounted) return;
-              if (f != null) {
-                widget.store.openShift(openingFloat: f, cashierId: widget.cashierId);
-                _refresh();
-              }
-            },
+          SizedBox(
+            height: 52,
+            child: FilledButton.icon(
+              key: const Key('open-shift'),
+              icon: const Icon(Icons.play_arrow),
+              label: Text(tr(context, 'Open shift')),
+              onPressed: () async {
+                final f = await _promptAmount(tr(context, 'Open shift'), label: tr(context, 'Opening float'));
+                if (!mounted) return;
+                if (f != null) {
+                  widget.store.openShift(openingFloat: f, cashierId: widget.cashierId);
+                  _refresh();
+                }
+              },
+            ),
           ),
         ]),
       );
@@ -207,33 +211,39 @@ class _ShiftScreenState extends State<ShiftScreen> {
       ],
       const SizedBox(height: 16),
       Wrap(spacing: 8, children: [
-        OutlinedButton.icon(
-          key: const Key('cash-in'),
-          icon: const Icon(Icons.add),
-          label: Text(tr(context, 'Cash in')),
-          onPressed: () async {
-            final m = await _promptMovement(tr(context, 'Cash in'));
-            if (!mounted) return;
-            if (m != null) {
-              widget.store.addMovement('in', m.amount, reason: m.reason);
-              _refresh();
-            }
-          },
+        SizedBox(
+          height: 52,
+          child: OutlinedButton.icon(
+            key: const Key('cash-in'),
+            icon: const Icon(Icons.add),
+            label: Text(tr(context, 'Cash in')),
+            onPressed: () async {
+              final m = await _promptMovement(tr(context, 'Cash in'));
+              if (!mounted) return;
+              if (m != null) {
+                widget.store.addMovement('in', m.amount, reason: m.reason);
+                _refresh();
+              }
+            },
+          ),
         ),
-        OutlinedButton.icon(
-          key: const Key('cash-out'),
-          icon: const Icon(Icons.remove),
-          label: Text(tr(context, 'Cash out')),
-          onPressed: () async {
-            final m = await _promptMovement(tr(context, 'Cash out'),
-                categories: widget.expenseCategories);
-            if (!mounted) return;
-            if (m != null) {
-              widget.store.addMovement('out', m.amount,
-                  reason: m.reason, category: m.category);
-              _refresh();
-            }
-          },
+        SizedBox(
+          height: 52,
+          child: OutlinedButton.icon(
+            key: const Key('cash-out'),
+            icon: const Icon(Icons.remove),
+            label: Text(tr(context, 'Cash out')),
+            onPressed: () async {
+              final m = await _promptMovement(tr(context, 'Cash out'),
+                  categories: widget.expenseCategories);
+              if (!mounted) return;
+              if (m != null) {
+                widget.store.addMovement('out', m.amount,
+                    reason: m.reason, category: m.category);
+                _refresh();
+              }
+            },
+          ),
         ),
       ]),
       const SizedBox(height: 16),
@@ -245,32 +255,75 @@ class _ShiftScreenState extends State<ShiftScreen> {
           onPressed: _printX,
         ),
       const SizedBox(height: 8),
-      FilledButton.icon(
-        key: const Key('close-shift'),
-        style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
-        icon: const Icon(Icons.stop),
-        label: Text(tr(context, 'Close shift (Z)')),
-        onPressed: () async {
-          final counted = await _promptAmount(tr(context, 'Close shift'), label: tr(context, 'Counted cash'));
-          if (counted == null) return;
-          final closed = widget.store.closeShift(countedCash: counted);
-          if (mounted) _showZ(closed);
-          _refresh();
-          // Push the day's orders to Odoo now, as one batch. The message tells the
-          // cashier whether it landed or is safely held for later.
-          if (widget.onCloseSync != null) {
-            final message = await widget.onCloseSync!();
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                key: const Key('close-sync-result'),
-                content: Text(message),
-                duration: const Duration(seconds: 5),
-              ));
+      SizedBox(
+        height: 60,
+        child: FilledButton.icon(
+          key: const Key('close-shift'),
+          style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+          icon: const Icon(Icons.stop),
+          label: Text(tr(context, 'Close shift (Z)')),
+          onPressed: () async {
+            final counted = await _promptAmount(tr(context, 'Close shift'), label: tr(context, 'Counted cash'));
+            if (counted == null) return;
+            if (!mounted) return;
+            final confirmed = await _confirmCloseShift(counted);
+            if (confirmed != true || !mounted) return;
+            final closed = widget.store.closeShift(countedCash: counted);
+            if (mounted) _showZ(closed);
+            _refresh();
+            // Push the day's orders to Odoo now, as one batch. The message tells the
+            // cashier whether it landed or is safely held for later.
+            if (widget.onCloseSync != null) {
+              final message = await widget.onCloseSync!();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  key: const Key('close-sync-result'),
+                  content: Text(message),
+                  duration: const Duration(seconds: 5),
+                ));
+              }
             }
-          }
-        },
+          },
+        ),
       ),
     ]);
+  }
+
+  /// A last check before a Z closes the shift and pushes the day's sales: it shows
+  /// the drawer numbers that are about to be locked in, so a mistap is caught
+  /// before the shift (and the day's till) is gone for good.
+  Future<bool?> _confirmCloseShift(double counted) {
+    final s = _shift;
+    if (s == null) return Future.value(false);
+    final sum = widget.store.summary(s, cashMethodIds: widget.cashMethodIds);
+    final variance = counted - sum.expectedCash;
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Close the shift?')),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${tr(ctx, 'Expected in drawer')}: ${widget.formatAmount(sum.expectedCash)}'),
+          Text('${tr(ctx, 'Counted')}: ${widget.formatAmount(counted)}'),
+          Text('${tr(ctx, 'Variance')}: ${widget.formatAmount(variance)}',
+              style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: variance.abs() < 0.01 ? Colors.green.shade700 : Colors.red)),
+          const SizedBox(height: 12),
+          Text(
+              tr(ctx, "This ends the shift and syncs the day's sales. It cannot be undone."),
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('confirm-close-shift'),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Close shift')),
+          ),
+        ],
+      ),
+    );
   }
 
   /// The report rows for an X (interim) or Z (close) reading.

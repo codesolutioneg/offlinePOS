@@ -93,6 +93,66 @@ void main() {
     expect(wall.shape, TableShape.divider);
   });
 
+  testWidgets('deleting a table asks for confirmation and keeps the table on cancel',
+      (t) async {
+    final table = tables.add(name: 'T1');
+    await t.pumpWidget(app());
+    await t.tap(find.byKey(const Key('toggle-edit')));
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(Key('table-edit-${table.id}')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('table-delete')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('confirm-delete-table')), findsOneWidget);
+    await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await t.pumpAndSettle();
+
+    expect(tables.byId(table.id), isNotNull);
+  });
+
+  testWidgets('confirming a table delete removes it from the floor', (t) async {
+    final table = tables.add(name: 'T1');
+    await t.pumpWidget(app());
+    await t.tap(find.byKey(const Key('toggle-edit')));
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(Key('table-edit-${table.id}')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('table-delete')));
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('confirm-delete-table')));
+    await t.pumpAndSettle();
+
+    expect(tables.byId(table.id), isNull);
+  });
+
+  testWidgets('deleting a section states the table count and only deletes on confirm',
+      (t) async {
+    tables.add(name: 'T1', section: 'Terrace');
+    tables.add(name: 'T2', section: 'Terrace');
+    await t.pumpWidget(app());
+    await t.tap(find.byKey(const Key('toggle-edit')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('section-terrace')));
+    await t.pumpAndSettle();
+
+    await t.longPress(find.byKey(const Key('section-terrace')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('section-delete')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('confirm-delete-section')), findsOneWidget);
+    expect(find.textContaining('2'), findsWidgets);
+
+    await t.tap(find.byKey(const Key('confirm-delete-section')));
+    await t.pumpAndSettle();
+
+    expect(tables.inSection('Terrace'), isEmpty);
+  });
+
   testWidgets('long-press dragging a table in edit mode snaps its position to the grid',
       (t) async {
     final table = tables.add(name: 'T1', x: 0, y: 0);
