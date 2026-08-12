@@ -291,8 +291,14 @@ class _PosAppState extends State<PosApp> {
       final base = reprint ? 'reprint-${order.uuid}' : order.uuid;
       final wantDrawer = isCash && !reprint && s.openDrawerOnSale;
       for (var i = 0; i < s.receiptCopies; i++) {
-        await _receiptPrinter.send(build(openDrawer: wantDrawer && i == 0),
-            reference: i == 0 ? base : '$base-c$i');
+        try {
+          await _receiptPrinter.send(build(openDrawer: wantDrawer && i == 0),
+              reference: i == 0 ? base : '$base-c$i');
+        } on PrinterUnavailable {
+          // Each copy is spooled independently by SpooledPrinter before it rethrows,
+          // so keep queuing the rest rather than losing the remaining copies when the
+          // printer is down.
+        }
       }
     } on PrinterUnavailable {
       // Already held in the spool by [SpooledPrinter]. Surfacing it here would put a
