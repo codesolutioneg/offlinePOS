@@ -11,6 +11,7 @@ class ShiftScreen extends StatefulWidget {
   const ShiftScreen({
     super.key,
     required this.store,
+    this.authorizeClose,
     required this.cashierId,
     required this.formatAmount,
     this.cashMethodIds = const {},
@@ -30,6 +31,11 @@ class ShiftScreen extends StatefulWidget {
   /// Pushes the shift's orders to Odoo as one batch when the shift closes, and
   /// returns a message describing the outcome. Null on a build with no server.
   final Future<String> Function()? onCloseSync;
+
+  /// Checked BEFORE the shift is closed: returns true if the cashier may close it
+  /// (their role permits it, or a manager approved). Null means no gate. Closing is
+  /// irreversible, so this must pass before [ShiftStore.closeShift] runs.
+  final Future<bool> Function()? authorizeClose;
 
   /// Prints a shift report (X or Z) to the receipt printer. Null hides the print
   /// action. Rows are (label, value) pairs.
@@ -268,6 +274,10 @@ class _ShiftScreenState extends State<ShiftScreen> {
             if (!mounted) return;
             final confirmed = await _confirmCloseShift(counted);
             if (confirmed != true || !mounted) return;
+            // Authorise BEFORE the irreversible close, not after: a failed approval
+            // must leave the shift open.
+            if (widget.authorizeClose != null && !await widget.authorizeClose!()) return;
+            if (!mounted) return;
             final closed = widget.store.closeShift(countedCash: counted);
             if (mounted) _showZ(closed);
             _refresh();

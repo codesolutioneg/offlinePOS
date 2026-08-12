@@ -644,7 +644,12 @@ class _PosAppState extends State<PosApp> {
       builder: (_) => OrderHistoryScreen(
         orders: widget.orders.recent(limit: 1000),
         formatAmount: PosApp.money,
-        onReprint: (order) => _printReceipt(order, reprint: true),
+        onReprint: (order) async {
+          // Reprinting a receipt is a permissioned action: a cashier without it
+          // needs a manager to approve, or the toggle would be cosmetic.
+          if (!await _authorize(Permission.reprint, context)) return;
+          await _printReceipt(order, reprint: true);
+        },
         onRefund: (order) => _openRefund(context, order),
       ),
     ));
@@ -1121,16 +1126,13 @@ class _PosAppState extends State<PosApp> {
         cashMethodIds: cashMethodIds,
         formatAmount: PosApp.money,
         onPrintReport: _printShiftReport,
+        // Gated BEFORE the shift closes, since the close is irreversible: the
+        // cashier's role may allow it outright, otherwise a manager approves.
+        authorizeClose: () => _authorize(Permission.closeShift, context),
         // Closing the shift is when the day's orders are pushed to Odoo in one
         // batch. Returns a message for the cashier: how it went, or that the
         // orders are safe and will sync once the connection is back.
         onCloseSync: () async {
-          // Closing the shift pushes the day's sales, so it is gated: the cashier's
-          // role may allow it outright, otherwise a manager approves before anything
-          // is swept up or sent.
-          if (context.mounted && !await _authorize(Permission.closeShift, context)) {
-            return 'Manager approval required to close the shift.';
-          }
           // Sweep any paid sale that never reached the outbox back in first, so the
           // count below reflects everything owed to the server, not just what
           // happened to be queued.
