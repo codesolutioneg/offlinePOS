@@ -236,4 +236,25 @@ void main() {
     await t.pumpAndSettle();
     expect(states, [true, false]);
   });
+
+  testWidgets('a kitchen-fired line cannot be edited or trashed inline, only voided', (t) async {
+    session.addProduct(const Product(id: 10, name: 'Margherita', price: 250, categoryId: 1));
+    final line = session.current.lines.single;
+
+    // Before firing: free inline controls, plain trash.
+    await t.pumpWidget(app());
+    await t.pumpAndSettle();
+    expect(find.byIcon(Icons.add_circle_outline), findsWidgets);
+    expect(find.byIcon(Icons.delete_outline), findsOneWidget);
+    expect(find.byKey(Key('line-void-inline-${line.uuid}')), findsNothing);
+
+    // Once the kitchen holds it, the +/- and free trash are gone; the only removal
+    // path is the void affordance (which is gated, prints a slip and audits).
+    line.printedToKitchen = true;
+    await t.pumpWidget(app());
+    await t.pumpAndSettle();
+    expect(find.byIcon(Icons.add_circle_outline), findsNothing);
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
+    expect(find.byKey(Key('line-void-inline-${line.uuid}')), findsOneWidget);
+  });
 }

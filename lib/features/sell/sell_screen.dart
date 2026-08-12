@@ -801,7 +801,22 @@ class _SellScreenState extends State<SellScreen> {
     // A non-null result (including an empty string from Other / custom) is applied,
     // so clearing the text removes a mistakenly assigned table.
     final label = await _pickTable();
-    if (label != null) _changed(() => s.setTable(label));
+    if (label == null) return;
+    // Do not seat this order on a table another open tab already holds, or two bills
+    // collide on one table and the floor can only recall one of them. Sending the
+    // cashier to recall the existing tab is the safe path.
+    if (label.isNotEmpty && label != s.current.tableLabel) {
+      final taken = (widget.heldOrders?.call() ?? const <Order>[])
+          .any((o) => o.tableLabel == label && o.lines.isNotEmpty);
+      if (taken) {
+        if (mounted) {
+          showToast(context, tr(context, 'Table is occupied. Recall it from the floor.'),
+              kind: ToastKind.error);
+        }
+        return;
+      }
+    }
+    _changed(() => s.setTable(label));
   }
 
   /// A visual floor picker: every table as a tile coloured by occupancy (this
@@ -1580,6 +1595,7 @@ class _SellScreenState extends State<SellScreen> {
                           onRemove: () => _changed(() => s.removeLine(line.uuid)),
                           onQty: (q) => _changed(() => s.setQuantity(line.uuid, q)),
                           onTapLine: () => _lineActions(line),
+                          onVoid: () => _voidLine(line),
                         ),
                     ],
                   ),
@@ -1996,6 +2012,7 @@ class _LineTile extends StatelessWidget {
     required this.onRemove,
     required this.onQty,
     required this.onTapLine,
+    required this.onVoid,
   });
 
   final OrderLine line;
@@ -2005,6 +2022,10 @@ class _LineTile extends StatelessWidget {
   final void Function(double) onQty;
   final VoidCallback onTapLine;
 
+  /// Take a kitchen-fired line off through the void flow (gate, reason, slip,
+  /// audit). Used instead of the free trash once the kitchen holds the line.
+  final VoidCallback onVoid;
+
   String get _qtyText =>
       line.quantity.toStringAsFixed(line.quantity == line.quantity.roundToDouble() ? 0 : 3);
 
@@ -2013,6 +2034,10 @@ class _LineTile extends StatelessWidget {
     // A fired line reads green down its edge; a not-yet-sent line reads in the draft
     // colour, so the cashier can see at a glance what the kitchen already has.
     final sent = line.printedToKitchen;
+    // Once the kitchen holds any copy of the line, the inline +/- and trash are
+    // removed: taking it off must go through the Void action (manager gate, reason,
+    // deletion slip, kitchen cancel, audit), never a silent quantity edit.
+    final kitchenHasIt = line.printedToKitchen || line.firedStations.isNotEmpty;
     final edge = sent ? AppColors.sent : AppColors.draft;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -2062,28 +2087,38 @@ class _LineTile extends StatelessWidget {
             if (line.note != null)
               Text('   ${line.note}',
                   style: const TextStyle(fontSize: 13, fontStyle: FontStyle.italic)),
-            Row(children: [
-              IconButton(
-                  icon: const Icon(Icons.remove_circle_outline, size: 28),
-                  color: AppColors.error,
-                  onPressed: () => onQty(line.quantity - 1)),
-              Container(
-                constraints: const BoxConstraints(minWidth: 32),
-                alignment: Alignment.center,
-                child: Text(_qtyText,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-              ),
-              IconButton(
-                  icon: const Icon(Icons.add_circle_outline, size: 28),
-                  color: AppColors.success,
-                  onPressed: () => onQty(line.quantity + 1)),
-            ]),
+            if (!kitchenHasIt)
+              Row(children: [
+                IconButton(
+                    icon: const Icon(Icons.remove_circle_outline, size: 28),
+                    color: AppColors.error,
+                    onPressed: () => onQty(line.quantity - 1)),
+                Container(
+                  constraints: const BoxConstraints(minWidth: 32),
+                  alignment: Alignment.center,
+                  child: Text(_qtyText,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                ),
+                IconButton(
+                    icon: const Icon(Icons.add_circle_outline, size: 28),
+                    color: AppColors.success,
+                    onPressed: () => onQty(line.quantity + 1)),
+              ]),
           ],
         ),
-        trailing: IconButton(
-            icon: const Icon(Icons.delete_outline, size: 26),
-            color: AppColors.error,
-            onPressed: onRemove),
+        // A sent line shows the Void affordance instead of a free trash: removing it
+        // is a permissioned, audited, slip-printing action, not a silent delete.
+        trailing: kitchenHasIt
+            ? IconButton(
+                key: Key('line-void-inline-${line.uuid}'),
+                icon: const Icon(Icons.remove_circle_outline, size: 26),
+                color: AppColors.error,
+                tooltip: tr(context, 'Void this line'),
+                onPressed: onVoid)
+            : IconButton(
+                icon: const Icon(Icons.delete_outline, size: 26),
+                color: AppColors.error,
+                onPressed: onRemove),
       ),
     );
   }
