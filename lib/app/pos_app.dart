@@ -431,7 +431,7 @@ class _PosAppState extends State<PosApp> {
               // Re-fire every line (a lost or re-requested ticket), ignoring the
               // already-printed flag.
               onResendToKitchen: () => unawaited(
-                  _fireKitchen(session.current, only: session.current.lines)),
+                  _fireKitchen(session.current, only: session.current.lines, resend: true)),
               onLineVoided: (line, reason) =>
                   unawaited(_fireVoid(session.current, line, reason)),
               onPaid: (order) {
@@ -596,7 +596,10 @@ class _PosAppState extends State<PosApp> {
           // Anything the kitchen already started must be told to stop: fire a void
           // slip for each fired line before the order is discarded, so cancelling a
           // sent order does not silently leave food cooking.
-          for (final line in order.lines.where((l) => l.printedToKitchen)) {
+          // Any line the kitchen has a copy of, even partially fired to one of
+          // several stations, must get a cancel slip.
+          for (final line in order.lines
+              .where((l) => l.printedToKitchen || l.firedStations.isNotEmpty)) {
             unawaited(_fireVoid(order, line, 'Order cancelled'));
           }
           widget.orders.delete(order.uuid);
@@ -925,7 +928,7 @@ class _PosAppState extends State<PosApp> {
   /// path of a tap: a kitchen printer that is off must not stop the sale. When no
   /// kitchen printer answers, the ticket falls back to the receipt printer so a
   /// slip still comes out that staff can carry to the pass.
-  Future<void> _fireKitchen(Order order, {List<OrderLine>? only}) async {
+  Future<void> _fireKitchen(Order order, {List<OrderLine>? only, bool resend = false}) async {
     final lines = only ?? order.lines.where((l) => !l.printedToKitchen).toList();
     if (lines.isEmpty) return;
     final builder = KitchenTicketBuilder();
@@ -951,7 +954,11 @@ class _PosAppState extends State<PosApp> {
     // per station and a later void follows it even if routing changes.
     for (final entry in routed.entries) {
       final station = entry.key;
-      final pending = entry.value.where((l) => !l.firedStations.contains(station)).toList();
+      // A deliberate resend reprints everything; an ordinary fire only sends the
+      // lines a station has not already received.
+      final pending = resend
+          ? entry.value
+          : entry.value.where((l) => !l.firedStations.contains(station)).toList();
       if (pending.isEmpty) continue;
       final bytes = builder.build(order, only: pending, station: station);
       final ok = await _sendToStation(station, bytes, 'kot-${order.uuid}-$station');
