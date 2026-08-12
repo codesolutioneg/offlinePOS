@@ -39,19 +39,19 @@ void main() {
       session.current.lines.firstWhere((l) => l.productId == productId).uuid;
 
   group('seats', () {
-    test('a line can be tagged to a guest and listed in seatsInUse', () {
+    test('a line can be tagged to a guest', () {
       session.addProduct(pizza);
       session.addProduct(cola);
       session.setLineSeat(lineFor(10), 1);
       session.setLineSeat(lineFor(11), 2);
-      expect(session.seatsInUse, [1, 2]);
+      expect(session.current.lines.firstWhere((l) => l.productId == 10).seat, 1);
+      expect(session.current.lines.firstWhere((l) => l.productId == 11).seat, 2);
     });
 
     test('a zero or negative seat clears the tag', () {
       session.addProduct(pizza);
       session.setLineSeat(lineFor(10), 0);
       expect(session.current.lines.single.seat, isNull);
-      expect(session.seatsInUse, isEmpty);
     });
   });
 

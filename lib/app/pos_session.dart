@@ -248,13 +248,6 @@ class PosSession {
     orders.save(current);
   }
 
-  /// The distinct seats currently assigned on the order, ascending.
-  List<int> get seatsInUse {
-    final s = current.lines.map((l) => l.seat).whereType<int>().toSet().toList()
-      ..sort();
-    return s;
-  }
-
   /// Carve a subset of the current order's lines into their own paid check and
   /// take payment for it, leaving the rest of the table open. This is how a split
   /// bill is settled: each guest/selection becomes its own paid order that syncs on
