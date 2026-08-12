@@ -1658,7 +1658,7 @@ class _SellScreenState extends State<SellScreen> {
                   Flexible(
                     child: Text(
                         unsent > 0
-                            ? '${tr(context, 'Send to kitchen')} ($unsent)'
+                            ? '${tr(context, 'Kitchen')} ($unsent)'
                             : tr(context, 'All sent'),
                         maxLines: 1, overflow: TextOverflow.ellipsis),
                   ),
