@@ -102,6 +102,15 @@ void main() {
     expect(picked, '');
   });
 
+  testWidgets('pick mode on an empty floor offers Other, not a floor-edit trap', (t) async {
+    await t.pumpWidget(app(pickMode: true));
+
+    // No "Set up the floor" button (it would flip edit mode on with no way out
+    // while picking); the Other action is still there to name a table.
+    expect(find.byKey(const Key('empty-edit')), findsNothing);
+    expect(find.byKey(const Key('pick-other')), findsOneWidget);
+  });
+
   testWidgets('a divider is drawn but never tapped to open an order', (t) async {
     final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
     bool tapped = false;

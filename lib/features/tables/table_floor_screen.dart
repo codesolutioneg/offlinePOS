@@ -639,7 +639,12 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             const SizedBox(height: 8),
             Text(tr(context, 'No tables yet')),
             const SizedBox(height: 8),
-            if (!_editing)
+            // While picking, laying out the floor is the wrong door: point to the
+            // Other action instead so the chooser never traps the user in edit mode.
+            if (widget.pickMode)
+              Text(tr(context, 'Use Other to name a table.'),
+                  style: const TextStyle(color: Colors.black54))
+            else if (!_editing)
               FilledButton.icon(
                 key: const Key('empty-edit'),
                 onPressed: () => setState(() => _editing = true),

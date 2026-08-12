@@ -503,4 +503,5 @@ const Map<String, String> _ar = {
   'Printer unavailable, drawer not opened': 'الطابعة غير متاحة، لم يُفتح الدرج',
   'Other table': 'طاولة أخرى',
   'Table name / number': 'اسم / رقم الطاولة',
+  'Use Other to name a table.': 'استخدم "أخرى" لتسمية طاولة.',
 };
