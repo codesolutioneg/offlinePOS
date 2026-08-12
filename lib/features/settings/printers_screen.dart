@@ -79,20 +79,26 @@ class _PrintersScreenState extends State<PrintersScreen> {
   }
 
   Future<void> _addPrinter() async {
-    final added = await showDialog<bool>(
+    final added = await showDialog<String>(
       context: context,
       builder: (context) => _AddPrinterDialog(printers: widget.printers),
     );
-    if (added == true) _notify();
+    if (added != null) _notify();
   }
 
   Future<void> _editPrinter(ConfiguredPrinter printer) async {
-    final changed = await showDialog<bool>(
+    final newName = await showDialog<String>(
       context: context,
       builder: (context) =>
           _AddPrinterDialog(printers: widget.printers, editing: printer),
     );
-    if (changed == true) _notify();
+    if (newName == null) return;
+    // A rename must carry the routing across, or every category/product still
+    // pointing at the old name would silently fall back to the default kitchen.
+    if (newName != printer.name) {
+      widget.settings.renameStation(printer.name, newName);
+    }
+    _notify();
   }
 
   void _setCategoryStation(int categoryId, String station, bool enabled) {
@@ -538,7 +544,8 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
       widget.printers.forget(oldName);
     }
     widget.printers.remember(name, host: host.isEmpty ? null : host, port: port);
-    Navigator.of(context).pop(true);
+    // Return the saved name so the caller can repoint routing on a rename.
+    Navigator.of(context).pop(name);
   }
 
   @override

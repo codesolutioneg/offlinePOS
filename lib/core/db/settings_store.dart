@@ -169,6 +169,21 @@ class SettingsStore {
   set categoryStations(Map<int, List<String>> v) => setString(
       _categoryStations, jsonEncode(v.map((k, val) => MapEntry('$k', val))));
 
+  /// Repoint every category and product route from [oldStation] to [newStation]
+  /// when a printer is renamed, so its tickets keep reaching it rather than
+  /// falling back to the default kitchen.
+  void renameStation(String oldStation, String newStation) {
+    if (oldStation == newStation) return;
+    Map<int, List<String>> remap(Map<int, List<String>> m) => {
+          for (final e in m.entries)
+            e.key: <String>{
+              for (final s in e.value) s == oldStation ? newStation : s,
+            }.toList(),
+        };
+    categoryStations = remap(categoryStations);
+    productStations = remap(productStations);
+  }
+
   /// Adds or removes one station from a category's routing without disturbing any
   /// other station already set on it, so a category can be pointed at several
   /// printers one toggle at a time.

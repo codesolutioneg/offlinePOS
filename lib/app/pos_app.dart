@@ -932,16 +932,26 @@ class _PosAppState extends State<PosApp> {
     final routed = routeToStations(lines,
         categoryToStations: widget.settings.categoryStations,
         productToStations: widget.settings.productStations);
+    // Send to each station, remembering which failed, so a line that fans out to
+    // more than one printer is only marked fired once EVERY station it needs got
+    // it. Marking on the first success would let a resend skip the line and a
+    // failed station never gets its copy.
+    final failed = <String>{};
     for (final entry in routed.entries) {
       final bytes = builder.build(order, only: entry.value, station: entry.key);
-      final ok = await _sendToStation(entry.key, bytes, 'kot-${order.uuid}');
-      // Only mark a line fired if its ticket reached a printer or the spool. A
-      // truly lost ticket leaves its lines un-fired so a later re-fire retries them
-      // rather than silently dropping food off the pass.
-      if (ok) {
-        for (final l in entry.value) {
-          l.printedToKitchen = true;
-        }
+      final ok = await _sendToStation(entry.key, bytes, 'kot-${order.uuid}-${entry.key}');
+      if (!ok) failed.add(entry.key);
+    }
+    final stationsOf = <String, Set<String>>{};
+    for (final entry in routed.entries) {
+      for (final l in entry.value) {
+        stationsOf.putIfAbsent(l.uuid, () => {}).add(entry.key);
+      }
+    }
+    for (final l in lines) {
+      final stations = stationsOf[l.uuid] ?? const <String>{};
+      if (stations.isNotEmpty && !stations.any(failed.contains)) {
+        l.printedToKitchen = true;
       }
     }
     widget.orders.save(order);
@@ -949,7 +959,15 @@ class _PosAppState extends State<PosApp> {
 
   Future<void> _fireVoid(Order order, OrderLine line, String reason) async {
     final bytes = KitchenTicketBuilder().buildVoid(order, line, reason);
-    await _sendToStation('kitchen', bytes, 'void-${order.uuid}-${line.uuid}');
+    // Route the cancel to the same station(s) the line was cooked at, or a line
+    // sent to the bar/grill keeps cooking because only the default kitchen heard it.
+    final stations = routeToStations([line],
+            categoryToStations: widget.settings.categoryStations,
+            productToStations: widget.settings.productStations)
+        .keys;
+    for (final station in stations) {
+      await _sendToStation(station, bytes, 'void-${order.uuid}-${line.uuid}-$station');
+    }
   }
 
   /// Send a kitchen ticket to [station]. Returns true if it reached a printer or was
