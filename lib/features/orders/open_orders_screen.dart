@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
+import '../../core/theme/app_colors.dart';
 import '../../domain/order.dart';
 
 /// Lists orders parked on a table or tab so a cashier can pick one back up.
@@ -97,11 +98,25 @@ class _OpenOrderCard extends StatelessWidget {
     return '$hh:$mm';
   }
 
+  /// The tab's kitchen state as a label, colour and icon, so a glance down the list
+  /// tells a cashier which tables are held, cooking or ready to run.
+  (String, Color, IconData) _status(BuildContext context) => switch (order.kitchenStatus) {
+        KitchenStatus.pending =>
+          (tr(context, 'Held'), AppColors.held, Icons.pause_circle_outline),
+        KitchenStatus.preparing =>
+          (tr(context, 'Preparing'), AppColors.info, Icons.local_fire_department_outlined),
+        KitchenStatus.ready =>
+          (tr(context, 'Ready'), AppColors.success, Icons.check_circle_outline),
+        KitchenStatus.served => (tr(context, 'Served'), Colors.grey, Icons.done_all),
+      };
+
   @override
   Widget build(BuildContext context) {
     final itemCount = order.lines.length;
     final preview = order.lines.take(3).map((l) => l.name).join(', ');
     final label = _label(context);
+    final (statusLabel, statusColor, statusIcon) = _status(context);
+    final hasUnsent = order.lines.any((l) => !l.printedToKitchen);
     final subtitleParts = <String>[
       tr(context, order.type.label),
       if (order.guestCount != null) '${order.guestCount} guests',
@@ -110,15 +125,25 @@ class _OpenOrderCard extends StatelessWidget {
     ];
     return Card(
       key: Key('open-order-${order.uuid}'),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: statusColor.withValues(alpha: 0.4)),
+      ),
       child: InkWell(
         key: Key('recall-${order.uuid}'),
         onTap: onTap,
-        child: Padding(
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border(left: BorderSide(color: statusColor, width: 5)),
+          ),
           padding: const EdgeInsets.all(12),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               CircleAvatar(
+                backgroundColor: statusColor.withValues(alpha: 0.15),
+                foregroundColor: statusColor,
                 child: Text(label.length >= 2 ? label.substring(0, 2) : label),
               ),
               const SizedBox(width: 12),
@@ -140,6 +165,15 @@ class _OpenOrderCard extends StatelessWidget {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      StatusChip(statusLabel, statusColor, icon: statusIcon),
+                      if (hasUnsent) ...[
+                        const SizedBox(width: 6),
+                        StatusChip(tr(context, 'New items'), AppColors.draft,
+                            icon: Icons.fiber_new),
+                      ],
+                    ]),
                     const SizedBox(height: 4),
                     Text(subtitleParts.join(' · '),
                         style: const TextStyle(color: Colors.black54)),

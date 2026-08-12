@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../app/pos_session.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/theme/app_colors.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
 import 'modifier_sheet.dart';
@@ -734,8 +735,90 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Future<void> _setTable() async {
+    final label = await _pickTable();
+    if (label != null && label.isNotEmpty) _changed(() => s.setTable(label));
+  }
+
+  /// A visual floor picker: every table as a tile coloured by occupancy (this
+  /// order's table, an occupied tab, or free), with the running total on the busy
+  /// ones. Falls back to free-text for a table that is not on the floor yet.
+  /// [exclude] hides one label (used when moving items, to hide the source table).
+  Future<String?> _pickTable({String? exclude}) async {
+    final tables =
+        (widget.tables?.call() ?? const <String>[]).where((t) => t != exclude).toList();
+    final held = <String, Order>{
+      for (final o in (widget.heldOrders?.call() ?? const <Order>[]))
+        if (o.tableLabel != null && o.lines.isNotEmpty) o.tableLabel!: o,
+    };
+    final current = s.current.tableLabel;
+    return showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.7,
+        maxChildSize: 0.9,
+        builder: (ctx, scroll) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(children: [
+            Row(children: [
+              Text(tr(ctx, 'Choose a table'),
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              _legendDot(AppColors.tableFree, tr(ctx, 'Free')),
+              const SizedBox(width: 10),
+              _legendDot(AppColors.tableOccupied, tr(ctx, 'Occupied')),
+            ]),
+            const SizedBox(height: 10),
+            Expanded(
+              child: tables.isEmpty
+                  ? Center(child: Text(tr(ctx, 'No tables yet. Add them in Settings.')))
+                  : GridView.count(
+                      controller: scroll,
+                      crossAxisCount: 4,
+                      childAspectRatio: 1.1,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      children: [
+                        for (final t in tables)
+                          _TablePickTile(
+                            label: t,
+                            isCurrent: t == current,
+                            occupiedTotal: held[t]?.total,
+                            formatAmount: widget.formatAmount,
+                            onTap: () => Navigator.pop(ctx, t),
+                          ),
+                      ],
+                    ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('table-custom'),
+              icon: const Icon(Icons.edit),
+              label: Text(tr(ctx, 'Other / custom')),
+              onPressed: () async {
+                final custom = await _promptCustomTable();
+                if (ctx.mounted && custom != null && custom.isNotEmpty) {
+                  Navigator.pop(ctx, custom);
+                }
+              },
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _legendDot(Color c, String label) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(width: 10, height: 10, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(fontSize: 12)),
+      ]);
+
+  Future<String?> _promptCustomTable() {
     final ctrl = TextEditingController(text: s.current.tableLabel ?? '');
-    final label = await showDialog<String>(
+    return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(tr(ctx, 'Table / tab')),
@@ -754,7 +837,6 @@ class _SellScreenState extends State<SellScreen> {
         ],
       ),
     );
-    if (label != null) _changed(() => s.setTable(label));
   }
 
   Future<void> _deliveryDetails() async {
@@ -1107,7 +1189,7 @@ class _SellScreenState extends State<SellScreen> {
       title: tr(context, 'Move items to another table'),
       confirmLabel: tr(context, 'Choose table'),
       onConfirm: (lines) async {
-        final label = await _promptTableLabel();
+        final label = await _pickTable(exclude: s.current.tableLabel);
         if (label == null || label.isEmpty || !mounted) return;
         final ids = lines.map((l) => l.uuid).toSet();
         _changed(() => s.moveLinesToTable(ids, label));
@@ -1116,40 +1198,6 @@ class _SellScreenState extends State<SellScreen> {
           content: Text('${lines.length} ${tr(context, 'item(s) moved to table')} $label'),
         ));
       },
-    );
-  }
-
-  Future<String?> _promptTableLabel() {
-    final ctrl = TextEditingController();
-    final tables = widget.tables?.call() ?? const <String>[];
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(tr(ctx, 'Destination table')),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (tables.isNotEmpty)
-            Wrap(
-              spacing: 6,
-              children: [
-                for (final t in tables)
-                  ActionChip(label: Text(t), onPressed: () => Navigator.pop(ctx, t)),
-              ],
-            ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: ctrl,
-            autofocus: tables.isEmpty,
-            decoration: InputDecoration(
-                labelText: tr(ctx, 'Table'), border: const OutlineInputBorder()),
-          ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: Text(tr(ctx, 'OK'))),
-        ],
-      ),
     );
   }
 
@@ -1294,7 +1342,9 @@ class _SellScreenState extends State<SellScreen> {
   Color? _colorFor(int? categoryId) {
     if (categoryId == null) return null;
     final argb = widget.categoryColors[categoryId];
-    return argb == null ? null : Color(argb);
+    // A manager-picked colour wins; otherwise a stable colour from the palette so
+    // the grid reads by category instead of as one flat wall of teal.
+    return argb != null ? Color(argb) : AppColors.categoryColor(categoryId);
   }
 
   Widget _catalogue(List<Product> products) => Column(
@@ -1734,6 +1784,62 @@ class _ProductTile extends StatelessWidget {
   }
 }
 
+/// One table on the visual picker: coloured by occupancy, with the running total
+/// when a tab is open on it.
+class _TablePickTile extends StatelessWidget {
+  const _TablePickTile({
+    required this.label,
+    required this.isCurrent,
+    required this.occupiedTotal,
+    required this.formatAmount,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool isCurrent;
+  final double? occupiedTotal;
+  final String Function(double) formatAmount;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final occupied = occupiedTotal != null;
+    final color = isCurrent
+        ? AppColors.tableThis
+        : (occupied ? AppColors.tableOccupied : AppColors.tableFree);
+    return Material(
+      color: color.withValues(alpha: 0.10),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        key: Key('table-tile-${label.toLowerCase()}'),
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color, width: isCurrent ? 2.5 : 1.5),
+          ),
+          padding: const EdgeInsets.all(6),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(Icons.table_restaurant, color: color, size: 22),
+            const SizedBox(height: 2),
+            Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            if (occupied)
+              Text(formatAmount(occupiedTotal!),
+                  style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600))
+            else
+              Text(tr(context, isCurrent ? 'This table' : 'Free'),
+                  style: TextStyle(fontSize: 11, color: color)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
 class _LineTile extends StatelessWidget {
   const _LineTile({
     super.key,
@@ -1752,30 +1858,41 @@ class _LineTile extends StatelessWidget {
   final void Function(double) onQty;
   final VoidCallback onTapLine;
 
+  String get _qtyText =>
+      line.quantity.toStringAsFixed(line.quantity == line.quantity.roundToDouble() ? 0 : 3);
+
   @override
-  Widget build(BuildContext context) => ListTile(
+  Widget build(BuildContext context) {
+    // A fired line reads green down its edge; a not-yet-sent line reads in the draft
+    // colour, so the cashier can see at a glance what the kitchen already has.
+    final sent = line.printedToKitchen;
+    final edge = sent ? AppColors.sent : AppColors.draft;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: sent ? AppColors.sent.withValues(alpha: 0.05) : null,
+        borderRadius: BorderRadius.circular(10),
+        border: Border(left: BorderSide(color: edge, width: 4)),
+      ),
+      child: ListTile(
         onTap: onTapLine,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        contentPadding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
         title: Row(children: [
           if (line.seat != null) ...[
-            Container(
-              key: Key('seat-badge-${line.uuid}'),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-              decoration: BoxDecoration(
-                color: Colors.indigo.shade50,
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: Colors.indigo.shade200),
-              ),
-              child: Text('G${line.seat}',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.indigo.shade700)),
-            ),
+            _tag('G${line.seat}', AppColors.info, key: Key('seat-badge-${line.uuid}')),
             const SizedBox(width: 6),
           ],
+          Text('$_qtyText×',
+              style: TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.primary)),
+          const SizedBox(width: 6),
           Expanded(
-              child: Text(line.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
+              child: Text(line.name,
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600))),
+          if (sent) ...[
+            StatusChip(tr(context, 'Sent'), AppColors.sent, icon: Icons.check),
+            const SizedBox(width: 6),
+          ],
           Text(amount, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
         ]),
         subtitle: Column(
@@ -1783,35 +1900,53 @@ class _LineTile extends StatelessWidget {
           children: [
             for (final m in line.modifiers)
               Text(
-                  '   + ${m.name}${m.quantity > 1 ? ' x${m.quantity.toStringAsFixed(0)}' : ''}'
-                  '${m.unitPrice == 0 ? '' : '  ${format(m.total * line.quantity)}'}',
-                  style: const TextStyle(fontSize: 13, color: Colors.green)),
+                  '   + ${m.name}${m.quantity > 1 ? ' ×${m.quantity.toStringAsFixed(0)}' : ''}'
+                  '${m.unitPrice == 0 ? '  (${tr(context, 'free')})' : '  ${format(m.total * line.quantity)}'}',
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: m.unitPrice == 0 ? AppColors.modifierFree : AppColors.modifierPaid)),
             if (line.discountPercent > 0)
               Text('   -${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
-                  style: TextStyle(fontSize: 13, color: Colors.orange.shade800)),
+                  style: const TextStyle(fontSize: 13, color: AppColors.warning)),
             if (line.note != null)
               Text('   ${line.note}',
                   style: const TextStyle(fontSize: 13, fontStyle: FontStyle.italic)),
             Row(children: [
               IconButton(
                   icon: const Icon(Icons.remove_circle_outline, size: 28),
+                  color: AppColors.error,
                   onPressed: () => onQty(line.quantity - 1)),
               Container(
                 constraints: const BoxConstraints(minWidth: 32),
                 alignment: Alignment.center,
-                child: Text(
-                    line.quantity
-                        .toStringAsFixed(line.quantity == line.quantity.roundToDouble() ? 0 : 3),
+                child: Text(_qtyText,
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
               IconButton(
                   icon: const Icon(Icons.add_circle_outline, size: 28),
+                  color: AppColors.success,
                   onPressed: () => onQty(line.quantity + 1)),
             ]),
           ],
         ),
         trailing: IconButton(
-            icon: const Icon(Icons.delete_outline, size: 26), onPressed: onRemove),
+            icon: const Icon(Icons.delete_outline, size: 26),
+            color: AppColors.error,
+            onPressed: onRemove),
+      ),
+    );
+  }
+
+  Widget _tag(String text, Color color, {Key? key}) => Container(
+        key: key,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Text(text,
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
       );
 }
 

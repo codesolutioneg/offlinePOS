@@ -315,4 +315,13 @@ const Map<String, String> _ar = {
   'Off the clock': 'خارج الدوام',
   'Clock in': 'تسجيل حضور',
   'Clock out': 'تسجيل انصراف',
+  // status colours / dine-in visuals
+  'Sent': 'أُرسل',
+  'free': 'مجاني',
+  'New items': 'أصناف جديدة',
+  'Held': 'معلّق',
+  'Choose a table': 'اختر طاولة',
+  'Other / custom': 'أخرى / مخصص',
+  'This table': 'هذه الطاولة',
+  'No tables yet. Add them in Settings.': 'لا توجد طاولات بعد. أضِفها من الإعدادات.',
 };

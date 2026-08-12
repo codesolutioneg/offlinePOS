@@ -91,7 +91,8 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pick-confirm')));
     await t.pumpAndSettle();
-    await t.tap(find.widgetWithText(ActionChip, '5'));
+    // The visual floor picker opens; tap the destination table tile.
+    await t.tap(find.byKey(const Key('table-tile-5')));
     await t.pumpAndSettle();
 
     // Pizza stays here; Cola is now a held tab on table 5.
