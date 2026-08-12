@@ -112,23 +112,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       key: const Key('no-users')),
                 )
               else ...[
-                Wrap(
-                  spacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    for (final c in staff)
-                      ChoiceChip(
-                        key: Key('user-${c.id}'),
-                        label: Text(c.name),
-                        selected: _selected?.id == c.id,
-                        onSelected: (_) => setState(() {
-                          _selected = c;
-                          _pin = '';
-                          _message = null;
-                        }),
-                      ),
-                  ],
-                ),
+                _accountSelector(staff),
                 const SizedBox(height: 20),
                 Text('•' * _pin.length,
                     key: const Key('pin-dots'),
@@ -147,6 +131,70 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  void _choose(Cashier c) => setState(() {
+        _selected = c;
+        _pin = '';
+        _message = null;
+      });
+
+  /// Above this many accounts the chip wall stops being scannable, so switch to a
+  /// type-to-search field. A small shop keeps the one-tap chips.
+  static const _chipLimit = 6;
+
+  /// Pick who is signing in. Chips for a small roster (fast, no typing); a
+  /// searchable field once there are enough accounts that chips would wrap into an
+  /// unscannable wall, so a 15-strong roster is a name away instead of a hunt.
+  Widget _accountSelector(List<Cashier> staff) {
+    if (staff.length <= _chipLimit) {
+      return Wrap(
+        spacing: 8,
+        alignment: WrapAlignment.center,
+        children: [
+          for (final c in staff)
+            ChoiceChip(
+              key: Key('user-${c.id}'),
+              label: Text(c.name),
+              selected: _selected?.id == c.id,
+              onSelected: (_) => _choose(c),
+            ),
+        ],
+      );
+    }
+    return Column(
+      children: [
+        Autocomplete<Cashier>(
+          displayStringForOption: (c) => c.name,
+          optionsBuilder: (value) {
+            final q = value.text.trim().toLowerCase();
+            // Empty query lists everyone, so the field doubles as a full account
+            // list you can scroll, not only a search.
+            if (q.isEmpty) return staff;
+            return staff.where((c) => c.name.toLowerCase().contains(q));
+          },
+          onSelected: _choose,
+          fieldViewBuilder: (context, controller, focusNode, onSubmit) => TextField(
+            key: const Key('account-search'),
+            controller: controller,
+            focusNode: focusNode,
+            textCapitalization: TextCapitalization.words,
+            decoration: InputDecoration(
+              labelText: tr(context, 'Search your name'),
+              prefixIcon: const Icon(Icons.search),
+              border: const OutlineInputBorder(),
+            ),
+          ),
+        ),
+        if (_selected != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Text('${tr(context, 'Signing in as')}: ${_selected!.name}',
+                key: const Key('signing-in-as'),
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+          ),
+      ],
     );
   }
 

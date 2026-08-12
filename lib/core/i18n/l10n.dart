@@ -504,4 +504,6 @@ const Map<String, String> _ar = {
   'Other table': 'طاولة أخرى',
   'Table name / number': 'اسم / رقم الطاولة',
   'Use Other to name a table.': 'استخدم "أخرى" لتسمية طاولة.',
+  'Search your name': 'ابحث عن اسمك',
+  'Signing in as': 'تسجيل الدخول باسم',
 };

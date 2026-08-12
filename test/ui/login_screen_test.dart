@@ -115,6 +115,35 @@ void main() {
     expect(t.widget<Text>(find.byKey(const Key('pin-dots'))).data, '•');
   });
 
+  testWidgets('a small roster stays as quick-tap chips', (t) async {
+    await t.pumpWidget(app());
+    // One cashier enrolled: chips, no search field.
+    expect(find.byKey(const Key('user-sara')), findsOneWidget);
+    expect(find.byKey(const Key('account-search')), findsNothing);
+  });
+
+  testWidgets('a large roster switches to a searchable account field', (t) async {
+    // Seven accounts pushes past the chip limit, so the field appears instead.
+    for (var i = 0; i < 7; i++) {
+      await auth.enrol(id: 'staff-$i', name: 'Staff $i', pin: '1234');
+    }
+    await t.pumpWidget(app());
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('account-search')), findsOneWidget);
+    expect(find.byKey(const Key('user-sara')), findsNothing);
+
+    // Type a name, pick it from the options, and the keypad unlocks for that person.
+    await t.enterText(find.byKey(const Key('account-search')), 'Staff 3');
+    await t.pumpAndSettle();
+    await t.tap(find.text('Staff 3').last);
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('signing-in-as')), findsOneWidget);
+    await enter(t, '1234');
+    expect(signedIn?.id, 'staff-3');
+  });
+
   testWidgets('a device with no cashiers says so instead of hanging', (t) async {
     final empty = Db.open(':memory:');
     await t.pumpWidget(MaterialApp(
