@@ -744,8 +744,10 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Future<void> _setTable() async {
+    // A non-null result (including an empty string from Other / custom) is applied,
+    // so clearing the text removes a mistakenly assigned table.
     final label = await _pickTable();
-    if (label != null && label.isNotEmpty) _changed(() => s.setTable(label));
+    if (label != null) _changed(() => s.setTable(label));
   }
 
   /// A visual floor picker: every table as a tile coloured by occupancy (this
@@ -807,10 +809,10 @@ class _SellScreenState extends State<SellScreen> {
               icon: const Icon(Icons.edit),
               label: Text(tr(ctx, 'Other / custom')),
               onPressed: () async {
+                // Empty is allowed through so it can clear a table; the move flow
+                // ignores an empty destination itself.
                 final custom = await _promptCustomTable();
-                if (ctx.mounted && custom != null && custom.isNotEmpty) {
-                  Navigator.pop(ctx, custom);
-                }
+                if (ctx.mounted && custom != null) Navigator.pop(ctx, custom);
               },
             ),
           ]),
