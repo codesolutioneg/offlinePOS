@@ -752,8 +752,9 @@ class _PosAppState extends State<PosApp> {
             settings: widget.settings,
             categories: widget.catalogue.categories(),
             onChanged: refresh,
-            // Send a sample receipt to the chosen printer so a manager can prove it
-            // is wired before a customer is standing there.
+            // Send a sample receipt straight to the chosen printer so a manager can
+            // prove THAT printer is wired. No receipt-printer fallback here: a test
+            // must fail honestly if the named station is unreachable.
             onTestPrint: (name) async {
               final s = widget.settings;
               final bytes = ReceiptBuilder(
@@ -762,7 +763,8 @@ class _PosAppState extends State<PosApp> {
                 columns: s.receiptColumns,
                 formatAmount: PosApp.money,
               ).build(_sampleOrder(), reprint: true);
-              await _sendToStation(name, bytes, 'test-$name');
+              await RegistryPrinter(widget.printers, name)
+                  .send(Uint8List.fromList(bytes));
             })),
       ),
       SettingsEntry(

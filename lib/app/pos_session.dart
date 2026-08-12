@@ -281,9 +281,39 @@ class PosSession {
 
   /// Tag a line with the guest/seat it belongs to (null clears it). Drives
   /// split-by-guest and the per-seat kitchen ticket.
+  ///
+  /// If the line holds more than one unit, one unit is peeled onto the guest and
+  /// the rest stay on the original line: repeat taps consolidate into a 2× line,
+  /// but that line can still be split a cover at a time.
   void setLineSeat(String lineUuid, int? seat) {
     final line = current.lines.firstWhere((l) => l.uuid == lineUuid);
-    line.seat = (seat != null && seat > 0) ? seat : null;
+    final s = (seat != null && seat > 0) ? seat : null;
+    if (s != null && line.quantity > 1) {
+      line.quantity -= 1;
+      current.lines.add(OrderLine(
+        productId: line.productId,
+        name: line.name,
+        quantity: 1,
+        unitPrice: line.unitPrice,
+        categoryId: line.categoryId,
+        taxRate: line.taxRate,
+        note: line.note,
+        discountPercent: line.discountPercent,
+        printedToKitchen: line.printedToKitchen,
+        seat: s,
+        modifiers: [
+          for (final m in line.modifiers)
+            OrderModifier(
+                modifierId: m.modifierId,
+                productId: m.productId,
+                name: m.name,
+                quantity: m.quantity,
+                unitPrice: m.unitPrice),
+        ],
+      ));
+    } else {
+      line.seat = s;
+    }
     orders.save(current);
   }
 

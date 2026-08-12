@@ -93,6 +93,20 @@ void main() {
     expect(session.current.lines.length, 2);
   });
 
+  test('assigning a guest to a consolidated line peels one unit onto that guest', () {
+    session.addProduct(pizza);
+    session.addProduct(pizza); // consolidated -> one line, qty 2
+    expect(session.current.lines.single.quantity, 2);
+    session.setLineSeat(session.current.lines.single.uuid, 1);
+    // Now two lines: one unit on guest 1, one still unassigned.
+    expect(session.current.lines.length, 2);
+    final guest1 = session.current.lines.firstWhere((l) => l.seat == 1);
+    final rest = session.current.lines.firstWhere((l) => l.seat == null);
+    expect(guest1.quantity, 1);
+    expect(rest.quantity, 1);
+    expect(session.total, 500); // value unchanged by the split
+  });
+
   test('setting quantity to zero removes the line', () {
     session.addProduct(pizza);
     session.setQuantity(session.current.lines.single.uuid, 0);

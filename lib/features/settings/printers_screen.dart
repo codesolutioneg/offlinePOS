@@ -268,10 +268,18 @@ class _PrintersScreenState extends State<PrintersScreen> {
   }
 
   Future<void> _testPrint(String name) async {
-    await widget.onTestPrint?.call(name);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$name: ${tr(context, 'test receipt sent')}')));
+    try {
+      await widget.onTestPrint?.call(name);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$name: ${tr(context, 'test receipt sent')}')));
+    } catch (_) {
+      // The named printer answered nothing: say so rather than claim success.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          backgroundColor: AppColors.error,
+          content: Text('$name: ${tr(context, 'not reachable')}')));
+    }
   }
 
   String _describe(ConfiguredPrinter printer) {

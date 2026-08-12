@@ -333,4 +333,5 @@ const Map<String, String> _ar = {
   'Not found': 'غير موجودة',
   'Test print': 'طباعة تجريبية',
   'test receipt sent': 'أُرسل الإيصال التجريبي',
+  'not reachable': 'غير قابلة للوصول',
 };
