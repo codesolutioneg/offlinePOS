@@ -281,6 +281,12 @@ class _PosAppState extends State<PosApp> {
             showCashier: s.getBool('receipt_show_cashier', fallback: true),
             showOrderType: s.getBool('receipt_show_ordertype', fallback: true),
             showTax: s.receiptShowTax,
+            showDateTime: s.receiptShowDateTime,
+            showNumber: s.receiptShowNumber,
+            showTable: s.receiptShowTable,
+            showPayment: s.receiptShowPayment,
+            showItemPrice: s.receiptShowItemPrice,
+            dividerStyle: s.receiptDividerStyle,
             openDrawer: openDrawer,
             formatAmount: PosApp.money,
           ).build(order, reprint: reprint);
@@ -408,9 +414,10 @@ class _PosAppState extends State<PosApp> {
               drawer: _buildDrawer(context, session),
               onOpenOrders: () => _openOrders(context, session),
               onHold: () {
-                // Holding a table is what sends its food to the kitchen, so the
-                // ticket fires here, then the order is parked.
-                unawaited(_fireKitchen(session.current));
+                // Holding only parks the order. It does NOT fire the kitchen: food
+                // reaches the kitchen only via the explicit Send to kitchen button,
+                // so a cashier can park a tab that is still being built without the
+                // line cooking it.
                 session.hold();
                 _publishActivity();
               },
@@ -774,6 +781,7 @@ class _PosAppState extends State<PosApp> {
                 shopName: s.shopName ?? widget.config.shopName,
                 footer: s.receiptFooter ?? widget.config.receiptFooter,
                 columns: s.receiptColumns,
+                dividerStyle: s.receiptDividerStyle,
                 formatAmount: PosApp.money,
               ).build(_sampleOrder(), reprint: true);
               await RegistryPrinter(widget.printers, name)
