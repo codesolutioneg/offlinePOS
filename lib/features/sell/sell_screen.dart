@@ -831,6 +831,9 @@ class _SellScreenState extends State<SellScreen> {
     final addr = TextEditingController(text: s.current.customerAddress ?? '');
     final cost = TextEditingController(
         text: s.current.deliveryCost > 0 ? s.current.deliveryCost.toStringAsFixed(2) : '');
+    // The existing customer picked, so the delivery links to that partner rather
+    // than being saved as a free-typed name (which would duplicate them in Odoo).
+    Customer? picked;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -850,6 +853,7 @@ class _SellScreenState extends State<SellScreen> {
                 onPressed: () async {
                   final c = await _pickExistingCustomer();
                   if (c == null) return;
+                  picked = c;
                   setSt(() {
                     name.text = c.name;
                     if (c.phone != null) phone.text = c.phone!;
@@ -890,6 +894,9 @@ class _SellScreenState extends State<SellScreen> {
     );
     if (ok == true) {
       _changed(() {
+        // Link the chosen partner first (sets partnerId), then overlay the typed
+        // name/phone/address; the partner id survives so the sale is not a duplicate.
+        if (picked != null) s.setCustomer(picked);
         s.setDeliveryCustomer(
             name: name.text, phone: phone.text, address: addr.text);
         s.setDeliveryCost(double.tryParse(cost.text.trim()) ?? 0);

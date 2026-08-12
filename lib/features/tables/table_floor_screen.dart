@@ -583,8 +583,10 @@ class _TableTile extends StatelessWidget {
     final wide = table.shape == TableShape.rectangle;
     final round = table.shape == TableShape.round;
     return Container(
-      width: wide ? 140 : 100,
-      height: wide ? 76 : 100,
+      // A rectangle is short rather than extra-wide so it still fits one grid slot
+      // and cannot overlap the table snapped into the next cell.
+      width: 100,
+      height: wide ? 60 : 100,
       margin: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.15),
