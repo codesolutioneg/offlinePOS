@@ -67,6 +67,18 @@ void main() {
     expect(reloaded.shape, TableShape.divider);
   });
 
+  test('a divider defaults to horizontal and round-trips its orientation and length', () {
+    final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
+    // A seatable table keeps the defaults too; only the divider draws by them.
+    expect(wall.vertical, false);
+    expect(wall.span, 140);
+
+    tables.upsert(wall.copyWith(vertical: true, span: 260));
+    final reloaded = tables.byId(wall.id)!;
+    expect(reloaded.vertical, true);
+    expect(reloaded.span, 260);
+  });
+
   test('copyWith changes shape without touching the rest of the table', () {
     final t = tables.add(name: 'C1');
     final round = t.copyWith(shape: TableShape.round);

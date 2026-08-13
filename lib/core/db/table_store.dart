@@ -25,6 +25,8 @@ class PosTable {
     this.y = 0,
     this.sequence = 0,
     this.shape = TableShape.square,
+    this.vertical = false,
+    this.span = 140,
   });
 
   final String id;
@@ -40,6 +42,12 @@ class PosTable {
   final int sequence;
   final TableShape shape;
 
+  /// Divider-only geometry, ignored by seatable tables. [vertical] draws the wall
+  /// as a tall bar instead of a wide one; [span] is its long side in logical
+  /// pixels, so a manager can enlarge or shrink a wall to fit the aisle.
+  final bool vertical;
+  final int span;
+
   /// A divider is a visual wall/aisle marker, not a seatable table: it never
   /// shows as occupied and is never tapped to open an order.
   bool get isDivider => shape == TableShape.divider;
@@ -52,6 +60,8 @@ class PosTable {
     double? y,
     int? sequence,
     TableShape? shape,
+    bool? vertical,
+    int? span,
   }) =>
       PosTable(
         id: id,
@@ -62,6 +72,8 @@ class PosTable {
         y: y ?? this.y,
         sequence: sequence ?? this.sequence,
         shape: shape ?? this.shape,
+        vertical: vertical ?? this.vertical,
+        span: span ?? this.span,
       );
 }
 
@@ -139,12 +151,14 @@ class TableStore {
   }
 
   void upsert(PosTable t) => _db.raw.execute(
-        'INSERT INTO pos_tables (id, section, name, seats, pos_x, pos_y, sequence, shape) '
-        'VALUES (?,?,?,?,?,?,?,?) '
+        'INSERT INTO pos_tables (id, section, name, seats, pos_x, pos_y, sequence, shape, vertical, span) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?) '
         'ON CONFLICT(id) DO UPDATE SET section=excluded.section, name=excluded.name, '
         'seats=excluded.seats, pos_x=excluded.pos_x, pos_y=excluded.pos_y, '
-        'sequence=excluded.sequence, shape=excluded.shape',
-        [t.id, t.section, t.name, t.seats, t.x, t.y, t.sequence, t.shape.name],
+        'sequence=excluded.sequence, shape=excluded.shape, vertical=excluded.vertical, '
+        'span=excluded.span',
+        [t.id, t.section, t.name, t.seats, t.x, t.y, t.sequence, t.shape.name,
+          t.vertical ? 1 : 0, t.span],
       );
 
   void remove(String id) =>
@@ -171,5 +185,7 @@ class TableStore {
         y: (r['pos_y'] as num).toDouble(),
         sequence: r['sequence'] as int,
         shape: _shapeFromDb(r['shape'] as String?),
+        vertical: (r['vertical'] as int? ?? 0) != 0,
+        span: r['span'] as int? ?? 140,
       );
 }

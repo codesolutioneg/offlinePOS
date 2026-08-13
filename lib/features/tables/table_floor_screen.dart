@@ -146,8 +146,13 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       // Keep names unique so an order is never recalled onto the wrong table; a
       // rename that would collide is suffixed rather than silently duplicated.
       final name = result.name == t.name ? t.name : widget.store.uniqueName(result.name);
-      widget.store
-          .upsert(t.copyWith(name: name, seats: result.seats, shape: result.shape));
+      widget.store.upsert(t.copyWith(
+        name: name,
+        seats: result.seats,
+        shape: result.shape,
+        vertical: result.vertical,
+        span: result.span,
+      ));
     }
     _reload();
   }
@@ -217,6 +222,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final seatsCtrl = TextEditingController(text: '${initial?.seats ?? 4}');
     final isDivider = initial?.isDivider ?? false;
     var shape = initial?.shape ?? TableShape.square;
+    // Divider geometry: kept in dialog state so the +/- stepper and the
+    // orientation chips update the same values the Save action writes back.
+    var vertical = initial?.vertical ?? false;
+    var span = initial?.span ?? 140;
     return showDialog<_TableEdit>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -264,6 +273,49 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                 ],
               ),
             ],
+            // A divider carries no seats or shape, but it does have an
+            // orientation and a length the manager sets here.
+            if (isDivider) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(tr(ctx, 'Orientation'),
+                    style: Theme.of(ctx).textTheme.labelMedium),
+              ),
+              const SizedBox(height: 4),
+              Wrap(spacing: 8, children: [
+                ChoiceChip(
+                  key: const Key('orient-horizontal'),
+                  label: Text(tr(ctx, 'Horizontal')),
+                  selected: !vertical,
+                  onSelected: (_) => setDialogState(() => vertical = false),
+                ),
+                ChoiceChip(
+                  key: const Key('orient-vertical'),
+                  label: Text(tr(ctx, 'Vertical')),
+                  selected: vertical,
+                  onSelected: (_) => setDialogState(() => vertical = true),
+                ),
+              ]),
+              const SizedBox(height: 8),
+              Row(children: [
+                Text(tr(ctx, 'Length'), style: Theme.of(ctx).textTheme.labelMedium),
+                const Spacer(),
+                IconButton(
+                  key: const Key('divider-shorter'),
+                  icon: const Icon(Icons.remove_circle_outline),
+                  // Clamp to a floor so a wall can never shrink to an untappable
+                  // sliver, and step in whole grid-ish increments.
+                  onPressed: () => setDialogState(() => span = (span - 40).clamp(60, 400)),
+                ),
+                Text('$span'),
+                IconButton(
+                  key: const Key('divider-longer'),
+                  icon: const Icon(Icons.add_circle_outline),
+                  onPressed: () => setDialogState(() => span = (span + 40).clamp(60, 400)),
+                ),
+              ]),
+            ],
           ]),
           actions: [
             if (initial != null)
@@ -284,6 +336,8 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                     name: name,
                     seats: isDivider ? 0 : (int.tryParse(seatsCtrl.text.trim()) ?? 4),
                     shape: isDivider ? TableShape.divider : shape,
+                    vertical: vertical,
+                    span: span,
                   ),
                 );
               },
@@ -752,32 +806,49 @@ class _TableTile extends StatelessWidget {
   }
 
   /// A wall/divider draws as a plain bar with the table's name as a small label,
-  /// never a colour that could be mistaken for an occupancy state.
-  Widget _divider() => Container(
-        width: 140,
-        height: 18,
-        margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.grey.shade500,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(table.name,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 10, color: Colors.white)),
-      );
+  /// never a colour that could be mistaken for an occupancy state. Its long side
+  /// is [PosTable.span]; a vertical wall is the same bar rotated, so the label
+  /// reads along it rather than spilling out of a thin column.
+  Widget _divider() {
+    const thickness = 18.0;
+    final length = table.span.toDouble();
+    final label = Text(table.name,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 10, color: Colors.white));
+    return Container(
+      width: table.vertical ? thickness : length,
+      height: table.vertical ? length : thickness,
+      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade500,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: table.vertical ? RotatedBox(quarterTurns: 1, child: label) : label,
+    );
+  }
 }
 
 class _TableEdit {
-  const _TableEdit({required this.name, required this.seats, this.shape = TableShape.square})
-      : delete = false;
+  const _TableEdit({
+    required this.name,
+    required this.seats,
+    this.shape = TableShape.square,
+    this.vertical = false,
+    this.span = 140,
+  }) : delete = false;
   const _TableEdit.remove()
       : name = '',
         seats = 0,
         shape = TableShape.square,
+        vertical = false,
+        span = 140,
         delete = true;
   final String name;
   final int seats;
   final TableShape shape;
+  // Divider-only geometry; ignored for a seatable table.
+  final bool vertical;
+  final int span;
   final bool delete;
 }

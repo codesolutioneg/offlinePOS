@@ -384,6 +384,10 @@ const Map<String, String> _ar = {
   'Round': 'دائري',
   'Rectangle': 'مستطيل',
   'Divider': 'فاصل',
+  'Orientation': 'الاتجاه',
+  'Horizontal': 'أفقي',
+  'Vertical': 'رأسي',
+  'Length': 'الطول',
   'Section name (e.g. Terrace)': 'اسم القسم (مثل التراس)',
   // timed / course firing
   'Fire timing': 'توقيت الإرسال',
