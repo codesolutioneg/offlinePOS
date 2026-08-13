@@ -508,8 +508,6 @@ const Map<String, String> _ar = {
   'Other table': 'طاولة أخرى',
   'Table name / number': 'اسم / رقم الطاولة',
   'Use Other to name a table.': 'استخدم "أخرى" لتسمية طاولة.',
-  'How is this order served?': 'كيف سيُقدَّم هذا الطلب؟',
-  'Add the customer and charge': 'أضف العميل والرسوم',
   'Search your name': 'ابحث عن اسمك',
   'Signing in as': 'تسجيل الدخول باسم',
   ", then enrol the real roster. This code is new on every launch and stops appearing once staff are enrolled.": "، ثم سجّل الطاقم الحقيقي. هذا الرمز جديد عند كل تشغيل ويختفي بمجرد تسجيل الموظفين.",

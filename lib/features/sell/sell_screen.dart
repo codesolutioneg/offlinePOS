@@ -51,6 +51,7 @@ class SellScreen extends StatefulWidget {
     this.tables,
     this.heldOrders,
     this.onPickTable,
+    this.onNewOrder,
     this.onResendToKitchen,
   });
 
@@ -151,6 +152,10 @@ class SellScreen extends StatefulWidget {
   /// back to its own flat-grid table sheet. [exclude] hides one table (the source
   /// when moving a bill to another table).
   final Future<String?> Function({String? exclude})? onPickTable;
+
+  /// Show the home floor plan to start the next order (tap a table, or the
+  /// takeaway/delivery buttons). Wired by the shell, which owns the floor screen.
+  final VoidCallback? onNewOrder;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -1016,58 +1021,10 @@ class _SellScreenState extends State<SellScreen> {
 
   void _newOrder() {
     _changed(() => s.newOrder());
-    // A new order starts by choosing how it is served, the way a table-service till
-    // does, rather than defaulting to dine-in and leaving the cashier to change it.
-    unawaited(_chooseServiceType());
-  }
-
-  /// The order-start step: pick dine-in (then a table), takeaway, or delivery (then
-  /// the customer/charge). Sets the type and walks straight into the follow-up each
-  /// needs, so the sequence matches how the order is actually taken.
-  Future<void> _chooseServiceType() async {
-    final choice = await showModalBottomSheet<OrderType>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Text(tr(ctx, 'How is this order served?'),
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          ),
-          ListTile(
-            key: const Key('start-dine-in'),
-            leading: const Icon(Icons.restaurant, color: AppColors.primary),
-            title: Text(tr(ctx, 'Dine-in')),
-            subtitle: Text(tr(ctx, 'Choose a table')),
-            onTap: () => Navigator.pop(ctx, OrderType.dineIn),
-          ),
-          ListTile(
-            key: const Key('start-takeaway'),
-            leading: const Icon(Icons.takeout_dining, color: AppColors.primary),
-            title: Text(tr(ctx, 'Takeaway')),
-            onTap: () => Navigator.pop(ctx, OrderType.takeaway),
-          ),
-          ListTile(
-            key: const Key('start-delivery'),
-            leading: const Icon(Icons.delivery_dining, color: AppColors.primary),
-            title: Text(tr(ctx, 'Delivery')),
-            subtitle: Text(tr(ctx, 'Add the customer and charge')),
-            onTap: () => Navigator.pop(ctx, OrderType.delivery),
-          ),
-        ]),
-      ),
-    );
-    if (choice == null || !mounted) return;
-    _changed(() => s.setOrderType(choice));
-    switch (choice) {
-      case OrderType.dineIn:
-        await _setTable();
-      case OrderType.delivery:
-        await _deliveryDetails();
-      case OrderType.takeaway:
-        break;
-    }
+    // The floor plan is the home base: starting a new order drops back to it, where
+    // the cashier taps a table (dine-in) or the takeaway/delivery buttons. The shell
+    // owns that screen, so it is asked to show it.
+    widget.onNewOrder?.call();
   }
 
   void _sendToKitchen() {

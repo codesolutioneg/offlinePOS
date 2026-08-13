@@ -24,7 +24,14 @@ class TableFloorScreen extends StatefulWidget {
     this.formatAmount,
     this.pickMode = false,
     this.exclude,
+    this.onTakeaway,
+    this.onDelivery,
   });
+
+  /// Start a takeaway or delivery order straight from the floor home, the two ways
+  /// an order begins without a table. Null hides the button (e.g. in pick mode).
+  final VoidCallback? onTakeaway;
+  final VoidCallback? onDelivery;
 
   final TableStore store;
 
@@ -467,6 +474,36 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                     child: _canvas(tables),
                   ),
           ),
+          // The two ways to start an order without a table, on the floor home.
+          if (!widget.pickMode && !_editing && (widget.onTakeaway != null || widget.onDelivery != null))
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+                child: Row(children: [
+                  if (widget.onTakeaway != null)
+                    Expanded(
+                      child: FilledButton.icon(
+                        key: const Key('floor-takeaway'),
+                        onPressed: widget.onTakeaway,
+                        icon: const Icon(Icons.takeout_dining),
+                        label: Text(tr(context, 'Takeaway')),
+                      ),
+                    ),
+                  if (widget.onTakeaway != null && widget.onDelivery != null)
+                    const SizedBox(width: 10),
+                  if (widget.onDelivery != null)
+                    Expanded(
+                      child: FilledButton.icon(
+                        key: const Key('floor-delivery'),
+                        onPressed: widget.onDelivery,
+                        icon: const Icon(Icons.delivery_dining),
+                        label: Text(tr(context, 'Delivery')),
+                      ),
+                    ),
+                ]),
+              ),
+            ),
         ],
       ),
     );

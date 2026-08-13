@@ -123,6 +123,34 @@ void main() {
     expect(find.text('T3'), findsOneWidget);
   });
 
+  testWidgets('the floor home offers takeaway and delivery buttons', (t) async {
+    tables.add(name: 'T1');
+    var takeaway = false, delivery = false;
+    await t.pumpWidget(MaterialApp(
+      home: TableFloorScreen(
+        store: tables,
+        occupiedLabels: const {},
+        onOpenTable: (_) {},
+        onTakeaway: () => takeaway = true,
+        onDelivery: () => delivery = true,
+      ),
+    ));
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('floor-takeaway')));
+    expect(takeaway, isTrue);
+    await t.tap(find.byKey(const Key('floor-delivery')));
+    expect(delivery, isTrue);
+  });
+
+  testWidgets('the pick-mode floor hides the takeaway/delivery buttons', (t) async {
+    tables.add(name: 'T1');
+    await t.pumpWidget(app(pickMode: true));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('floor-takeaway')), findsNothing);
+    expect(find.byKey(const Key('floor-delivery')), findsNothing);
+  });
+
   testWidgets('a divider is drawn but never tapped to open an order', (t) async {
     final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
     bool tapped = false;

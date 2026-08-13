@@ -258,6 +258,16 @@ class _PosAppState extends State<PosApp> {
     // Support asks who is on the till before anything else.
     widget.sync.cashierId = cashier.id;
     _publishActivity();
+    // Land on the floor home once signed in, unless a draft order was restored
+    // (crash recovery): the table plan is the base screen an order starts from.
+    final session = _session;
+    if (session != null &&
+        session.current.lines.isEmpty &&
+        session.current.tableLabel == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openFloor(context, session);
+      });
+    }
   }
 
   /// Ends the shift without ending the process.
@@ -475,6 +485,9 @@ class _PosAppState extends State<PosApp> {
               // list, so choosing a table looks like the floor the manager drew.
               onPickTable: ({exclude}) =>
                   _pickTableFromFloor(context, session, exclude: exclude),
+              // New order returns to the floor home to choose a table or the
+              // takeaway/delivery buttons.
+              onNewOrder: () => _openFloor(context, session),
               onChanged: _publishActivity,
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
@@ -866,17 +879,33 @@ class _PosAppState extends State<PosApp> {
     final occ = _floorOccupancy(session);
     final occupied = occ.occupied;
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => TableFloorScreen(
+      builder: (floorContext) => TableFloorScreen(
         store: widget.tables,
         occupiedLabels: occupied,
         occupiedInfo: occ.info,
         formatAmount: PosApp.money,
+        // The two table-less ways to start an order, straight from the floor home.
+        // Each starts a fresh order of that type and drops to the order screen.
+        onTakeaway: () {
+          setState(() {
+            session.newOrder();
+            session.setOrderType(OrderType.takeaway);
+          });
+          Navigator.of(floorContext).pop();
+        },
+        onDelivery: () {
+          setState(() {
+            session.newOrder();
+            session.setOrderType(OrderType.delivery);
+          });
+          Navigator.of(floorContext).pop();
+        },
         onOpenTable: (t) {
           // Tapping the table the current order is already seated at just returns
           // to it rather than parking it and starting a duplicate.
           if (session.current.tableLabel == t.name &&
               session.current.lines.isNotEmpty) {
-            Navigator.of(context).pop();
+            Navigator.of(floorContext).pop();
             return;
           }
           final held =
@@ -891,7 +920,7 @@ class _PosAppState extends State<PosApp> {
               if (t.seats > 0) session.setGuestCount(t.seats);
             }
           });
-          Navigator.of(context).pop();
+          Navigator.of(floorContext).pop();
         },
       ),
     ));
