@@ -1020,11 +1020,14 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   void _newOrder() {
-    _changed(() => s.newOrder());
-    // The floor plan is the home base: starting a new order drops back to it, where
-    // the cashier taps a table (dine-in) or the takeaway/delivery buttons. The shell
-    // owns that screen, so it is asked to show it.
-    widget.onNewOrder?.call();
+    // Do not reset here: the floor home starts the next order (via startFresh) when
+    // a table or the takeaway/delivery button is chosen, so backing out of the floor
+    // leaves the current order untouched and no empty draft is created.
+    if (widget.onNewOrder != null) {
+      widget.onNewOrder!();
+    } else {
+      _changed(() => s.newOrder());
+    }
   }
 
   void _sendToKitchen() {

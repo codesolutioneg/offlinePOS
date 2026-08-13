@@ -280,6 +280,21 @@ class PosSession {
     _current = Order(deviceId: deviceId, cashierId: cashierId);
   }
 
+  /// Begin a fresh order of [type]. A current order with lines is parked (held); an
+  /// empty draft is discarded rather than left behind, so starting from the floor
+  /// home never orphans a stale empty draft that could be restored later.
+  void startFresh(OrderType type) {
+    final active = current;
+    if (active.lines.isNotEmpty) {
+      active.state = OrderState.held;
+      orders.save(active);
+    } else {
+      orders.delete(active.uuid);
+    }
+    _current = Order(deviceId: deviceId, cashierId: cashierId);
+    setOrderType(type);
+  }
+
   /// Take payment. Writes locally, queues for the server, and starts a fresh order.
   /// Returns the completed order so the caller can print it.
   Order pay({List<OrderPayment> payments = const [], double? cashReceived}) {

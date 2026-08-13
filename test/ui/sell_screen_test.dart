@@ -252,9 +252,11 @@ void main() {
 
     await t.tap(find.byKey(const Key('new-order')));
     await t.pumpAndSettle();
-    // The order is reset and the shell is asked to show the floor home.
+    // The shell is asked to show the floor home; the current order is left intact
+    // (it is started fresh only once a table/takeaway/delivery is chosen there), so
+    // backing out of the floor loses nothing.
     expect(wentHome, isTrue);
-    expect(session.hasLines, isFalse);
+    expect(session.hasLines, isTrue);
   });
 
   testWidgets('a kitchen-fired line cannot be edited or trashed inline, only voided', (t) async {

@@ -64,6 +64,30 @@ void main() {
     expect(session.current.lines.length, 1);
   });
 
+  test('startFresh discards an empty draft rather than leaving it behind', () {
+    // An empty order that has been persisted (e.g. a type was set) then a fresh
+    // start: the old empty draft must not linger to be restored later.
+    session.setOrderType(OrderType.delivery);
+    final staleUuid = session.current.uuid;
+    expect(orders.drafts().length, 1);
+
+    session.startFresh(OrderType.takeaway);
+    expect(session.current.type, OrderType.takeaway);
+    expect(session.current.uuid, isNot(staleUuid));
+    // Still exactly one draft: the empty one was dropped, not duplicated.
+    expect(orders.drafts().length, 1);
+    expect(orders.drafts().any((o) => o.uuid == staleUuid), isFalse);
+  });
+
+  test('startFresh parks a non-empty order before starting a new one', () {
+    session.addProduct(pizza);
+    final held = session.current.uuid;
+    session.startFresh(OrderType.takeaway);
+    // The order with lines is kept (held), and a new empty order is current.
+    expect(session.current.uuid, isNot(held));
+    expect(orders.held().any((o) => o.uuid == held), isTrue);
+  });
+
   test('a percentage modifier is charged against the parent price', () {
     session.addProduct(pizza, chosen: const [ChosenModifier(tenPct)]);
     expect(session.total, 275);

@@ -887,17 +887,11 @@ class _PosAppState extends State<PosApp> {
         // The two table-less ways to start an order, straight from the floor home.
         // Each starts a fresh order of that type and drops to the order screen.
         onTakeaway: () {
-          setState(() {
-            session.newOrder();
-            session.setOrderType(OrderType.takeaway);
-          });
+          setState(() => session.startFresh(OrderType.takeaway));
           Navigator.of(floorContext).pop();
         },
         onDelivery: () {
-          setState(() {
-            session.newOrder();
-            session.setOrderType(OrderType.delivery);
-          });
+          setState(() => session.startFresh(OrderType.delivery));
           Navigator.of(floorContext).pop();
         },
         onOpenTable: (t) {
@@ -914,8 +908,7 @@ class _PosAppState extends State<PosApp> {
             if (held.isNotEmpty) {
               session.recall(held.first.uuid);
             } else {
-              session.newOrder();
-              session.setOrderType(OrderType.dineIn);
+              session.startFresh(OrderType.dineIn);
               session.setTable(t.name);
               if (t.seats > 0) session.setGuestCount(t.seats);
             }
