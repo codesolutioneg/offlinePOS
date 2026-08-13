@@ -61,6 +61,28 @@ void main() {
     expect(find.byKey(const Key('bill-options')), findsOneWidget);
   });
 
+  testWidgets('split by item lets you choose how many units of a line to take', (t) async {
+    await t.pumpWidget(app(tables: ['5']));
+    await t.tap(find.byKey(const Key('product-10'))); // Pizza
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('product-10'))); // second -> qty 2 on one line
+    await t.pumpAndSettle();
+    final line = session.current.lines.single;
+
+    await t.tap(find.byKey(const Key('bill-options')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('bill-pay-selected')));
+    await t.pumpAndSettle();
+
+    // Including the multi-unit line reveals a quantity stepper so a subset can be
+    // taken as its own check.
+    await t.tap(find.descendant(
+        of: find.widgetWithText(ListTile, 'Pizza'), matching: find.byType(Checkbox)));
+    await t.pumpAndSettle();
+    expect(find.byKey(Key('pick-plus-${line.uuid}')), findsOneWidget);
+    expect(find.byKey(Key('pick-minus-${line.uuid}')), findsOneWidget);
+  });
+
   testWidgets('bill options offers split, pay-selected, move and merge', (t) async {
     await t.pumpWidget(app());
     await t.tap(find.byKey(const Key('product-10')));
@@ -87,7 +109,8 @@ void main() {
     await t.pumpAndSettle();
 
     // Tick the Cola line in the checklist, confirm, then pick table 5.
-    await t.tap(find.widgetWithText(CheckboxListTile, 'Cola'));
+    await t.tap(find.descendant(
+        of: find.widgetWithText(ListTile, 'Cola'), matching: find.byType(Checkbox)));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pick-confirm')));
     await t.pumpAndSettle();

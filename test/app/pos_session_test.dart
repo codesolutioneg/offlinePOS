@@ -43,6 +43,27 @@ void main() {
     expect(orders.drafts().single.lines.single.name, 'Margherita');
   });
 
+  test('splitOffQuantity peels the chosen units onto a new line', () {
+    session.addProduct(pizza, qty: 3);
+    final line = session.current.lines.single;
+    final peeled = session.splitOffQuantity(line.uuid, 1);
+    expect(session.current.lines.length, 2);
+    final remaining = session.current.lines.firstWhere((l) => l.uuid == line.uuid);
+    final taken = session.current.lines.firstWhere((l) => l.uuid == peeled);
+    expect(remaining.quantity, 2);
+    expect(taken.quantity, 1);
+    // Peeled line keeps the product identity so it prices and consolidates the same.
+    expect(taken.productId, line.productId);
+  });
+
+  test('splitOffQuantity returns the same line when the whole quantity is taken', () {
+    session.addProduct(pizza, qty: 2);
+    final line = session.current.lines.single;
+    final resolved = session.splitOffQuantity(line.uuid, 2);
+    expect(resolved, line.uuid);
+    expect(session.current.lines.length, 1);
+  });
+
   test('a percentage modifier is charged against the parent price', () {
     session.addProduct(pizza, chosen: const [ChosenModifier(tenPct)]);
     expect(session.total, 275);

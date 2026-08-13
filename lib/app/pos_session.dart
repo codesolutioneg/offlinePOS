@@ -358,6 +358,50 @@ class PosSession {
     orders.save(current);
   }
 
+  /// Peel [qty] units off a line into a new line and return its uuid, so a subset
+  /// of a multi-unit line can be paid or moved on its own (split by item with a
+  /// quantity). Returns the original uuid when [qty] covers the whole line, and
+  /// null when the line is gone. Only whole units are peeled; a fractional/weighed
+  /// line can only be taken in full.
+  String? splitOffQuantity(String lineUuid, double qty) {
+    final idx = current.lines.indexWhere((l) => l.uuid == lineUuid);
+    if (idx < 0) return null;
+    final line = current.lines[idx];
+    if (qty >= line.quantity ||
+        qty <= 0 ||
+        line.quantity != line.quantity.roundToDouble() ||
+        qty != qty.roundToDouble()) {
+      return lineUuid;
+    }
+    line.quantity -= qty;
+    final peeled = OrderLine(
+      productId: line.productId,
+      name: line.name,
+      quantity: qty,
+      unitPrice: line.unitPrice,
+      categoryId: line.categoryId,
+      taxRate: line.taxRate,
+      note: line.note,
+      discountPercent: line.discountPercent,
+      printedToKitchen: line.printedToKitchen,
+      firedStations: List.of(line.firedStations),
+      fireAt: line.fireAt,
+      seat: line.seat,
+      modifiers: [
+        for (final m in line.modifiers)
+          OrderModifier(
+              modifierId: m.modifierId,
+              productId: m.productId,
+              name: m.name,
+              quantity: m.quantity,
+              unitPrice: m.unitPrice),
+      ],
+    );
+    current.lines.insert(idx + 1, peeled);
+    orders.save(current);
+    return peeled.uuid;
+  }
+
   /// Explode a consolidated multi-unit line into that many single-unit lines, so a
   /// cashier can note, discount, seat, move or pay one unit on its own after repeat
   /// taps merged them. A no-op on a single-unit or fractional line.

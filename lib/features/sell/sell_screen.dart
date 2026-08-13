@@ -1016,6 +1016,58 @@ class _SellScreenState extends State<SellScreen> {
 
   void _newOrder() {
     _changed(() => s.newOrder());
+    // A new order starts by choosing how it is served, the way a table-service till
+    // does, rather than defaulting to dine-in and leaving the cashier to change it.
+    unawaited(_chooseServiceType());
+  }
+
+  /// The order-start step: pick dine-in (then a table), takeaway, or delivery (then
+  /// the customer/charge). Sets the type and walks straight into the follow-up each
+  /// needs, so the sequence matches how the order is actually taken.
+  Future<void> _chooseServiceType() async {
+    final choice = await showModalBottomSheet<OrderType>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Text(tr(ctx, 'How is this order served?'),
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          ),
+          ListTile(
+            key: const Key('start-dine-in'),
+            leading: const Icon(Icons.restaurant, color: AppColors.primary),
+            title: Text(tr(ctx, 'Dine-in')),
+            subtitle: Text(tr(ctx, 'Choose a table')),
+            onTap: () => Navigator.pop(ctx, OrderType.dineIn),
+          ),
+          ListTile(
+            key: const Key('start-takeaway'),
+            leading: const Icon(Icons.takeout_dining, color: AppColors.primary),
+            title: Text(tr(ctx, 'Takeaway')),
+            onTap: () => Navigator.pop(ctx, OrderType.takeaway),
+          ),
+          ListTile(
+            key: const Key('start-delivery'),
+            leading: const Icon(Icons.delivery_dining, color: AppColors.primary),
+            title: Text(tr(ctx, 'Delivery')),
+            subtitle: Text(tr(ctx, 'Add the customer and charge')),
+            onTap: () => Navigator.pop(ctx, OrderType.delivery),
+          ),
+        ]),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    _changed(() => s.setOrderType(choice));
+    switch (choice) {
+      case OrderType.dineIn:
+        await _setTable();
+      case OrderType.delivery:
+        await _deliveryDetails();
+      case OrderType.takeaway:
+        break;
+    }
   }
 
   void _sendToKitchen() {
@@ -1247,19 +1299,28 @@ class _SellScreenState extends State<SellScreen> {
 
   /// A checklist of the current lines; the callback gets the chosen ones. Shared by
   /// "pay selected" and "move items".
+  /// A checklist of the current lines where each selected line's QUANTITY can be
+  /// dialled from 1 up to its count (a multi-unit line can be split part-and-part),
+  /// then resolved to real lines by peeling the chosen quantities. Shared by
+  /// "pay selected items" and "move items". A fractional/weighed line is taken
+  /// whole or not at all.
   Future<void> _pickLines({
     required String title,
     required String confirmLabel,
     required void Function(List<OrderLine> lines) onConfirm,
   }) async {
-    final selected = <String>{};
+    // How many units of each line are picked, keyed by uuid; absent/0 means unpicked.
+    final picks = <String, int>{};
+    bool whole(OrderLine l) => l.quantity == l.quantity.roundToDouble();
+    int maxUnits(OrderLine l) => whole(l) ? l.quantity.toInt() : 1;
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
         final lines = s.current.lines;
-        final chosen = lines.where((l) => selected.contains(l.uuid)).toList();
+        final pickedCount = picks.values.where((q) => q > 0).length;
         return Padding(
           padding: EdgeInsets.fromLTRB(
               16, 8, 16, 16 + MediaQuery.of(ctx).viewInsets.bottom),
@@ -1271,13 +1332,19 @@ class _SellScreenState extends State<SellScreen> {
                 shrinkWrap: true,
                 children: [
                   for (final l in lines)
-                    CheckboxListTile(
+                    _PickLineTile(
                       key: Key('pick-${l.uuid}'),
-                      value: selected.contains(l.uuid),
-                      title: Text(l.name),
-                      subtitle: Text(widget.formatAmount(l.total)),
-                      onChanged: (v) => setSheet(() =>
-                          v == true ? selected.add(l.uuid) : selected.remove(l.uuid)),
+                      line: l,
+                      format: widget.formatAmount,
+                      max: maxUnits(l),
+                      picked: picks[l.uuid] ?? 0,
+                      onChanged: (q) => setSheet(() {
+                        if (q <= 0) {
+                          picks.remove(l.uuid);
+                        } else {
+                          picks[l.uuid] = q;
+                        }
+                      }),
                     ),
                 ],
               ),
@@ -1287,13 +1354,22 @@ class _SellScreenState extends State<SellScreen> {
               width: double.infinity,
               child: FilledButton(
                 key: const Key('pick-confirm'),
-                onPressed: chosen.isEmpty
+                onPressed: pickedCount == 0
                     ? null
                     : () {
                         Navigator.pop(ctx);
-                        onConfirm(chosen);
+                        // Peel the chosen quantities into their own lines, then hand
+                        // the resulting lines to the caller.
+                        final ids = <String>[];
+                        picks.forEach((uuid, q) {
+                          final resolved = s.splitOffQuantity(uuid, q.toDouble());
+                          if (resolved != null) ids.add(resolved);
+                        });
+                        final chosen =
+                            s.current.lines.where((l) => ids.contains(l.uuid)).toList();
+                        if (chosen.isNotEmpty) onConfirm(chosen);
                       },
-                child: Text('$confirmLabel (${chosen.length})'),
+                child: Text('$confirmLabel ($pickedCount)'),
               ),
             ),
           ]),
@@ -1999,6 +2075,57 @@ class _TablePickTile extends StatelessWidget {
           ]),
         ),
       ),
+    );
+  }
+}
+
+/// One row in the pick-lines sheet: a line you can include and, when it holds more
+/// than one unit, dial how many of its units to take. A single-unit or weighed line
+/// is a plain include/exclude.
+class _PickLineTile extends StatelessWidget {
+  const _PickLineTile({
+    super.key,
+    required this.line,
+    required this.format,
+    required this.max,
+    required this.picked,
+    required this.onChanged,
+  });
+
+  final OrderLine line;
+  final String Function(double) format;
+  final int max;
+  final int picked;
+  final void Function(int qty) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final on = picked > 0;
+    final perUnit = line.quantity == 0 ? line.total : line.total / line.quantity;
+    return ListTile(
+      leading: Checkbox(
+        value: on,
+        onChanged: (v) => onChanged(v == true ? max : 0),
+      ),
+      title: Text(line.name),
+      subtitle: Text(max > 1
+          ? '${on ? picked : 0}/$max × ${format(perUnit)}'
+          : format(line.total)),
+      trailing: (max > 1 && on)
+          ? Row(mainAxisSize: MainAxisSize.min, children: [
+              IconButton(
+                key: Key('pick-minus-${line.uuid}'),
+                icon: const Icon(Icons.remove_circle_outline),
+                onPressed: picked > 1 ? () => onChanged(picked - 1) : null,
+              ),
+              Text('$picked', style: const TextStyle(fontWeight: FontWeight.bold)),
+              IconButton(
+                key: Key('pick-plus-${line.uuid}'),
+                icon: const Icon(Icons.add_circle_outline),
+                onPressed: picked < max ? () => onChanged(picked + 1) : null,
+              ),
+            ])
+          : null,
     );
   }
 }

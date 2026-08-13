@@ -8,6 +8,7 @@ import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/domain/catalogue.dart';
+import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -235,6 +236,24 @@ void main() {
     await t.tap(find.byIcon(Icons.delete_outline));
     await t.pumpAndSettle();
     expect(states, [true, false]);
+  });
+
+  testWidgets('starting a new order asks how it is served and applies the choice', (t) async {
+    // An order on screen so the New order button is enabled.
+    session.addProduct(const Product(id: 10, name: 'Margherita', price: 250, categoryId: 1));
+    await t.pumpWidget(app());
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('new-order')));
+    await t.pumpAndSettle();
+    // The service-type chooser leads the sequence.
+    expect(find.byKey(const Key('start-dine-in')), findsOneWidget);
+    expect(find.byKey(const Key('start-takeaway')), findsOneWidget);
+    expect(find.byKey(const Key('start-delivery')), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('start-takeaway')));
+    await t.pumpAndSettle();
+    expect(session.current.type, OrderType.takeaway);
   });
 
   testWidgets('a kitchen-fired line cannot be edited or trashed inline, only voided', (t) async {

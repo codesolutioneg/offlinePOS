@@ -658,6 +658,36 @@ class _PosAppState extends State<PosApp> {
     );
   }
 
+  /// A required free-text reason, for discarding a tab the kitchen has started.
+  /// Returns null if the manager backs out (which aborts the cancel).
+  Future<String?> _promptReason(BuildContext context, String title) {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          key: const Key('cancel-reason'),
+          controller: ctrl,
+          autofocus: true,
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Reason'), border: const OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('cancel-reason-ok'),
+            onPressed: () {
+              final r = ctrl.text.trim();
+              if (r.isNotEmpty) Navigator.pop(ctx, r);
+            },
+            child: Text(tr(ctx, 'Confirm')),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _openAttendance(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => AttendanceScreen(users: widget.users, attendance: widget.attendance),
@@ -674,21 +704,33 @@ class _PosAppState extends State<PosApp> {
         // audited, then the list is popped so the change is visible.
         onCancel: (order) async {
           if (!await _authorize(Permission.cancelOrder, sheetContext)) return;
-          // Anything the kitchen already started must be told to stop: fire a void
-          // slip for each fired line before the order is discarded, so cancelling a
-          // sent order does not silently leave food cooking.
-          // Any line the kitchen has a copy of, even partially fired to one of
-          // several stations, must get a cancel slip.
-          for (final line in order.lines
-              .where((l) => l.printedToKitchen || l.firedStations.isNotEmpty)) {
-            unawaited(_fireVoid(order, line, 'Order cancelled'));
+          // Any line the kitchen holds, even partially fired to one of several
+          // stations, means food is already cooking.
+          final firedLines = order.lines
+              .where((l) => l.printedToKitchen || l.firedStations.isNotEmpty)
+              .toList();
+          // Discarding a tab the kitchen has started demands a reason: it prints on
+          // the cancel slip and lands in the audit, and abandoning the prompt aborts
+          // the cancel so food that is cooking is never dropped without a record.
+          var reason = 'Order cancelled';
+          if (firedLines.isNotEmpty) {
+            if (!sheetContext.mounted) return;
+            final given = await _promptReason(sheetContext, tr(sheetContext, 'Cancel order'));
+            if (given == null) return;
+            reason = given;
+          }
+          // Tell each station that holds the line to stop, so cancelling a sent
+          // order does not leave food cooking.
+          for (final line in firedLines) {
+            unawaited(_fireVoid(order, line, reason));
           }
           // The till's own record that the whole order was discarded, listing every
           // line and the total removed, printed alongside the audit entry.
           unawaited(_printDeletion(order, order.lines,
-              title: 'ORDER CANCELLED', reason: 'Order cancelled'));
+              title: 'ORDER CANCELLED', reason: reason));
           widget.orders.delete(order.uuid);
-          widget.audit.record(session.cashierId, 'order.cancelled', detail: order.uuid);
+          widget.audit.record(session.cashierId, 'order.cancelled',
+              detail: '${order.uuid}|$reason');
           if (sheetContext.mounted) Navigator.of(sheetContext).pop();
           setState(() {});
         },
