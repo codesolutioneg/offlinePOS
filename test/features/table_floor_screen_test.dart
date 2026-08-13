@@ -134,6 +134,44 @@ void main() {
     expect(tapped, false);
   });
 
+  testWidgets('a vertical divider renders as a rotated bar and is still not tappable', (t) async {
+    final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
+    tables.upsert(wall.copyWith(vertical: true, span: 200));
+    bool tapped = false;
+    await t.pumpWidget(app(onOpenTable: (_) => tapped = true));
+
+    // A vertical wall draws its label rotated, and never gets the tappable key.
+    expect(find.byType(RotatedBox), findsOneWidget);
+    expect(find.byKey(Key('table-tile-${wall.id}')), findsNothing);
+    expect(find.text('Wall'), findsOneWidget);
+    expect(tapped, false);
+  });
+
+  testWidgets('editing a divider changes its orientation and length, and it persists',
+      (t) async {
+    final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
+    await t.pumpWidget(app());
+    await t.tap(find.byKey(const Key('toggle-edit')));
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(Key('table-edit-${wall.id}')));
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('orient-vertical')));
+    await t.pump();
+    // Two taps grow the wall from the 140 default by 40 each.
+    await t.tap(find.byKey(const Key('divider-longer')));
+    await t.pump();
+    await t.tap(find.byKey(const Key('divider-longer')));
+    await t.pump();
+    await t.tap(find.byKey(const Key('table-save')));
+    await t.pumpAndSettle();
+
+    final saved = tables.byId(wall.id)!;
+    expect(saved.vertical, isTrue);
+    expect(saved.span, 220);
+  });
+
   testWidgets('edit mode offers both an add-table and an add-divider action', (t) async {
     tables.add(name: 'T1');
     await t.pumpWidget(app());
