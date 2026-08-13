@@ -83,6 +83,25 @@ void main() {
     expect(find.byKey(Key('pick-minus-${line.uuid}')), findsOneWidget);
   });
 
+  testWidgets('even split asks how many ways, then opens a share payment sheet', (t) async {
+    await t.pumpWidget(app(tables: ['5']));
+    await t.tap(find.byKey(const Key('product-10'))); // Pizza 100
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('bill-options')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('bill-split-even')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('split-ways')), findsOneWidget);
+    await t.enterText(find.byKey(const Key('split-ways')), '2');
+    await t.tap(find.byKey(const Key('split-ways-ok')));
+    await t.pumpAndSettle();
+
+    // A payment sheet for the half share (100 / 2 = 50) is shown.
+    expect(find.textContaining('50.00'), findsWidgets);
+  });
+
   testWidgets('cancelling the pay sheet after a partial pick does not split the bill', (t) async {
     await t.pumpWidget(app(tables: ['5']));
     await t.tap(find.byKey(const Key('product-10')));

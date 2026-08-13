@@ -279,6 +279,13 @@ class Order {
   /// the whole-order discount, plus delivery and tip.
   double get total => subtotal * discountFactor + deliveryCost + tip;
 
+  /// Money already tendered against this order. On a normal sale this equals the
+  /// total; on an even/part-paid open tab it is the sum of the shares taken so far.
+  double get amountPaid => payments.fold(0.0, (s, p) => s + p.amount);
+
+  /// What is still owed. Zero (or below) means the order is fully settled.
+  double get balance => total - amountPaid;
+
   /// The tax already contained in the line prices (prices are tax-inclusive), after
   /// the whole-order discount. Informational: it does not change [total]. The server
   /// remains the source of truth for the tax actually booked.

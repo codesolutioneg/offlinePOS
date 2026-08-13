@@ -309,6 +309,31 @@ class PosSession {
     return order;
   }
 
+  /// Take one part payment toward the current order (an even-split share, or any
+  /// partial amount), keeping the table open on a running balance until it is
+  /// covered. The share's tenders accrue on the order; once they settle the total
+  /// the order is finalized like a normal sale and a fresh order starts. Returns the
+  /// remaining balance (0 when fully paid). While a balance remains the order is
+  /// held, so it survives a restart and shows on the floor/open tabs.
+  double payShare({List<OrderPayment> payments = const [], double? cashReceived}) {
+    final order = current;
+    order.payments = [...order.payments, ...payments];
+    if (cashReceived != null) {
+      order.cashReceived = (order.cashReceived ?? 0) + cashReceived;
+    }
+    if (order.balance <= 0.001) {
+      order.state = OrderState.paid;
+      orders.save(order);
+      outbox.enqueue('order.push', order.uuid, order.toServerPayload());
+      audit.record(cashierId, 'order.paid', detail: '${order.uuid}|even split settled');
+      _current = Order(deviceId: deviceId, cashierId: cashierId);
+      return 0;
+    }
+    order.state = OrderState.held;
+    orders.save(order);
+    return order.balance;
+  }
+
   // ── dine-in: seats, split, move, merge ──────────────────────────
 
   /// Schedule one line to fire to the kitchen [afterMinutes] from now (0 clears

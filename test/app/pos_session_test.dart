@@ -88,6 +88,27 @@ void main() {
     expect(orders.held().any((o) => o.uuid == held), isTrue);
   });
 
+  test('payShare keeps the tab open on a running balance until it is settled', () {
+    session.addProduct(pizza); // total 250
+    final uuid = session.current.uuid;
+
+    // First share of two: half now, table stays open.
+    final after1 = session.payShare(
+        payments: const [OrderPayment(methodId: 1, amount: 125, label: 'Cash')]);
+    expect(after1, closeTo(125, 0.001));
+    expect(session.current.uuid, uuid); // same order, still open
+    expect(session.current.balance, closeTo(125, 0.001));
+    expect(orders.held().any((o) => o.uuid == uuid), isTrue);
+
+    // Second share settles it: order is finalized, queued, and a fresh order starts.
+    final after2 = session.payShare(
+        payments: const [OrderPayment(methodId: 2, amount: 125, label: 'Card')]);
+    expect(after2, 0);
+    expect(session.current.uuid, isNot(uuid));
+    expect(orders.byUuid(uuid)!.state, OrderState.paid);
+    expect(orders.byUuid(uuid)!.payments.length, 2);
+  });
+
   test('a percentage modifier is charged against the parent price', () {
     session.addProduct(pizza, chosen: const [ChosenModifier(tenPct)]);
     expect(session.total, 275);

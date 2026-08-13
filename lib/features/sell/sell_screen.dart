@@ -1066,20 +1066,49 @@ class _SellScreenState extends State<SellScreen> {
 
   void _pay() {
     if (!s.hasLines) return;
+    // If shares were already taken (even split), the main Pay settles what is left,
+    // not the whole total again.
+    final partPaid = s.current.amountPaid > 0.001;
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
       builder: (ctx) => _PaymentSheet(
-        total: s.total,
+        total: partPaid ? s.current.balance : s.total,
         format: widget.formatAmount,
         methods: s.catalogue.paymentMethods(),
         onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
-          _complete(payments, label, tip, cashReceived);
+          if (partPaid) {
+            _completeShare(payments, label, cashReceived);
+          } else {
+            _complete(payments, label, tip, cashReceived);
+          }
         },
       ),
     );
+  }
+
+  /// Settle a part payment / even-split share against the open balance. Closes the
+  /// table and prints once the balance reaches zero; otherwise keeps it open.
+  void _completeShare(List<OrderPayment> payments, String label, double? cashReceived) {
+    final settling = s.current; // finalized in place if this share settles it
+    final balance = s.payShare(payments: payments, cashReceived: cashReceived);
+    setState(() {});
+    if (balance <= 0.001) {
+      widget.onPaid?.call(settling);
+      if (!mounted) return;
+      showToast(context, tr(context, 'Table closed.'),
+          kind: ToastKind.success, key: const Key('share-settled'));
+    } else if (mounted) {
+      showToast(
+          context,
+          '${tr(context, 'Paid')} ${widget.formatAmount(settling.amountPaid)}, '
+              '${tr(context, 'balance')} ${widget.formatAmount(balance)}',
+          kind: ToastKind.info,
+          key: const Key('share-paid'),
+          duration: const Duration(seconds: 3));
+    }
   }
 
   void _complete(
@@ -1181,8 +1210,18 @@ class _SellScreenState extends State<SellScreen> {
   Future<void> _billOptions() async {
     final action = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Scrollable so the menu never overflows a short sheet as options grow.
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            key: const Key('bill-split-even'),
+            leading: const Icon(Icons.safety_divider),
+            title: Text(tr(ctx, 'Split evenly')),
+            subtitle: Text(tr(ctx, 'Divide the bill into equal shares')),
+            onTap: () => Navigator.pop(ctx, 'even'),
+          ),
           ListTile(
             key: const Key('bill-split-guest'),
             leading: const Icon(Icons.groups_2_outlined),
@@ -1216,12 +1255,15 @@ class _SellScreenState extends State<SellScreen> {
             onTap: () => Navigator.pop(ctx, 'timing'),
           ),
         ]),
+        ),
       ),
     );
     if (!mounted) return;
     switch (action) {
       case 'timing':
         await _setFireTiming();
+      case 'even':
+        await _splitEvenly();
       case 'guest':
         await _splitByGuest();
       case 'selected':
@@ -1234,6 +1276,62 @@ class _SellScreenState extends State<SellScreen> {
       case 'merge':
         await _mergeTable();
     }
+  }
+
+  /// Even split: ask how many ways, then take one equal share now. The table stays
+  /// open on a running balance until every share is paid, so shares can be settled
+  /// one at a time. The last share is whatever balance remains, so rounding never
+  /// leaves a stray cent.
+  Future<void> _splitEvenly() async {
+    final ways = await _askShareCount();
+    if (ways == null || ways < 2 || !mounted) return;
+    final share = s.current.total / ways;
+    final due = share < s.current.balance ? share : s.current.balance;
+    _payShareSheet(due);
+  }
+
+  Future<int?> _askShareCount() {
+    final ctrl = TextEditingController(text: '${s.current.guestCount ?? 2}');
+    return showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Split into how many?')),
+        content: TextField(
+          key: const Key('split-ways'),
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Number of shares'), border: const OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('split-ways-ok'),
+            onPressed: () => Navigator.pop(ctx, int.tryParse(ctrl.text.trim())),
+            child: Text(tr(ctx, 'Next')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Take one share/part payment against the open balance via the payment sheet.
+  void _payShareSheet(double amount) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => _PaymentSheet(
+        total: amount,
+        format: widget.formatAmount,
+        methods: s.catalogue.paymentMethods(),
+        onConfirm: (payments, label, tip, cashReceived) {
+          Navigator.pop(ctx);
+          _completeShare(payments, label, cashReceived);
+        },
+      ),
+    );
   }
 
   /// One row per guest with its subtotal and a Pay button; unassigned lines are a
@@ -1841,6 +1939,14 @@ class _SellScreenState extends State<SellScreen> {
                   key: const Key('total'),
                   style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
             ]),
+            // On an even/part-paid open tab, show what has been taken and what is
+            // still owed, so the running balance is visible while the table is open.
+            if (s.current.amountPaid > 0.001) ...[
+              _totalRow('Paid', '-${widget.formatAmount(s.current.amountPaid)}',
+                  key: const Key('paid-line'), green: true),
+              _totalRow('Balance', widget.formatAmount(s.current.balance),
+                  key: const Key('balance-line')),
+            ],
             if (s.hasLines)
               Align(
                 alignment: Alignment.centerLeft,
