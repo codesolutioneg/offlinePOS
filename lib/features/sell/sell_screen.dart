@@ -1359,8 +1359,10 @@ class _SellScreenState extends State<SellScreen> {
       final i = s.current.lines.indexWhere((l) => l.uuid == uuid);
       if (i < 0) return;
       final l = s.current.lines[i];
-      final perUnit = l.quantity == 0 ? l.total : l.total / l.quantity;
-      sum += perUnit * q;
+      // A weighed/fractional line can only be taken whole (splitOffQuantity refuses
+      // to peel it), so charge its full total; a whole-number line charges per unit.
+      final whole = l.quantity == l.quantity.roundToDouble();
+      sum += whole ? (l.total / l.quantity) * q : l.total;
     });
     return sum * s.current.discountFactor;
   }

@@ -599,10 +599,22 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   Widget _canvas(List<PosTable> tables) {
     final maxX = tables.map((t) => t.x).fold(3.0, (a, b) => a > b ? a : b);
     final maxY = tables.map((t) => t.y).fold(3.0, (a, b) => a > b ? a : b);
+    // A lengthened or vertical divider can reach past the grid cell it sits in, so
+    // grow the canvas to cover its rendered span or it would be clipped at the edge.
+    var width = (maxX + 2) * _cell;
+    var height = (maxY + 2) * _cell;
+    for (final t in tables.where((t) => t.isDivider)) {
+      final w = t.vertical ? 40.0 : t.span.toDouble();
+      final h = t.vertical ? t.span.toDouble() : 40.0;
+      final right = t.x * _cell + w + 12;
+      final bottom = t.y * _cell + h + 12;
+      if (right > width) width = right;
+      if (bottom > height) height = bottom;
+    }
     final canvas = SizedBox(
       key: _canvasKey,
-      width: (maxX + 2) * _cell,
-      height: (maxY + 2) * _cell,
+      width: width,
+      height: height,
       child: Stack(
         children: [
           // A light grid so the manager can see the floor is laid out on a grid,
