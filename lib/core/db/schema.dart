@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 12;
+  static const int version = 13;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -334,6 +334,14 @@ class Schema {
     // own shape) to mark a section split.
     [
       "ALTER TABLE pos_tables ADD COLUMN shape TEXT NOT NULL DEFAULT 'square'",
+    ],
+
+    // v12 -> v13: divider geometry, so a wall can be drawn vertical and be
+    // enlarged or shrunk. Only dividers read these; a seatable table keeps its
+    // fixed tile size and defaults to horizontal.
+    [
+      'ALTER TABLE pos_tables ADD COLUMN vertical INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE pos_tables ADD COLUMN span INTEGER NOT NULL DEFAULT 140',
     ],
   ];
 }
