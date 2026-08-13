@@ -83,6 +83,35 @@ void main() {
     expect(find.byKey(Key('pick-minus-${line.uuid}')), findsOneWidget);
   });
 
+  testWidgets('cancelling the pay sheet after a partial pick does not split the bill', (t) async {
+    await t.pumpWidget(app(tables: ['5']));
+    await t.tap(find.byKey(const Key('product-10')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('product-10'))); // qty 2 on one line
+    await t.pumpAndSettle();
+    final line = session.current.lines.single;
+
+    await t.tap(find.byKey(const Key('bill-options')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('bill-pay-selected')));
+    await t.pumpAndSettle();
+    await t.tap(find.descendant(
+        of: find.widgetWithText(ListTile, 'Pizza'), matching: find.byType(Checkbox)));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(Key('pick-minus-${line.uuid}'))); // take 1 of 2
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pick-confirm')));
+    await t.pumpAndSettle(); // payment sheet opens
+
+    // Dismiss the payment sheet without paying (tap the scrim).
+    await t.tapAt(const Offset(5, 5));
+    await t.pumpAndSettle();
+
+    // The peel is deferred to payment, so the bill is untouched: still one line of 2.
+    expect(session.current.lines.length, 1);
+    expect(session.current.lines.single.quantity, 2);
+  });
+
   testWidgets('bill options offers split, pay-selected, move and merge', (t) async {
     await t.pumpWidget(app());
     await t.tap(find.byKey(const Key('product-10')));

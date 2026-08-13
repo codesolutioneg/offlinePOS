@@ -1181,6 +1181,41 @@ class _SellScreenState extends State<SellScreen> {
     );
   }
 
+  /// Pay a picks selection as its own check. The chosen quantities are peeled only
+  /// inside the payment confirmation, so cancelling the payment sheet leaves the
+  /// bill whole (no orphan split lines).
+  void _payPicks(Map<String, int> picks, {String? label}) {
+    if (picks.isEmpty) return;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => _PaymentSheet(
+        total: _picksTotal(picks),
+        format: widget.formatAmount,
+        methods: s.catalogue.paymentMethods(),
+        onConfirm: (payments, payLabel, tip, cashReceived) {
+          Navigator.pop(ctx);
+          final ids = _peelPicks(picks).map((l) => l.uuid).toList();
+          if (ids.isEmpty) return;
+          final check = s.payCheck(ids,
+              payments: payments, cashReceived: cashReceived, tip: tip);
+          setState(() {});
+          widget.onPaid?.call(check);
+          if (!mounted) return;
+          showToast(
+              context,
+              '${label ?? tr(context, 'Check')}: '
+                  '${widget.formatAmount(check.total)} ($payLabel). '
+                  '${s.hasLines ? tr(context, 'Rest of the table stays open.') : tr(context, 'Table closed.')}',
+              kind: ToastKind.success,
+              key: const Key('check-complete'),
+              duration: const Duration(seconds: 3));
+        },
+      ),
+    );
+  }
+
   /// The dine-in bill menu: split by guest, pay selected items, move items to
   /// another table, or merge another table in. Mirrors a table-service till.
   Future<void> _billOptions() async {
@@ -1233,7 +1268,7 @@ class _SellScreenState extends State<SellScreen> {
         await _pickLines(
             title: tr(context, 'Pay selected items'),
             confirmLabel: tr(context, 'Pay'),
-            onConfirm: (lines) => _payLines(lines, label: tr(context, 'Check')));
+            onConfirm: (picks) => _payPicks(picks, label: tr(context, 'Check')));
       case 'move':
         await _moveItems();
       case 'merge':
@@ -1304,10 +1339,36 @@ class _SellScreenState extends State<SellScreen> {
   /// then resolved to real lines by peeling the chosen quantities. Shared by
   /// "pay selected items" and "move items". A fractional/weighed line is taken
   /// whole or not at all.
+  /// Turn a picks map (line uuid -> units) into real lines by peeling the chosen
+  /// quantities. Call this only at the moment the pay/move actually commits, so a
+  /// cancelled flow never leaves the bill split.
+  List<OrderLine> _peelPicks(Map<String, int> picks) {
+    final ids = <String>[];
+    picks.forEach((uuid, q) {
+      final resolved = s.splitOffQuantity(uuid, q.toDouble());
+      if (resolved != null) ids.add(resolved);
+    });
+    return s.current.lines.where((l) => ids.contains(l.uuid)).toList();
+  }
+
+  /// The charge for a picks selection, computed without peeling (per-unit price x
+  /// units), so the payment sheet can show a total before anything is committed.
+  double _picksTotal(Map<String, int> picks) {
+    var sum = 0.0;
+    picks.forEach((uuid, q) {
+      final i = s.current.lines.indexWhere((l) => l.uuid == uuid);
+      if (i < 0) return;
+      final l = s.current.lines[i];
+      final perUnit = l.quantity == 0 ? l.total : l.total / l.quantity;
+      sum += perUnit * q;
+    });
+    return sum * s.current.discountFactor;
+  }
+
   Future<void> _pickLines({
     required String title,
     required String confirmLabel,
-    required void Function(List<OrderLine> lines) onConfirm,
+    required void Function(Map<String, int> picks) onConfirm,
   }) async {
     // How many units of each line are picked, keyed by uuid; absent/0 means unpicked.
     final picks = <String, int>{};
@@ -1358,16 +1419,10 @@ class _SellScreenState extends State<SellScreen> {
                     ? null
                     : () {
                         Navigator.pop(ctx);
-                        // Peel the chosen quantities into their own lines, then hand
-                        // the resulting lines to the caller.
-                        final ids = <String>[];
-                        picks.forEach((uuid, q) {
-                          final resolved = s.splitOffQuantity(uuid, q.toDouble());
-                          if (resolved != null) ids.add(resolved);
-                        });
-                        final chosen =
-                            s.current.lines.where((l) => ids.contains(l.uuid)).toList();
-                        if (chosen.isNotEmpty) onConfirm(chosen);
+                        // Hand the selection forward; the actual peel happens only
+                        // when the pay/move commits, so a cancelled flow leaves the
+                        // bill untouched.
+                        onConfirm(Map.of(picks));
                       },
                 child: Text('$confirmLabel ($pickedCount)'),
               ),
@@ -1383,9 +1438,13 @@ class _SellScreenState extends State<SellScreen> {
     await _pickLines(
       title: tr(context, 'Move items to another table'),
       confirmLabel: tr(context, 'Choose table'),
-      onConfirm: (lines) async {
+      onConfirm: (picks) async {
+        // Choose the destination first; only peel the quantities once a table is
+        // actually picked, so backing out of the picker leaves the bill whole.
         final label = await _pickTable(exclude: s.current.tableLabel);
         if (label == null || label.isEmpty || !mounted) return;
+        final lines = _peelPicks(picks);
+        if (lines.isEmpty) return;
         final ids = lines.map((l) => l.uuid).toSet();
         _changed(() => s.moveLinesToTable(ids, label));
         if (!mounted) return;
