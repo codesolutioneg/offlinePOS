@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
 import 'database.dart';
 
@@ -25,6 +26,7 @@ class SettingsStore {
   static const _categoryColors = 'category_colors';
   static const _categoryStations = 'category_stations';
   static const _productStations = 'product_stations';
+  static const _categoryTax = 'category_tax';
   static const _receiptShowTax = 'receipt_show_tax';
   static const _language = 'language';
   static const _unavailableProducts = 'unavailable_products';
@@ -170,6 +172,48 @@ class SettingsStore {
 
   set categoryStations(Map<int, List<String>> v) => setString(
       _categoryStations, jsonEncode(v.map((k, val) => MapEntry('$k', val))));
+
+  /// Tax rate (percent) per category, overridable per order type, so a shop can set
+  /// (say) 14% dine-in and 0% takeaway on food. A category absent from the matrix,
+  /// or an order type absent for a category, falls back to the product's own rate
+  /// (so nothing changes until a manager configures it). Prices stay tax-inclusive:
+  /// the rate drives how much tax is shown/reported, not what the customer pays.
+  Map<int, Map<OrderType, double>> get categoryTaxRates {
+    final v = getString(_categoryTax);
+    if (v == null) return const {};
+    try {
+      return (jsonDecode(v) as Map).map((k, val) => MapEntry(
+            int.parse(k as String),
+            (val as Map).map((t, r) =>
+                MapEntry(OrderType.values.byName(t as String), (r as num).toDouble())),
+          ));
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// The configured rate for a category in a given order type, or null if none is
+  /// set (caller then keeps the product's own rate).
+  double? categoryTaxRate(int categoryId, OrderType type) =>
+      categoryTaxRates[categoryId]?[type];
+
+  /// Set (or clear, with null) the rate for one category + order type.
+  void setCategoryTaxRate(int categoryId, OrderType type, double? rate) {
+    final map = {
+      for (final e in categoryTaxRates.entries) e.key: {...e.value},
+    };
+    final row = map.putIfAbsent(categoryId, () => {});
+    if (rate == null) {
+      row.remove(type);
+      if (row.isEmpty) map.remove(categoryId);
+    } else {
+      row[type] = rate;
+    }
+    setString(
+        _categoryTax,
+        jsonEncode(map.map((k, val) =>
+            MapEntry('$k', val.map((t, r) => MapEntry(t.name, r))))));
+  }
 
   /// Repoint every category and product route from [oldStation] to [newStation]
   /// when a printer is renamed, so its tickets keep reaching it rather than

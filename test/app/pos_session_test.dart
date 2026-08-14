@@ -119,6 +119,44 @@ void main() {
     expect(session.current.lines, isEmpty); // fresh order started
   });
 
+  test('the tax matrix overrides a line rate and re-resolves on order type change', () {
+    final taxed = PosSession(
+      catalogue: CatalogueStore(db),
+      orders: orders,
+      outbox: Outbox(store: outboxStore, senders: const {}),
+      audit: AuditLog(db),
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      // Food (category 1): 14% dine-in, zero-rated takeaway.
+      taxRateFor: (cat, type) =>
+          cat == 1 ? (type == OrderType.takeaway ? 0.0 : 14.0) : null,
+    );
+    // Product's own rate is 9, but the matrix overrides it for its category.
+    taxed.addProduct(const Product(id: 10, name: 'Burger', price: 100, categoryId: 1, taxRate: 9));
+    expect(taxed.current.lines.single.taxRate, 14); // dine-in default
+
+    taxed.setOrderType(OrderType.takeaway);
+    expect(taxed.current.lines.single.taxRate, 0); // zero-rated takeaway
+
+    taxed.setOrderType(OrderType.dineIn);
+    expect(taxed.current.lines.single.taxRate, 14);
+  });
+
+  test('a line whose category is not in the tax matrix keeps the product rate', () {
+    final taxed = PosSession(
+      catalogue: CatalogueStore(db),
+      orders: orders,
+      outbox: Outbox(store: outboxStore, senders: const {}),
+      audit: AuditLog(db),
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      taxRateFor: (cat, type) => cat == 1 ? 14.0 : null, // only category 1 configured
+    );
+    taxed.addProduct(const Product(id: 20, name: 'Water', price: 10, categoryId: 2, taxRate: 5));
+    taxed.setOrderType(OrderType.takeaway);
+    expect(taxed.current.lines.single.taxRate, 5); // untouched by the matrix
+  });
+
   test('a percentage modifier is charged against the parent price', () {
     session.addProduct(pizza, chosen: const [ChosenModifier(tenPct)]);
     expect(session.total, 275);

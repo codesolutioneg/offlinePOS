@@ -50,6 +50,7 @@ import '../features/reports/reports_hub_screen.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
+import '../features/settings/tax_settings_screen.dart';
 import '../features/settings/printers_screen.dart';
 import '../features/settings/quick_comments_screen.dart';
 import '../features/settings/receipt_designer_screen.dart';
@@ -252,6 +253,9 @@ class _PosAppState extends State<PosApp> {
         audit: widget.audit,
         deviceId: widget.deviceId,
         cashierId: cashier.id,
+        // Category/order-type tax rules, so (e.g.) takeaway food can be zero-rated.
+        taxRateFor: (categoryId, type) =>
+            categoryId == null ? null : widget.settings.categoryTaxRate(categoryId, type),
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
     });
@@ -1056,6 +1060,21 @@ class _PosAppState extends State<PosApp> {
         // to discount could raise the cap and discount without limit.
         onTap: () => pushGated(Permission.openSettings,
             DiscountSettingsScreen(settings: widget.settings, onChanged: refresh)),
+      ),
+      SettingsEntry(
+        title: 'Tax rules',
+        subtitle: 'Per category, per order type',
+        icon: Icons.receipt_long_outlined,
+        keyValue: 'set-tax',
+        group: 'Shop',
+        // Tax config changes the reported tax, so it clears the same manager gate as
+        // the other shop settings.
+        onTap: () => pushGated(
+            Permission.openSettings,
+            TaxSettingsScreen(
+                settings: widget.settings,
+                categories: widget.catalogue.categories(),
+                onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'Server (Odoo)',

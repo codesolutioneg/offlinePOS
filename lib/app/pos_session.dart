@@ -17,6 +17,7 @@ class PosSession {
     required this.audit,
     required this.deviceId,
     required this.cashierId,
+    this.taxRateFor,
   });
 
   final CatalogueStore catalogue;
@@ -25,6 +26,18 @@ class PosSession {
   final AuditLog audit;
   final String deviceId;
   final String cashierId;
+
+  /// Resolves the tax rate for a line's category in the current order type, or null
+  /// to keep the product's own rate. Lets a shop set tax per category per order type
+  /// (e.g. 0% takeaway). Null for the whole session means "use product rates".
+  final double? Function(int? categoryId, OrderType type)? taxRateFor;
+
+  /// Apply the configured category/order-type tax rate to a line, if one is set.
+  /// A line whose category is not in the matrix keeps the rate it already has.
+  void _applyTax(OrderLine line) {
+    final r = taxRateFor?.call(line.categoryId, current.type);
+    if (r != null) line.taxRate = r;
+  }
 
   Order? _current;
 
@@ -51,6 +64,8 @@ class PosSession {
       quantity: qty,
       unitPrice: product.price,
       categoryId: product.categoryId,
+      // Start from the product's rate, then let the category/order-type matrix
+      // override it below.
       taxRate: product.taxRate,
       modifiers: [
         for (final c in chosen)
@@ -65,6 +80,8 @@ class PosSession {
           ),
       ],
     );
+    // Let the category/order-type tax matrix override the product rate for this line.
+    _applyTax(line);
     // Consolidate: tapping the same product again bumps the existing line's
     // quantity instead of stacking a duplicate row, the way a till is expected to
     // behave. Only an identical line that has not been fired to the kitchen yet
@@ -185,6 +202,11 @@ class PosSession {
   /// Set the order type. Clears delivery details when switching away from delivery.
   void setOrderType(OrderType type) {
     current.type = type;
+    // Tax can differ by order type (e.g. 0% takeaway), so re-resolve every line's
+    // rate for the new type. Lines whose category is not in the matrix are untouched.
+    for (final line in current.lines) {
+      _applyTax(line);
+    }
     if (type != OrderType.delivery) {
       // Dine-in and takeaway carry no customer, so switching away from delivery
       // clears the whole customer, not just the address, or a stale partner would

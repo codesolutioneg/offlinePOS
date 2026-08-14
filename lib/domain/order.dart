@@ -111,7 +111,9 @@ class OrderLine {
   /// The line's tax rate as a percent (e.g. 14 for 14%), captured from the product
   /// at the moment of sale. Prices are treated as tax-inclusive, so this is used
   /// only to show the tax component; the amount the customer pays is unchanged.
-  final double taxRate;
+  // Mutable so the category/order-type tax matrix can override the product's rate
+  // when the line is added or the order type changes.
+  double taxRate;
 
   /// Whether this line has already been sent to the kitchen. Lets a re-fire print
   /// only the newly added lines rather than the whole ticket again.

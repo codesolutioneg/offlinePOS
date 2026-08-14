@@ -508,6 +508,9 @@ const Map<String, String> _ar = {
   'Other table': 'طاولة أخرى',
   'Table name / number': 'اسم / رقم الطاولة',
   'Use Other to name a table.': 'استخدم "أخرى" لتسمية طاولة.',
+  'Tax rules': 'قواعد الضريبة',
+  'Blank keeps the product tax. Set 0 to remove tax.':
+      'اتركه فارغًا للإبقاء على ضريبة المنتج. اضبطه على 0 لإزالة الضريبة.',
   'Split evenly': 'تقسيم بالتساوي',
   'Divide the bill into equal shares': 'قسّم الفاتورة إلى حصص متساوية',
   'Split into how many?': 'التقسيم على كم؟',
