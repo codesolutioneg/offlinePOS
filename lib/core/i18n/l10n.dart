@@ -666,4 +666,13 @@ const Map<String, String> _ar = {
   'Download PDF': 'تنزيل PDF',
   'Saved to': 'حُفظ في',
   'Could not save file': 'تعذّر حفظ الملف',
+  // arabic on paper: what the printer can spell
+  'Character table': 'جدول الحروف',
+  'Latin': 'لاتيني',
+  'Arabic': 'عربي',
+  'Pick Arabic only if the printer supports it':
+      'اختر العربي فقط إذا كانت الطابعة تدعمه',
+  'Print missing letters as an image': 'طباعة الحروف غير المدعومة كصورة',
+  'Slower, but a name the table cannot spell still prints':
+      'أبطأ قليلًا، لكن الاسم الذي لا يدعمه جدول الحروف يُطبع صحيحًا',
 };
