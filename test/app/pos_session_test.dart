@@ -162,6 +162,25 @@ void main() {
     expect(taxed.current.lines.single.taxRate, 9);
   });
 
+  test('lines with the same override rate but different base rates do not merge', () {
+    // Zero-rated takeaway makes both adds show 0% tax, but their product base rates
+    // differ (9 then 20 after a catalogue change). They must stay separate so the
+    // second unit keeps its own fallback when the override later lifts.
+    final taxed = PosSession(
+      catalogue: CatalogueStore(db),
+      orders: orders,
+      outbox: Outbox(store: outboxStore, senders: const {}),
+      audit: AuditLog(db),
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      taxRateFor: (cat, type) => type == OrderType.takeaway ? 0.0 : null,
+    );
+    taxed.setOrderType(OrderType.takeaway);
+    taxed.addProduct(const Product(id: 10, name: 'Burger', price: 100, categoryId: 1, taxRate: 9));
+    taxed.addProduct(const Product(id: 10, name: 'Burger', price: 100, categoryId: 1, taxRate: 20));
+    expect(taxed.current.lines.length, 2); // not merged
+  });
+
   test('a line whose category is not in the tax matrix keeps the product rate', () {
     final taxed = PosSession(
       catalogue: CatalogueStore(db),

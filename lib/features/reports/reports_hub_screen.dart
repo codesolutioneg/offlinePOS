@@ -378,6 +378,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                           formatAmount: widget.formatAmount,
                           from: _windowFrom,
                           to: _windowTo,
+                          // Narrow voids/cancels to the same cashier as the refunds.
+                          actor: _cashier,
                         )),
                 _tile(tr(context, 'Sales by hour'), Icons.schedule, 'rep-time',
                     const Color(0xFF14B8A6),

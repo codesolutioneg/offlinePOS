@@ -112,6 +112,10 @@ class PosSession {
           l.productId != line.productId ||
           l.unitPrice != line.unitPrice ||
           l.taxRate != line.taxRate ||
+          // Also the base rate: under an override two lines can share a visible rate
+          // (e.g. both 0% takeaway) while their product rates differ, and merging
+          // would lose the newer unit's fallback when the override later lifts.
+          l.baseTaxRate != line.baseTaxRate ||
           l.categoryId != line.categoryId ||
           l.name != line.name ||
           l.note != null ||

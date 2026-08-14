@@ -39,6 +39,7 @@ class ActivityReportScreen extends StatelessWidget {
     required this.formatAmount,
     this.from,
     this.to,
+    this.actor,
   });
 
   final List<Order> orders;
@@ -47,18 +48,24 @@ class ActivityReportScreen extends StatelessWidget {
   final DateTime? from;
   final DateTime? to;
 
+  /// When set, the voided/cancelled rows are narrowed to this cashier too, so the
+  /// report stays consistent with a cashier-filtered order list (refunds).
+  final String? actor;
+
   List<Order> get _refunds => orders.where((o) => o.isRefund).toList();
 
   double get _refundTotal => _refunds.fold(0.0, (s, o) => s + o.total.abs());
 
   List<_VoidedLine> get _voidedLines => audit
-      .recent(event: 'line.voided', from: from, to: to)
+      .recent(event: 'line.voided', actor: actor, from: from, to: to)
       .map(_parseVoided)
       .whereType<_VoidedLine>()
       .toList();
 
-  List<_CancelledOrder> get _cancelledOrders =>
-      audit.recent(event: 'order.cancelled', from: from, to: to).map(_parseCancelled).toList();
+  List<_CancelledOrder> get _cancelledOrders => audit
+      .recent(event: 'order.cancelled', actor: actor, from: from, to: to)
+      .map(_parseCancelled)
+      .toList();
 
   _VoidedLine? _parseVoided(Map<String, Object?> row) {
     final detail = row['detail'] as String?;
