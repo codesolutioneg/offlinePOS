@@ -480,17 +480,48 @@ class _PosAppState extends State<PosApp> {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
-        home: session == null
-            ? LoginScreen(
-                auth: widget.auth,
-                users: widget.users,
-                onSignedIn: _signedIn,
-                provisioningPin: widget.provisioningPin,
-              )
-            : _selling(session),
+        home: widget.config.kdsMode
+            ? _kitchenOnly()
+            : session == null
+                ? LoginScreen(
+                    auth: widget.auth,
+                    users: widget.users,
+                    onSignedIn: _signedIn,
+                    provisioningPin: widget.provisioningPin,
+                  )
+                : _selling(session),
       ),
     );
   }
+
+  /// A device that is a kitchen screen and nothing else.
+  ///
+  /// No sign-in and no open shift, because a cook takes no money: a board bolted to
+  /// a wall behind a cashier's PIN is a board nobody uses. Every ticket on it arrived
+  /// over the fabric, and a bump leaves the same way, as a status event rather than a
+  /// claim on somebody else's sale, so this device can neither ring up nor report nor
+  /// push anything. The printed kitchen ticket is untouched by this and stays the
+  /// answer for a kitchen with no screen.
+  Widget _kitchenOnly() => Builder(
+        // Builder, so the settings route targets the Navigator inside this MaterialApp.
+        builder: (context) => KitchenDisplayScreen(
+          load: () => widget.orders.kitchenTickets(),
+          onStatus: (uuid, status) => widget.orders.setKitchenStatus(uuid, status),
+          actions: [
+            IconButton(
+              key: const Key('kds-network'),
+              // Ungated, unlike the same screen on a till: a kitchen screen has no
+              // roster and never sees the sign-in screen, so a manager PIN here would
+              // be a lock with no key. There is nothing behind it to take either: a
+              // device id, a name and who else is on the LAN.
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => _lanScreen(() => setState(() {})))),
+              icon: const Icon(Icons.lan_outlined),
+              tooltip: tr(context, 'Shop network'),
+            ),
+          ],
+        ),
+      );
 
   Widget _selling(PosSession session) => Stack(
         fit: StackFit.expand,

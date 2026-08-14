@@ -25,6 +25,7 @@ class KitchenDisplayScreen extends StatefulWidget {
     super.key,
     required this.load,
     required this.onStatus,
+    this.actions = const <Widget>[],
     this.nowFn = DateTime.now,
   });
 
@@ -36,6 +37,12 @@ class KitchenDisplayScreen extends StatefulWidget {
   /// caller does not need to return anything: the next [load] is the source
   /// of truth for what actually happened.
   final void Function(String uuid, KitchenStatus status) onStatus;
+
+  /// Anything else the app bar should offer. Empty when the board is reached from
+  /// the till's own menu, which already has a way back to everything; a device that
+  /// boots straight into this board has no menu behind it, so its one door to the
+  /// shop network settings goes here.
+  final List<Widget> actions;
 
   /// The clock driving the app bar time and every card's elapsed timer.
   /// Defaults to the real clock; tests inject a controllable one so the
@@ -133,6 +140,7 @@ class _KitchenDisplayScreenState extends State<KitchenDisplayScreen> {
             icon: const Icon(Icons.refresh),
             tooltip: tr(context, 'Refresh'),
           ),
+          ...widget.actions,
         ],
       ),
       body: Container(
