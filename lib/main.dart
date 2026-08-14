@@ -88,11 +88,18 @@ Future<void> main() async {
   // BootstrapCashier for why.
   final provisioningPin = await BootstrapCashier.ensure(auth, users);
 
+  // One transport for every Odoo call: the login, the order push, the catalogue
+  // pull and the reachability probe below. Certificate-pinned when this build was
+  // given pins for the server, plain platform trust when it was not, so a shop
+  // without pins keeps syncing exactly as it did.
+  final post = odooPost(config.syncCertificatePins);
+
   // The catalogue pull rides the same authenticated Odoo session as the order
   // push. Built here, before any endpoint is configured, but it reads the live
   // sender at call time, so a server entered later still refreshes the menu.
   final odoo = OdooWiring(
     outbox: outbox,
+    post: post,
     // Once the server books a sale, mark it synced so the history badge is honest.
     onOrderBooked: orders.markSynced,
     // A server-rejected sale is money taken but never booked; record it so it is
@@ -112,7 +119,7 @@ Future<void> main() async {
     final e = endpoints.load();
     if (e == null || !e.isComplete) return false;
     try {
-      final reply = await httpPost(
+      final reply = await post(
         Uri.parse(e.baseUrl).resolve('/web/webclient/version_info'),
         const {'Content-Type': 'application/json'},
         '{"jsonrpc":"2.0","method":"call","params":{}}',

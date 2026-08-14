@@ -19,26 +19,35 @@ class TillConfig {
     this.updateManifestUrl,
     this.updatePublicKey = '',
     this.updateCertificatePins = const {},
+    this.syncCertificatePins = const {},
     this.soleTill = true,
+    this.lanFabric = false,
+    this.kdsMode = false,
+    this.lanPort = 45333,
   });
 
   factory TillConfig.fromEnvironment() {
     const manifestUrl = String.fromEnvironment('UPDATE_MANIFEST_URL');
-    const pins = String.fromEnvironment('UPDATE_CERT_PINS');
     return TillConfig(
       shopName: const String.fromEnvironment('SHOP_NAME'),
       taxId: _orNull(const String.fromEnvironment('SHOP_TAX_ID')),
       receiptFooter: _orNull(const String.fromEnvironment('RECEIPT_FOOTER')),
       updateManifestUrl: manifestUrl.isEmpty ? null : Uri.parse(manifestUrl),
       updatePublicKey: const String.fromEnvironment('UPDATE_PUBLIC_KEY'),
-      updateCertificatePins: {
-        for (final pin in pins.split(',').map((p) => p.trim()))
-          if (pin.isNotEmpty) pin,
-      },
+      updateCertificatePins:
+          _pinSet(const String.fromEnvironment('UPDATE_CERT_PINS')),
+      syncCertificatePins:
+          _pinSet(const String.fromEnvironment('SYNC_CERT_PINS')),
       // A single-till shop is the assumption that costs nothing when wrong the
       // other way: assuming a second till exists is how a shop ends up with no
       // way to sell during a restart.
       soleTill: const bool.fromEnvironment('SOLE_TILL', defaultValue: true),
+      // Off unless the shop was sold a second device. The fabric is the only
+      // feature here that opens a listening socket, so it is the one that has to
+      // be asked for rather than assumed.
+      lanFabric: const bool.fromEnvironment('LAN_FABRIC'),
+      kdsMode: const bool.fromEnvironment('KDS_MODE'),
+      lanPort: const int.fromEnvironment('LAN_PORT', defaultValue: 45333),
     );
   }
 
@@ -61,10 +70,37 @@ class TillConfig {
   /// Hex sha256 of the DER certificates the update host may present.
   final Set<String> updateCertificatePins;
 
+  /// Hex sha256 of the DER certificates the Odoo host may present, for the calls
+  /// that carry the integration login and the day's takings.
+  ///
+  /// Empty means the platform trust store decides, which is what every till already
+  /// installed runs on. Unlike the update channel this cannot be all-or-nothing: a
+  /// pin invented here for a shop that was never given one is a till that can never
+  /// reach its own server, and a till that cannot sync is a shop that cannot bank
+  /// its day. Pinning the API is still the rule for a build that ships one, and
+  /// docs/SECURITY.md asks for it.
+  final Set<String> syncCertificatePins;
+
   /// Whether this is the only till that can take money in the shop. Feeds the
   /// update gate: a mandatory update may override the clock, but not if going down
   /// means the shop cannot sell at all.
   final bool soleTill;
+
+  /// Whether this build starts out sharing state with the other devices in the
+  /// shop over the LAN. Only the default: the device's own setting wins, so a shop
+  /// that adds a second till does not need a new build to switch it on.
+  final bool lanFabric;
+
+  /// This device is a kitchen screen and nothing else: it boots straight into the
+  /// board, sells nothing, and needs no shift open. A build-time decision because
+  /// it is a decision about what the hardware is for, not a preference.
+  final bool kdsMode;
+
+  /// The port the fabric serves on. The beacon announces on the next port up, so
+  /// an installer who has to move it past a busy port only sets one number.
+  final int lanPort;
+
+  int get lanBeaconPort => lanPort + 1;
 
   /// True only when the channel is completely specified. A partly configured
   /// channel is a build mistake, and running with the missing half filled in by a
@@ -81,4 +117,11 @@ class TillConfig {
       ManifestVerifier.fromBase64(updatePublicKey);
 
   static String? _orNull(String value) => value.isEmpty ? null : value;
+
+  /// One comma-separated list of digests, parsed the same way for both channels so
+  /// an installer never has to remember which pin takes which spelling.
+  static Set<String> _pinSet(String raw) => {
+        for (final pin in raw.split(',').map((p) => p.trim()))
+          if (pin.isNotEmpty) pin,
+      };
 }
