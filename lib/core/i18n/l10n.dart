@@ -140,6 +140,31 @@ const Map<String, String> _ar = {
   'Add printer': 'إضافة طابعة',
   'Add table': 'إضافة طاولة',
   'Name / number': 'الاسم / الرقم',
+  // the shop network
+  'Shop network': 'شبكة المتجر',
+  'Share open tabs, tickets and the floor plan':
+      'مشاركة الطلبات المفتوحة وطلبات المطبخ ومخطط الصالة',
+  'Share with the other devices': 'المشاركة مع الأجهزة الأخرى',
+  'Open tabs, kitchen tickets and the floor plan. Selling never waits on this, '
+          'and the change takes effect when this device next starts.':
+      'الطلبات المفتوحة وطلبات المطبخ ومخطط الصالة. البيع لا ينتظر هذه الميزة '
+          'أبدًا، ويسري التغيير عند تشغيل هذا الجهاز في المرة القادمة.',
+  'What this device is called': 'اسم هذا الجهاز',
+  'Front till': 'الكاشير الأمامي',
+  'Device id': 'معرّف الجهاز',
+  'Answering on': 'يستجيب على',
+  'not serving': 'لا يستجيب',
+  'Data version': 'إصدار البيانات',
+  'data version': 'إصدار البيانات',
+  'Last catch-up': 'آخر مزامنة',
+  'Last problem': 'آخر مشكلة',
+  'Catch up now': 'المزامنة الآن',
+  'Devices on this network': 'الأجهزة على هذه الشبكة',
+  'Nothing else found yet. A single-till shop is expected to look like this.':
+      'لم يتم العثور على أجهزة أخرى بعد. هذا هو الوضع المتوقع لمتجر بكاشير واحد.',
+  'read to': 'تمت القراءة حتى',
+  'Turned away': 'مرفوضة',
+  'never': 'أبدًا',
   // reports
   'Sales summary': 'ملخص المبيعات',
   'Tax': 'الضريبة',

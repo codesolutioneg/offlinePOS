@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
+import 'package:offline_pos/core/i18n/l10n.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
 import 'package:offline_pos/core/lan/lan_wiring.dart';
 import 'package:offline_pos/features/settings/lan_settings_screen.dart';
@@ -33,7 +35,14 @@ void main() {
         lastSeenAt: now.subtract(const Duration(seconds: 12)),
       );
 
-  Widget app({LanFacts Function()? facts}) => MaterialApp(
+  Widget app({LanFacts Function()? facts, Locale? locale}) => MaterialApp(
+        locale: locale,
+        supportedLocales: kSupportedLocales,
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
         home: LanSettingsScreen(
           settings: settings,
           deviceId: 'device-abc-123',
@@ -95,6 +104,21 @@ void main() {
     await t.dragUntilVisible(find.byKey(const Key('lan-refused-till-c')),
         find.byType(ListView), const Offset(0, -200));
     expect(find.byKey(const Key('lan-refused-till-c')), findsOneWidget);
+  });
+
+  testWidgets('reads in Arabic, including the sentences', (t) async {
+    await t.pumpWidget(app(locale: const Locale('ar')));
+
+    // A long label is where a translation key silently drifts from the string in
+    // the widget, and the fallback would leave one English paragraph on an
+    // otherwise Arabic screen.
+    expect(find.text('شبكة المتجر'), findsOneWidget);
+    expect(find.text('المشاركة مع الأجهزة الأخرى'), findsOneWidget);
+    expect(
+        find.text('لم يتم العثور على أجهزة أخرى بعد. هذا هو الوضع المتوقع لمتجر '
+            'بكاشير واحد.'),
+        findsOneWidget);
+    expect(find.textContaining('البيع لا ينتظر هذه الميزة'), findsOneWidget);
   });
 
   testWidgets('sharing is off until it is switched on, and the choice sticks',
