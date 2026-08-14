@@ -200,6 +200,13 @@ class _ShiftScreenState extends State<ShiftScreen> {
       _row(tr(context, 'Cash out'), widget.formatAmount(sum.cashOut)),
       const Divider(),
       _row(tr(context, 'Expected in drawer'), widget.formatAmount(sum.expectedCash), bold: true),
+      if (sum.tenders.isNotEmpty) ...[
+        const Divider(),
+        Text(tr(context, 'Payment mix'), style: const TextStyle(fontWeight: FontWeight.bold)),
+        // Tender names come from the catalogue, so only the untendered cash row has
+        // a translation to find.
+        ...sum.tenders.map((t) => _row(tr(context, t.label), widget.formatAmount(t.amount))),
+      ],
       if (s.movements.isNotEmpty) ...[
         const Divider(),
         Text(tr(context, 'Cash movements'), style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -336,9 +343,12 @@ class _ShiftScreenState extends State<ShiftScreen> {
     );
   }
 
-  /// The report rows for an X (interim) or Z (close) reading.
-  List<(String, String)> _rows(dynamic sum, {bool withVariance = false}) => [
+  /// The report rows for an X (interim) or Z (close) reading. The tender rows sit
+  /// indented under the sales figure they break down, because a receipt is too
+  /// narrow for a headed section of its own.
+  List<(String, String)> _rows(ShiftSummary sum, {bool withVariance = false}) => [
         ('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
+        for (final t in sum.tenders) ('  ${t.label}', widget.formatAmount(t.amount)),
         ('Cash sales', widget.formatAmount(sum.cashSales)),
         ('Opening float', widget.formatAmount(sum.openingFloat)),
         ('Cash in', widget.formatAmount(sum.cashIn)),
@@ -369,6 +379,10 @@ class _ShiftScreenState extends State<ShiftScreen> {
         title: Text(tr(ctx, 'Z report')),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('${tr(ctx, 'Sales')}: ${sum.salesCount}   ${widget.formatAmount(sum.salesTotal)}'),
+          // Indented under the sales total they break down, in the same order as the
+          // printed ticket, so the paper and the screen read the same.
+          for (final t in sum.tenders)
+            Text('  ${tr(ctx, t.label)}: ${widget.formatAmount(t.amount)}'),
           Text('${tr(ctx, 'Cash sales')}: ${widget.formatAmount(sum.cashSales)}'),
           Text('${tr(ctx, 'Opening float')}: ${widget.formatAmount(sum.openingFloat)}'),
           Text('${tr(ctx, 'Cash in')}: ${widget.formatAmount(sum.cashIn)}    ${tr(ctx, 'Cash out')}: ${widget.formatAmount(sum.cashOut)}'),
