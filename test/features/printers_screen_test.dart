@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
+import 'package:offline_pos/core/printing/escpos.dart';
 import 'package:offline_pos/core/printing/printer_discovery.dart';
 import 'package:offline_pos/core/printing/printer_registry.dart';
 import 'package:offline_pos/domain/catalogue.dart';
@@ -288,6 +289,45 @@ void main() {
 
       expect(find.byKey(const Key('product-route-10')), findsNothing);
       expect(find.byKey(const Key('product-route-11')), findsOneWidget);
+    });
+  });
+
+  group('what the printer can spell', () {
+    testWidgets('the character table is stored and reaches the print profile',
+        (t) async {
+      await tall(t);
+      await t.pumpWidget(app());
+
+      await t.tap(find.text('Arabic'));
+      await t.pumpAndSettle();
+
+      expect(settings.receiptCodePage, 'wpc1256');
+      expect(EscPosPrintProfile.shared.codePage.id, 49);
+      expect(changedCount, 1);
+
+      await t.tap(find.text('Latin'));
+      await t.pumpAndSettle();
+      expect(settings.receiptCodePage, 'wpc1252');
+      expect(EscPosPrintProfile.shared.codePage.id, 16);
+    });
+
+    testWidgets('rendering missing letters is a switch a manager owns', (t) async {
+      await tall(t);
+      settings.language = 'ar';
+      await t.pumpWidget(app());
+
+      // On already for an Arabic till, so the meaningful action here is turning it
+      // off, which is what a shop with an Arabic-capable printer wants.
+      expect(
+          t.widget<SwitchListTile>(find.byKey(const Key('arabic-raster'))).value,
+          isTrue);
+
+      await t.tap(find.byKey(const Key('arabic-raster')));
+      await t.pumpAndSettle();
+
+      expect(settings.receiptArabicRaster, isFalse);
+      expect(EscPosPrintProfile.shared.rasterUnmappable, isFalse);
+      expect(changedCount, 1);
     });
   });
 }

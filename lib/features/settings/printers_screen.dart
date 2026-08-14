@@ -237,6 +237,44 @@ class _PrintersScreenState extends State<PrintersScreen> {
               _notify();
             },
           ),
+          const Divider(),
+          // Which script the printer itself can spell, and what to do about the
+          // lines it cannot. Here rather than in the receipt designer because both
+          // answers depend on the hardware, not on what the slip should say.
+          Row(children: [
+            Text(tr(context, 'Character table'),
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            const Spacer(),
+            SegmentedButton<String>(
+              key: const Key('code-page'),
+              segments: [
+                ButtonSegment(value: 'wpc1252', label: Text(tr(context, 'Latin'))),
+                ButtonSegment(value: 'wpc1256', label: Text(tr(context, 'Arabic'))),
+              ],
+              selected: {
+                widget.settings.receiptCodePage == 'wpc1256' ? 'wpc1256' : 'wpc1252'
+              },
+              onSelectionChanged: (s) {
+                widget.settings.receiptCodePage = s.first;
+                _notify();
+              },
+            ),
+          ]),
+          Text(tr(context, 'Pick Arabic only if the printer supports it'),
+              style: Theme.of(context).textTheme.bodySmall),
+          const Divider(),
+          SwitchListTile(
+            key: const Key('arabic-raster'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Print missing letters as an image')),
+            subtitle: Text(tr(
+                context, 'Slower, but a name the table cannot spell still prints')),
+            value: widget.settings.receiptArabicRaster,
+            onChanged: (v) {
+              widget.settings.receiptArabicRaster = v;
+              _notify();
+            },
+          ),
         ]),
       ),
     );
