@@ -124,6 +124,14 @@ Odoo rasterises the receipt (`html-to-image`), which costs seconds per print, mo
 spent inlining ~4 MB of base64 font data into the clone on every single receipt.
 Sending text avoids all of it and prints in the time the printer takes.
 
+One exception, per line and only where bytes cannot do the job: a printer speaks one
+single-byte character table at a time, so a shop can either pick an Arabic table
+(`WPC1256`, where the firmware joins the letters) or have the lines that table cannot
+carry rendered as `GS v 0` bands. Rendering is asynchronous and the builders are not,
+so a marked line goes out as fallback text and the send path swaps the band in on its
+way to the wire. A Latin receipt is byte for byte what it always was, and no selling
+path ever waits for a picture.
+
 ## Updates
 
 - Never update while unsynced orders exist, and never mid-shift. Gate it in code.
