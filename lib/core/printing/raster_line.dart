@@ -72,11 +72,11 @@ class LineRasteriser {
       color: const Color(0xFF000000),
     );
 
-    // The amount column is measured first: what is left is what the label may use,
-    // which is how the byte path decides too.
+    // The amount is measured at its natural width first, and what is left over is
+    // what the label may use, which is how the byte path decides too.
     final right = r.right == null || r.right!.isEmpty
         ? null
-        : _painter(r.right!, style, TextAlign.right, usable);
+        : _painter(r.right!, style, TextAlign.right, usable, snug: true);
     final gap = right == null ? 0.0 : fontSize * 0.4;
     final leftWidth = math.max(usable - (right?.width ?? 0) - gap, fontSize);
     final left = _painter(
@@ -112,17 +112,24 @@ class LineRasteriser {
     }
   }
 
-  /// Laid out at a fixed width so the alignment inside it means something, and to a
-  /// single line with an ellipsis so a long name can never push the amount column
-  /// onto paper of its own.
-  TextPainter _painter(String s, TextStyle style, TextAlign align, double width) =>
+  /// One line with an ellipsis, so a long name can never push the amount column onto
+  /// paper of its own. Laid out at exactly [width] so the alignment inside it means
+  /// something, unless [snug] asks for the text's own width, which is how the amount
+  /// column reports how much room it needs.
+  TextPainter _painter(
+    String s,
+    TextStyle style,
+    TextAlign align,
+    double width, {
+    bool snug = false,
+  }) =>
       TextPainter(
         text: TextSpan(text: s, style: style),
         textDirection: _directionOf(s),
         textAlign: align,
         maxLines: 1,
         ellipsis: '…',
-      )..layout(minWidth: width, maxWidth: width);
+      )..layout(minWidth: snug ? 0 : width, maxWidth: width);
 
   static TextAlign _alignment(EscPosAlign a) => switch (a) {
         EscPosAlign.left => TextAlign.left,

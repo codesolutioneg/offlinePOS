@@ -107,6 +107,16 @@ void main() {
       expect(printedBands(await rasteriseEscPos(p.build())), hasLength(1));
     });
 
+    test('a long name gets the room the amount does not need', () async {
+      // The amount is measured at its own width, not at the paper's: measuring it
+      // full width once left every label ellipsised into a single character.
+      final band = (await LineRasteriser()
+          .render(const RasterRequest(text: 'شاورما فراخ سبيشال', right: '130.00', dots: 504)))!;
+      expect(_inkBetween(band, 168, 336), greaterThan(0),
+          reason: 'the name reaches the middle of the paper');
+      expect(_inkBetween(band, 0, 24), greaterThan(0), reason: 'and starts at the left');
+    });
+
     test('weight and size are baked into the band, since ESC ! cannot reach dots',
         () {
       final p = EscPos()
@@ -336,6 +346,18 @@ By: sara
 ''');
     });
   });
+}
+
+/// Inked dots in a vertical slice of a band, for asking where on the paper the text
+/// actually landed.
+int _inkBetween(RasterBand band, int fromDot, int toDot) {
+  var ink = 0;
+  for (var y = 0; y < band.heightDots; y++) {
+    for (var x = fromDot; x < toDot; x++) {
+      if (band.bits[y * band.widthBytes + (x >> 3)] & (0x80 >> (x & 7)) != 0) ink++;
+    }
+  }
+  return ink;
 }
 
 int _indexOf(List<int> haystack, List<int> needle) {
