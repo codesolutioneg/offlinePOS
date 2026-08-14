@@ -65,6 +65,15 @@ void main() {
       expect(settings.roleCan('cashier', Permission.viewReports), isTrue);
     });
 
+    test('correcting a paid sale asks a manager until it is granted', () {
+      // Rewriting a sale that is already tendered is not a cashier's on their own,
+      // so it falls to the manager-PIN gate by default and can still be delegated.
+      expect(settings.roleCan('cashier', Permission.amendOrder), isFalse);
+      settings.setRolePermission('cashier', Permission.amendOrder, true);
+      expect(settings.roleCan('cashier', Permission.amendOrder), isTrue);
+      expect(settings.roleCan('manager', Permission.amendOrder), isTrue);
+    });
+
     test('an unknown custom role starts with no permissions', () {
       expect(settings.permissionsFor('runner'), isEmpty);
       settings.setRolePermission('runner', Permission.reprint, true);
