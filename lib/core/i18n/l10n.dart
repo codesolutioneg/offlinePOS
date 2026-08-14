@@ -150,6 +150,26 @@ const Map<String, String> _ar = {
       'الطلبات المفتوحة وطلبات المطبخ ومخطط الصالة. البيع لا ينتظر هذه الميزة '
           'أبدًا، ويسري التغيير عند تشغيل هذا الجهاز في المرة القادمة.',
   'What this device is called': 'اسم هذا الجهاز',
+  'Pairing': 'الإقران',
+  'Shop key': 'مفتاح المتجر',
+  'Every device in the shop shares one key. Copy it from the first '
+          'device into the others. A device with a different key is turned '
+          'away, so nothing else on the network can read the tabs.':
+      'تشترك جميع أجهزة المتجر في مفتاح واحد. انسخه من الجهاز الأول إلى بقية '
+          'الأجهزة. أي جهاز يحمل مفتاحًا مختلفًا يُرفض، فلا يستطيع أي جهاز آخر على '
+          'الشبكة قراءة الطلبات.',
+  'Copy': 'نسخ',
+  'Copied': 'تم النسخ',
+  'New key': 'مفتاح جديد',
+  'Replace': 'استبدال',
+  'The other devices stop sharing with this one until they are given '
+          'the new key.':
+      'ستتوقف الأجهزة الأخرى عن المشاركة مع هذا الجهاز حتى يتم إعطاؤها المفتاح '
+          'الجديد.',
+  'A shop key is needed before this device can share.':
+      'يلزم وجود مفتاح للمتجر قبل أن يتمكن هذا الجهاز من المشاركة.',
+  'Saved. Takes effect when this device restarts.':
+      'تم الحفظ. يسري التغيير عند إعادة تشغيل هذا الجهاز.',
   'Front till': 'الكاشير الأمامي',
   'Device id': 'معرّف الجهاز',
   'Answering on': 'يستجيب على',

@@ -52,8 +52,20 @@ void main() {
         ),
       );
 
+  /// Opens the screen on a till-sized surface. The default 800x600 test window is
+  /// shorter than this page, and a ListView does not build what does not fit, so the
+  /// peer list below the fold would read as missing rather than as off-screen.
+  Future<void> open(WidgetTester t,
+      {LanFacts Function()? facts, Locale? locale}) async {
+    t.view.physicalSize = const Size(1200, 2400);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    await t.pumpWidget(app(facts: facts, locale: locale));
+  }
+
   testWidgets('shows this device id and the devices it can see', (t) async {
-    await t.pumpWidget(app(
+    await open(t,
       facts: () => (
         servingAt: '10.0.0.5:45333',
         peers: [peer()],
@@ -62,7 +74,7 @@ void main() {
         lastPassAt: now.subtract(const Duration(seconds: 3)),
         lastError: null,
       ),
-    ));
+    );
 
     // The id is what support asks for first, so it is shown in full.
     expect(find.text('device-abc-123'), findsOneWidget);
@@ -77,7 +89,7 @@ void main() {
   });
 
   testWidgets('a device on its own says so rather than looking broken', (t) async {
-    await t.pumpWidget(app());
+    await open(t);
 
     expect(find.byKey(const Key('lan-no-peers')), findsOneWidget);
     expect(find.text('not serving'), findsOneWidget);
@@ -87,7 +99,7 @@ void main() {
   });
 
   testWidgets('a peer on another data version is shown as turned away', (t) async {
-    await t.pumpWidget(app(
+    await open(t,
       facts: () => (
         servingAt: null,
         peers: const [],
@@ -96,7 +108,7 @@ void main() {
         lastPassAt: null,
         lastError: 'Back till: connection refused',
       ),
-    ));
+    );
 
     expect(find.byKey(const Key('lan-last-error')), findsOneWidget);
     // Down past the peer list: an unfinished rollout is visible on the device
@@ -107,7 +119,7 @@ void main() {
   });
 
   testWidgets('reads in Arabic, including the sentences', (t) async {
-    await t.pumpWidget(app(locale: const Locale('ar')));
+    await open(t, locale: const Locale('ar'));
 
     // A long label is where a translation key silently drifts from the string in
     // the widget, and the fallback would leave one English paragraph on an
@@ -123,7 +135,7 @@ void main() {
 
   testWidgets('sharing is off until it is switched on, and the choice sticks',
       (t) async {
-    await t.pumpWidget(app());
+    await open(t);
     expect(settings.lanEnabled(), isFalse);
 
     await t.tap(find.byKey(const Key('lan-enabled')));
@@ -135,7 +147,7 @@ void main() {
 
   testWidgets('naming the device persists it, and a blank name is no name',
       (t) async {
-    await t.pumpWidget(app());
+    await open(t);
 
     await t.enterText(find.byKey(const Key('lan-device-name')), 'Front till');
     await t.tap(find.byKey(const Key('lan-save-name')));
@@ -151,5 +163,71 @@ void main() {
     // Cleared rather than stored as blank, so the other devices fall back to
     // showing an id instead of an empty row.
     expect(settings.lanDeviceName, isNull);
+  });
+
+  testWidgets('switching sharing on invents a shop key to pair the others with',
+      (t) async {
+    await open(t);
+    expect(settings.lanShopKey, isNull);
+
+    await t.tap(find.byKey(const Key('lan-enabled')));
+    await t.pumpAndSettle();
+
+    // Made here rather than on the next start, so whoever flicked the switch can
+    // copy it to the other tills without restarting anything.
+    final key = settings.lanShopKey;
+    expect(key, isNotNull);
+    expect(key!.length, greaterThan(20));
+    // Shown, because it is only useful if someone can read it off this screen and
+    // type it into the next till.
+    expect(find.text(key), findsOneWidget);
+  });
+
+  testWidgets('pasting the first till key pairs this one to the same shop',
+      (t) async {
+    await open(t);
+
+    await t.enterText(find.byKey(const Key('lan-shop-key')), 'the-first-till-key');
+    await t.tap(find.byKey(const Key('lan-save-key')));
+    await t.pumpAndSettle();
+
+    expect(settings.lanShopKey, 'the-first-till-key');
+    expect(changed, greaterThan(0));
+  });
+
+  testWidgets('a blank key is refused rather than stored as no pairing at all',
+      (t) async {
+    settings.lanShopKey = 'a-real-key';
+    await open(t);
+
+    await t.enterText(find.byKey(const Key('lan-shop-key')), '   ');
+    await t.tap(find.byKey(const Key('lan-save-key')));
+    await t.pumpAndSettle();
+
+    // Saving nothing would leave the fabric unable to serve anyone, which is worse
+    // than telling the manager the field is required.
+    expect(settings.lanShopKey, 'a-real-key');
+    expect(find.textContaining('shop key is needed'), findsOneWidget);
+  });
+
+  testWidgets('replacing the key asks first, because it unpairs the other devices',
+      (t) async {
+    settings.lanShopKey = 'the-old-key';
+    await open(t);
+
+    await t.tap(find.byKey(const Key('lan-new-key')));
+    await t.pumpAndSettle();
+    // Cancelled: nothing moves, so a mis-tap on a busy night costs nothing.
+    await t.tap(find.text('Cancel'));
+    await t.pumpAndSettle();
+    expect(settings.lanShopKey, 'the-old-key');
+
+    await t.tap(find.byKey(const Key('lan-new-key')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('lan-confirm-new-key')));
+    await t.pumpAndSettle();
+
+    expect(settings.lanShopKey, isNot('the-old-key'));
+    expect(find.text(settings.lanShopKey!), findsOneWidget);
   });
 }
