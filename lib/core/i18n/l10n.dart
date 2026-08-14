@@ -666,4 +666,10 @@ const Map<String, String> _ar = {
   'Download PDF': 'تنزيل PDF',
   'Saved to': 'حُفظ في',
   'Could not save file': 'تعذّر حفظ الملف',
+  // service charge
+  'Service charge': 'رسم الخدمة',
+  'Service': 'الخدمة',
+  'Charged on': 'تُطبَّق على',
+  'Added to a bill when it opens. Zero turns it off.':
+      'يُضاف إلى الفاتورة عند فتحها. صفر يعني إلغاءه.',
 };
