@@ -57,7 +57,19 @@ class ReceiptBuilder {
   /// Kick the cash drawer open at the end, for a cash sale.
   final bool openDrawer;
 
-  Uint8List build(Order order, {bool reprint = false}) {
+  Uint8List build(Order order, {bool reprint = false}) =>
+      _slip(order, reprint: reprint);
+
+  /// The check handed to a table before it pays: the sale layout without anything
+  /// that implies money changed hands. No tender or change section, no drawer kick,
+  /// and it says on the paper that it is not a tax receipt, because a waiter carries
+  /// this to the table and the customer must not mistake it for the real slip.
+  ///
+  /// Takes the order as-is and reads nothing but its lines and totals, so a bill can
+  /// be printed as often as the table asks for it.
+  Uint8List buildBill(Order order) => _slip(order, bill: true);
+
+  Uint8List _slip(Order order, {bool reprint = false, bool bill = false}) {
     final p = EscPos(columns: columns)..reset();
     final divider = _dividerChars[dividerStyle] ?? '-';
 
@@ -73,6 +85,11 @@ class ReceiptBuilder {
     // a refund is marked so a returned sale is never mistaken for a new one.
     if (order.isRefund) p.centred('*** REFUND ***');
     if (reprint) p.centred('*** REPRINT ***');
+    // A bill is titled and disclaimed at the top, where a customer reads first.
+    if (bill) {
+      p.size(doubleHeight: true).centred('*** BILL ***').size();
+      p.centred('NOT A TAX RECEIPT');
+    }
     p.align(EscPosAlign.left).rule(divider);
 
     // Where the sale was served, so a delivery or table sale reads differently
@@ -151,7 +168,7 @@ class ReceiptBuilder {
     // Tender breakdown and change. A split payment prints one line per tender.
     // Payments store the settled amount, so a cash overpayment prints the cash
     // received and the change owed from [cashReceived] rather than from the tender.
-    if (order.payments.isNotEmpty) {
+    if (!bill && order.payments.isNotEmpty) {
       p.feed();
       if (showPayment) {
         for (final pay in order.payments) {
@@ -169,13 +186,27 @@ class ReceiptBuilder {
       }
     }
 
+    // A part-paid tab (an even or per-guest split settled one share at a time) still
+    // owes less than its total, so the bill states what is left rather than sending
+    // the waiter back to collect the whole amount again. This is what is due, not a
+    // tender breakdown, and a settled tab prints nothing here because there is
+    // nothing left to collect.
+    if (bill && order.amountPaid > 0.001 && order.balance > 0.001) {
+      p.row('Already paid', '-${formatAmount(order.amountPaid)}');
+      p.size(doubleHeight: true).bold(true)
+        ..row('BALANCE DUE', formatAmount(order.balance))
+        ..bold(false)
+        ..size();
+    }
+
     if (footer != null) {
       p.feed().align(EscPosAlign.center).line(footer!);
     }
     p.feed(2);
     // Kick the drawer before the cut on a cash sale, so the till opens as the
-    // receipt prints rather than needing a separate command.
-    if (openDrawer) p.openDrawer();
+    // receipt prints rather than needing a separate command. A bill is not a sale,
+    // so it never opens the till.
+    if (openDrawer && !bill) p.openDrawer();
     return (p..cut()).build();
   }
 
