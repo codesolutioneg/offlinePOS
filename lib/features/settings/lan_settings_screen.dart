@@ -123,7 +123,8 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
         content: Text(tr(
             context,
             'The other devices stop sharing with this one until they are given '
-                'the new key.')),
+                'the new key. This device keeps using the old key until it '
+                'restarts, so restart it once the others are set.')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
