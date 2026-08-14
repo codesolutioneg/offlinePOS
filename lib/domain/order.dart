@@ -289,6 +289,12 @@ class Order {
   /// Set once the backend confirms. Never used as identity.
   int? serverId;
 
+  /// True once this sale was reopened after payment and rung again. Local only:
+  /// it marks the corrected receipt so the customer can tell which of two slips
+  /// stands, and it is stripped from the server payload, which carries one sale
+  /// under one uuid either way.
+  bool amended = false;
+
   double get subtotal => lines.fold(0.0, (s, l) => s + l.total);
   double get discountFactor => 1 - (discountPercent.clamp(0, 100) / 100);
 
@@ -351,6 +357,7 @@ class Order {
         'kitchen_status': kitchenStatus.name,
         'refund_of_uuid': refundOfUuid,
         'cash_received': cashReceived,
+        'amended': amended,
         'lines': lines.map((l) => l.toMap()).toList(),
         'payments': payments.map((p) => p.toMap()).toList(),
       };
@@ -366,6 +373,9 @@ class Order {
     // zeroed on the wire. Leaving them set would let a server that also reads them
     // discount an already-discounted price a second time.
     m['discount_percent'] = 0;
+    // Whether the till corrected this sale before sending it is the till's own
+    // business: the server is handed one sale under one uuid either way.
+    m.remove('amended');
     // A locally-created customer has a synthetic negative id, not an Odoo partner.
     // Never send it as partner_id (it would fail the foreign key); the name and
     // phone still travel so the server can match or create the partner itself.
@@ -415,7 +425,8 @@ class Order {
             .toList(),
       )
         ..serverId = m['server_id'] as int?
-        ..cashReceived = (m['cash_received'] as num?)?.toDouble();
+        ..cashReceived = (m['cash_received'] as num?)?.toDouble()
+        ..amended = (m['amended'] as bool?) ?? false;
 }
 
 /// One tender against a sale: which Odoo payment method, how much, and any tip
