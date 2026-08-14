@@ -123,6 +123,7 @@ class ReceiptBuilder {
     // Show the breakdown only when there is one, so a plain sale stays a plain
     // receipt but a discounted delivery with a tip is fully itemised.
     final hasBreakdown = order.discountPercent > 0 ||
+        order.serviceChargePercent > 0 ||
         order.deliveryCost > 0 ||
         order.tip > 0;
     if (hasBreakdown) {
@@ -132,6 +133,13 @@ class ReceiptBuilder {
             ? 'Discount ${_pct(order.discountPercent)}%'
             : 'Discount ${_pct(order.discountPercent)}% (${order.discountReason})';
         p.row(label, '-${formatAmount(order.subtotal * order.discountPercent / 100)}');
+      }
+      // After the discount, because that is what it is charged on, and on its own line:
+      // a guest is entitled to see the service they are paying rather than find it
+      // buried in the item prices.
+      if (order.serviceChargePercent > 0) {
+        p.row('Service ${_pct(order.serviceChargePercent)}%',
+            formatAmount(order.serviceCharge));
       }
       if (order.deliveryCost > 0) p.row('Delivery', formatAmount(order.deliveryCost));
       if (order.tip > 0) p.row('Tip', formatAmount(order.tip));
@@ -215,16 +223,25 @@ class ReceiptBuilder {
       removed += l.total;
     }
     p.rule(divider);
-    // A whole-order discount scales what the customer would actually have paid for
-    // the removed lines, so the REMOVED figure nets it off rather than printing the
-    // gross line sum. It is itemised so the numbers reconcile on the slip.
-    if (order.discountPercent > 0) {
+    // A whole-order discount and the bill's service charge both scale what the customer
+    // would actually have paid for the removed lines, so the REMOVED figure nets them
+    // off rather than printing the gross line sum. Both are itemised so the numbers
+    // reconcile on the slip.
+    if (order.discountPercent > 0 || order.serviceChargePercent > 0) {
       p.row('Subtotal', formatAmount(removed));
+    }
+    if (order.discountPercent > 0) {
       p.row('Order discount ${_pct(order.discountPercent)}%',
           '-${formatAmount(removed * order.discountPercent / 100)}');
     }
+    if (order.serviceChargePercent > 0) {
+      final serviced = removed * order.discountFactor;
+      p.row('Service ${_pct(order.serviceChargePercent)}%',
+          formatAmount(serviced * order.serviceChargePercent / 100));
+    }
     p.size(doubleHeight: true).bold(true)
-      ..row('REMOVED', formatAmount(removed * order.discountFactor))
+      ..row('REMOVED',
+          formatAmount(removed * order.discountFactor * order.serviceChargeFactor))
       ..bold(false)
       ..size();
     if (reason != null && reason.isNotEmpty) p.feed().line('Reason: $reason');
