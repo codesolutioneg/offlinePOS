@@ -16,6 +16,7 @@ import 'package:offline_pos/core/db/table_store.dart';
 import 'package:offline_pos/core/onboarding/wizard_store.dart';
 import 'package:offline_pos/core/printing/printer_discovery.dart';
 import 'package:offline_pos/core/printing/printer_registry.dart';
+import 'package:offline_pos/core/printing/spool_store.dart';
 import 'package:offline_pos/core/sync/odoo_endpoint.dart';
 import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
@@ -45,6 +46,7 @@ void main() {
   late OrderStore orders;
   late SqliteOutboxStore outboxStore;
   late AuditLog audit;
+  late MemorySpoolStore spool;
 
   setUpAll(useSystemSqlite);
   setUp(() async {
@@ -52,6 +54,9 @@ void main() {
     orders = OrderStore(db, ownDeviceId: 'till-1');
     outboxStore = SqliteOutboxStore(db);
     audit = AuditLog(db);
+    // Nothing on this till can print, so every slip lands here instead, which is
+    // how a test reads what the printer would have produced.
+    spool = MemorySpoolStore();
     CatalogueStore(db).replaceAll(
       categories: const [Category(id: 1, name: 'Food')],
       products: const [
@@ -106,12 +111,22 @@ void main() {
       settings: SettingsStore(db),
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
+      receiptSpool: spool,
     );
+  }
+
+  /// What the printer would have produced, by spool reference prefix.
+  Future<List<String>> slipsMatching(String prefix) async {
+    final jobs = await spool.oldestFirst(limit: 100);
+    return jobs
+        .where((j) => (j.reference ?? '').startsWith(prefix))
+        .map((j) => String.fromCharCodes(j.bytes))
+        .toList();
   }
 
   /// A tendered sale sitting on the till waiting for the shift-close batch, with
   /// its line already cooked, which is what a paid order looks like in a real shop.
-  Future<Order> paidSale() async {
+  Future<Order> paidSale({bool withUnfiredLine = false, double colas = 1}) async {
     final o = Order(deviceId: 'till-1', cashierId: 'sara', lines: [
       OrderLine(
         productId: 10,
@@ -121,6 +136,10 @@ void main() {
         printedToKitchen: true,
         firedStations: ['kitchen'],
       ),
+      // A line the kitchen never got, because the station was down when the sale
+      // was rung. Removing it leaves no paper anywhere except the correction slip.
+      if (withUnfiredLine)
+        OrderLine(productId: 11, name: 'Cola', quantity: colas, unitPrice: 30),
     ])
       ..state = OrderState.paid
       ..payments = const [OrderPayment(methodId: 1, amount: 250, label: 'Cash')];
@@ -156,11 +175,21 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  /// Sign in, walk to the sale in history and press Edit.
-  Future<Order> reachEditAndTap(WidgetTester t) async {
-    final sale = await paidSale();
+  /// Boot the till on a screen the size of a real one, so the cart is not cut off
+  /// by the test surface, and get past the sign-in.
+  Future<void> boot(WidgetTester t) async {
+    await t.binding.setSurfaceSize(const Size(1280, 1000));
+    addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(app(await managerOnTheTill()));
     await signIn(t);
+  }
+
+  /// Sign in, walk to the sale in history and press Edit.
+  Future<Order> reachEditAndTap(WidgetTester t,
+      {bool withUnfiredLine = false, double colas = 1}) async {
+    final sale =
+        await paidSale(withUnfiredLine: withUnfiredLine, colas: colas);
+    await boot(t);
 
     await t.tap(find.byType(DrawerButton));
     await t.pumpAndSettle();
@@ -256,12 +285,83 @@ void main() {
     expect(pizza.firedStations, ['kitchen']);
   });
 
+  testWidgets('an item taken off a paid sale leaves a slip at the till', (t) async {
+    final sale = await reachEditAndTap(t, withUnfiredLine: true);
+    final cola = sale.lines.firstWhere((l) => l.name == 'Cola');
+
+    // The kitchen never had this one, so it deletes without a void prompt and
+    // would otherwise come off a paid bill leaving no paper at all.
+    await t.tap(find.descendant(
+        of: find.byKey(Key('line-${cola.uuid}')),
+        matching: find.byIcon(Icons.delete_outline)));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pay')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('method-2')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+
+    final slips = await slipsMatching('void-slip-${sale.uuid}');
+    expect(slips, hasLength(1));
+    expect(slips.single, contains('REMOVED ON EDIT'));
+    expect(slips.single, contains('Cola'));
+    // And the sale that books is the corrected one.
+    expect(orders.byUuid(sale.uuid)!.total, 250);
+  });
+
+  testWidgets('stepping units off a paid line leaves a slip for those units',
+      (t) async {
+    final sale = await reachEditAndTap(t, withUnfiredLine: true, colas: 3);
+    final cola = sale.lines.firstWhere((l) => l.name == 'Cola');
+
+    // 3 Colas down to 1: the line keeps its uuid, so only the quantity says two
+    // units the customer paid for are no longer on the bill.
+    await t.tap(find.descendant(
+        of: find.byKey(Key('line-${cola.uuid}')),
+        matching: find.byIcon(Icons.remove_circle_outline)));
+    await t.pumpAndSettle();
+    await t.tap(find.descendant(
+        of: find.byKey(Key('line-${cola.uuid}')),
+        matching: find.byIcon(Icons.remove_circle_outline)));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pay')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('method-2')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+
+    final slips = await slipsMatching('void-slip-${sale.uuid}');
+    expect(slips, hasLength(1));
+    expect(slips.single, contains('REMOVED ON EDIT'));
+    // The two units that came off, at what they were sold for.
+    expect(slips.single, contains('2 x Cola'));
+    expect(slips.single, contains('60.00'));
+    expect(orders.byUuid(sale.uuid)!.total, 280);
+  });
+
+  testWidgets('a sale corrected with nothing taken off prints no removal slip',
+      (t) async {
+    final sale = await reachEditAndTap(t);
+
+    await t.tap(find.byKey(const Key('product-11')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pay')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('method-2')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+
+    expect(await slipsMatching('void-slip-${sale.uuid}'), isEmpty);
+  });
+
   testWidgets('a sale the server already has is refused rather than edited',
       (t) async {
     final sale = await paidSale();
     orders.markSynced(sale.uuid, 42);
-    await t.pumpWidget(app(await managerOnTheTill()));
-    await signIn(t);
+    await boot(t);
 
     await t.tap(find.byType(DrawerButton));
     await t.pumpAndSettle();

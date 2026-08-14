@@ -189,6 +189,11 @@ class _PosAppState extends State<PosApp> {
   /// uuid. Kept only until that sale is tendered again, so the second payment can
   /// print one slip for everything that came off a bill the customer had already
   /// paid, whether or not the kitchen ever held it.
+  ///
+  /// Deliberately not on disk. The sale itself is durable and the correction is in
+  /// the audit trail; this is only what a slip is printed from, and a till
+  /// restarted mid-correction losing one piece of paper is the right trade against
+  /// another schema field to migrate.
   final Map<String, List<OrderLine>> _amending = {};
 
   /// Lines that already had their own deletion slip printed at the moment they
@@ -402,27 +407,52 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
-  /// Print one slip for the lines a corrected sale lost, when it is tendered again.
+  /// Print one slip for what a corrected sale lost, when it is tendered again.
   ///
   /// A line the kitchen already held printed its own slip the moment it was voided,
-  /// and is skipped here. What is left is a line the customer had paid for that was
-  /// taken off with a plain delete, which leaves no paper anywhere else. A no-op on
-  /// any sale that was not reopened.
+  /// and is skipped here. What is left is what the customer had paid for and no
+  /// longer has, which leaves no paper anywhere else: a line taken off with a plain
+  /// delete, and units stepped off a line that is otherwise still on the bill. A
+  /// no-op on any sale that was not reopened.
   void _slipRemovedOnAmend(Order order) {
     final before = _amending.remove(order.uuid);
     if (before == null) return;
-    final kept = order.lines.map((l) => l.uuid).toSet();
+    final kept = {for (final l in order.lines) l.uuid: l};
     final removed = <OrderLine>[];
     for (final l in before) {
-      if (kept.contains(l.uuid)) continue;
-      // Already on paper from its own void slip, and taken off the set as it is
-      // consumed so nothing accumulates across a shift.
-      if (_slipped.remove(l.uuid)) continue;
-      removed.add(l);
+      final still = kept[l.uuid];
+      if (still == null) {
+        // Already on paper from its own void slip, and taken off the set as it is
+        // consumed so nothing accumulates across a shift.
+        if (_slipped.remove(l.uuid)) continue;
+        removed.add(l);
+        continue;
+      }
+      // Stepping a line down is money off an already-paid bill too, and the line
+      // keeps its uuid, so only the quantity says it happened.
+      if (still.quantity < l.quantity) {
+        removed.add(_unitsOff(l, l.quantity - still.quantity));
+      }
     }
     unawaited(_printDeletion(order, removed,
         title: 'REMOVED ON EDIT', reason: 'Order amended'));
   }
+
+  /// [quantity] units of [line], priced exactly as they were sold, so the slip's
+  /// REMOVED total is what the customer is owed back for them.
+  static OrderLine _unitsOff(OrderLine line, double quantity) => OrderLine(
+        productId: line.productId,
+        name: line.name,
+        quantity: quantity,
+        unitPrice: line.unitPrice,
+        categoryId: line.categoryId,
+        taxRate: line.taxRate,
+        baseTaxRate: line.baseTaxRate,
+        discountPercent: line.discountPercent,
+        note: line.note,
+        seat: line.seat,
+        modifiers: line.modifiers,
+      );
 
   Future<void> _printReceipt(Order order, {bool reprint = false}) async {
     try {
