@@ -219,6 +219,7 @@ class Order {
     this.guestCount,
     this.note,
     this.deliveryCost = 0,
+    this.serviceChargePercent = 0,
     this.tip = 0,
     this.kitchenStatus = KitchenStatus.pending,
     this.refundOfUuid,
@@ -268,6 +269,12 @@ class Order {
   /// income rather than as a sold item.
   double deliveryCost;
 
+  /// The service percentage this bill carries, stamped when the order is created and
+  /// re-stamped when its type changes, never read from settings at total time: a bill
+  /// parked on a table must not change price because a manager edited the setting while
+  /// the guests were still eating.
+  double serviceChargePercent;
+
   /// A tip added on top of the sale total.
   double tip;
 
@@ -292,9 +299,22 @@ class Order {
   double get subtotal => lines.fold(0.0, (s, l) => s + l.total);
   double get discountFactor => 1 - (discountPercent.clamp(0, 100) / 100);
 
+  /// What the service charge is taken on: the food after every discount. Delivery and
+  /// tip stay outside it, since neither is table service.
+  double get serviceChargeBase => subtotal * discountFactor;
+
+  /// The service money on this bill, from the percentage stamped on it.
+  double get serviceCharge =>
+      serviceChargeBase * serviceChargePercent.clamp(0, 100) / 100;
+
+  /// One plus the charge, for callers that scale a part of the bill (a split check, a
+  /// refund) by the same service the customer paid on it.
+  double get serviceChargeFactor => 1 + serviceChargePercent.clamp(0, 100) / 100;
+
   /// What the customer pays: lines (each already net of its own discount), less
-  /// the whole-order discount, plus delivery and tip.
-  double get total => subtotal * discountFactor + deliveryCost + tip;
+  /// the whole-order discount, plus service, delivery and tip.
+  double get total =>
+      subtotal * discountFactor + serviceCharge + deliveryCost + tip;
 
   /// Money already tendered against this order. On a normal sale this equals the
   /// total; on an even/part-paid open tab it is the sum of the shares taken so far.
@@ -308,9 +328,13 @@ class Order {
   /// remains the source of truth for the tax actually booked.
   double get taxTotal {
     var t = 0.0;
+    // The service charge rides in the line prices on the wire, so the server taxes it
+    // at each item's own rate. Scaling by it here keeps the tax shown on the slip equal
+    // to the tax that gets booked.
+    final s = serviceChargeFactor;
     for (final l in lines) {
       if (l.taxRate <= 0) continue;
-      final net = l.total * discountFactor;
+      final net = l.total * discountFactor * s;
       t += net - net / (1 + l.taxRate / 100);
     }
     return t;
@@ -347,6 +371,7 @@ class Order {
         'guest_count': guestCount,
         'note': note,
         'delivery_cost': deliveryCost,
+        'service_charge_percent': serviceChargePercent,
         'tip': tip,
         'kitchen_status': kitchenStatus.name,
         'refund_of_uuid': refundOfUuid,
@@ -355,23 +380,31 @@ class Order {
         'payments': payments.map((p) => p.toMap()).toList(),
       };
 
-  /// The payload sent to the server: like [toMap] but with both the per-line and
-  /// the whole-order discount folded into each line price, so Odoo (which totals
-  /// from the line prices) books the discounted amount. [toMap] itself stays raw,
-  /// so a draft restored from disk is not discounted twice.
+  /// The payload sent to the server: like [toMap] but with the per-line discount, the
+  /// whole-order discount and the service charge folded into each line price, so Odoo
+  /// (which totals from the line prices) books what the customer actually paid.
+  /// [toMap] itself stays raw, so a draft restored from disk is not adjusted twice.
   Map<String, dynamic> toServerPayload() {
     final f = discountFactor;
+    // The service charge is a percentage of the discounted food, so scaling every line
+    // by it books the same total the till printed and taxes the service at each item's
+    // own rate. It travels in the prices rather than as a field of its own because the
+    // module books lines, and the wire contract is fixed.
+    final s = serviceChargeFactor;
     final m = toMap();
     // The discount is now baked into the prices below, so the percentage fields are
     // zeroed on the wire. Leaving them set would let a server that also reads them
     // discount an already-discounted price a second time.
     m['discount_percent'] = 0;
+    // Local-only, and for the same reason: the charge is already inside the prices, and
+    // a field the module does not read could only ever be billed twice.
+    m.remove('service_charge_percent');
     // A locally-created customer has a synthetic negative id, not an Odoo partner.
     // Never send it as partner_id (it would fail the foreign key); the name and
     // phone still travel so the server can match or create the partner itself.
     if (partnerId != null && partnerId! < 0) m['partner_id'] = null;
     m['lines'] = lines.map((l) {
-      final lf = l.lineDiscountFactor * f;
+      final lf = l.lineDiscountFactor * f * s;
       final lm = l.toMap();
       lm['unit_price'] = l.unitPrice * lf;
       lm['discount_percent'] = 0;
@@ -403,6 +436,8 @@ class Order {
         guestCount: m['guest_count'] as int?,
         note: m['note'] as String?,
         deliveryCost: (m['delivery_cost'] as num?)?.toDouble() ?? 0,
+        serviceChargePercent:
+            (m['service_charge_percent'] as num?)?.toDouble() ?? 0,
         tip: (m['tip'] as num?)?.toDouble() ?? 0,
         kitchenStatus: KitchenStatus.values
             .byName((m['kitchen_status'] as String?) ?? KitchenStatus.pending.name),
