@@ -44,6 +44,8 @@ dependencies:
   path_provider: ^2.1.6
   sqlcipher_flutter_libs: ^0.7.0+eol
   flutter_secure_storage: ^11.0.0
+  pdf: ^3.12.0
+  printing: ^5.14.3
 
 dev_dependencies:
   flutter_test:
