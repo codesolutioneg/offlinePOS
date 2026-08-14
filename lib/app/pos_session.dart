@@ -18,6 +18,7 @@ class PosSession {
     required this.deviceId,
     required this.cashierId,
     this.taxRateFor,
+    this.serviceChargeFor,
   });
 
   final CatalogueStore catalogue;
@@ -32,6 +33,12 @@ class PosSession {
   /// (e.g. 0% takeaway). Null for the whole session means "use product rates".
   final double? Function(int? categoryId, OrderType type)? taxRateFor;
 
+  /// Resolves the service percentage a new bill of this order type carries (0 for
+  /// none), so the shop's setting is stamped onto the order once instead of being read
+  /// every time a total is asked for. Null for the whole session means no service
+  /// charge anywhere.
+  final double Function(OrderType type)? serviceChargeFor;
+
   /// Apply the configured category/order-type tax rate to a line, if one is set.
   /// A line whose category is not in the matrix keeps the rate it already has.
   void _applyTax(OrderLine line) {
@@ -41,13 +48,28 @@ class PosSession {
     line.taxRate = taxRateFor?.call(line.categoryId, current.type) ?? line.baseTaxRate;
   }
 
+  /// Stamp the shop's current service percentage for [o]'s order type onto the bill.
+  /// Called when a bill is opened and when its type changes, never when a total is
+  /// read: what the guests are shown is what they pay, whatever happens to the setting
+  /// while they eat.
+  void _stampServiceCharge(Order o) {
+    o.serviceChargePercent = serviceChargeFor?.call(o.type) ?? 0;
+  }
+
+  /// A fresh empty bill for this till, with the service charge for its type on it.
+  Order _blankOrder() {
+    final o = Order(deviceId: deviceId, cashierId: cashierId);
+    _stampServiceCharge(o);
+    return o;
+  }
+
   Order? _current;
 
   /// The order being built. Restored from disk if one was left unfinished, which is
-  /// what gives a cashier their work back after a crash or a closed window.
+  /// what gives a cashier their work back after a crash or a closed window. A restored
+  /// draft keeps the service percentage it was opened with.
   Order get current {
-    _current ??= orders.drafts().firstOrNull ??
-        Order(deviceId: deviceId, cashierId: cashierId);
+    _current ??= orders.drafts().firstOrNull ?? _blankOrder();
     return _current!;
   }
 
@@ -195,6 +217,9 @@ class PosSession {
     order.note = null;
     order.deliveryCost = 0;
     order.tip = 0;
+    // An emptied order is a fresh bill on the same row, so it takes the service charge
+    // the shop is on now rather than keeping a stamp from the sale that was cleared.
+    _stampServiceCharge(order);
     orders.save(order);
   }
 
@@ -208,6 +233,10 @@ class PosSession {
   /// Set the order type. Clears delivery details when switching away from delivery.
   void setOrderType(OrderType type) {
     current.type = type;
+    // Service follows the type: what is table service dine-in is not table service in a
+    // takeaway bag. Re-stamped here, on the bill, so the total still never depends on
+    // reading a setting late.
+    _stampServiceCharge(current);
     // Tax can differ by order type (e.g. 0% takeaway), so re-resolve every line's
     // rate for the new type. Lines whose category is not in the matrix are untouched.
     for (final line in current.lines) {
@@ -280,7 +309,7 @@ class PosSession {
     orders.save(order);
     audit.record(cashierId, 'order.held',
         detail: '${order.uuid}|${order.tableLabel ?? ''}');
-    _current = Order(deviceId: deviceId, cashierId: cashierId);
+    _current = _blankOrder();
   }
 
   /// Bring a parked order back to the counter to edit or pay. The order currently
@@ -305,7 +334,7 @@ class PosSession {
       active.state = OrderState.held;
       orders.save(active);
     }
-    _current = Order(deviceId: deviceId, cashierId: cashierId);
+    _current = _blankOrder();
   }
 
   /// Begin a fresh order of [type]. A current order with lines is parked (held); an
@@ -319,7 +348,7 @@ class PosSession {
     } else {
       orders.delete(active.uuid);
     }
-    _current = Order(deviceId: deviceId, cashierId: cashierId);
+    _current = _blankOrder();
     setOrderType(type);
   }
 
@@ -333,7 +362,7 @@ class PosSession {
     orders.save(order);
     outbox.enqueue('order.push', order.uuid, order.toServerPayload());
     audit.record(cashierId, 'order.paid', detail: order.uuid);
-    _current = Order(deviceId: deviceId, cashierId: cashierId);
+    _current = _blankOrder();
     return order;
   }
 
@@ -358,7 +387,7 @@ class PosSession {
       orders.save(order);
       outbox.enqueue('order.push', order.uuid, order.toServerPayload());
       audit.record(cashierId, 'order.paid', detail: '${order.uuid}|even split settled');
-      _current = Order(deviceId: deviceId, cashierId: cashierId);
+      _current = _blankOrder();
       return 0;
     }
     order.state = OrderState.held;
@@ -518,12 +547,24 @@ class PosSession {
     orders.save(current);
   }
 
+  /// What a check made of [lines] is charged: the lines net of their own discounts,
+  /// less the whole-order discount, plus the bill's service charge. [payCheck] books
+  /// exactly this, so a tender sheet asks for this figure rather than re-deriving part
+  /// of it and coming up short by the service.
+  double checkTotal(Iterable<OrderLine> lines) =>
+      lines.fold(0.0, (a, l) => a + l.total) *
+      current.discountFactor *
+      current.serviceChargeFactor;
+
   /// Carve a subset of the current order's lines into their own paid check and
   /// take payment for it, leaving the rest of the table open. This is how a split
   /// bill is settled: each guest/selection becomes its own paid order that syncs on
   /// its own, so the server needs no concept of a split. Returns the paid check for
   /// printing. The order-level discount rides along (it is a percentage, so each
   /// check discounts only its own lines); tip is whatever was tendered on the check.
+  /// The service percentage rides along the same way, taken from the table's stamp
+  /// rather than read again, so the checks add up to exactly what the table was
+  /// charged.
   Order payCheck(
     List<String> lineUuids, {
     List<OrderPayment> payments = const [],
@@ -544,6 +585,7 @@ class PosSession {
       customerPhone: order.customerPhone,
       discountPercent: order.discountPercent,
       discountReason: order.discountReason,
+      serviceChargePercent: order.serviceChargePercent,
       tip: tip,
       lines: taken,
     )
@@ -557,7 +599,7 @@ class PosSession {
     if (order.lines.isEmpty) {
       // Whole table settled: discard the now-empty running order and start fresh.
       orders.delete(order.uuid);
-      _current = Order(deviceId: deviceId, cashierId: cashierId);
+      _current = _blankOrder();
     } else {
       orders.save(order);
     }
@@ -592,6 +634,13 @@ class PosSession {
   /// (creating one if the table has none), then leave the rest here. Returns the
   /// target order. Used for "move items to another table". A whole-order discount on
   /// the source is folded into the moved lines so their price does not change.
+  ///
+  /// The service charge belongs to the bill, not to the line, because it is a
+  /// percentage of the bill the table is handed. A tab opened by this move therefore
+  /// takes the source's percentage (the moved lines keep the price they were rung at);
+  /// a tab that already exists keeps its own, and the lines joining it are serviced at
+  /// that bill's rate. Both were stamped from the same shop setting, so they differ
+  /// only if it was edited mid-service.
   Order moveLinesToTable(Set<String> lineUuids, String targetTableLabel) {
     final order = current;
     // Moving onto the table the order is already on would fork a duplicate tab for
@@ -607,6 +656,7 @@ class PosSession {
             cashierId: cashierId,
             type: OrderType.dineIn,
             tableLabel: targetTableLabel,
+            serviceChargePercent: order.serviceChargePercent,
           )..state = OrderState.held,
         );
     // Flatten the target's own discount to line level first, so the moved lines
@@ -619,7 +669,7 @@ class PosSession {
         detail: '${order.uuid}->${target.uuid}|${taken.length} line(s)');
     if (order.lines.isEmpty) {
       orders.delete(order.uuid);
-      _current = Order(deviceId: deviceId, cashierId: cashierId);
+      _current = _blankOrder();
     } else {
       orders.save(order);
     }
@@ -627,7 +677,8 @@ class PosSession {
   }
 
   /// Fold another table's open order into the current one, then discard the source.
-  /// Used for "merge tables". A no-op if the source is missing or is this order.
+  /// Used for "merge tables". A no-op if the source is missing or is this order. One
+  /// merged bill carries one service percentage, so the surviving order keeps its own.
   void mergeOrderInto(String sourceUuid) {
     final source = orders.byUuid(sourceUuid);
     if (source == null || source.uuid == current.uuid) return;
