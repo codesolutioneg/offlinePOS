@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 13;
+  static const int version = 14;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -342,6 +342,20 @@ class Schema {
     [
       'ALTER TABLE pos_tables ADD COLUMN vertical INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE pos_tables ADD COLUMN span INTEGER NOT NULL DEFAULT 140',
+    ],
+
+    // v13 -> v14: a shift's own identity.
+    //
+    // Nothing reads this yet, which is the point of adding it now: the shift is a
+    // till-local artefact today, and giving it an identity before a consumer exists
+    // means that if one is ever added the shift is already replay-safe on a key
+    // rather than needing a migration in the same release. Existing rows are
+    // backfilled from the shift id, which is already unique per till, so an
+    // upgraded till has no nulls and no row's identity changes underneath it.
+    [
+      'ALTER TABLE shifts ADD COLUMN uuid TEXT',
+      'UPDATE shifts SET uuid = id WHERE uuid IS NULL',
+      'CREATE UNIQUE INDEX idx_shifts_uuid ON shifts(uuid)',
     ],
   ];
 }

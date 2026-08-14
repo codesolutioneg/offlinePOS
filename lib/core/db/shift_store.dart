@@ -12,6 +12,9 @@ class ShiftStore {
 
   final Db _db;
 
+  /// The tender an untendered sale is booked to, matching the payment-mix report.
+  static const String _cashLabel = 'Cash';
+
   Shift? currentOpenShift() {
     final rows = _db.raw.select(
         'SELECT * FROM shifts WHERE closed_at IS NULL ORDER BY opened_at DESC LIMIT 1');
@@ -30,14 +33,18 @@ class ShiftStore {
       throw StateError('A shift is already open.');
     }
     final opened = (at ?? DateTime.now().toUtc());
-    final shiftId = id ?? 'SH${opened.microsecondsSinceEpoch}';
-    _db.raw.execute(
-      'INSERT INTO shifts (id, opened_at, closed_at, opening_float, cashier_id, movements, closing_counted) '
-      'VALUES (?, ?, NULL, ?, ?, ?, NULL)',
-      [shiftId, opened.toIso8601String(), openingFloat, cashierId, '[]'],
+    final shift = Shift(
+      id: id ?? 'SH${opened.microsecondsSinceEpoch}',
+      openedAt: opened,
+      openingFloat: openingFloat,
+      cashierId: cashierId,
     );
-    return Shift(
-        id: shiftId, openedAt: opened, openingFloat: openingFloat, cashierId: cashierId);
+    _db.raw.execute(
+      'INSERT INTO shifts (id, uuid, opened_at, closed_at, opening_float, cashier_id, movements, closing_counted) '
+      'VALUES (?, ?, ?, NULL, ?, ?, ?, NULL)',
+      [shift.id, shift.uuid, opened.toIso8601String(), openingFloat, cashierId, '[]'],
+    );
+    return shift;
   }
 
   void addMovement(String type, double amount, {String reason = '', String? category}) {
@@ -79,10 +86,18 @@ class ShiftStore {
     );
     var salesTotal = 0.0;
     var cashSales = 0.0;
+    // Keyed on (label, is-cash) rather than on the label alone, so a tender named
+    // like a cash one but not configured as cash cannot be folded into the cash row
+    // and silently break the drawer reconciliation.
+    final byTender = <(String, bool), double>{};
     for (final r in rows) {
       final total = (r['total'] as num).toDouble();
       salesTotal += total;
-      cashSales += _cashPortion(r['payload'] as String, total, cashMethodIds);
+      // One decode per order: the tender split and the cash portion read the same
+      // payments, and the X read runs on every rebuild of the shift screen.
+      final payments = _payments(r['payload'] as String);
+      cashSales += _cashPortion(payments, total, cashMethodIds);
+      _addTenders(payments, total, cashMethodIds, byTender);
     }
     return ShiftSummary(
       openingFloat: shift.openingFloat,
@@ -92,27 +107,75 @@ class ShiftStore {
       salesTotal: salesTotal,
       cashSales: cashSales,
       countedCash: shift.closingCounted,
+      tenders: _sorted(byTender),
     );
   }
+
+  /// The payments recorded on one order payload, empty when none were.
+  List<Map<String, Object?>> _payments(String payload) => [
+        for (final p in (jsonDecode(payload) as Map)['payments'] as List? ?? const [])
+          (p as Map).cast<String, Object?>(),
+      ];
 
   /// The cash tendered on one order: the sum of its cash-method payments, or the
   /// whole total when no tender was recorded (an implicit cash sale, matching how
   /// the server books an order with no payments).
-  double _cashPortion(String payload, double total, Set<int> cashMethodIds) {
-    final payments = (jsonDecode(payload) as Map)['payments'] as List? ?? const [];
+  double _cashPortion(
+      List<Map<String, Object?>> payments, double total, Set<int> cashMethodIds) {
     if (payments.isEmpty) return total;
     var cash = 0.0;
     for (final p in payments) {
-      final m = p as Map;
-      if (cashMethodIds.contains(m['method_id'] as int)) {
-        cash += (m['amount'] as num).toDouble();
+      if (cashMethodIds.contains(p['method_id'] as int)) {
+        cash += (p['amount'] as num).toDouble();
       }
     }
     return cash;
   }
 
+  /// Folds one order's tenders into [into]. A split tender contributes to each
+  /// method it was paid on, and an order with no recorded payment is booked to cash
+  /// for its whole total the same way [_cashPortion] and the server treat it, so the
+  /// tender rows always add up to the takings. A refund carries negative amounts
+  /// and therefore reduces the method it is returned on.
+  void _addTenders(
+    List<Map<String, Object?>> payments,
+    double total,
+    Set<int> cashMethodIds,
+    Map<(String, bool), double> into,
+  ) {
+    void add(String label, bool isCash, double amount) =>
+        into[(label, isCash)] = (into[(label, isCash)] ?? 0) + amount;
+
+    if (payments.isEmpty) {
+      add(_cashLabel, true, total);
+      return;
+    }
+    for (final p in payments) {
+      final methodId = p['method_id'] as int;
+      final isCash = cashMethodIds.contains(methodId);
+      // A tender saved without its method name is shown by method id rather than
+      // guessed at: naming a card row 'Cash' would put it against the drawer count.
+      final label =
+          (p['label'] as String?) ?? (isCash ? _cashLabel : 'Method $methodId');
+      add(label, isCash, (p['amount'] as num).toDouble());
+    }
+  }
+
+  /// Cash first, then largest first: a Z read is reconciled against the drawer
+  /// count, so the rows being counted lead. Ties break on the label to keep the
+  /// order stable between two reads of the same shift.
+  List<TenderTotal> _sorted(Map<(String, bool), double> byTender) => [
+        for (final e in byTender.entries)
+          TenderTotal(label: e.key.$1, amount: e.value, isCash: e.key.$2),
+      ]..sort((a, b) {
+        if (a.isCash != b.isCash) return a.isCash ? -1 : 1;
+        final bySize = b.amount.compareTo(a.amount);
+        return bySize != 0 ? bySize : a.label.compareTo(b.label);
+      });
+
   Shift _row(Map<String, dynamic> r) => Shift(
         id: r['id'] as String,
+        uuid: r['uuid'] as String?,
         openedAt: DateTime.parse(r['opened_at'] as String),
         closedAt: r['closed_at'] == null
             ? null
