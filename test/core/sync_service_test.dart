@@ -19,6 +19,19 @@ OdooPuller pullerWith(List<Product> products) => OdooPuller(
       },
     );
 
+/// A server that can be turned off and on inside a test, so a batch push can be
+/// made to fail the way a shift close does at 11pm and then be allowed to succeed
+/// on a later attempt.
+class FlakyServer {
+  bool down = true;
+  int sends = 0;
+
+  Future<void> send(OutboxEntry entry) async {
+    if (down) throw Exception('server down');
+    sends++;
+  }
+}
+
 void main() {
   late Db db;
   late CatalogueStore cat;
@@ -39,6 +52,9 @@ void main() {
     Outbox? outbox,
     Future<bool> Function()? probe,
     Future<void> Function()? reconcile,
+    Duration retryWindow = const Duration(hours: 12),
+    Duration retryInterval = const Duration(minutes: 5),
+    DateTime Function()? now,
   }) =>
       SyncService(
         outbox: outbox ?? Outbox(store: store, senders: senders),
@@ -49,7 +65,32 @@ void main() {
         puller: puller,
         probe: probe,
         reconcile: reconcile,
+        retryWindow: retryWindow,
+        retryInterval: retryInterval,
+        now: now,
       );
+
+  /// A till that closed its shift while the server was down: one sale still queued
+  /// and a retry armed. This is the state the self-healing tests start from.
+  Future<({SyncService sync, Outbox outbox, FlakyServer server})> armedTill({
+    Duration retryWindow = const Duration(hours: 12),
+    Duration retryInterval = const Duration(minutes: 5),
+    DateTime Function()? now,
+    Future<bool> Function()? probe,
+  }) async {
+    final server = FlakyServer();
+    final outbox = Outbox(store: store, senders: {'order.push': server.send});
+    await outbox.enqueue('order.push', 'u1', {});
+    final sync = serviceWith(
+      outbox: outbox,
+      probe: probe,
+      retryWindow: retryWindow,
+      retryInterval: retryInterval,
+      now: now,
+    );
+    await sync.flush();
+    return (sync: sync, outbox: outbox, server: server);
+  }
 
   test('a never-pulled catalogue needs a refresh', () {
     expect(serviceWith().catalogueNeedsRefresh, isTrue);
@@ -174,5 +215,97 @@ void main() {
     await s.tick();
     await s.tick();
     expect(pulls, 1);
+  });
+
+  test('a flush that cannot deliver arms a retry', () async {
+    // The shift close that fails is exactly when a person is least likely to be
+    // watching, so the till has to remember the job is unfinished.
+    final till = await armedTill();
+    expect(till.server.sends, 0);
+    expect(store.pendingSalesCount, 1, reason: 'the takings are still on the till');
+    expect(till.sync.retryArmed, isTrue);
+    expect(till.sync.retryArmedAt, isNotNull);
+    expect(till.sync.retryArmedReason, isNotNull);
+    expect(till.sync.retryAttempts, 0, reason: 'armed, not yet tried');
+  });
+
+  test('a timer pass drains the armed retry once the server is back', () async {
+    final till = await armedTill(probe: () async => true);
+    till.server.down = false;
+    await till.sync.periodicPass();
+    expect(till.server.sends, 1, reason: 'the orders went without anyone tapping sync');
+    expect(store.pendingSalesCount, 0);
+    expect(till.sync.retryAttempts, 1);
+    expect(till.sync.lastRetryAt, isNotNull);
+    expect(till.sync.retryArmed, isFalse);
+    expect(till.sync.retryStoppedReason, contains('delivered'));
+  });
+
+  test('the armed retry paces itself instead of hammering a dead server', () async {
+    var clock = DateTime.utc(2026, 1, 1, 23);
+    final till = await armedTill(
+      retryInterval: const Duration(minutes: 5),
+      now: () => clock,
+      probe: () async => true,
+    );
+    await till.sync.periodicPass();
+    // The loop ticks every 20 s; the next few passes must not turn into attempts.
+    await till.sync.periodicPass();
+    await till.sync.periodicPass();
+    expect(till.sync.retryAttempts, 1);
+    clock = clock.add(const Duration(minutes: 6));
+    await till.sync.periodicPass();
+    expect(till.sync.retryAttempts, 2);
+  });
+
+  test('the armed retry gives up when its window closes', () async {
+    var clock = DateTime.utc(2026, 1, 1, 23);
+    final till = await armedTill(
+      retryWindow: const Duration(hours: 12),
+      now: () => clock,
+      probe: () async => true,
+    );
+    till.server.down = false; // back up, but far too late to be this till's job
+    clock = clock.add(const Duration(hours: 13));
+    await till.sync.periodicPass();
+    expect(till.server.sends, 0, reason: 'the window closed, so nothing is tried');
+    expect(till.sync.retryArmed, isFalse);
+    // Support has to be able to see it stopped, rather than a till that looks like
+    // it is still trying.
+    expect(till.sync.retryStoppedReason, contains('gave up'));
+    expect(store.pendingSalesCount, 1, reason: 'the sale is still owed to Odoo');
+  });
+
+  test('the timer pass stands the retry down when nothing is left to send', () async {
+    final till = await armedTill(probe: () async => true);
+    till.server.down = false;
+    // Emptied without a batch push, the way a drain from elsewhere can, so the
+    // pass itself is what has to notice there is nothing to chase.
+    await till.outbox.drain();
+    await till.sync.periodicPass();
+    expect(till.sync.retryArmed, isFalse);
+    expect(till.sync.retryStoppedReason, contains('nothing left'));
+    expect(till.sync.retryAttempts, 0, reason: 'nothing owed, so no attempt');
+  });
+
+  test('an offline pass makes no retry attempt at all', () async {
+    final till = await armedTill(probe: () async => false);
+    till.server.down = false; // the server is up; this till cannot see it
+    await till.sync.periodicPass();
+    expect(till.server.sends, 0, reason: 'the probe said offline, so no attempt');
+    expect(till.sync.retryAttempts, 0);
+    expect(till.sync.retryArmed, isTrue, reason: 'still owed, so still armed');
+  });
+
+  test('refresh never drains even while a retry is armed', () async {
+    // The retry lives beside refresh, never inside it: orders are booked as one
+    // batch on a single shared Odoo login, so the periodic read stays a read.
+    final till = await armedTill(probe: () async => true);
+    till.server.down = false;
+    await till.sync.refresh();
+    expect(till.server.sends, 0, reason: 'refresh must not push orders');
+    expect(store.pendingSalesCount, 1);
+    expect(till.sync.retryArmed, isTrue);
+    expect(till.sync.retryAttempts, 0);
   });
 }

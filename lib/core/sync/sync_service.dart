@@ -32,6 +32,8 @@ class SyncService {
     Future<bool> Function()? probe,
     this.reconcile,
     this.catalogueMaxAge = const Duration(hours: 6),
+    this.retryWindow = const Duration(hours: 12),
+    this.retryInterval = const Duration(minutes: 5),
     DateTime Function()? now,
   })  : _outbox = outbox,
         _catalogue = catalogue,
@@ -55,6 +57,18 @@ class SyncService {
   final String deviceId;
   final String appVersion;
   final Duration catalogueMaxAge;
+
+  /// How long after a batch push failed the timer keeps trying to finish it. Wide
+  /// enough to sit through an overnight outage and deliver before the shop opens,
+  /// bounded so a till that has been pointed at a dead server for days stops
+  /// pretending a retry is still coming and says it gave up instead.
+  final Duration retryWindow;
+
+  /// Floor between two retry attempts. The loop ticks every 20 s, and a drain
+  /// against a dead server costs a socket timeout plus a failed attempt on every
+  /// queued entry, so the retry is paced far below the loop.
+  final Duration retryInterval;
+
   final DateTime Function() _now;
 
   /// Re-queues any paid order that is not on the wire yet. Injected so this class
@@ -95,6 +109,30 @@ class SyncService {
   String? lastError;
   int sentThisRun = 0;
 
+  DateTime? _retryArmedAt;
+  String? _retryArmedReason;
+  DateTime? _lastRetryAt;
+  int _retryAttempts = 0;
+  String? _retryStoppedReason;
+
+  /// True while a batch push that did not deliver everything is waiting for the
+  /// timer to finish it. See [retryArmedFlush].
+  bool get retryArmed => _retryArmedAt != null;
+
+  /// When the failed push happened. The retry window runs from here and is never
+  /// extended by a later attempt, so a dead server cannot be retried forever.
+  DateTime? get retryArmedAt => _retryArmedAt;
+
+  /// What went wrong on the push that armed the retry, or why it was given up on,
+  /// in the words support gets read back to them.
+  String? get retryArmedReason => _retryArmedReason;
+  String? get retryStoppedReason => _retryStoppedReason;
+
+  /// Background attempts made since arming, and when the last one ran. Together
+  /// they are the difference between "still trying" and "quietly doing nothing".
+  int get retryAttempts => _retryAttempts;
+  DateTime? get lastRetryAt => _lastRetryAt;
+
   /// Ticks every time the catalogue is refreshed from the server, so a screen
   /// showing the menu can reload itself instead of the cashier having to leave
   /// and re-enter it after the first sync.
@@ -114,11 +152,24 @@ class SyncService {
   /// because the shop runs on a single shared Odoo login and a per-order push is
   /// not how the books are meant to be written. The timer only keeps the
   /// online/offline badge honest and the catalogue fresh, both of which are reads.
+  ///
+  /// The single exception is a batch push that already ran and did not get
+  /// everything out: [retryArmedFlush] finishes that one batch. The loop still
+  /// never starts a push of its own.
   void start({Duration every = const Duration(seconds: 20)}) {
     _timer?.cancel();
-    _timer = Timer.periodic(every, (_) => refresh());
+    _timer = Timer.periodic(every, (_) => periodicPass());
     // Probe once at startup so the badge is right before the first tick.
-    unawaited(refresh());
+    unawaited(periodicPass());
+  }
+
+  /// One turn of the periodic loop: the read-only [refresh], then, only while a
+  /// failed batch push is armed, one bounded attempt to finish it. Kept as its own
+  /// method so the two stay separate: [refresh] is what the loop does every time
+  /// and it must remain incapable of pushing an order.
+  Future<void> periodicPass() async {
+    await refresh();
+    await retryArmedFlush();
   }
 
   void stop() {
@@ -241,6 +292,104 @@ class SyncService {
       _state = SyncState.idle;
       // A completed push is the strongest proof of being online.
       online.value = true;
+      _armRetryIfIncomplete(null);
+    } catch (e) {
+      lastError = e.toString();
+      _state = SyncState.offline;
+      online.value = false;
+      _armRetryIfIncomplete(e.toString());
+    }
+  }
+
+  /// Decide, at the end of a batch push, whether the timer has to come back and
+  /// finish the job. A failed shift close used to sit there until somebody noticed
+  /// the next morning and tapped Sync now; the day's takings are not something to
+  /// leave waiting on a person remembering.
+  ///
+  /// Only sales arm a retry. A push that failed on the catalogue read with nothing
+  /// owed to the server has nothing for a retry to deliver, and the periodic
+  /// refresh already re-reads the catalogue on its own.
+  void _armRetryIfIncomplete(String? failure) {
+    if (pendingSales == 0) {
+      if (_retryArmedAt != null) _disarmRetry('nothing left to send');
+      return;
+    }
+    final reason = failure ?? '$pendingSales sale(s) still queued after the push';
+    if (_retryArmedAt != null) {
+      // Keep the original arming time: the window is meant to expire, and a fresh
+      // failure every few minutes would push it out forever.
+      _retryArmedReason = reason;
+      return;
+    }
+    _retryArmedAt = _now().toUtc();
+    _retryArmedReason = reason;
+    _retryAttempts = 0;
+    _lastRetryAt = null;
+    _retryStoppedReason = null;
+  }
+
+  void _disarmRetry(String why) {
+    _retryArmedAt = null;
+    _retryStoppedReason = why;
+  }
+
+  /// One bounded catch-up attempt for a batch push that did not deliver.
+  ///
+  /// Called by the loop next to [refresh], never from inside it: orders leave this
+  /// till as one batch because the shop has a single shared Odoo login, so the
+  /// read-only pass has to stay read-only. This is the same batch finishing late,
+  /// which is why it only ever runs when a real push already failed.
+  ///
+  /// Does nothing unless armed, gives up when [retryWindow] has passed, and paces
+  /// itself to one attempt per [retryInterval] so a dead server is not hammered
+  /// every 20 s.
+  Future<void> retryArmedFlush() async {
+    final armedAt = _retryArmedAt;
+    if (armedAt == null) return;
+    final now = _now().toUtc();
+    if (pendingSales == 0) {
+      // Something else got there first: a manual sync, or an earlier attempt.
+      _disarmRetry('nothing left to send');
+      return;
+    }
+    if (now.difference(armedAt) >= retryWindow) {
+      // Recorded rather than dropped, so diagnostics can say it gave up instead of
+      // showing a till that looks like it is still trying.
+      _disarmRetry('gave up with $pendingSales sale(s) still queued when the '
+          'retry window closed');
+      return;
+    }
+    final last = _lastRetryAt;
+    if (last != null && now.difference(last) < retryInterval) return;
+    // A push is already running (a manual sync, a shift close): that one owns the
+    // queue and this attempt would only fight it for the same entries.
+    if (_state == SyncState.working) return;
+    // [refresh] has just run the probe on this same pass, so an offline till costs
+    // nothing here: no socket, no burnt attempt on every queued entry.
+    if (!online.value) return;
+
+    _lastRetryAt = now;
+    _retryAttempts++;
+    _state = SyncState.working;
+    try {
+      // Same sweep the batch push does, in case the sale that was lost from the
+      // outbox is the reason the close came up short.
+      await reconcilePending();
+      sentThisRun = await _outbox.drain(maxBatches: _retryMaxBatches);
+      if (sentThisRun > 0) {
+        _outboxStore.pruneSent();
+        // Something was accepted, which is the only proof of a line worth acting
+        // on. Nothing sent proves nothing, so the badge is left to the probe.
+        online.value = true;
+      }
+      // The drain swallows a sender failure, so what is left in the queue is the
+      // honest answer about whether the books are up to date.
+      final left = pendingSales;
+      _state = left == 0 || sentThisRun > 0 ? SyncState.idle : SyncState.offline;
+      if (left == 0) {
+        lastError = null;
+        _disarmRetry('delivered on retry $_retryAttempts');
+      }
     } catch (e) {
       lastError = e.toString();
       _state = SyncState.offline;
@@ -259,4 +408,8 @@ class SyncService {
   /// Alias read at the call sites that push a batch (shift close, manual sync), so
   /// their intent reads as "flush what is queued" rather than an anonymous tick.
   Future<void> flush() => tick();
+
+  /// Batches one retry attempt will take. A long backlog is worked through over
+  /// several attempts rather than one long run behind a cashier who is mid-sale.
+  static const int _retryMaxBatches = 10;
 }
