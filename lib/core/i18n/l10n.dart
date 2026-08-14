@@ -603,4 +603,15 @@ const Map<String, String> _ar = {
   "offlinePOS": "offlinePOS",
   "receipt": "إيصال",
   "unknown reason": "سبب غير معروف",
+  // audit + report filters and downloads
+  'All actors': 'كل المستخدمين',
+  'Any date': 'أي تاريخ',
+  'All cashiers': 'كل الكاشير',
+  'Order type': 'نوع الطلب',
+  'All types': 'كل الأنواع',
+  'Copy CSV': 'نسخ CSV',
+  'Download CSV': 'تنزيل CSV',
+  'Download PDF': 'تنزيل PDF',
+  'Saved to': 'حُفظ في',
+  'Could not save file': 'تعذّر حفظ الملف',
 };

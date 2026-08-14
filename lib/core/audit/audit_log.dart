@@ -35,12 +35,14 @@ class AuditLog {
       .select('SELECT COUNT(*) c FROM audit_log WHERE synced_at IS NULL')
       .first['c'] as int;
 
-  /// Recent entries, newest first, optionally filtered by [event] and a time
-  /// window. Backs the manager's audit viewer and the activity report. Times are
-  /// compared as UTC ISO strings, which sort lexically the same as chronologically.
+  /// Recent entries, newest first, optionally filtered by [event], [actor] and a
+  /// time window. Backs the manager's audit viewer and the activity report. Times
+  /// are compared as UTC ISO strings, which sort lexically the same as
+  /// chronologically.
   List<Map<String, Object?>> recent({
     int limit = 500,
     String? event,
+    String? actor,
     DateTime? from,
     DateTime? to,
   }) {
@@ -49,6 +51,10 @@ class AuditLog {
     if (event != null) {
       where.add('event = ?');
       args.add(event);
+    }
+    if (actor != null) {
+      where.add('actor = ?');
+      args.add(actor);
     }
     if (from != null) {
       where.add('at >= ?');
@@ -70,5 +76,13 @@ class AuditLog {
   List<String> events() => _db.raw
       .select('SELECT DISTINCT event FROM audit_log ORDER BY event')
       .map((r) => r['event'] as String)
+      .toList();
+
+  /// The distinct actors recorded, for a filter dropdown. Under one shared Odoo
+  /// login the cashier id is the only record of who took an action, so this is
+  /// how a manager narrows the trail to a single person.
+  List<String> actors() => _db.raw
+      .select('SELECT DISTINCT actor FROM audit_log ORDER BY actor')
+      .map((r) => r['actor'] as String)
       .toList();
 }

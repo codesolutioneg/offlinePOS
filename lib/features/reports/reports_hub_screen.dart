@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/audit/audit_log.dart';
+import '../../core/export/data_export.dart';
+import '../../core/export/pdf_export.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/catalogue.dart';
@@ -63,7 +65,14 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   /// report can cover any period, not just today/yesterday/7-day.
   DateTimeRange? _custom;
 
-  /// Orders whose local sale date falls inside the chosen range.
+  /// Narrow the window to one cashier / one order type before a report opens.
+  /// Null means "all", so the reports keep working exactly as before until a
+  /// manager actually picks a value.
+  String? _cashier;
+  OrderType? _type;
+
+  /// Orders whose local sale date falls inside the chosen range and match the
+  /// cashier/order-type filters.
   List<Order> get _filtered {
     final now = DateTime.now();
     final startOfToday = DateTime(now.year, now.month, now.day);
@@ -82,8 +91,16 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       };
     }
 
-    return widget.allOrders.where(inRange).toList();
+    return widget.allOrders
+        .where(inRange)
+        .where((o) => _cashier == null || o.cashierId == _cashier)
+        .where((o) => _type == null || o.type == _type)
+        .toList();
   }
+
+  /// The cashiers who appear in the recent orders, for the cashier filter.
+  List<String> get _cashiers =>
+      (widget.allOrders.map((o) => o.cashierId).toSet().toList()..sort());
 
   /// The chosen range as explicit bounds, for reports that also read the audit
   /// trail (which is not a list of orders). Null means unbounded on that side.
@@ -160,11 +177,86 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     }
   }
 
+  /// The windowed, filtered orders as one row each, the shape both the CSV and
+  /// the PDF export share. Columns are the order-level facts a manager needs off
+  /// the till: reference, when, who, type, item count and total.
+  (List<String>, List<List<String>>) _ordersTable() {
+    String ref(String uuid) =>
+        uuid.length <= 6 ? uuid : uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
+    String at(DateTime d) {
+      final l = d.toLocal();
+      String two(int n) => n.toString().padLeft(2, '0');
+      return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
+    }
+
+    const header = ['Ref', 'Date', 'Cashier', 'Type', 'Items', 'Total'];
+    final rows = [
+      for (final o in _filtered)
+        [
+          ref(o.uuid),
+          at(o.createdAt),
+          o.cashierId,
+          o.type.label,
+          '${o.lines.length}',
+          o.total.toStringAsFixed(2),
+        ],
+    ];
+    return (header, rows);
+  }
+
+  Future<void> _downloadCsv() async {
+    final (header, rows) = _ordersTable();
+    final name = exportFileName('report-sales', DateTime.now(), 'csv');
+    await _save(() => writeTextExport(name, buildCsv(header, rows)));
+  }
+
+  Future<void> _downloadPdf() async {
+    final (header, rows) = _ordersTable();
+    final name = exportFileName('report-sales', DateTime.now(), 'pdf');
+    await _save(() async => writeBytesExport(
+          name,
+          await buildPdfTable(tr(context, 'Sales report'), header, rows),
+        ));
+  }
+
+  /// Runs a file-writing action and tells the user where it landed, or that it
+  /// could not be saved, rather than failing silently.
+  Future<void> _save(Future<String> Function() write) async {
+    try {
+      final path = await write();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${tr(context, 'Saved to')}: $path')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(tr(context, 'Could not save file'))),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final count = _filtered.length;
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Reports'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Reports')),
+        actions: [
+          IconButton(
+            key: const Key('report-download-csv'),
+            tooltip: tr(context, 'Download CSV'),
+            icon: const Icon(Icons.download),
+            onPressed: _downloadCsv,
+          ),
+          IconButton(
+            key: const Key('report-download-pdf'),
+            tooltip: tr(context, 'Download PDF'),
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            onPressed: _downloadPdf,
+          ),
+        ],
+      ),
       floatingActionButton: widget.onPrint == null
           ? null
           : FloatingActionButton.extended(
@@ -202,6 +294,58 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String?>(
+                    key: const Key('report-cashier-filter'),
+                    initialValue: _cashier,
+                    decoration: InputDecoration(
+                      labelText: tr(context, 'Cashier'),
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: [
+                      DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text(tr(context, 'All cashiers')),
+                      ),
+                      for (final c in _cashiers)
+                        DropdownMenuItem<String?>(value: c, child: Text(c)),
+                    ],
+                    onChanged: (v) => setState(() => _cashier = v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButtonFormField<OrderType?>(
+                    key: const Key('report-type-filter'),
+                    initialValue: _type,
+                    decoration: InputDecoration(
+                      labelText: tr(context, 'Order type'),
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: [
+                      DropdownMenuItem<OrderType?>(
+                        value: null,
+                        child: Text(tr(context, 'All types')),
+                      ),
+                      for (final t in OrderType.values)
+                        DropdownMenuItem<OrderType?>(
+                          value: t,
+                          child: Text(tr(context, t.label)),
+                        ),
+                    ],
+                    onChanged: (v) => setState(() => _type = v),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
           Text('$count order(s) in range', key: const Key('range-count')),
           const Divider(),
           Expanded(
