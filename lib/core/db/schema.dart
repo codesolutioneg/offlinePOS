@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 14;
+  static const int version = 15;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -356,6 +356,53 @@ class Schema {
       'ALTER TABLE shifts ADD COLUMN uuid TEXT',
       'UPDATE shifts SET uuid = id WHERE uuid IS NULL',
       'CREATE UNIQUE INDEX idx_shifts_uuid ON shifts(uuid)',
+    ],
+
+    // v14 -> v15: the LAN state fabric.
+    //
+    // A shop with two tills and a kitchen screen has shared state (parked orders,
+    // which tables are busy, where a ticket is in the kitchen) that until now lived
+    // only on the device that created it. These three tables are what let one till
+    // tell another what it did, without a cloud and without a server round trip:
+    // everything here is device-to-device on the shop LAN.
+    [
+      // Only events this device originated, so the origin is implicit and a
+      // replicated event can never be re-served to the till it came from. That is
+      // what stops two tills echoing one order back and forth forever.
+      //
+      // Append-only: a row is written next to the record it describes and never
+      // edited, so a peer that was switched off all morning catches up by asking
+      // for everything after the seq it last saw.
+      '''
+      CREATE TABLE lan_events (
+        seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind        TEXT NOT NULL,
+        record_uuid TEXT NOT NULL,
+        payload     TEXT NOT NULL,
+        at          TEXT NOT NULL
+      )
+      ''',
+      // How far this till has read each peer's log. Keyed by the peer's device id
+      // rather than by its address: a peer that comes back on a different DHCP
+      // lease is the same peer and must not be replayed from zero.
+      '''
+      CREATE TABLE lan_cursors (
+        peer_device_id TEXT PRIMARY KEY,
+        last_seq       INTEGER NOT NULL DEFAULT 0,
+        updated_at     TEXT NOT NULL
+      )
+      ''',
+      // The clock the last-write-wins rule is decided on, per record. Written for
+      // local changes as well as replicated ones, so an event that crossed the LAN
+      // slowly cannot overwrite a newer change made here in the meantime.
+      '''
+      CREATE TABLE lan_clocks (
+        record_uuid TEXT PRIMARY KEY,
+        kind        TEXT NOT NULL,
+        at          TEXT NOT NULL,
+        origin      TEXT NOT NULL
+      )
+      ''',
     ],
   ];
 }
