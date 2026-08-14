@@ -109,6 +109,16 @@ void main() {
     expect(orders.byUuid(uuid)!.payments.length, 2);
   });
 
+  test('a tip on a share raises the total so it is not counted against the food', () {
+    session.addProduct(pizza); // total 250
+    // Pay the whole 250 plus a 20 tip in one share: the tender is 270 and it fully
+    // settles, because the tip lifted the total rather than paying down the bill.
+    final balance = session.payShare(
+        payments: const [OrderPayment(methodId: 1, amount: 270, label: 'Cash')], tip: 20);
+    expect(balance, 0);
+    expect(session.current.lines, isEmpty); // fresh order started
+  });
+
   test('a percentage modifier is charged against the parent price', () {
     session.addProduct(pizza, chosen: const [ChosenModifier(tenPct)]);
     expect(session.total, 275);

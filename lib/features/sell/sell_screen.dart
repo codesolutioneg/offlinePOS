@@ -1080,7 +1080,7 @@ class _SellScreenState extends State<SellScreen> {
         onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
           if (partPaid) {
-            _completeShare(payments, label, cashReceived);
+            _completeShare(payments, label, tip, cashReceived);
           } else {
             _complete(payments, label, tip, cashReceived);
           }
@@ -1091,9 +1091,10 @@ class _SellScreenState extends State<SellScreen> {
 
   /// Settle a part payment / even-split share against the open balance. Closes the
   /// table and prints once the balance reaches zero; otherwise keeps it open.
-  void _completeShare(List<OrderPayment> payments, String label, double? cashReceived) {
+  void _completeShare(
+      List<OrderPayment> payments, String label, double tip, double? cashReceived) {
     final settling = s.current; // finalized in place if this share settles it
-    final balance = s.payShare(payments: payments, cashReceived: cashReceived);
+    final balance = s.payShare(payments: payments, cashReceived: cashReceived, tip: tip);
     setState(() {});
     if (balance <= 0.001) {
       widget.onPaid?.call(settling);
@@ -1328,7 +1329,7 @@ class _SellScreenState extends State<SellScreen> {
         methods: s.catalogue.paymentMethods(),
         onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
-          _completeShare(payments, label, cashReceived);
+          _completeShare(payments, label, tip, cashReceived);
         },
       ),
     );

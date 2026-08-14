@@ -315,8 +315,12 @@ class PosSession {
   /// the order is finalized like a normal sale and a fresh order starts. Returns the
   /// remaining balance (0 when fully paid). While a balance remains the order is
   /// held, so it survives a restart and shows on the floor/open tabs.
-  double payShare({List<OrderPayment> payments = const [], double? cashReceived}) {
+  double payShare({List<OrderPayment> payments = const [], double? cashReceived, double tip = 0}) {
     final order = current;
+    // A tip on a share raises what is owed too, so the tendered amount (which
+    // includes the tip) nets correctly against the balance rather than paying down
+    // the food. Additive, since several shares can each carry a tip.
+    if (tip > 0) order.tip += tip;
     order.payments = [...order.payments, ...payments];
     if (cashReceived != null) {
       order.cashReceived = (order.cashReceived ?? 0) + cashReceived;
