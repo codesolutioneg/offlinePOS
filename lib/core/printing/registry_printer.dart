@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'printer_registry.dart';
 import 'printer_transport.dart';
+import 'raster_line.dart';
 
 /// Sends to whichever address the named printer answers on right now.
 ///
@@ -26,6 +27,10 @@ class RegistryPrinter implements PrinterTransport {
     // registry refused to guess between them. Either way the job is spooled by the
     // caller rather than sent somewhere it does not belong.
     if (host == null) throw PrinterUnavailable('$name printer not found on the LAN');
-    await TcpPrinter(host: host, port: printer.port).send(bytes);
+    // A kitchen ticket reaches a station without passing a spool, so this is where
+    // its Arabic lines become dots. Bytes with nothing deferred come back as they
+    // went in.
+    await TcpPrinter(host: host, port: printer.port)
+        .send(await rasteriseEscPos(bytes));
   }
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'raster_line.dart';
 import 'spool_store.dart';
 
 /// Where receipt bytes actually go.
@@ -153,12 +154,17 @@ class SpooledPrinter implements PrinterTransport {
 
   /// [reference] is the order the receipt belongs to, so a held one can be named
   /// on the support screen instead of being an anonymous count.
+  ///
+  /// Lines the printer's character table cannot carry are rendered here, before the
+  /// spool sees them: what is held has to be what would have printed, or a receipt
+  /// reprinted after the printer comes back would lose its Arabic.
   @override
   Future<void> send(Uint8List bytes, {String? reference}) async {
+    final job = await rasteriseEscPos(bytes);
     try {
-      await _inner.send(bytes);
+      await _inner.send(job);
     } catch (e) {
-      await _spool.add(bytes, reference: reference);
+      await _spool.add(job, reference: reference);
       for (final dropped in await _spool.trimTo(maxSpool)) {
         onDropped?.call(dropped);
       }
@@ -169,7 +175,8 @@ class SpooledPrinter implements PrinterTransport {
   /// Send immediately, bypassing the spool: on failure it throws and queues
   /// nothing. For payloads that must not be replayed later, above all a cash-drawer
   /// kick, which would pop the till open unexpectedly when the backlog flushes.
-  Future<void> sendNow(Uint8List bytes) => _inner.send(bytes);
+  Future<void> sendNow(Uint8List bytes) async =>
+      _inner.send(await rasteriseEscPos(bytes));
 
   /// Retry the backlog, oldest first. Stops at the first failure so the order in
   /// which tickets print is preserved.

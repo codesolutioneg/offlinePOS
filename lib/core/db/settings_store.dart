@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
+import '../printing/escpos.dart';
 import 'database.dart';
 
 /// On-device configuration a manager can change without a rebuild: shop name and
@@ -11,7 +12,9 @@ import 'database.dart';
 /// A single key-value table backs all of it, so adding a setting is a write rather
 /// than a migration. Reads are local and synchronous like the rest of the till.
 class SettingsStore {
-  SettingsStore(this._db);
+  SettingsStore(this._db) {
+    publishPrintProfile();
+  }
 
   final Db _db;
 
@@ -33,6 +36,8 @@ class SettingsStore {
   static const _favourites = 'favourite_products';
   static const _gridColumns = 'grid_columns';
   static const _rolePermissions = 'role_permissions';
+  static const _codePage = 'receipt_code_page';
+  static const _arabicRaster = 'receipt_arabic_raster';
 
   // ── generic accessors ────────────────────────────────────────────
   String? getString(String key) {
@@ -295,7 +300,12 @@ class SettingsStore {
 
   /// UI language code: 'en' or 'ar'. Drives translation and text direction.
   String get language => getString(_language) ?? 'en';
-  set language(String code) => setString(_language, code);
+  set language(String code) {
+    setString(_language, code);
+    // Whether Arabic is rendered on paper follows the language until a manager says
+    // otherwise, so switching the till to Arabic fixes the receipts too.
+    publishPrintProfile();
+  }
 
   /// Products marked sold-out ("86'd") on this till, so a run-out item can be
   /// blocked mid-service without waiting for an Odoo catalogue change.
@@ -400,6 +410,38 @@ class SettingsStore {
   /// 'equals', 'dots' or 'stars'.
   String get receiptDividerStyle => getString('receipt_divider_style') ?? 'line';
   set receiptDividerStyle(String v) => setString('receipt_divider_style', v);
+
+  // ── what the printer can spell ───────────────────────────────────
+
+  /// Which single-byte table the receipt printer is told to render bytes with:
+  /// 'wpc1252' (Latin, the default) or 'wpc1256' (Arabic). Arabic is the fast path
+  /// on a printer that has the table, because the firmware joins the letters and a
+  /// line stays bytes; a printer without it prints those bytes as nonsense, so the
+  /// choice belongs to the shop that owns the hardware.
+  String get receiptCodePage => getString(_codePage) ?? 'wpc1252';
+  set receiptCodePage(String v) {
+    setString(_codePage, v);
+    publishPrintProfile();
+  }
+
+  /// Render a line the table cannot carry as an image instead of printing question
+  /// marks. Defaults to on for an Arabic till, which is the shop that needs it.
+  bool get receiptArabicRaster =>
+      getBool(_arabicRaster, fallback: language == 'ar');
+  set receiptArabicRaster(bool v) {
+    setBool(_arabicRaster, v);
+    publishPrintProfile();
+  }
+
+  /// Hands the printing layer the two choices it cannot ask for: a receipt layout
+  /// builds an [EscPos] with nothing but a column count, and that layer stays free
+  /// of this database on purpose. Called on open and on every change to either.
+  void publishPrintProfile() {
+    EscPosPrintProfile.shared = EscPosPrintProfile(
+      codePage: EscPosCodePage.byKey[receiptCodePage],
+      rasterUnmappable: receiptArabicRaster,
+    );
+  }
 
   // ── role permissions ─────────────────────────────────────────────
   // Per role name, the set of permission keys that role may exercise WITHOUT
