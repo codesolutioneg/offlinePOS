@@ -304,6 +304,10 @@ class _PosAppState extends State<PosApp> {
         // Category/order-type tax rules, so (e.g.) takeaway food can be zero-rated.
         taxRateFor: (categoryId, type) =>
             categoryId == null ? null : widget.settings.categoryTaxRate(categoryId, type),
+        // The service percentage a bill opens with. Read per order rather than held,
+        // so a manager changing it mid-service applies to the next bill and not to
+        // the ones already on the floor.
+        serviceChargeFor: widget.settings.serviceChargePercentFor,
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
     });
