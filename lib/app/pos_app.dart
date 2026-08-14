@@ -923,7 +923,10 @@ class _PosAppState extends State<PosApp> {
   /// picker so both colour tables identically.
   ({Set<String> occupied, Map<String, ({double total, DateTime since})> info})
       _floorOccupancy(PosSession session) {
-    final held = widget.orders.held();
+    // Every parked order in the shop, not just this till's. A table busy on the bar
+    // till has to read as busy here, or two cashiers seat the same table and the
+    // second guest's food goes to a bill nobody is holding.
+    final held = widget.orders.heldAnywhere();
     final occupied = held.map((o) => o.tableLabel).whereType<String>().toSet();
     final info = <String, ({double total, DateTime since})>{
       for (final o in held)
@@ -987,6 +990,22 @@ class _PosAppState extends State<PosApp> {
           }
           final held =
               widget.orders.held().where((o) => o.tableLabel == t.name).toList();
+          if (held.isEmpty) {
+            // Parked on another till. Neither start a second order on the table nor
+            // recall theirs: a tab is settled where it was opened, because that till
+            // is the one that books it.
+            final elsewhere = widget.orders
+                .heldElsewhere()
+                .where((o) => o.tableLabel == t.name)
+                .toList();
+            if (elsewhere.isNotEmpty) {
+              ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
+                content: Text(tr(floorContext,
+                    'This table is open on another device. Settle it there.')),
+              ));
+              return;
+            }
+          }
           setState(() {
             if (held.isNotEmpty) {
               session.recall(held.first.uuid);

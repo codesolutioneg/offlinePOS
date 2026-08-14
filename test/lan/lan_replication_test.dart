@@ -37,6 +37,24 @@ void main() {
     expect(b.orders.byUuid(onA.uuid)!.tableLabel, '5');
   });
 
+  test('a peer tab occupies the floor without becoming recallable here', () async {
+    final a = shop.add('till-a');
+    final b = shop.add('till-b');
+    shop.introduceAll();
+
+    final tab = heldOrder('till-a', table: '5');
+    a.orders.save(tab);
+    await shop.settle();
+
+    // What the floor plan colours: the table is busy on till B's screen too, so a
+    // second cashier cannot seat the same table.
+    expect(b.orders.heldAnywhere().map((o) => o.tableLabel), ['5']);
+    // What the floor plan refuses: till B cannot recall or settle it, because the
+    // till that opened a tab is the one that books it.
+    expect(b.orders.held(), isEmpty);
+    expect(b.orders.heldElsewhere().map((o) => o.uuid), [tab.uuid]);
+  });
+
   test('a table cancelled on one till stops occupying the other floor', () async {
     final a = shop.add('till-a');
     final b = shop.add('till-b');
