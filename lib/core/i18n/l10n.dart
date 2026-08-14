@@ -666,4 +666,18 @@ const Map<String, String> _ar = {
   'Download PDF': 'تنزيل PDF',
   'Saved to': 'حُفظ في',
   'Could not save file': 'تعذّر حفظ الملف',
+  // editing or cancelling a paid sale that has not synced yet
+  'Edit order': 'تعديل الطلب',
+  'Cancel sale': 'إلغاء البيع',
+  'Cancel this sale?': 'إلغاء هذا البيع؟',
+  'The sale stays on the books and a full refund is recorded against '
+      'it. Pick the lines and give a reason on the next screen.':
+      'يبقى البيع في الدفاتر ويُسجَّل استرداد كامل مقابله. اختر الأصناف واذكر السبب في الشاشة التالية.',
+  'Keep the sale': 'إبقاء البيع',
+  'Refund it all': 'استرداد الكل',
+  'This sale can no longer be edited here. Refund it and ring it again.':
+      'لم يعد من الممكن تعديل هذا البيع هنا. استرده ثم سجّله من جديد.',
+  'Edit a paid order': 'تعديل طلب مدفوع',
+  'Put a paid sale back on the counter before it syncs':
+      'إعادة بيع مدفوع إلى الشاشة قبل مزامنته',
 };

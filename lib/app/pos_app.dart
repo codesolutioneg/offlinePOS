@@ -185,6 +185,16 @@ class _PosAppState extends State<PosApp> {
   String? _printError;
   Timer? _background;
 
+  /// The lines a paid sale carried when it was reopened for correction, by order
+  /// uuid. Kept only until that sale is tendered again, so the second payment can
+  /// print one slip for everything that came off a bill the customer had already
+  /// paid, whether or not the kitchen ever held it.
+  final Map<String, List<OrderLine>> _amending = {};
+
+  /// Lines that already had their own deletion slip printed at the moment they
+  /// were voided, so the correction slip does not print them a second time.
+  final Set<String> _slipped = {};
+
   /// Drives the app language and text direction, seeded from the saved setting and
   /// persisting any change.
   late final LocaleController _locale = LocaleController(
@@ -392,6 +402,28 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
+  /// Print one slip for the lines a corrected sale lost, when it is tendered again.
+  ///
+  /// A line the kitchen already held printed its own slip the moment it was voided,
+  /// and is skipped here. What is left is a line the customer had paid for that was
+  /// taken off with a plain delete, which leaves no paper anywhere else. A no-op on
+  /// any sale that was not reopened.
+  void _slipRemovedOnAmend(Order order) {
+    final before = _amending.remove(order.uuid);
+    if (before == null) return;
+    final kept = order.lines.map((l) => l.uuid).toSet();
+    final removed = <OrderLine>[];
+    for (final l in before) {
+      if (kept.contains(l.uuid)) continue;
+      // Already on paper from its own void slip, and taken off the set as it is
+      // consumed so nothing accumulates across a shift.
+      if (_slipped.remove(l.uuid)) continue;
+      removed.add(l);
+    }
+    unawaited(_printDeletion(order, removed,
+        title: 'REMOVED ON EDIT', reason: 'Order amended'));
+  }
+
   Future<void> _printReceipt(Order order, {bool reprint = false}) async {
     try {
       // On-device settings win over the compile-time defaults, so a manager can
@@ -597,16 +629,25 @@ class _PosAppState extends State<PosApp> {
                 if (line.printedToKitchen || line.firedStations.isNotEmpty) {
                   unawaited(_fireVoid(session.current, line, reason));
                 }
+                // Only while this order is being corrected, so the set stays the
+                // size of one amendment rather than a shift's worth of voids.
+                if (_amending.containsKey(session.current.uuid)) {
+                  _slipped.add(line.uuid);
+                }
                 unawaited(_printDeletion(session.current, [line],
                     title: 'ITEM VOIDED', reason: reason));
               },
               onPaid: (order) {
                 _publishActivity();
+                final sale = order as Order;
                 // A straight counter sale never held, so its lines reach the
                 // kitchen here; a dine-in order already fired on hold and reprints
-                // nothing. The sale is NOT pushed to Odoo now: it waits on the till
-                // for the shift-close batch.
-                unawaited(_fireKitchen(order as Order).then((_) => _printReceipt(order)));
+                // nothing. Only lines the kitchen has never seen are fired, which
+                // is also what keeps a corrected sale from cooking its food twice.
+                // The sale is NOT pushed to Odoo now: it waits on the till for the
+                // shift-close batch.
+                _slipRemovedOnAmend(sale);
+                unawaited(_fireKitchen(sale).then((_) => _printReceipt(sale)));
               },
             ),
           ),
@@ -825,6 +866,9 @@ class _PosAppState extends State<PosApp> {
           unawaited(_printDeletion(order, order.lines,
               title: 'ORDER CANCELLED', reason: reason));
           widget.orders.delete(order.uuid);
+          // Nothing left to correct, so the snapshot taken when it was reopened
+          // has no second payment coming to consume it.
+          _amending.remove(order.uuid);
           widget.audit.record(session.cashierId, 'order.cancelled',
               detail: '${order.uuid}|$reason');
           if (sheetContext.mounted) Navigator.of(sheetContext).pop();
@@ -836,7 +880,7 @@ class _PosAppState extends State<PosApp> {
 
   void _openHistory(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => OrderHistoryScreen(
+      builder: (historyContext) => OrderHistoryScreen(
         orders: widget.orders.recent(limit: 1000),
         formatAmount: PosApp.money,
         onReprint: (order) async {
@@ -846,8 +890,59 @@ class _PosAppState extends State<PosApp> {
           await _printReceipt(order, reprint: true);
         },
         onRefund: (order) => _openRefund(context, order),
+        // Only offered while a session is selling: a correction lands in the cart,
+        // and there is no cart with nobody signed in.
+        onEdit: _session == null
+            ? null
+            : (order) => _amendOrder(historyContext, order),
       ),
     ));
+  }
+
+  /// Put a paid sale back on the counter to be corrected, and land the cashier on
+  /// it. The daily "rang it wrong" and "they added one more thing" flow, which
+  /// otherwise costs a refund and a full re-ring.
+  ///
+  /// The store decides whether the sale may be reopened at all and takes its queued
+  /// push back out of the outbox in the same transaction; a refusal here is that
+  /// answer, told plainly rather than as a dead button.
+  Future<void> _amendOrder(BuildContext context, Order order) async {
+    final session = _session;
+    if (session == null) return;
+    if (!await _authorize(Permission.amendOrder, context)) return;
+    // What the customer was charged before the correction, read before anything
+    // moves, for the audit trail and for the removal slip at the second payment.
+    final oldTotal = order.total;
+    final before = List<OrderLine>.of(order.lines);
+    final reopened = widget.orders.reopen(
+      order.uuid,
+      // A batch push owns the queue while it runs, and its entries are already read
+      // out of the table, so withdrawing one there would take back a sale that is
+      // on its way to being booked. Refuse instead: the answer a moment later is a
+      // refund, which is right and reversible, rather than a silent divergence.
+      withdrawPush: (uuid) =>
+          widget.sync.state != SyncState.working &&
+          widget.outboxStore.withdrawPending('order.push', uuid),
+    );
+    if (!reopened) {
+      if (context.mounted) {
+        showToast(
+            context,
+            tr(context,
+                'This sale can no longer be edited here. Refund it and ring it again.'),
+            kind: ToastKind.error);
+      }
+      return;
+    }
+    widget.audit.record(session.cashierId, 'order.amended',
+        detail: '${order.uuid}|${PosApp.money(oldTotal)}');
+    _amending[order.uuid] = before;
+    session.recall(order.uuid);
+    _publishActivity();
+    // Back to the sell screen, past the detail and the history list, so the
+    // reopened order is on the counter rather than behind two screens.
+    if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+    if (mounted) setState(() {});
   }
 
   /// Refund a past sale: pick the lines, then record, queue and print the reversal.
