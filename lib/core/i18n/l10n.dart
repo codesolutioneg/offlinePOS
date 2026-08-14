@@ -681,4 +681,8 @@ const Map<String, String> _ar = {
   'Charged on': 'تُطبَّق على',
   'Added to a bill when it opens. Zero turns it off.':
       'يُضاف إلى الفاتورة عند فتحها. صفر يعني إلغاءه.',
+  // pre-bill: the check printed for the table before payment
+  'Print bill': 'طباعة الحساب',
+  'The check to take to the table, before payment': 'الحساب الذي يُقدَّم للطاولة قبل الدفع',
+  'Bill sent to the printer': 'أُرسل الحساب إلى الطابعة',
 };

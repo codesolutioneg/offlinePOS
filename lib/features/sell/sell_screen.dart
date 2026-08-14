@@ -53,6 +53,7 @@ class SellScreen extends StatefulWidget {
     this.onPickTable,
     this.onNewOrder,
     this.onResendToKitchen,
+    this.onPrintBill,
   });
 
   final PosSession session;
@@ -88,6 +89,11 @@ class SellScreen extends StatefulWidget {
   /// Re-fires every line to the kitchen, even those already sent, for when a ticket
   /// was lost or the kitchen asks for it again. Surfaced on a long-press of Send.
   final VoidCallback? onResendToKitchen;
+
+  /// Prints the check for the open order before it is paid, so a waiter can take the
+  /// bill to the table. Paper only: the order is not changed and nothing is settled.
+  /// Absent hides the action.
+  final void Function(Order order)? onPrintBill;
 
   /// Opens the parked-orders list to recall a table.
   final VoidCallback? onOpenOrders;
@@ -1206,6 +1212,16 @@ class _SellScreenState extends State<SellScreen> {
     );
   }
 
+  /// The table asked for the bill. Hands the current order to the shell to print and
+  /// changes nothing: no state, no lines, no tender, so it can be tapped as often as
+  /// the table asks. The shell spools the slip, so a dead printer does not fail the
+  /// tap and the toast stays honest about what happened.
+  void _printBill() {
+    widget.onPrintBill?.call(s.current);
+    showToast(context, tr(context, 'Bill sent to the printer'),
+        kind: ToastKind.success, key: const Key('bill-printed'));
+  }
+
   /// The dine-in bill menu: split by guest, pay selected items, move items to
   /// another table, or merge another table in. Mirrors a table-service till.
   Future<void> _billOptions() async {
@@ -1216,6 +1232,14 @@ class _SellScreenState extends State<SellScreen> {
         // Scrollable so the menu never overflows a short sheet as options grow.
         child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (widget.onPrintBill != null)
+            ListTile(
+              key: const Key('bill-print'),
+              leading: const Icon(Icons.receipt_long_outlined),
+              title: Text(tr(ctx, 'Print bill')),
+              subtitle: Text(tr(ctx, 'The check to take to the table, before payment')),
+              onTap: () => Navigator.pop(ctx, 'print'),
+            ),
           ListTile(
             key: const Key('bill-split-even'),
             leading: const Icon(Icons.safety_divider),
@@ -1261,6 +1285,8 @@ class _SellScreenState extends State<SellScreen> {
     );
     if (!mounted) return;
     switch (action) {
+      case 'print':
+        _printBill();
       case 'timing':
         await _setFireTiming();
       case 'even':
@@ -1949,9 +1975,8 @@ class _SellScreenState extends State<SellScreen> {
                   key: const Key('balance-line')),
             ],
             if (s.hasLines)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
+              Row(children: [
+                TextButton.icon(
                   key: const Key('discount'),
                   onPressed: _openDiscount,
                   icon: const Icon(Icons.percent, size: 16),
@@ -1959,7 +1984,17 @@ class _SellScreenState extends State<SellScreen> {
                       ? tr(context, 'Edit discount')
                       : tr(context, 'Add discount')),
                 ),
-              ),
+                const Spacer(),
+                // Next to the total, where a waiter looks when the table asks for the
+                // bill, and not buried in a menu that only dine-in reaches.
+                if (widget.onPrintBill != null)
+                  IconButton(
+                    key: const Key('print-bill'),
+                    tooltip: tr(context, 'Print bill'),
+                    icon: const Icon(Icons.receipt_long_outlined),
+                    onPressed: _printBill,
+                  ),
+              ]),
           ],
         ),
       );

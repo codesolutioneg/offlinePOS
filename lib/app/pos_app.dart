@@ -392,6 +392,29 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
+  /// Print the check for a table that asked for the bill before paying. Spooled like
+  /// any other slip, so a printer that is off holds the bill instead of failing the
+  /// waiter's tap, and the order is never touched: this produces paper and an audit
+  /// entry, nothing else. Works with no shift open, hence the cashier fallback.
+  Future<void> _printBill(Order order) async {
+    widget.audit.record(_session?.cashierId ?? order.cashierId, 'bill.printed',
+        detail: order.uuid);
+    try {
+      final bytes = _receiptBuilder().buildBill(order);
+      // A bill is reprintable on demand, so the timestamp keeps each copy out of the
+      // spool's dedupe rather than folding a second request into the first.
+      await _receiptPrinter.send(bytes,
+          reference: 'bill-${order.uuid}-${DateTime.now().microsecondsSinceEpoch}');
+    } on PrinterUnavailable {
+      // Held in the spool; the background flush prints it when the printer is back.
+    } catch (e) {
+      // Building the slip is inside the try for the same reason as the sale receipt:
+      // a character the printer cannot carry must leave a record, not an unhandled
+      // error on a waiter's tap.
+      widget.audit.record(order.cashierId, 'receipt.failed', detail: '${order.uuid}: $e');
+    }
+  }
+
   Future<void> _printReceipt(Order order, {bool reprint = false}) async {
     try {
       // On-device settings win over the compile-time defaults, so a manager can
@@ -575,6 +598,9 @@ class _PosAppState extends State<PosApp> {
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
               onOpenOrders: () => _openOrders(context, session),
+              // The table asked for the bill. Paper only: nothing is settled, nothing
+              // is pushed, and the order stays exactly as it is.
+              onPrintBill: (order) => unawaited(_printBill(order)),
               onHold: () {
                 // Holding only parks the order. It does NOT fire the kitchen: food
                 // reaches the kitchen only via the explicit Send to kitchen button,
@@ -796,6 +822,8 @@ class _PosAppState extends State<PosApp> {
         orders: widget.orders.held(),
         formatAmount: PosApp.money,
         onRecall: (order) => setState(() => session.recall(order.uuid)),
+        // A parked tab's bill prints without recalling it, so the list stays put.
+        onPrintBill: (order) => unawaited(_printBill(order)),
         // Discarding a parked order is money not taken, so it is manager-gated and
         // audited, then the list is popped so the change is visible.
         onCancel: (order) async {

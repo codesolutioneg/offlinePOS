@@ -58,6 +58,45 @@ void main() {
     expect(recalled, orders[1]);
   });
 
+  testWidgets('a parked tab prints its bill without being recalled', (t) async {
+    final orders = [held(table: 'T1', guestCount: 2), held(table: 'T2', guestCount: 4)];
+    final printed = <Order>[];
+    Order? recalled;
+
+    await t.pumpWidget(MaterialApp(
+      home: OpenOrdersScreen(
+        orders: orders,
+        formatAmount: (v) => v.toStringAsFixed(2),
+        onRecall: (order) => recalled = order,
+        onPrintBill: printed.add,
+      ),
+    ));
+
+    await t.tap(find.byKey(Key('print-bill-${orders[1].uuid}')));
+    await t.pumpAndSettle();
+
+    expect(printed.single, orders[1]);
+    // A waiter printing one table's bill must not take another cashier's tab off the
+    // list, so the order is neither recalled nor changed.
+    expect(recalled, isNull);
+    expect(orders[1].state, OrderState.held);
+    expect(find.byKey(Key('recall-${orders[1].uuid}')), findsOneWidget);
+    expect(find.byKey(const Key('bill-printed')), findsOneWidget);
+  });
+
+  testWidgets('no bill action when the shell offers no printer', (t) async {
+    final orders = [held(table: 'T1', guestCount: 2)];
+    await t.pumpWidget(MaterialApp(
+      home: OpenOrdersScreen(
+        orders: orders,
+        formatAmount: (v) => v.toStringAsFixed(2),
+        onRecall: (_) {},
+      ),
+    ));
+
+    expect(find.byKey(Key('print-bill-${orders[0].uuid}')), findsNothing);
+  });
+
   testWidgets('shows an empty state when there are no open tables', (t) async {
     await t.pumpWidget(MaterialApp(
       home: OpenOrdersScreen(
