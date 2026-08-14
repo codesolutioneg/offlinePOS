@@ -335,6 +335,23 @@ class SettingsStore {
   int get gridColumns => int.tryParse(getString(_gridColumns) ?? '') ?? 0;
   set gridColumns(int n) => setString(_gridColumns, n <= 0 ? null : '$n');
 
+  // ── the LAN state fabric ─────────────────────────────────────────
+
+  /// Whether this device shares its parked orders, kitchen tickets and floor plan
+  /// with the other devices in the shop.
+  ///
+  /// [fallback] is what the build was compiled with, so an installer can ship a
+  /// two-till shop with the fabric on and a one-till shop with it off, and either
+  /// can still be changed on the device. Off means no socket is opened at all.
+  bool lanEnabled({bool fallback = false}) => getBool('lan_enabled', fallback: fallback);
+  void setLanEnabled(bool v) => setBool('lan_enabled', v);
+
+  /// What this device calls itself to the others ("Front till", "Kitchen"). Null
+  /// until someone names it, and then it is the name that shows on their screens
+  /// instead of a device id nobody can act on.
+  String? get lanDeviceName => getString('lan_device_name');
+  set lanDeviceName(String? v) => setString('lan_device_name', v?.trim());
+
   /// Receipt paper width in characters: 42 for 80mm (default), 32 for 58mm.
   int get receiptColumns => int.tryParse(getString('receipt_columns') ?? '') ?? 42;
   set receiptColumns(int n) => setString('receipt_columns', '$n');

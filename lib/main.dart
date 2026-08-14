@@ -26,6 +26,7 @@ import 'core/db/print_job_store.dart';
 import 'core/db/printer_store.dart';
 import 'core/db/shift_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
+import 'core/lan/lan_wiring.dart';
 import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
 import 'core/printing/printer_registry.dart';
@@ -60,7 +61,6 @@ Future<void> main() async {
   final db = Db.open('${dir.path}${Platform.pathSeparator}pos.db', encryptionKey: dbKey);
 
   final catalogue = CatalogueStore(db);
-  final orders = OrderStore(db);
   final users = UserStore(db);
   final audit = AuditLog(db);
   final outboxStore = SqliteOutboxStore(db);
@@ -69,6 +69,38 @@ Future<void> main() async {
   // Generated on this device on first launch. A constant would make every till in
   // a shop file its sales under the same id.
   final deviceId = devices.deviceId();
+
+  final settings = SettingsStore(db);
+
+  // Whether this device shares state with the others in the shop. Off unless it was
+  // asked for: the device's own switch decides, and the build's dart-define is only
+  // what it falls back to, so a shop that adds a second till flips a setting rather
+  // than waiting for a new binary. Off means nothing below is built at all, and a
+  // till behaves exactly as it did before the fabric existed: no event, no socket.
+  final lanOn = settings.lanEnabled(fallback: config.lanDefault);
+
+  // Assembled further down, after the stores it writes through. The stores reach it
+  // through this holder rather than the other way round, because a store announces
+  // from inside its own write transaction.
+  LanNode? lan;
+
+  final orders = OrderStore(
+    db,
+    // Scoped to this till whether or not the fabric is on. A device that shared for
+    // a week and was then taken off the LAN still has the other tills' orders on
+    // disk, and only the till that rang a sale may ever recall, report or book it.
+    ownDeviceId: deviceId,
+    publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+    // A change that committed but could not be announced is a shop whose devices
+    // have quietly stopped agreeing. The sale is already safe, so this is the only
+    // way support finds out.
+    onAnnounceFailed: (uuid, error) =>
+        audit.record('system', 'lan.publish.failed', detail: '$uuid: $error'),
+  );
+  final tables = TableStore(
+    db,
+    publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+  );
 
   // Senders are registered once the device is enrolled and authenticated. Until
   // then the outbox simply accumulates, which is the correct offline behaviour:
@@ -183,6 +215,25 @@ Future<void> main() async {
     odoo.configure(savedEndpoint);
   }
 
+  // Nothing is bound or announced here. The node is only assembled; PosApp starts it
+  // behind the first frame, so no part of opening the till waits on a socket, a LAN
+  // address or a peer.
+  if (lanOn) {
+    lan = LanNode.build(
+      db: db,
+      deviceId: deviceId,
+      // Unnamed until a manager names it on the shop network screen. The id is what
+      // the other devices show until then, which is honest: two devices that both
+      // call themselves "Till" are worse than two ids.
+      deviceName: settings.lanDeviceName ?? deviceId,
+      orders: orders,
+      tables: tables,
+      audit: audit,
+      port: config.lanPort,
+      beaconPort: config.lanBeaconPort,
+    );
+  }
+
   runApp(PosApp(
     auth: auth,
     users: users,
@@ -203,10 +254,11 @@ Future<void> main() async {
     updates: _updateService(config, sync, activity, dir),
     endpoints: endpoints,
     odoo: odoo,
-    tables: TableStore(db),
-    settings: SettingsStore(db),
+    tables: tables,
+    settings: settings,
     customers: CustomerStore(db),
     attendance: AttendanceStore(db),
+    lan: lan,
   ));
 }
 

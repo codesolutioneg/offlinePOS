@@ -19,6 +19,7 @@ import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
 import '../core/db/table_store.dart';
+import '../core/lan/lan_wiring.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
@@ -94,6 +95,7 @@ class PosApp extends StatefulWidget {
     this.activity,
     this.provisioningPin,
     this.updates,
+    this.lan,
   });
 
   final AuthService auth;
@@ -139,6 +141,14 @@ class PosApp extends StatefulWidget {
 
   /// Null when this build has no update channel configured.
   final UpdateService? updates;
+
+  /// This device's presence on the shop LAN, or null when it is not sharing state
+  /// with the other devices. Null is the ordinary case: a one-till shop.
+  ///
+  /// Handed over assembled but not started. Starting it belongs here rather than in
+  /// main so that binding a socket happens behind the first frame, and so the shell
+  /// can take the device off the LAN the moment the switch is turned off.
+  final LanNode? lan;
 
   /// The name receipts are routed by. Part of the on-disk contract: the printers
   /// table and the held-receipt queue are both keyed on it.
@@ -204,12 +214,31 @@ class _PosAppState extends State<PosApp> {
     // human to open the support screen and press Reprint, which meant a printer
     // that came back mid-shift printed nothing until somebody noticed.
     _background = Timer.periodic(const Duration(seconds: 30), (_) => _catchUp());
+    unawaited(_startLan());
   }
 
   @override
   void dispose() {
     _background?.cancel();
+    unawaited(widget.lan?.dispose());
     super.dispose();
+  }
+
+  /// Bring this device onto the shop LAN, if it is set up for one.
+  ///
+  /// Never awaited by anything: a bind, a broadcast and a first catch-up all happen
+  /// behind the first frame, so the first sale of the day cannot be waiting on a
+  /// switch that is not plugged in yet. LanNode logs its own failures and returns
+  /// rather than throwing; this catch is for the unforeseen one, because a shop must
+  /// still be able to open when its network cannot.
+  Future<void> _startLan() async {
+    final lan = widget.lan;
+    if (lan == null) return;
+    try {
+      await lan.start();
+    } catch (e) {
+      widget.audit.record('system', 'lan.start.failed', detail: '$e');
+    }
   }
 
   Future<void> _catchUp() async {

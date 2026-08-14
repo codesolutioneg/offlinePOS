@@ -102,6 +102,14 @@ class TillConfig {
 
   int get lanBeaconPort => lanPort + 1;
 
+  /// What the device's own LAN switch falls back to when nobody has set it.
+  ///
+  /// A kitchen screen counts as asking for the fabric whether or not the LAN flag
+  /// was passed with it: it rings up nothing, so every ticket it shows arrived from
+  /// another device, and a KDS build off the LAN is a blank screen. The device
+  /// setting still overrides this either way.
+  bool get lanDefault => lanFabric || kdsMode;
+
   /// True only when the channel is completely specified. A partly configured
   /// channel is a build mistake, and running with the missing half filled in by a
   /// default is how an unsigned or unpinned update path gets shipped by accident.
