@@ -18,6 +18,7 @@ class OrderHistoryScreen extends StatefulWidget {
     required this.formatAmount,
     required this.onReprint,
     this.onRefund,
+    this.onEdit,
   });
 
   /// Already sorted newest first by the caller (recent()); this screen does
@@ -31,6 +32,11 @@ class OrderHistoryScreen extends StatefulWidget {
 
   /// Opens the refund flow for [order]. Absent hides the refund action.
   final Future<void> Function(Order order)? onRefund;
+
+  /// Puts [order] back on the counter to be corrected. Absent hides the action,
+  /// and so does the order being anything but a paid sale this till still holds:
+  /// see [OrderDetailScreen.canEdit].
+  final Future<void> Function(Order order)? onEdit;
 
   /// The first six hex characters of the uuid, upper-cased. Not unique on its
   /// own across a long history, but enough for a cashier to read a table's
@@ -145,6 +151,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                       formatAmount: widget.formatAmount,
                       onReprint: widget.onReprint,
                       onRefund: widget.onRefund,
+                      onEdit: widget.onEdit,
                     ),
                   ),
           ),
@@ -161,12 +168,14 @@ class _HistoryTile extends StatelessWidget {
     required this.formatAmount,
     required this.onReprint,
     this.onRefund,
+    this.onEdit,
   });
 
   final Order order;
   final String Function(double) formatAmount;
   final Future<void> Function(Order order) onReprint;
   final Future<void> Function(Order order)? onRefund;
+  final Future<void> Function(Order order)? onEdit;
 
   /// synced: the server has it. paid: tendered but still queued. Nothing else
   /// reaches this screen, since a draft or held order was never a completed
@@ -199,6 +208,7 @@ class _HistoryTile extends StatelessWidget {
           formatAmount: formatAmount,
           onReprint: onReprint,
           onRefund: onRefund,
+          onEdit: onEdit,
         ),
       )),
     );
@@ -215,17 +225,58 @@ class OrderDetailScreen extends StatelessWidget {
     required this.formatAmount,
     required this.onReprint,
     this.onRefund,
+    this.onEdit,
   });
 
   final Order order;
   final String Function(double) formatAmount;
   final Future<void> Function(Order order) onReprint;
   final Future<void> Function(Order order)? onRefund;
+  final Future<void> Function(Order order)? onEdit;
+
+  /// Whether [o] can still be corrected on the till rather than reversed.
+  ///
+  /// Only a sale that is tendered but not yet acknowledged by the server, and is
+  /// not itself a refund. Once the server has it a repeat of its uuid reads there
+  /// as a duplicate of what was already booked rather than as a correction, so the
+  /// answer past that point is a refund and a re-ring. The store refuses the same
+  /// cases; this only keeps the till from offering what it would then refuse.
+  static bool canEdit(Order o) =>
+      o.state == OrderState.paid && !o.isRefund;
 
   Future<void> _reprint(BuildContext context) async {
     await onReprint(order);
     if (!context.mounted) return;
     showToast(context, tr(context, 'Receipt sent to printer'), kind: ToastKind.success);
+  }
+
+  /// Reverse the whole sale rather than delete it, so the books stay append-only:
+  /// the original stands and a full-quantity refund is booked against it. The
+  /// refund screen already opens with every line selected, so this is the same
+  /// flow with the intent said out loud and confirmed first.
+  Future<void> _cancelSale(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Cancel this sale?')),
+        content: Text(tr(
+            ctx,
+            'The sale stays on the books and a full refund is recorded against '
+            'it. Pick the lines and give a reason on the next screen.')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr(ctx, 'Keep the sale'))),
+          FilledButton(
+            key: const Key('cancel-sale-ok'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Refund it all')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await onRefund!(order);
   }
 
   @override
@@ -266,6 +317,17 @@ class OrderDetailScreen extends StatelessWidget {
               onPressed: () => _reprint(context),
               child: Text(tr(context, 'Reprint receipt')),
             ),
+            // Correcting the sale is offered first, because it is what a cashier
+            // who rang it wrong actually wants; the money-back routes are below it.
+            if (onEdit != null && canEdit(order)) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                key: Key('edit-${order.uuid}'),
+                onPressed: () => onEdit!(order),
+                icon: const Icon(Icons.edit_outlined),
+                label: Text(tr(context, 'Edit order')),
+              ),
+            ],
             // A refund is offered only on a real sale, never on a refund itself, so
             // a return cannot be refunded again.
             if (onRefund != null && !order.isRefund) ...[
@@ -276,6 +338,19 @@ class OrderDetailScreen extends StatelessWidget {
                 icon: const Icon(Icons.undo),
                 label: Text(tr(context, 'Refund')),
               ),
+              // The whole sale back, for the till's other answer to "that was
+              // wrong": one confirmation instead of stepping every line down.
+              // Offered on the same orders Edit is, since a sale the server has
+              // already booked is refunded through the line picker like any other.
+              if (canEdit(order)) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  key: Key('cancel-sale-${order.uuid}'),
+                  onPressed: () => _cancelSale(context),
+                  icon: const Icon(Icons.block_outlined),
+                  label: Text(tr(context, 'Cancel sale')),
+                ),
+              ],
             ],
           ],
         ),

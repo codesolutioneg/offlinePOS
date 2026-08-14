@@ -4,6 +4,13 @@ import '../../domain/order.dart';
 import '../lan/lan_event.dart';
 import 'database.dart';
 
+/// Takes a sale's queued server push back out of the outbox, returning false when
+/// it can no longer be withdrawn because it is already on the wire or acknowledged.
+///
+/// Passed in rather than reached for, so this store keeps knowing about orders and
+/// nothing about the queue they are delivered through.
+typedef WithdrawPush = bool Function(String uuid);
+
 /// Orders on disk. Every mutation is written immediately, not at payment, so a
 /// half-rung sale survives the app being killed.
 ///
@@ -184,6 +191,72 @@ class OrderStore {
     order.state = OrderState.synced;
     if (serverId != null) order.serverId = serverId;
     save(order);
+  }
+
+  /// Put a paid sale back on the counter to be corrected, and say whether it went.
+  /// Rang wrong, or a customer added something a moment after checkout: a daily
+  /// flow that otherwise costs a refund and a re-ring.
+  ///
+  /// A SYNCED order can never be reopened, and that is the rule this method exists
+  /// to hold. The server treats a repeat of a uuid as a duplicate acknowledgement
+  /// of the sale it already booked, never as an update, so an amended sale pushed
+  /// under its old uuid would leave the books showing the pre-edit version with
+  /// nothing anywhere saying so. Once the server has the sale the only honest
+  /// answer is a refund and a re-ring. It is enforced here rather than by hiding a
+  /// button because the row on disk is the one thing every caller is bound by.
+  ///
+  /// [withdrawPush] pulls the sale out of the outbox inside the same transaction as
+  /// the state change, so the queue and the order can never disagree about which
+  /// version is owed. It refusing is a refusal to reopen: a push that is already on
+  /// the wire will be booked whatever happens here, and editing behind it would
+  /// hand the customer a receipt the books will never match.
+  ///
+  /// The tenders are cleared with the state. The sale is going back to being
+  /// un-tendered and will be taken again in full, and leaving them on would make
+  /// the payment sheet read the order as part-paid and append a second set of
+  /// tenders to the first.
+  ///
+  /// Nothing is announced, for the same reason [recall] announces nothing: a draft
+  /// is the till's own working state. The other tills keep showing the sale as it
+  /// was until it is tendered again, which re-announces the corrected version.
+  ///
+  /// One window stays open and cannot be closed from this side: a push whose HTTP
+  /// call reached the server but whose acknowledgement was lost leaves the order
+  /// paid with its row still queued, and reopening there loses the correction to
+  /// the server's duplicate handling. The next batch push resolves it, because the
+  /// server answers the repeat with a duplicate status and the order is marked
+  /// synced from that.
+  bool reopen(String uuid, {required WithdrawPush withdrawPush}) {
+    final order = byUuid(uuid);
+    if (order == null) return false;
+    // Only a tendered sale is reopened: a draft or a held tab is editable already,
+    // and synced is the state this must never move.
+    if (order.state != OrderState.paid) return false;
+    // Another till's sale is booked by that till, exactly as its tabs are settled
+    // there, so it is not this one's to rewrite.
+    if (ownDeviceId != null && order.deviceId != ownDeviceId) return false;
+    // A refund reverses a sale that stands. Editing one back into the cart would
+    // turn a credit into a fresh order made of negative lines.
+    if (order.isRefund) return false;
+    _db.raw.execute('BEGIN');
+    try {
+      if (!withdrawPush(uuid)) {
+        _db.raw.execute('ROLLBACK');
+        return false;
+      }
+      order.state = OrderState.draft;
+      order.payments = [];
+      order.cashReceived = null;
+      // Rides on the order so the corrected receipt is marked whenever it prints,
+      // including a reprint days later and after a restart mid-correction.
+      order.amended = true;
+      _insert(order);
+      _db.raw.execute('COMMIT');
+      return true;
+    } catch (_) {
+      _db.raw.execute('ROLLBACK');
+      rethrow;
+    }
   }
 
   /// Active kitchen tickets for the KDS board: orders that have been sent to the

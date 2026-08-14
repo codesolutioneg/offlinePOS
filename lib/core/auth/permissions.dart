@@ -11,6 +11,7 @@ enum Permission {
   applyDiscount('apply_discount', 'Apply discount', 'Take a percentage off an order or a line'),
   voidLine('void_line', 'Void a line', 'Remove an item from an open order'),
   cancelOrder('cancel_order', 'Cancel order', 'Discard a whole parked or open order'),
+  amendOrder('amend_order', 'Edit a paid order', 'Put a paid sale back on the counter before it syncs'),
   refund('refund', 'Refund', 'Return money against a past sale'),
   reprint('reprint', 'Reprint receipt', 'Print another copy of a receipt'),
   openDrawer('open_drawer', 'Open cash drawer', 'Kick the drawer open without a sale'),

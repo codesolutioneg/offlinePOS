@@ -90,6 +90,9 @@ class ReceiptBuilder {
       p.size(doubleHeight: true).centred('*** BILL ***').size();
       p.centred('NOT A TAX RECEIPT');
     }
+    // A sale corrected after it was first tendered says so, so a customer holding
+    // the slip from before the correction can see which of the two stands.
+    if (order.amended) p.centred('*** AMENDED ***');
     p.align(EscPosAlign.left).rule(divider);
 
     // Where the sale was served, so a delivery or table sale reads differently

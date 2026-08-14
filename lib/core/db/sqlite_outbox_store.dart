@@ -78,6 +78,36 @@ class SqliteOutboxStore implements OutboxStore {
       .select('SELECT COUNT(*) c FROM outbox WHERE dead_at IS NOT NULL')
       .first['c'] as int;
 
+  /// Take an entry back out of the queue before it is delivered, so a record that
+  /// is being rewritten locally cannot book the version that was queued.
+  ///
+  /// Returns false, touching nothing, when a row for this key exists and is past
+  /// withdrawing: acknowledged by the server, or parked. The caller is expected to
+  /// abandon whatever it was about to rewrite.
+  ///
+  /// Deleting is deliberate, and the alternatives are both wrong. Marking the row
+  /// dead would strand the record forever, because [append] leaves `dead_at` alone
+  /// on a conflict and [pending] skips dead rows, so the re-queue would land on a
+  /// row nothing ever drains. Leaving the row to be overwritten by the re-queue
+  /// would keep the superseded payload deliverable in the meantime, so a record
+  /// that was withdrawn and then abandoned rather than re-saved would still be sent.
+  /// With the row gone, nothing is owed until the record is saved again.
+  bool withdrawPending(String kind, String payloadUuid) {
+    // Unique on (kind, payload_uuid), so this is one row or none.
+    final rows = _db.raw.select(
+        'SELECT sent_at, dead_at FROM outbox WHERE kind = ? AND payload_uuid = ?',
+        [kind, payloadUuid]);
+    if (rows.isNotEmpty &&
+        (rows.first['sent_at'] != null || rows.first['dead_at'] != null)) {
+      return false;
+    }
+    _db.raw.execute(
+        'DELETE FROM outbox WHERE kind = ? AND payload_uuid = ? '
+        'AND sent_at IS NULL AND dead_at IS NULL',
+        [kind, payloadUuid]);
+    return true;
+  }
+
   /// Put a parked entry back in the queue, once whatever caused it is fixed.
   void revive(int id) => _db.raw.execute(
       'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 WHERE id = ?',
