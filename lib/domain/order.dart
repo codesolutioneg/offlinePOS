@@ -82,12 +82,20 @@ class OrderLine {
     this.note,
     this.discountPercent = 0,
     this.categoryId,
-    this.taxRate = 0,
+    double taxRate = 0,
+    double? baseTaxRate,
     this.printedToKitchen = false,
     this.seat,
     this.fireAt,
     List<String>? firedStations,
   })  : uuid = uuid ?? Uuid.v4(),
+        // Not an initializing formal because baseTaxRate defaults to this value.
+        // ignore: prefer_initializing_formals
+        taxRate = taxRate,
+        // The product's own rate, kept so the tax matrix can be undone: switching to
+        // an order type with no override restores this instead of leaving the last
+        // override stuck on the line.
+        baseTaxRate = baseTaxRate ?? taxRate,
         modifiers = modifiers ?? [],
         firedStations = firedStations ?? [];
 
@@ -114,6 +122,11 @@ class OrderLine {
   // Mutable so the category/order-type tax matrix can override the product's rate
   // when the line is added or the order type changes.
   double taxRate;
+
+  /// The product's original tax rate, captured at sale. [taxRate] may be overridden
+  /// by the category/order-type matrix; this is what it falls back to when no
+  /// override applies to the current order type.
+  final double baseTaxRate;
 
   /// Whether this line has already been sent to the kitchen. Lets a re-fire print
   /// only the newly added lines rather than the whole ticket again.
@@ -159,6 +172,7 @@ class OrderLine {
         'discount_percent': discountPercent,
         'category_id': categoryId,
         'tax_rate': taxRate,
+        'base_tax_rate': baseTaxRate,
         'printed_to_kitchen': printedToKitchen,
         'seat': seat,
         'fired_stations': firedStations,
@@ -175,6 +189,7 @@ class OrderLine {
         discountPercent: (m['discount_percent'] as num?)?.toDouble() ?? 0,
         categoryId: m['category_id'] as int?,
         taxRate: (m['tax_rate'] as num?)?.toDouble() ?? 0,
+        baseTaxRate: (m['base_tax_rate'] as num?)?.toDouble(),
         printedToKitchen: (m['printed_to_kitchen'] as bool?) ?? false,
         seat: m['seat'] as int?,
         firedStations:

@@ -142,6 +142,26 @@ void main() {
     expect(taxed.current.lines.single.taxRate, 14);
   });
 
+  test('switching to an order type with no override restores the product rate', () {
+    final taxed = PosSession(
+      catalogue: CatalogueStore(db),
+      orders: orders,
+      outbox: Outbox(store: outboxStore, senders: const {}),
+      audit: AuditLog(db),
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      // Only takeaway is configured (zero-rated); dine-in/delivery have no override.
+      taxRateFor: (cat, type) =>
+          cat == 1 && type == OrderType.takeaway ? 0.0 : null,
+    );
+    taxed.addProduct(const Product(id: 10, name: 'Burger', price: 100, categoryId: 1, taxRate: 9));
+    taxed.setOrderType(OrderType.takeaway);
+    expect(taxed.current.lines.single.taxRate, 0);
+    // Back to dine-in (no override): the product's own 9% returns, not a stuck 0%.
+    taxed.setOrderType(OrderType.dineIn);
+    expect(taxed.current.lines.single.taxRate, 9);
+  });
+
   test('a line whose category is not in the tax matrix keeps the product rate', () {
     final taxed = PosSession(
       catalogue: CatalogueStore(db),

@@ -35,8 +35,10 @@ class PosSession {
   /// Apply the configured category/order-type tax rate to a line, if one is set.
   /// A line whose category is not in the matrix keeps the rate it already has.
   void _applyTax(OrderLine line) {
-    final r = taxRateFor?.call(line.categoryId, current.type);
-    if (r != null) line.taxRate = r;
+    // The matrix rate for this category/order type, or the product's base rate when
+    // the type has no override, so switching away from a configured type restores
+    // the original rate rather than leaving the last override stuck on the line.
+    line.taxRate = taxRateFor?.call(line.categoryId, current.type) ?? line.baseTaxRate;
   }
 
   Order? _current;
@@ -402,6 +404,7 @@ class PosSession {
         unitPrice: line.unitPrice,
         categoryId: line.categoryId,
         taxRate: line.taxRate,
+        baseTaxRate: line.baseTaxRate,
         note: line.note,
         discountPercent: line.discountPercent,
         printedToKitchen: line.printedToKitchen,
@@ -447,6 +450,7 @@ class PosSession {
       unitPrice: line.unitPrice,
       categoryId: line.categoryId,
       taxRate: line.taxRate,
+        baseTaxRate: line.baseTaxRate,
       note: line.note,
       discountPercent: line.discountPercent,
       printedToKitchen: line.printedToKitchen,
@@ -488,6 +492,7 @@ class PosSession {
           unitPrice: line.unitPrice,
           categoryId: line.categoryId,
           taxRate: line.taxRate,
+        baseTaxRate: line.baseTaxRate,
           note: line.note,
           discountPercent: line.discountPercent,
           printedToKitchen: line.printedToKitchen,
