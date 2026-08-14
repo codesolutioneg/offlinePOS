@@ -16,7 +16,10 @@ class TaxReportScreen extends StatelessWidget {
     // rate% -> [gross, tax]
     final byRate = <double, List<double>>{};
     for (final o in orders) {
-      final f = o.discountFactor;
+      // The service charge travels inside the line prices, so the server taxes it at
+      // each item's own rate. The report has to include it or it understates the tax
+      // that was actually booked.
+      final f = o.discountFactor * o.serviceChargeFactor;
       for (final l in o.lines) {
         if (l.taxRate <= 0) continue;
         final gross = l.total * f;
