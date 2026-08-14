@@ -51,6 +51,7 @@ import '../features/reports/reports_hub_screen.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
+import '../features/settings/lan_settings_screen.dart';
 import '../features/settings/tax_settings_screen.dart';
 import '../features/settings/printers_screen.dart';
 import '../features/settings/quick_comments_screen.dart';
@@ -238,6 +239,24 @@ class _PosAppState extends State<PosApp> {
       await lan.start();
     } catch (e) {
       widget.audit.record('system', 'lan.start.failed', detail: '$e');
+    }
+  }
+
+  /// Follow the LAN switch the moment it is flipped.
+  ///
+  /// Switching sharing off closes the socket and stops the announcements now rather
+  /// than at the next restart, so a manager who turns it off has actually turned it
+  /// off. Switching it on can only restart a fabric this launch already assembled;
+  /// a device that started the day off the LAN picks it up on the next launch, which
+  /// is what the screen says, because standing up an event log behind orders that
+  /// are already on screen would replicate a half-known shop.
+  Future<void> _reconcileLan() async {
+    final lan = widget.lan;
+    if (lan == null) return;
+    if (widget.settings.lanEnabled(fallback: widget.config.lanDefault)) {
+      await _startLan();
+    } else {
+      await lan.stop();
     }
   }
 
@@ -1117,6 +1136,16 @@ class _PosAppState extends State<PosApp> {
         },
       ),
       SettingsEntry(
+        title: 'Shop network',
+        subtitle: 'Share open tabs, tickets and the floor plan',
+        icon: Icons.lan_outlined,
+        keyValue: 'set-lan',
+        group: 'Server',
+        // Behind the same gate as the server settings: this is the one switch in the
+        // app that opens a listening socket, so it is not a cashier's to flip.
+        onTap: () => pushGated(Permission.openSettings, _lanScreen(refresh)),
+      ),
+      SettingsEntry(
         title: 'Staff',
         icon: Icons.badge_outlined,
         keyValue: 'set-staff',
@@ -1144,6 +1173,21 @@ class _PosAppState extends State<PosApp> {
     ];
     push(SettingsHubScreen(entries: entries));
   }
+
+  /// What this device is on the shop LAN, and who else it can see. The fabric is
+  /// read through a callback rather than copied in, so the peer list and the last
+  /// catch-up are what is true while the screen is open.
+  Widget _lanScreen(VoidCallback refresh) => LanSettingsScreen(
+        settings: widget.settings,
+        deviceId: widget.deviceId,
+        buildDefault: widget.config.lanDefault,
+        facts: widget.lan == null ? null : () => widget.lan!.facts,
+        onSyncNow: widget.lan?.pass,
+        onChanged: () {
+          refresh();
+          unawaited(_reconcileLan());
+        },
+      );
 
   /// Gate a privileged action behind manager approval. A manager already signed in
   /// passes straight through; anyone else must enter a manager PIN.

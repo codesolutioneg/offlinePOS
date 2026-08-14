@@ -13,6 +13,21 @@ import 'lan_fabric.dart';
 import 'lan_peer.dart';
 import 'lan_transport.dart';
 
+/// Everything the shop network screen reports about this device.
+///
+/// Read on every rebuild rather than handed over once, because all of it changes
+/// while somebody is looking at it: the beacon finds a device, a pull fails, a
+/// cursor moves. A peer list frozen when the screen opened is a support screen that
+/// lies, which is worse than no screen at all.
+typedef LanFacts = ({
+  String? servingAt,
+  List<LanPeer> peers,
+  List<LanPeer> refused,
+  Map<String, int> cursors,
+  DateTime? lastPassAt,
+  String? lastError,
+});
+
 /// This device's whole presence on the shop LAN: the log it serves, the beacon it
 /// announces on, the server peers pull from and the replicator that keeps it level
 /// with them.
@@ -145,6 +160,16 @@ class LanNode {
 
   /// How far this device has read each peer, so a stuck cursor is visible.
   Map<String, int> get cursors => _log.cursors();
+
+  /// This device's whole LAN state as the settings screen shows it.
+  LanFacts get facts => (
+        servingAt: servingAt,
+        peers: peers.all,
+        refused: peers.refused,
+        cursors: cursors,
+        lastPassAt: lastPassAt,
+        lastError: lastError,
+      );
 
   /// Whether this device is on the LAN right now.
   bool get isRunning => _host.isServing || _beacon.isRunning;
