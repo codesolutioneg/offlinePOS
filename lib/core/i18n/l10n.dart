@@ -675,4 +675,10 @@ const Map<String, String> _ar = {
   'Print missing letters as an image': 'طباعة الحروف غير المدعومة كصورة',
   'Slower, but a name the table cannot spell still prints':
       'أبطأ قليلًا، لكن الاسم الذي لا يدعمه جدول الحروف يُطبع صحيحًا',
+  // service charge
+  'Service charge': 'رسم الخدمة',
+  'Service': 'الخدمة',
+  'Charged on': 'تُطبَّق على',
+  'Added to a bill when it opens. Zero turns it off.':
+      'يُضاف إلى الفاتورة عند فتحها. صفر يعني إلغاءه.',
 };

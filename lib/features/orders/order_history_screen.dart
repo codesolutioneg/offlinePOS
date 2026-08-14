@@ -241,6 +241,8 @@ class OrderDetailScreen extends StatelessWidget {
             if (order.discountPercent > 0)
               _adjustmentRow(tr(context, 'Discount'),
                   '-${order.discountPercent.toStringAsFixed(0)}%'),
+            if (order.serviceChargePercent > 0)
+              _adjustmentRow(tr(context, 'Service'), formatAmount(order.serviceCharge)),
             if (order.deliveryCost != 0)
               _adjustmentRow(tr(context, 'Delivery'), formatAmount(order.deliveryCost)),
             if (order.tip != 0) _adjustmentRow(tr(context, 'Tip'), formatAmount(order.tip)),

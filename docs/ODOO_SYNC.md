@@ -124,7 +124,7 @@ Every order push carries these, each one for a reason that has gone wrong somewh
 | `created_at` | The moment of sale. Without it a week of offline orders all post on the day the line returned |
 | `cashier_id` | With one shared login Odoo attributes every order to the same user; this is the only record of who rang it |
 | `device_id` | Which till, for reconciliation and support |
-| `lines[].product_id`, `quantity`, `unit_price` | The sale itself; a whole-order discount is folded into each line's `unit_price` before sending |
+| `lines[].product_id`, `quantity`, `unit_price` | The sale itself; a whole-order discount and the service charge are both folded into each line's `unit_price` before sending, so the module books what the customer paid without learning a new field, and the service is taxed at each item's own rate. The till keeps the percentage locally to print it as its own line; it is stripped from the payload |
 | `lines[].modifiers[].product_id` | Each modifier backed by a product becomes its own order line, so it moves stock and invoices exactly as on-site |
 
 ## How the module answers
