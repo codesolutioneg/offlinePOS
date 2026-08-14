@@ -83,14 +83,28 @@ class FakeRequest implements HttpClientRequest {
 /// Answers per url, so a test can hand back a different certificate on a later call
 /// the way a server whose certificate was swapped mid-shift would.
 class FakeClient implements HttpClient {
-  FakeClient(this._respond);
+  FakeClient(this._respond, {this.certificateFor});
   final FakeResponse Function(Uri url) _respond;
+
+  /// What the fake server presents mid-handshake. Set it and the refusal happens
+  /// before there is a request to write to, which is what dart:io does when no root
+  /// store can verify the chain.
+  final X509Certificate? Function(Uri url)? certificateFor;
+
   final List<FakeRequest> requests = [];
   int closes = 0;
   @override
   Duration? connectionTimeout;
   @override
+  bool Function(X509Certificate certificate, String host, int port)?
+      badCertificateCallback;
+  @override
   Future<HttpClientRequest> postUrl(Uri url) async {
+    final presented = certificateFor?.call(url);
+    final gate = badCertificateCallback;
+    if (presented != null && gate != null && !gate(presented, url.host, url.port)) {
+      throw const HandshakeException('certificate refused during the handshake');
+    }
     final request = FakeRequest(_respond(url));
     requests.add(request);
     return request;
@@ -161,6 +175,47 @@ void main() {
     // path gets nothing believed, and the socket is dropped with the client.
     expect(response.bodyRead, isFalse);
     expect(client.closes, 1);
+  });
+
+  test('the pin is checked mid-handshake, so a stranger is never sent the login', () async {
+    // The body of an authenticate call IS the shared integration password, so the
+    // refusal has to land before anything is written, not on the reply that comes back.
+    final client = FakeClient(
+      (_) => reply(ours),
+      certificateFor: (_) => FakeCertificate(stranger),
+    );
+    final transport =
+        PinnedSyncTransport(certificateSha256: {pin}, openClient: () => client);
+
+    await expectLater(
+      transport.post(url, const {'Content-Type': 'application/json'},
+          '{"params":{"login":"integration","password":"the shared secret"}}'),
+      throwsA(isA<HandshakeException>()),
+    );
+    // No request object was ever handed out, so there was nothing to write the
+    // password to.
+    expect(client.requests, isEmpty);
+  });
+
+  test('a pinned certificate passes the handshake and the call goes through', () async {
+    final client = FakeClient(
+      (_) => reply(ours),
+      certificateFor: (_) => FakeCertificate(ours),
+    );
+    final transport =
+        PinnedSyncTransport(certificateSha256: {pin}, openClient: () => client);
+
+    final res = await transport.post(url, const {}, '{"jsonrpc":"2.0"}');
+
+    expect(res.statusCode, 200);
+    expect(client.requests.single.sent, isNotEmpty);
+  });
+
+  test('the pin gate recognises our certificate and refuses a stranger', () {
+    final transport = PinnedSyncTransport(certificateSha256: {pin});
+
+    expect(transport.acceptCertificate(FakeCertificate(ours)), isTrue);
+    expect(transport.acceptCertificate(FakeCertificate(stranger)), isFalse);
   });
 
   test('a certificate presenting no chain at all is refused too', () async {

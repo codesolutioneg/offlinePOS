@@ -44,10 +44,17 @@ HttpPost odooPost(Set<String> certificateSha256) => certificateSha256.isEmpty
 /// trust, which on a shop LAN means whatever the local router resolves and whatever
 /// CA an operator installed. docs/SECURITY.md asks for pinning on the API.
 ///
-/// dart:io reports the certificate with the response, so the check lands before any
-/// reply is read, parsed, or believed about a session. A wrong certificate therefore
-/// never yields a working session or a booked sale, and every later call is refused
-/// the same way.
+/// The pin is checked during the TLS handshake, before the request body is written,
+/// because this body IS the secret: the shared integration login on authenticate and
+/// the day's takings on a close. Checking the certificate that comes back with the
+/// response would refuse the reply after already handing the login to whoever
+/// answered. The client therefore trusts no roots of its own and accepts a connection
+/// only when [acceptCertificate] recognises the certificate.
+///
+/// Pinning replaces chain validation rather than adding to it: a pinned certificate is
+/// accepted on its digest alone. That is the point (an operator-installed CA cannot
+/// mint a certificate this till will talk to) and the cost (an expired pinned
+/// certificate is still accepted, so a rotation has to be staged with two pins).
 class PinnedSyncTransport {
   /// [certificateSha256] holds lowercase hex digests of the DER form of the
   /// certificates this till will talk to. More than one so a rotation can be staged:
@@ -64,7 +71,7 @@ class PinnedSyncTransport {
     required Set<String> certificateSha256,
     HttpClient Function()? openClient,
   })  : _pins = {for (final p in certificateSha256) p.trim().toLowerCase()},
-        _openClient = openClient ?? HttpClient.new {
+        _openClient = openClient ?? _pinnedClient {
     if (_pins.isEmpty) {
       throw ArgumentError.value(certificateSha256, 'certificateSha256',
           'at least one certificate pin is required');
@@ -73,6 +80,17 @@ class PinnedSyncTransport {
 
   final Set<String> _pins;
   final HttpClient Function() _openClient;
+
+  /// A client that trusts no roots, so dart:io cannot verify any chain on its own and
+  /// hands every certificate to [acceptCertificate] mid-handshake instead.
+  static HttpClient _pinnedClient() =>
+      HttpClient(context: SecurityContext(withTrustedRoots: false));
+
+  /// Whether this is one of the certificates this till talks to. Called during the
+  /// handshake, so returning false aborts the connection before a request exists and
+  /// therefore before the login or the takings are written to the socket.
+  bool acceptCertificate(X509Certificate certificate) =>
+      _pins.contains(_digest(certificate));
 
   /// Same signature, same timeouts and same header handling as [httpPost], so the
   /// only difference a pinned build sees is the refusal.
@@ -86,7 +104,11 @@ class PinnedSyncTransport {
       // http:// would be pinned in name only.
       throw const HttpException('a pinned till syncs over https only');
     }
-    final client = _openClient()..connectionTimeout = const Duration(seconds: 20);
+    final client = _openClient()
+      ..connectionTimeout = const Duration(seconds: 20)
+      // The gate that matters: no chain verifies against an empty root store, so this
+      // runs for every connection and refuses before postUrl returns a request.
+      ..badCertificateCallback = (cert, host, port) => acceptCertificate(cert);
     try {
       final req = await client.postUrl(url);
       headers.forEach(req.headers.set);
@@ -95,9 +117,10 @@ class PinnedSyncTransport {
 
       final certificate = res.certificate;
       if (certificate == null || !_pins.contains(_digest(certificate))) {
-        // Nothing is read from a connection that failed the pin: no body for the
-        // JSON parser, no Set-Cookie for the session. The force-close below drops
-        // the connection with the reply still unread.
+        // A backstop for the connection the handshake gate did not see: a reused or
+        // proxied connection, or an injected client that ignores the callback. Nothing
+        // is read from it either way, so no body reaches the JSON parser and no
+        // Set-Cookie reaches the session.
         throw const HttpException('Odoo host presented an unpinned certificate');
       }
 
