@@ -1,4 +1,5 @@
 import '../../domain/identity.dart';
+import '../lan/lan_event.dart';
 import 'database.dart';
 
 /// How a floor element is drawn: a real shape for a seatable table, or
@@ -52,6 +53,37 @@ class PosTable {
   /// shows as occupied and is never tapped to open an order.
   bool get isDivider => shape == TableShape.divider;
 
+  /// The wire shape for the LAN fabric, so a floor laid out on one device reaches
+  /// the others. Column names, not field names, so the payload reads the same as
+  /// the row it came from.
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'section': section,
+        'name': name,
+        'seats': seats,
+        'pos_x': x,
+        'pos_y': y,
+        'sequence': sequence,
+        'shape': shape.name,
+        'vertical': vertical,
+        'span': span,
+      };
+
+  /// Throws if the payload is not a table. An unreadable event is refused by the
+  /// applier rather than written as a half-built table on the floor.
+  factory PosTable.fromMap(Map<String, dynamic> m) => PosTable(
+        id: m['id'] as String,
+        name: m['name'] as String,
+        section: (m['section'] as String?) ?? 'Main',
+        seats: (m['seats'] as num?)?.toInt() ?? 4,
+        x: (m['pos_x'] as num?)?.toDouble() ?? 0,
+        y: (m['pos_y'] as num?)?.toDouble() ?? 0,
+        sequence: (m['sequence'] as num?)?.toInt() ?? 0,
+        shape: _shapeFromDb(m['shape'] as String?),
+        vertical: m['vertical'] == true,
+        span: (m['span'] as num?)?.toInt() ?? 140,
+      );
+
   PosTable copyWith({
     String? name,
     String? section,
@@ -79,10 +111,16 @@ class PosTable {
 
 /// The floor plan on disk. Reads answer with no network so the floor is usable
 /// during an outage exactly like the catalogue.
+///
+/// The plan is laid out on one device but every till needs it, so each change is
+/// announced to the LAN fabric when one is wired. With no fabric this class writes
+/// exactly what it always wrote.
 class TableStore {
-  TableStore(this._db);
+  TableStore(this._db, {LanPublish? publish}) : _publish = publish;
 
   final Db _db;
+
+  final LanPublish? _publish;
 
   List<PosTable> all() => _db.raw
       .select('SELECT * FROM pos_tables ORDER BY section, sequence, name')
@@ -150,7 +188,12 @@ class TableStore {
     return '$desired-$n';
   }
 
-  void upsert(PosTable t) => _db.raw.execute(
+  /// [announce] is false only when the change arrived from another till, so the
+  /// floor plan is not bounced back to the device that drew it.
+  void upsert(PosTable t, {bool announce = true}) {
+    final publish = _publish;
+    _commit(
+      () => _db.raw.execute(
         'INSERT INTO pos_tables (id, section, name, seats, pos_x, pos_y, sequence, shape, vertical, span) '
         'VALUES (?,?,?,?,?,?,?,?,?,?) '
         'ON CONFLICT(id) DO UPDATE SET section=excluded.section, name=excluded.name, '
@@ -159,18 +202,62 @@ class TableStore {
         'span=excluded.span',
         [t.id, t.section, t.name, t.seats, t.x, t.y, t.sequence, t.shape.name,
           t.vertical ? 1 : 0, t.span],
-      );
+      ),
+      announce && publish != null
+          ? () => publish(LanEventKind.tableUpsert, t.id, t.toMap())
+          : null,
+    );
+  }
 
-  void remove(String id) =>
-      _db.raw.execute('DELETE FROM pos_tables WHERE id = ?', [id]);
+  void remove(String id, {bool announce = true}) {
+    final publish = _publish;
+    _commit(
+      () => _db.raw.execute('DELETE FROM pos_tables WHERE id = ?', [id]),
+      announce && publish != null
+          ? () => publish(LanEventKind.tableUpsert, id, {'id': id, 'deleted': true})
+          : null,
+    );
+  }
 
   /// Rename a whole section (moves every table in it).
-  void renameSection(String from, String to) => _db.raw.execute(
-      'UPDATE pos_tables SET section = ? WHERE section = ?', [to.trim(), from]);
+  ///
+  /// A table at a time rather than one bulk UPDATE, so each move carries its own
+  /// event and the other tills end up with the same floor rather than a section
+  /// that only exists here.
+  void renameSection(String from, String to) {
+    final target = to.trim();
+    for (final t in inSection(from)) {
+      upsert(t.copyWith(section: target));
+    }
+  }
 
   /// Delete a section and all its tables.
-  void deleteSection(String section) =>
-      _db.raw.execute('DELETE FROM pos_tables WHERE section = ?', [section]);
+  void deleteSection(String section) {
+    for (final t in inSection(section)) {
+      remove(t.id);
+    }
+  }
+
+  /// One writer, optionally with the fabric event in the same transaction so a
+  /// table cannot be announced as moved unless it really moved. A failed announce
+  /// still commits the change: the floor plan in front of the manager is what they
+  /// just drew, and refusing their edit because a peer table misbehaved would be
+  /// the wrong way round.
+  void _commit(void Function() write, void Function()? announce) {
+    if (announce == null) {
+      write();
+      return;
+    }
+    _db.raw.execute('BEGIN');
+    try {
+      write();
+      announce();
+      _db.raw.execute('COMMIT');
+    } catch (_) {
+      _db.raw.execute('ROLLBACK');
+      write();
+    }
+  }
 
   int _nextSequence(String section) =>
       (_db.raw.select('SELECT COALESCE(MAX(sequence), -1) + 1 n FROM pos_tables '
