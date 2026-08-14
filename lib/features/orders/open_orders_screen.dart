@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart';
 
 /// Lists orders parked on a table or tab so a cashier can pick one back up.
@@ -16,6 +17,7 @@ class OpenOrdersScreen extends StatelessWidget {
     required this.formatAmount,
     required this.onRecall,
     this.onCancel,
+    this.onPrintBill,
   });
 
   final List<Order> orders;
@@ -25,6 +27,10 @@ class OpenOrdersScreen extends StatelessWidget {
   /// Discards a held order (abandoned tab). Manager-gated by the caller. Absent
   /// hides the cancel action.
   final Future<void> Function(Order order)? onCancel;
+
+  /// Prints the check for a parked tab without recalling it, so a waiter can take the
+  /// bill to the table straight from this list. Absent hides the action.
+  final void Function(Order order)? onPrintBill;
 
   @override
   Widget build(BuildContext context) {
@@ -38,6 +44,13 @@ class OpenOrdersScreen extends StatelessWidget {
               itemBuilder: (_, i) => _OpenOrderCard(
                 order: orders[i],
                 formatAmount: formatAmount,
+                onPrintBill: onPrintBill == null
+                    ? null
+                    : () {
+                        onPrintBill!(orders[i]);
+                        showToast(context, tr(context, 'Bill sent to the printer'),
+                            kind: ToastKind.success, key: const Key('bill-printed'));
+                      },
                 onTap: () {
                   onRecall(orders[i]);
                   Navigator.of(context).pop();
@@ -77,12 +90,14 @@ class _OpenOrderCard extends StatelessWidget {
     required this.formatAmount,
     required this.onTap,
     this.onCancel,
+    this.onPrintBill,
   });
 
   final Order order;
   final String Function(double) formatAmount;
   final VoidCallback onTap;
   final VoidCallback? onCancel;
+  final VoidCallback? onPrintBill;
 
   // A tab with no table still needs a name a cashier can say out loud, so it
   // falls back to a short uuid tail rather than the full identifier.
@@ -188,6 +203,15 @@ class _OpenOrderCard extends StatelessWidget {
                   ],
                 ),
               ),
+              // Printing the check does not recall the tab, so a waiter can walk a
+              // bill to one table without taking the order off another cashier.
+              if (onPrintBill != null && order.lines.isNotEmpty)
+                IconButton(
+                  key: Key('print-bill-${order.uuid}'),
+                  tooltip: tr(context, 'Print bill'),
+                  icon: const Icon(Icons.receipt_long_outlined),
+                  onPressed: onPrintBill,
+                ),
               if (onCancel != null)
                 IconButton(
                   key: Key('cancel-order-${order.uuid}'),

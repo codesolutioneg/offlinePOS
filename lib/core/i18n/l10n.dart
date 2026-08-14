@@ -666,4 +666,8 @@ const Map<String, String> _ar = {
   'Download PDF': 'تنزيل PDF',
   'Saved to': 'حُفظ في',
   'Could not save file': 'تعذّر حفظ الملف',
+  // pre-bill: the check printed for the table before payment
+  'Print bill': 'طباعة الحساب',
+  'The check to take to the table, before payment': 'الحساب الذي يُقدَّم للطاولة قبل الدفع',
+  'Bill sent to the printer': 'أُرسل الحساب إلى الطابعة',
 };
