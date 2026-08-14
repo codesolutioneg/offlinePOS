@@ -5,6 +5,12 @@ import 'lan_event.dart';
 import 'lan_event_log.dart';
 import 'lan_peer.dart';
 
+/// What became of one event, which is what decides whether the peer's cursor may
+/// move past it. A refusal is final (this till has seen it and wants no more of it);
+/// a deferral is "not yet", and the cursor has to stay where the event can be found
+/// again.
+enum _Landing { written, refused, deferred }
+
 /// Writes what a peer sent into this till's own database, through the same stores
 /// every screen already reads.
 ///
@@ -45,13 +51,62 @@ class LanApplier {
   int applyAll(String peerDeviceId, List<LanEvent> events, {int? highSeq}) {
     var applied = 0;
     var seen = 0;
+    int? deferredAt;
     for (final event in events) {
       if (event.seq > seen) seen = event.seq;
-      if (apply(event)) applied++;
+      switch (_land(event)) {
+        case _Landing.written:
+          applied++;
+        case _Landing.deferred:
+          deferredAt ??= event.seq;
+        case _Landing.refused:
+          break;
+      }
     }
-    final cursor = highSeq ?? seen;
+    var cursor = highSeq ?? seen;
+    final waitingFor = deferredAt;
+    if (waitingFor == null) {
+      _waiting.remove(peerDeviceId);
+    } else if (_mayWaitFor(peerDeviceId, waitingFor)) {
+      // Hold the cursor below the first event whose order has not arrived, so the
+      // next pass asks for it again. Advancing here would move past a bump that
+      // nothing will ever fetch a second time, leaving a ticket permanently stale.
+      // Everything before it is an upsert keyed on a uuid, so re-reading that part
+      // of the page costs a write and changes nothing.
+      final hold = waitingFor - 1;
+      if (hold < cursor) cursor = hold;
+    }
     if (cursor > 0) _log.setCursor(peerDeviceId, cursor);
     return applied;
+  }
+
+  /// How many passes a peer's cursor may wait for an order that never came, before
+  /// it gives up and moves on. Without a bound, one bump for an order the owning
+  /// till discarded would stop that peer's catch-up for good.
+  static const int waitPasses = 10;
+
+  /// Per peer, the seq being waited on and how many passes it has been waited on
+  /// for. In memory only: a restart is welcome to try again, and re-trying is
+  /// cheaper than a schema change to remember a bump we may never be able to apply.
+  final Map<String, ({int seq, int passes})> _waiting = {};
+
+  bool _mayWaitFor(String peerDeviceId, int seq) {
+    final waiting = _waiting[peerDeviceId];
+    if (waiting == null || waiting.seq != seq) {
+      _waiting[peerDeviceId] = (seq: seq, passes: 1);
+      return true;
+    }
+    if (waiting.passes >= waitPasses) {
+      _onRefused?.call(
+        'lan.event.abandoned',
+        'no order arrived for $peerDeviceId seq $seq after ${waiting.passes} '
+            'passes, moving the cursor past it',
+      );
+      _waiting.remove(peerDeviceId);
+      return false;
+    }
+    _waiting[peerDeviceId] = (seq: seq, passes: waiting.passes + 1);
+    return true;
   }
 
   /// Write one event. Returns false when it was skipped or refused.
@@ -60,26 +115,34 @@ class LanApplier {
   /// between the two, this till re-applies the event on the next pull, and every
   /// kind here is an upsert keyed on a uuid, so a repeat lands the same row. The
   /// other order would mark a record as up to date that was never written.
-  bool apply(LanEvent event) {
+  bool apply(LanEvent event) => _land(event) == _Landing.written;
+
+  _Landing _land(LanEvent event) {
     // An event that started here has already been applied here. Belt and braces:
     // a till only ever serves its own log, so this should not arrive at all.
-    if (event.originDeviceId == deviceId) return false;
+    if (event.originDeviceId == deviceId) return _Landing.refused;
     try {
-      if (!_wins(event)) return false;
+      if (!_wins(event)) return _Landing.refused;
+      if (event.kind == LanEventKind.kitchenStatus &&
+          _orders.byUuid(event.recordUuid) == null) {
+        // Deferred rather than refused: the owning till's upsert is still coming,
+        // and the difference decides whether the cursor may move past this.
+        return _Landing.deferred;
+      }
       final written = switch (event.kind) {
         LanEventKind.orderUpsert => _applyOrder(event),
         LanEventKind.kitchenStatus => _applyKitchenStatus(event),
         LanEventKind.tableUpsert => _applyTable(event),
       };
-      if (!written) return false;
+      if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
-      return true;
+      return _Landing.written;
     } catch (e) {
       // A malformed or unreadable event is dropped, never retried into a crash
       // loop and never allowed near the till's own state.
       _onRefused?.call('lan.event.refused',
           '${event.kind.wire} ${event.recordUuid} from ${event.originDeviceId}: $e');
-      return false;
+      return _Landing.refused;
     }
   }
 
@@ -118,9 +181,9 @@ class LanApplier {
 
   bool _applyKitchenStatus(LanEvent event) {
     final status = KitchenStatus.values.byName('${event.payload['status']}');
-    // Nothing to advance means the order has not reached this till yet. Refusing
-    // (rather than inventing an order) is safe: the owning till's own upsert is
-    // still coming, and the bump will be pulled again on the next pass.
+    // Belt and braces: [_land] already deferred this case, holding the cursor so the
+    // bump is fetched again once the order arrives. Inventing an order here instead
+    // would put a ticket on the board that no till owns.
     if (_orders.byUuid(event.recordUuid) == null) return false;
     _orders.setKitchenStatus(event.recordUuid, status, announce: false);
     return true;
