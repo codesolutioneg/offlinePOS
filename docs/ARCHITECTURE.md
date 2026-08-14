@@ -31,8 +31,9 @@ critical path.
 
 Every record the till creates carries a **client-generated UUID as its identity**,
 assigned at creation, never reassigned by the server. This is what makes replay safe:
-the same order pushed twice is the same order, so sync needs no merge logic and no
-conflict resolution.
+the same order pushed twice is the same order, so the push to the server needs no merge
+logic. It is also the identity the devices in one shop replicate on, so applying the
+same change twice lands the same row.
 
 Server ids, when they come back, are stored alongside as a *reference*, never as the
 identity.
@@ -49,17 +50,52 @@ retry and backoff. Rules:
   to repeat.
 - Nothing is deleted from the outbox until the server has acknowledged it.
 
+## Multiple devices in one shop
+
+A shop with two tills and a kitchen screen has state that no single device owns: which
+tables are busy, which tabs are open, where a ticket is in the kitchen, what floor plan
+the manager drew. Those devices share it **directly with each other over the shop LAN**,
+with no cloud, no broker and nothing new on the server. Sharing keeps working with the
+internet cut, which is the only way it can be relied on during service.
+
+What that does not change is ownership. Replication makes a device *show* more, never
+*own* more:
+
+- The till that rang a sale is the only one that can recall it, report on it or book it
+  to Odoo. The reads that decide money are scoped to the device; the reads that only
+  serve food (kitchen tickets, every parked order) see the whole shop. The code that
+  applies a peer's events has no access to the outbox at all, so double-booking is
+  structurally impossible rather than merely avoided.
+- Held orders, kitchen statuses and floor elements replicate. Drafts do not: an order
+  being rung changes on every tap and no other device has a use for it.
+- Conflicts resolve as last write wins per record, with a device-id tiebreak, plus one
+  rule above the clocks: an order's state only moves forward, so a paid sale never loses
+  to a held one.
+- A device is authenticated by a shared shop key. The traffic is not encrypted.
+
+Off unless the shop was sold a second device, and then still a device setting rather than
+a build: with it off, no event is written and no socket is opened. The protocol, the
+pairing contract and the failure behaviour are in docs/LAN_SYNC.md.
+
+## Kitchen
+
+Two channels, and the shop picks by what it bought:
+
+- **Printed ticket.** ESC/POS straight to the station printers, with re-fires printing
+  only the new lines. This is the baseline and the degraded mode: it needs no second
+  screen and no network beyond the printer.
+- **A kitchen screen over the LAN.** A device built with `KDS_MODE` boots straight into
+  the board, with no sign-in and no open shift, because a cook takes no money. Every
+  ticket on it arrived over the shop network, and a bump leaves as a kitchen-status event
+  rather than a claim on somebody else's sale, so the board can neither ring up, report
+  nor push anything.
+
+The board is also just a screen on a till for a shop that wants it there.
+
 ## Storage
 
-SQLite. Versioned migrations, tested, run on launch.
-
-**Encryption at rest is not implemented.** The target is SQLCipher with the key
-from the platform keystore, and `Db.open` already takes a key, but the dependency
-is the plain `sqlite3` build, so a key passed today is accepted and ignored. Until
-that changes, sales, PIN hashes and the audit log are readable by anyone holding
-the device. It is on the go-live checklist in docs/SECURITY.md as an open blocker,
-and it is stated here rather than described as done because someone will otherwise
-sign the checklist against this page.
+SQLite, encrypted with SQLCipher and a key held in the platform keychain. Versioned
+migrations, tested, run on launch.
 
 A migration failure on a till holding unsynced sales is the worst bug this app can
 have, so migrations are additive first and destructive only after a release that

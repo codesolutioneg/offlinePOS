@@ -1,5 +1,19 @@
 # Syncing to Odoo
 
+## The server contract is fixed
+
+The till uses **one write entry point, `sale.order.create_from_offline_pos`, plus reads
+of models that already exist in the customer's database** through the generic `call_kw`
+path (`pos.category`, `product.product`, `account.tax`, `pos.payment.method`,
+`res.partner`, and jouma's own modifier models). That is the whole contract, and **no new
+endpoints are added**: every feature on this till is built to work against those calls or
+to stay on the device. A capability that would need a new server endpoint is a decision to
+take deliberately, with the module change and its deployment priced in, not something
+that appears because a screen wanted it.
+
+State that is shared between the devices in one shop does not go through Odoo at all. It
+is device-to-device on the shop LAN; see docs/LAN_SYNC.md.
+
 ## What we book, and why it is a sale.order
 
 An offline sale is booked as the **full on-site chain**, not a bare `pos.order`:
@@ -38,9 +52,37 @@ What runs in the background is read-only and books nothing:
   the **online/offline badge** on the sell screen honest.
 - A **catalogue refresh** when prices are stale.
 
-The periodic loop never drains the order queue. Selling is always available offline;
-the badge only tells the cashier whether the close-of-shift push will land now or
-wait.
+The periodic loop never starts an order push of its own. Selling is always available
+offline; the badge only tells the cashier whether the close-of-shift push will land now
+or wait.
+
+### Finishing a close that failed
+
+The one exception, and it is a narrow one: a batch push that already ran and did not get
+everything out is **armed**, and the loop then makes bounded attempts to finish *that*
+batch. The day's takings are not something to leave waiting on somebody remembering to
+tap Sync now the next morning. The read-only pass itself stays read-only; the retry is a
+separate step beside it.
+
+| Bound | Value | Why |
+|---|---|---|
+| What arms it | A batch push (shift close or manual sync) that ends with sales still queued | Only sales. A push that failed on the catalogue read with nothing owed to the server has nothing to deliver, and the periodic refresh re-reads the catalogue anyway |
+| Retry window | 12 hours from the **first** failure, never extended by a later one | Wide enough to sit through an overnight outage and deliver before the shop opens, bounded so a till pointed at a dead server stops pretending a retry is still coming |
+| Pacing floor | One attempt per 5 minutes | The loop ticks every 20s, and a drain against a dead server costs a socket timeout plus a burnt attempt on every queued entry |
+| Offline | Skipped, no socket opened | The probe has just run on this same pass, so an offline till costs nothing here |
+| Already pushing | Skipped | A manual sync or a shift close in flight owns the queue; a second attempt would only fight it for the same entries |
+| Work per attempt | 10 batches | A long backlog is worked through over several attempts rather than one long run behind a cashier who is mid-sale |
+
+It disarms the moment the queue is empty, whether this retry emptied it or a manual sync
+did. When the window closes with sales still queued it disarms too, and records that it
+gave up rather than leaving a till that looks like it is still trying. Support sees the
+armed state, the reason, the attempt count and the time of the last attempt.
+
+**The armed state is in memory only.** A restart forgets it, and the queued sales are
+then pushed by the next shift close or a manual Sync now. Nothing is lost either way:
+the sales are durable and the server is idempotent on the uuid. Persisting the armed
+flag would buy a retry across restarts and cost a schema column, which is a trade worth
+making only if a till is seen restarting inside its own outage.
 
 ## Recovering from an outage
 
@@ -114,6 +156,24 @@ transaction and discard the others.
 | `order.push` | order uuid | The sale. Idempotent on the uuid |
 | `audit.push` | `audit-<id>` | Who did what, since Odoo's trail only shows the shared user |
 | `device.status` | device id | Heartbeat. Keyed on the device so it replaces rather than accumulating during the outage it describes |
+
+`order.push` is the only kind with a real sender. `audit.push` and `device.status` are
+registered as local acks: the client side is complete, and a sink for them would be a new
+server endpoint, which per the contract above is not being built. The local audit log
+stays the record of who did what.
+
+## The shift stays on the till
+
+There is **no shift endpoint, deliberately**. The opening float, the drawer movements,
+the counted cash and the over/short are read on the till as the X and Z figures (now with
+per-tender totals, so a Z read reconciles against the drawer without re-deriving which
+methods are cash) and they go nowhere else. Sending them would mean a new server entry
+point to book a cash session, and the till builds nothing that requires one.
+
+One thing was added ahead of that decision: a shift now carries a `uuid` of its own
+(schema v14) alongside its till-local id. Nothing reads it. It exists so that **if** the
+decision is ever revisited, a shift is already replay-safe on a key and the change is a
+sender plus a module entry point rather than a migration in the same release.
 
 ## Catch-up after a long outage
 
