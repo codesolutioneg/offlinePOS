@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/schema.dart';
+import 'package:offline_pos/core/lan/lan_credential.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
 import 'package:offline_pos/core/lan/lan_transport.dart';
 import 'package:offline_pos/domain/order.dart';
@@ -21,26 +22,35 @@ void main() {
   });
   tearDown(() => shop.close());
 
+  /// The two calls below go straight at the protocol rather than over a socket, so
+  /// they carry the stamp the client would put on them. Pairing is asserted on its own
+  /// in lan_pairing_test.dart; here it just has to be satisfied.
+  LanReply pull(String path, Map<String, String> query) => till.protocol.handleGet(
+        path,
+        query,
+        auth: till.credential.stamp(
+            method: 'GET',
+            path: path,
+            query: LanCredential.canonicalQuery(query)),
+      );
+
+  LanReply push(String path, String body) => till.protocol.handlePost(
+        path,
+        body,
+        auth: till.credential.stamp(method: 'POST', path: path, body: body),
+      );
+
   test('an unknown path or method is answered, not crashed on', () {
-    expect(till.protocol.handleGet('/anything', const {}).status, 404);
-    expect(till.protocol.handlePost('/anything', '{}').status, 404);
+    expect(pull('/anything', const {}).status, 404);
+    expect(push('/anything', '{}').status, 404);
   });
 
   test('a notify with no device id or no events is refused', () {
     final schema = '${Schema.version}';
+    expect(push(LanProtocol.notifyPath, '{"schema":$schema,"events":[]}').status, 400);
     expect(
-        till.protocol
-            .handlePost(LanProtocol.notifyPath, '{"schema":$schema,"events":[]}')
-            .status,
-        400);
-    expect(
-        till.protocol
-            .handlePost(LanProtocol.notifyPath, '{"device_id":"b","schema":$schema}')
-            .status,
-        400);
-    expect(
-        till.protocol.handlePost(LanProtocol.notifyPath, 'not json at all').status,
-        400);
+        push(LanProtocol.notifyPath, '{"device_id":"b","schema":$schema}').status, 400);
+    expect(push(LanProtocol.notifyPath, 'not json at all').status, 400);
   });
 
   test('one unreadable event does not spoil the page it arrived in', () {
@@ -49,7 +59,7 @@ void main() {
     other.orders.save(order);
     final good = other.log.since(0).single;
 
-    final reply = till.protocol.handlePost(LanProtocol.notifyPath,
+    final reply = push(LanProtocol.notifyPath,
         '{"device_id":"till-b","schema":${Schema.version},"events":['
         '{"kind":"order.invented","origin":"till-b","seq":99,"uuid":"x","payload":{},"at":"2026-01-01T09:00:00.000Z"},'
         '${jsonEncode(good.toMap())}]}');
@@ -64,8 +74,8 @@ void main() {
   });
 
   test('the high-water mark moves past events this build cannot serve', () {
-    final reply = till.protocol.handleGet(
-        LanProtocol.eventsPath, {'since': '0', 'schema': '${Schema.version}'});
+    final reply =
+        pull(LanProtocol.eventsPath, {'since': '0', 'schema': '${Schema.version}'});
     expect(reply.status, 200);
     expect(reply.body['events'], isEmpty);
     expect(reply.body['high_seq'], 0);
@@ -88,7 +98,8 @@ void main() {
     expect(await host.start(), isTrue);
     addTearDown(host.stop);
 
-    final client = LanHttpClient(timeout: const Duration(seconds: 30));
+    final client = LanHttpClient(
+        credential: till.credential, timeout: const Duration(seconds: 30));
     addTearDown(client.close);
     final self = LanPeer(
       deviceId: 'till-a',
@@ -124,9 +135,18 @@ void main() {
 
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     addTearDown(() => client.close(force: true));
+    final query = {'since': '0', 'schema': '${Schema.version + 1}'};
     final request = await client.getUrl(Uri.parse(
         'http://${host.host}:${host.boundPort}${LanProtocol.eventsPath}'
         '?since=0&schema=${Schema.version + 1}'));
+    // Paired, so this reaches the schema gate rather than stopping at the pairing one.
+    request.headers.set(
+      LanCredential.header,
+      till.credential.stamp(
+          method: 'GET',
+          path: LanProtocol.eventsPath,
+          query: LanCredential.canonicalQuery(query)),
+    );
     final response = await request.close();
     expect(response.statusCode, 409);
   }, timeout: const Timeout(Duration(minutes: 2)));

@@ -7,6 +7,7 @@ import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
 import 'package:offline_pos/core/lan/lan_applier.dart';
+import 'package:offline_pos/core/lan/lan_credential.dart';
 import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/lan/lan_event_log.dart';
 import 'package:offline_pos/core/lan/lan_fabric.dart';
@@ -39,9 +40,11 @@ class TestTill {
   TestTill(
     this.deviceId, {
     required this.shop,
+    required String shopKey,
     String? name,
     StepClock? clock,
   })  : name = name ?? deviceId,
+        credential = LanCredential(shopKey),
         clock = clock ?? StepClock() {
     db = Db.open(':memory:');
     log = LanEventLog(db, deviceId: deviceId, now: () => this.clock());
@@ -68,6 +71,7 @@ class TestTill {
       deviceId: deviceId,
       log: log,
       applier: applier,
+      credential: credential,
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
     peers = LanPeerDirectory(log: (event, detail) => refusals.add('$event: $detail'));
@@ -86,6 +90,10 @@ class TestTill {
   final String name;
   final TestShop shop;
   final StepClock clock;
+
+  /// This till's half of the pairing. Tests reach for it to stamp a request the way
+  /// the real client does, or hand a different one to play the guest laptop.
+  final LanCredential credential;
 
   late final Db db;
   late final LanEventLog log;
@@ -111,6 +119,12 @@ class TestTill {
 /// Requests go through the same JSON encode and decode a socket would, so the wire
 /// format is exercised rather than assumed; only the socket itself is missing.
 class TestShop {
+  TestShop({this.shopKey = 'the-shop-key'});
+
+  /// The key every till in this shop is paired on. A test that wants an outsider adds
+  /// a till with a different one.
+  final String shopKey;
+
   final Map<String, TestTill> tills = {};
 
   /// Device ids that cannot currently be reached, so a partition can be opened and
@@ -121,8 +135,9 @@ class TestShop {
   /// whose fabric is broken.
   final Set<String> throwing = {};
 
-  TestTill add(String deviceId, {String? name, StepClock? clock}) {
-    final till = TestTill(deviceId, shop: this, name: name, clock: clock);
+  TestTill add(String deviceId, {String? name, StepClock? clock, String? shopKey}) {
+    final till = TestTill(deviceId,
+        shop: this, name: name, clock: clock, shopKey: shopKey ?? this.shopKey);
     tills[deviceId] = till;
     return till;
   }
@@ -148,10 +163,15 @@ class TestShop {
 
   Future<LanPage> fetch(String from, LanPeer peer, int since) async {
     final till = _reach(from, peer);
-    final reply = till.protocol.handleGet(LanProtocol.eventsPath, {
-      'since': '$since',
-      'schema': '${Schema.version}',
-    });
+    final query = {'since': '$since', 'schema': '${Schema.version}'};
+    final reply = till.protocol.handleGet(
+      LanProtocol.eventsPath,
+      query,
+      auth: _stamp(from,
+          method: 'GET',
+          path: LanProtocol.eventsPath,
+          query: LanCredential.canonicalQuery(query)),
+    );
     if (reply.status != 200) {
       throw StateError('${peer.deviceId} answered ${reply.status}');
     }
@@ -167,13 +187,16 @@ class TestShop {
 
   Future<void> notify(String from, LanPeer peer, List<LanEvent> events) async {
     final till = _reach(from, peer);
+    final body = jsonEncode({
+      'device_id': from,
+      'schema': Schema.version,
+      'events': [for (final e in events) e.toMap()],
+    });
     final reply = till.protocol.handlePost(
       LanProtocol.notifyPath,
-      jsonEncode({
-        'device_id': from,
-        'schema': Schema.version,
-        'events': [for (final e in events) e.toMap()],
-      }),
+      body,
+      auth: _stamp(from,
+          method: 'POST', path: LanProtocol.notifyPath, body: body),
     );
     if (reply.status != 200) {
       throw StateError('${peer.deviceId} answered ${reply.status}');
@@ -185,18 +208,34 @@ class TestShop {
   /// refusal instead of on an exception.
   int notifyOnSchema(
       String from, LanPeer peer, List<LanEvent> events, int schemaVersion) {
+    final body = jsonEncode({
+      'device_id': from,
+      'schema': schemaVersion,
+      'events': [for (final e in events) e.toMap()],
+    });
     return tills[peer.deviceId]!
         .protocol
         .handlePost(
           LanProtocol.notifyPath,
-          jsonEncode({
-            'device_id': from,
-            'schema': schemaVersion,
-            'events': [for (final e in events) e.toMap()],
-          }),
+          body,
+          auth: _stamp(from,
+              method: 'POST', path: LanProtocol.notifyPath, body: body),
         )
         .status;
   }
+
+  /// The stamp the calling till would put on this request, so every hop in this
+  /// harness goes through the same pairing check a real one does.
+  String? _stamp(
+    String from, {
+    required String method,
+    required String path,
+    String query = '',
+    String body = '',
+  }) =>
+      tills[from]
+          ?.credential
+          .stamp(method: method, path: path, query: query, body: body);
 
   /// A cut cable cuts both ways, so a till listed unreachable can neither be
   /// reached nor reach out. A one-sided partition would let a test pass on a

@@ -352,6 +352,13 @@ class SettingsStore {
   String? get lanDeviceName => getString('lan_device_name');
   set lanDeviceName(String? v) => setString('lan_device_name', v?.trim());
 
+  /// The key the devices in one shop share, which is what makes them a shop rather
+  /// than whatever else is plugged into the switch. Held here because this database
+  /// is encrypted at rest; it is a pairing secret between tills, never a server
+  /// credential.
+  String? get lanShopKey => getString('lan_shop_key');
+  set lanShopKey(String? v) => setString('lan_shop_key', v?.trim());
+
   /// Receipt paper width in characters: 42 for 80mm (default), 32 for 58mm.
   int get receiptColumns => int.tryParse(getString('receipt_columns') ?? '') ?? 42;
   set receiptColumns(int n) => setString('receipt_columns', '$n');

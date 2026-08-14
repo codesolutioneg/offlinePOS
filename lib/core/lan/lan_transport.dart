@@ -4,6 +4,7 @@ import 'dart:io';
 
 import '../db/schema.dart';
 import 'lan_applier.dart';
+import 'lan_credential.dart';
 import 'lan_event.dart';
 import 'lan_event_log.dart';
 import 'lan_peer.dart';
@@ -50,10 +51,12 @@ class LanProtocol {
     required this.deviceId,
     required LanEventLog log,
     required LanApplier applier,
+    required LanCredential credential,
     this.pageSize = 200,
     LanLog? onRefused,
   })  : _log = log,
         _applier = applier,
+        _credential = credential,
         _onRefused = onRefused;
 
   /// Everything a peer has after `since`.
@@ -65,11 +68,18 @@ class LanProtocol {
   final String deviceId;
   final LanEventLog _log;
   final LanApplier _applier;
+  final LanCredential _credential;
   final int pageSize;
   final LanLog? _onRefused;
 
-  LanReply handleGet(String path, Map<String, String> query) {
+  LanReply handleGet(String path, Map<String, String> query, {String? auth}) {
     if (path != eventsPath) return const LanReply(404, {'error': 'unknown path'});
+    final unpaired = _authRefusal(auth,
+        method: 'GET',
+        path: path,
+        query: LanCredential.canonicalQuery(query),
+        peer: query['peer']);
+    if (unpaired != null) return unpaired;
     final refusal = _schemaRefusal(int.tryParse(query['schema'] ?? ''), query['peer']);
     if (refusal != null) return refusal;
     final since = int.tryParse(query['since'] ?? '') ?? 0;
@@ -88,8 +98,12 @@ class LanProtocol {
     });
   }
 
-  LanReply handlePost(String path, String body) {
+  LanReply handlePost(String path, String body, {String? auth}) {
     if (path != notifyPath) return const LanReply(404, {'error': 'unknown path'});
+    // Before the body is even parsed: an unpaired device gets no say in what this
+    // till spends its time decoding.
+    final unpaired = _authRefusal(auth, method: 'POST', path: path, body: body);
+    if (unpaired != null) return unpaired;
     Map<String, dynamic> decoded;
     try {
       decoded = (jsonDecode(body) as Map).cast<String, dynamic>();
@@ -127,9 +141,43 @@ class LanProtocol {
     return LanReply(200, {'applied': applied});
   }
 
-  /// The one gate every request passes: a peer on another schema version is turned
-  /// away before a single event is read, and told why in the log rather than left
-  /// to look like a network problem.
+  /// The first gate every request passes: proof the caller holds the shop key.
+  ///
+  /// Without this, matching the schema version was the whole entry test, which any
+  /// device on the subnet can do. A guest phone could read the night's tabs off
+  /// /lan/events, or push a floor plan and a pile of held orders into a till through
+  /// /lan/notify. The stamp is checked against exactly this request, so it cannot be
+  /// lifted off a pull and reused on a notify.
+  LanReply? _authRefusal(
+    String? presented, {
+    required String method,
+    required String path,
+    String query = '',
+    String body = '',
+    String? peer,
+  }) {
+    final result = _credential.check(presented,
+        method: method, path: path, query: query, body: body);
+    if (result == LanAuth.ok) return null;
+    _onRefused?.call(
+      'lan.peer.refused',
+      switch (result) {
+        LanAuth.missing => '${peer ?? 'a device'} asked with no shop key at all',
+        LanAuth.wrongKey =>
+          '${peer ?? 'a device'} presented another shop\'s key, so it is paired '
+              'somewhere else',
+        LanAuth.staleClock => '${peer ?? 'a device'} stamped a request more than '
+            '${LanCredential.clockTolerance.inMinutes} minutes out, so one of the '
+            'two clocks is wrong',
+        LanAuth.ok => '',
+      },
+    );
+    return LanReply(401, {'error': result.name});
+  }
+
+  /// The second gate: a peer on another schema version is turned away before a single
+  /// event is read, and told why in the log rather than left to look like a network
+  /// problem.
   LanReply? _schemaRefusal(int? schema, String? peer) {
     if (schema == Schema.version) return null;
     _onRefused?.call(
@@ -208,11 +256,12 @@ class LanHost {
   Future<void> _serve(HttpRequest request) async {
     LanReply reply;
     try {
+      final auth = request.headers.value(LanCredential.header);
       reply = switch (request.method) {
         'GET' => _protocol.handleGet(
-            request.uri.path, request.uri.queryParameters),
+            request.uri.path, request.uri.queryParameters, auth: auth),
         'POST' => _protocol.handlePost(
-            request.uri.path, await utf8.decoder.bind(request).join()),
+            request.uri.path, await utf8.decoder.bind(request).join(), auth: auth),
         _ => const LanReply(405, {'error': 'method'}),
       };
     } catch (e) {
@@ -235,21 +284,31 @@ class LanHost {
 /// background timer, and a till that fell off the switch must cost seconds, not a
 /// stalled pass.
 class LanHttpClient {
-  LanHttpClient({Duration? timeout, HttpClient? client})
+  LanHttpClient({required LanCredential credential, Duration? timeout, HttpClient? client})
       : timeout = timeout ?? const Duration(seconds: 3),
+        _credential = credential,
         _client = client ?? HttpClient() {
     _client.connectionTimeout = this.timeout;
   }
 
   final Duration timeout;
+  final LanCredential _credential;
   final HttpClient _client;
 
   Future<LanPage> fetch(LanPeer peer, int since) async {
-    final url = peer.baseUrl.replace(path: LanProtocol.eventsPath, queryParameters: {
-      'since': '$since',
-      'schema': '${Schema.version}',
-    });
-    final body = await _send('GET', url, null);
+    final query = {'since': '$since', 'schema': '${Schema.version}'};
+    final url = peer.baseUrl
+        .replace(path: LanProtocol.eventsPath, queryParameters: query);
+    final body = await _send(
+      'GET',
+      url,
+      null,
+      _credential.stamp(
+        method: 'GET',
+        path: LanProtocol.eventsPath,
+        query: LanCredential.canonicalQuery(query),
+      ),
+    );
     final decoded = (jsonDecode(body) as Map).cast<String, dynamic>();
     final raw = decoded['events'];
     final events = <LanEvent>[];
@@ -270,19 +329,25 @@ class LanHttpClient {
 
   Future<void> notify(LanPeer peer, List<LanEvent> events, String deviceId) async {
     if (events.isEmpty) return;
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'events': [for (final e in events) e.toMap()],
+    });
     await _send(
       'POST',
       peer.baseUrl.replace(path: LanProtocol.notifyPath),
-      jsonEncode({
-        'device_id': deviceId,
-        'schema': Schema.version,
-        'events': [for (final e in events) e.toMap()],
-      }),
+      body,
+      // Signed over the body, so a peer cannot have its events swapped for someone
+      // else's on the way in.
+      _credential.stamp(
+          method: 'POST', path: LanProtocol.notifyPath, body: body),
     );
   }
 
-  Future<String> _send(String method, Uri url, String? body) async {
+  Future<String> _send(String method, Uri url, String? body, String stamp) async {
     final request = await _client.openUrl(method, url).timeout(timeout);
+    request.headers.set(LanCredential.header, stamp);
     if (body != null) {
       request.headers.contentType = ContentType.json;
       request.write(body);

@@ -8,6 +8,7 @@ import '../db/table_store.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
 import 'lan_event.dart';
+import 'lan_credential.dart';
 import 'lan_event_log.dart';
 import 'lan_fabric.dart';
 import 'lan_peer.dart';
@@ -57,6 +58,10 @@ class LanNode {
     required Db db,
     required String deviceId,
     required String deviceName,
+    /// The shop's shared key. Required rather than optional so a fabric can never be
+    /// assembled without one: an unauthenticated till would serve the shop's tabs to
+    /// any device on the subnet.
+    required String shopKey,
     required OrderStore orders,
     required TableStore tables,
     required AuditLog audit,
@@ -84,7 +89,8 @@ class LanNode {
       log: eventLog,
       onRefused: log,
     );
-    final client = LanHttpClient();
+    final credential = LanCredential(shopKey);
+    final client = LanHttpClient(credential: credential);
     final fabric = LanFabric(
       deviceId: deviceId,
       log: eventLog,
@@ -106,6 +112,7 @@ class LanNode {
           deviceId: deviceId,
           log: eventLog,
           applier: applier,
+          credential: credential,
           onRefused: log,
         ),
         port: port,

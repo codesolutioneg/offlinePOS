@@ -26,6 +26,7 @@ import 'core/db/print_job_store.dart';
 import 'core/db/printer_store.dart';
 import 'core/db/shift_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
+import 'core/lan/lan_credential.dart';
 import 'core/lan/lan_wiring.dart';
 import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
@@ -219,9 +220,15 @@ Future<void> main() async {
   // behind the first frame, so no part of opening the till waits on a socket, a LAN
   // address or a peer.
   if (lanOn) {
+    // The first till to share invents the shop's key; the others are paired by
+    // copying it across on the shop network screen. Until a device holds the same
+    // key it is turned away, so switching sharing on does not open this till's tabs
+    // to whatever else is on the subnet.
+    settings.lanShopKey ??= LanCredential.newKey();
     lan = LanNode.build(
       db: db,
       deviceId: deviceId,
+      shopKey: settings.lanShopKey!,
       // Unnamed until a manager names it on the shop network screen. The id is what
       // the other devices show until then, which is honest: two devices that both
       // call themselves "Till" are worse than two ids.

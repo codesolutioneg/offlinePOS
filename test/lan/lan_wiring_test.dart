@@ -10,6 +10,7 @@ import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
+import 'package:offline_pos/core/lan/lan_credential.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
 import 'package:offline_pos/core/lan/lan_transport.dart';
 import 'package:offline_pos/core/lan/lan_wiring.dart';
@@ -112,6 +113,7 @@ void main() {
         db: db,
         deviceId: 'till-a',
         deviceName: 'Front',
+        shopKey: 'the-shop-key',
         orders: OrderStore(db, ownDeviceId: 'till-a'),
         tables: TableStore(db),
         audit: AuditLog(db),
@@ -170,7 +172,7 @@ void main() {
     // The reason LanNode.stop leaves the HTTP client alone and only dispose closes
     // it: a closed client cannot be reopened, so closing it with the switch would
     // leave a device that came back on the LAN unable to reach anybody.
-    final client = LanHttpClient();
+    final client = LanHttpClient(credential: LanCredential('the-shop-key'));
     client.close();
 
     await expectLater(
