@@ -27,6 +27,8 @@ class SettingsStore {
   static const _categoryStations = 'category_stations';
   static const _productStations = 'product_stations';
   static const _categoryTax = 'category_tax';
+  static const _serviceChargePercent = 'service_charge_percent';
+  static const _serviceChargeOrderTypes = 'service_charge_order_types';
   static const _receiptShowTax = 'receipt_show_tax';
   static const _language = 'language';
   static const _unavailableProducts = 'unavailable_products';
@@ -214,6 +216,52 @@ class SettingsStore {
         jsonEncode(map.map((k, val) =>
             MapEntry('$k', val.map((t, r) => MapEntry(t.name, r))))));
   }
+
+  // ── service charge ───────────────────────────────────────────────
+
+  /// The service percentage a table-service shop bills on top of the food. Zero (the
+  /// default) means the shop does not charge service at all.
+  ///
+  /// This is the shop's current rule, not what a given bill carries: the percentage is
+  /// stamped onto an order when it is opened, so editing this never re-prices a bill
+  /// that is already running.
+  double get serviceChargePercent =>
+      double.tryParse(getString(_serviceChargePercent) ?? '') ?? 0;
+
+  set serviceChargePercent(double v) => setString(_serviceChargePercent,
+      v <= 0 ? null : v.clamp(0, 100).toStringAsFixed(v == v.roundToDouble() ? 0 : 1));
+
+  /// Which order types the charge applies to. Never configured means dine-in only: a
+  /// takeaway bag is not table service. An explicitly empty selection is kept as such
+  /// (it reads as "charge nothing"), rather than silently reverting to the default.
+  Set<OrderType> get serviceChargeOrderTypes {
+    final raw = getString(_serviceChargeOrderTypes);
+    if (raw == null) return const {OrderType.dineIn};
+    try {
+      final names = (jsonDecode(raw) as List).map((e) => e.toString()).toSet();
+      return OrderType.values.where((t) => names.contains(t.name)).toSet();
+    } catch (_) {
+      return const {OrderType.dineIn};
+    }
+  }
+
+  set serviceChargeOrderTypes(Set<OrderType> v) => setString(
+      _serviceChargeOrderTypes, jsonEncode(v.map((t) => t.name).toList()));
+
+  void setServiceChargeOrderType(OrderType type, bool enabled) {
+    final set = serviceChargeOrderTypes.toSet();
+    if (enabled) {
+      set.add(type);
+    } else {
+      set.remove(type);
+    }
+    serviceChargeOrderTypes = set;
+  }
+
+  /// The percentage to stamp on a new order of [type]: the configured rate for the
+  /// types that carry service, and zero for the rest.
+  double serviceChargePercentFor(OrderType type) =>
+      serviceChargeOrderTypes.contains(type) ? serviceChargePercent : 0;
 
   /// Repoint every category and product route from [oldStation] to [newStation]
   /// when a printer is renamed, so its tickets keep reaching it rather than
