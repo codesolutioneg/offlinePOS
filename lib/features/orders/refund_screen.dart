@@ -58,9 +58,11 @@ class _RefundScreenState extends State<RefundScreen> {
       final perUnit = l.total / (l.quantity == 0 ? 1 : l.quantity);
       t += perUnit * q;
     }
-    // The whole-order discount applied proportionally, so a refund returns what was
-    // actually paid, not the pre-discount price.
-    return t * widget.original.discountFactor;
+    // The whole-order discount and the bill's service charge applied proportionally, so
+    // a refund returns what was actually paid rather than the pre-discount,
+    // pre-service price.
+    final o = widget.original;
+    return t * o.discountFactor * o.serviceChargeFactor;
   }
 
   bool get _anySelected => _qty.values.any((q) => q > 0);
@@ -111,6 +113,9 @@ class _RefundScreenState extends State<RefundScreen> {
       partnerId: o.partnerId,
       customerName: o.customerName,
       discountPercent: o.discountPercent,
+      // The credit carries the service the original bill charged, so a return gives back
+      // the service on the returned items too rather than keeping it.
+      serviceChargePercent: o.serviceChargePercent,
       note: 'Refund of #${_shortRef(o)}: $reason',
       lines: lines,
       payments: refundPayments,
