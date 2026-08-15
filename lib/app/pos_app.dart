@@ -54,6 +54,7 @@ import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
 import '../features/settings/lan_settings_screen.dart';
 import '../features/settings/tax_settings_screen.dart';
+import '../features/settings/payment_methods_screen.dart';
 import '../features/settings/printers_screen.dart';
 import '../features/settings/quick_comments_screen.dart';
 import '../features/settings/receipt_designer_screen.dart';
@@ -399,6 +400,7 @@ class _PosAppState extends State<PosApp> {
       showItemPrice: showItemPrice ?? s.receiptShowItemPrice,
       showTotals: showTotals,
       logo: s.receiptLogoCommand(),
+      paymentLabels: s.paymentMethodLabels,
       dividerStyle: s.receiptDividerStyle,
       openDrawer: openDrawer,
       formatAmount: PosApp.money,
@@ -1262,6 +1264,19 @@ class _PosAppState extends State<PosApp> {
         group: 'Shop',
         onTap: () => pushGated(Permission.openSettings,
             ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
+      ),
+      SettingsEntry(
+        title: 'Payment methods',
+        subtitle: 'What each tender is called on the receipt',
+        icon: Icons.payments,
+        keyValue: 'set-payment-methods',
+        group: 'Shop',
+        onTap: () => pushGated(
+            Permission.openSettings,
+            PaymentMethodsScreen(
+                settings: widget.settings,
+                methods: widget.catalogue.paymentMethods(),
+                onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'Receipt designer',

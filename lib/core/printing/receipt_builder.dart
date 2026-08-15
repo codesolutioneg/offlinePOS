@@ -28,6 +28,7 @@ class ReceiptBuilder {
     this.dividerStyle = 'line',
     this.openDrawer = false,
     this.logo,
+    this.paymentLabels = const {},
   });
 
   final String shopName;
@@ -64,6 +65,11 @@ class ReceiptBuilder {
 
   /// Kick the cash drawer open at the end, for a cash sale.
   final bool openDrawer;
+
+  /// What each payment method is called on paper, by method id, when the shop wants
+  /// something other than the name that came down from the server. Print-time only:
+  /// the tender itself keeps the id and the label it was rung with.
+  final Map<int, String> paymentLabels;
 
   /// The printer command that puts the shop's mark above the name, or null for the
   /// text-only slip this always printed. Composed by the caller (see PrinterLogo)
@@ -203,7 +209,8 @@ class ReceiptBuilder {
       p.feed();
       if (showPayment) {
         for (final pay in order.payments) {
-          p.row(pay.label ?? 'Payment', formatAmount(pay.amount));
+          p.row(paymentLabels[pay.methodId] ?? pay.label ?? 'Payment',
+              formatAmount(pay.amount));
         }
       }
       // Orders stored before cash_received existed kept the tender in the payment

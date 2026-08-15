@@ -461,6 +461,39 @@ class SettingsStore {
   String get receiptDividerStyle => getString('receipt_divider_style') ?? 'line';
   set receiptDividerStyle(String v) => setString('receipt_divider_style', v);
 
+  // ── what a tender is called on paper ─────────────────────────────
+
+  /// Payment method id to the name the receipt should print for it, so a shop can
+  /// say "Visa/Mastercard" or "InstaPay" where Odoo says "Bank". Display only: the
+  /// method id and everything that goes to the server are untouched, so a renamed
+  /// tender still books and still reports as itself.
+  Map<int, String> get paymentMethodLabels {
+    final v = getString('payment_method_labels');
+    if (v == null) return const {};
+    try {
+      return (jsonDecode(v) as Map).map(
+          (k, val) => MapEntry(int.parse(k as String), val.toString()));
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  set paymentMethodLabels(Map<int, String> v) => setString(
+      'payment_method_labels', jsonEncode(v.map((k, val) => MapEntry('$k', val))));
+
+  /// Set or clear one override. An empty label clears it, so a manager who empties
+  /// the box gets the method's own name back rather than a blank line on the slip.
+  void setPaymentMethodLabel(int methodId, String? label) {
+    final map = Map<int, String>.from(paymentMethodLabels);
+    final trimmed = label?.trim() ?? '';
+    if (trimmed.isEmpty) {
+      map.remove(methodId);
+    } else {
+      map[methodId] = trimmed;
+    }
+    paymentMethodLabels = map;
+  }
+
   // ── the shop's mark on the paper ─────────────────────────────────
 
   /// Print the shop logo at the top of the receipt. Off until a shop asks for it,

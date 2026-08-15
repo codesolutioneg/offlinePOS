@@ -262,4 +262,42 @@ void main() {
       expect(containsBytes(bytes, const [0x1d, 0x76, 0x30, 0x00]), isFalse);
     });
   });
+
+  group('what a tender is called', () {
+    testWidgets('the printed name overrides the method name on the slip',
+        (t) async {
+      settings.setPaymentMethodLabel(2, 'Visa / Mastercard');
+
+      await sellAPizza(t);
+
+      final sale = orders.recent(limit: 1).single;
+      final receipt = (await slipsMatching(sale.uuid)).single;
+      expect(receipt, contains('Visa / Mastercard'));
+      expect(receipt, isNot(contains('Card ')));
+    });
+
+    testWidgets('the sale itself and what goes to the server are untouched',
+        (t) async {
+      settings.setPaymentMethodLabel(2, 'Visa / Mastercard');
+
+      await sellAPizza(t);
+
+      final sale = orders.recent(limit: 1).single;
+      // The tender keeps the id it was rung with and the name it was rung under,
+      // so every report and the booking still see the method itself.
+      expect(sale.payments.single.methodId, 2);
+      expect(sale.payments.single.label, 'Card');
+      final queued = await outboxStore.pending();
+      final payments = queued.single.payload['payments'] as List;
+      expect((payments.single as Map)['method_id'], 2);
+      expect((payments.single as Map)['label'], 'Card');
+    });
+
+    testWidgets('with no override the method prints as it always did', (t) async {
+      await sellAPizza(t);
+
+      final sale = orders.recent(limit: 1).single;
+      expect((await slipsMatching(sale.uuid)).single, contains('Card'));
+    });
+  });
 }

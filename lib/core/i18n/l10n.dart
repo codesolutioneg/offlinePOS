@@ -721,4 +721,11 @@ const Map<String, String> _ar = {
   'Send the picture with every receipt': 'إرسال الصورة مع كل فاتورة',
   'Only for a printer that cannot store a logo. Slower on every sale.':
       'فقط للطابعة التي لا تستطيع تخزين شعار. أبطأ في كل عملية بيع.',
+  'Payment methods': 'طرق الدفع',
+  'What each tender is called on the receipt': 'اسم كل طريقة دفع على الفاتورة',
+  'Printed name': 'الاسم المطبوع',
+  'Only the wording on the receipt changes. Sales and reports keep the method as it is.':
+      'يتغيّر النص على الفاتورة فقط. المبيعات والتقارير تحتفظ بطريقة الدفع كما هي.',
+  'No payment methods yet. They arrive with the menu on the next sync.':
+      'لا توجد طرق دفع بعد. تصل مع قائمة الأصناف في المزامنة القادمة.',
 };
