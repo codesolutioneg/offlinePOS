@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/audit/audit_log.dart';
+import '../../core/db/shift_store.dart';
 import '../../core/export/data_export.dart';
 import '../../core/export/pdf_export.dart';
 import '../../core/i18n/l10n.dart';
@@ -11,10 +12,15 @@ import 'activity_report_screen.dart';
 import 'cashier_report_screen.dart';
 import 'category_report_screen.dart';
 import 'discounts_report_screen.dart';
+import 'expenses_report_screen.dart';
+import 'modifier_report_screen.dart';
 import 'payment_analysis_report_screen.dart';
+import 'period_comparison_report_screen.dart';
+import 'refunds_voids_report_screen.dart';
 import 'sales_by_time_report_screen.dart';
 import 'sales_report_screen.dart';
 import 'tax_report_screen.dart';
+import 'today_glance_card.dart';
 import 'top_products_report_screen.dart';
 
 /// The reports hub, with a date-range filter applied to every report it opens.
@@ -40,6 +46,8 @@ class ReportsHubScreen extends StatefulWidget {
     required this.categories,
     required this.formatAmount,
     required this.audit,
+    this.shifts,
+    this.openTables,
     this.onPrint,
   });
 
@@ -50,6 +58,13 @@ class ReportsHubScreen extends StatefulWidget {
 
   /// The audit trail, for the cancelled/voided/refunded activity report.
   final AuditLog audit;
+
+  /// The shifts, read across the chosen range for the expenses report. Null hides
+  /// that tile, for a caller that has no drawer to report on.
+  final ShiftStore? shifts;
+
+  /// Tables with an order parked on them right now, for the glance card.
+  final int? openTables;
 
   /// Prints a report to the receipt printer. Null hides the print action.
   final Future<void> Function(String title, List<(String, String)> rows)? onPrint;
@@ -122,6 +137,51 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     final startOfToday = DateTime(now.year, now.month, now.day);
     return _range == ReportRange.yesterday ? startOfToday : null;
   }
+
+  /// The chosen window with both ends filled in: an open-ended range runs to the
+  /// end of today, so a period comparison measures whole days against whole days
+  /// rather than "today so far" against a full day.
+  ({DateTime from, DateTime to})? get _closedWindow {
+    final from = _windowFrom;
+    if (from == null) return null;
+    final now = DateTime.now();
+    final endOfToday =
+        DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
+    return (from: from, to: _windowTo ?? endOfToday);
+  }
+
+  /// The same-length period immediately before the chosen one, with the same
+  /// cashier and order-type filters. Empty for 'All', which has no before.
+  List<Order> get _previousPeriod {
+    final window = _closedWindow;
+    if (window == null) return const [];
+    final length = window.to.difference(window.from);
+    final from = window.from.subtract(length);
+    return widget.allOrders.where((o) {
+      final at = o.createdAt.toLocal();
+      return !at.isBefore(from) && at.isBefore(window.from);
+    }).where(_matchesFilters).toList();
+  }
+
+  bool _matchesFilters(Order o) =>
+      (_cashier == null || o.cashierId == _cashier) &&
+      (_type == null || o.type == _type);
+
+  /// The paid-outs and paid-ins inside the chosen window, for the expenses
+  /// report. Read straight from the shift store, which is local, so this works
+  /// with the network down like everything else here.
+  List<ShiftMovement> get _movements =>
+      widget.shifts?.movements(
+        from: _windowFrom,
+        to: _windowTo,
+        cashierId: _cashier,
+      ) ??
+      const [];
+
+  /// What the chosen period is called, for a report that names it on screen.
+  String _rangeLabel(BuildContext context) => _custom == null
+      ? _range.label(context)
+      : '${_custom!.start.month}/${_custom!.start.day} - ${_custom!.end.month}/${_custom!.end.day}';
 
   Future<void> _pickCustom() async {
     final now = DateTime.now();
@@ -267,6 +327,11 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
             ),
       body: Column(
         children: [
+          TodayGlanceCard(
+            allOrders: widget.allOrders,
+            formatAmount: widget.formatAmount,
+            openTables: widget.openTables,
+          ),
           Padding(
             padding: const EdgeInsets.all(8),
             child: Wrap(
@@ -384,6 +449,35 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                 _tile(tr(context, 'Sales by hour'), Icons.schedule, 'rep-time',
                     const Color(0xFF14B8A6),
                     (o) => SalesByTimeReportScreen(orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Period comparison'), Icons.compare_arrows,
+                    'rep-comparison', const Color(0xFF14B8A6),
+                    (o) => PeriodComparisonReportScreen(
+                          current: o,
+                          previous: _previousPeriod,
+                          currentLabel: _rangeLabel(context),
+                          previousLabel: tr(context, 'Previous period'),
+                          formatAmount: widget.formatAmount,
+                        )),
+                _tile(tr(context, 'Modifiers'), Icons.tune, 'rep-modifiers',
+                    const Color(0xFF0EA5E9),
+                    (o) => ModifierReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Refunds & voids'), Icons.undo, 'rep-refunds',
+                    AppColors.error,
+                    (o) => RefundsVoidsReportScreen(
+                          orders: o,
+                          audit: widget.audit,
+                          formatAmount: widget.formatAmount,
+                          from: _windowFrom,
+                          to: _windowTo,
+                          actor: _cashier,
+                        )),
+                if (widget.shifts != null)
+                  _tile(tr(context, 'Expenses'), Icons.money_off, 'rep-expenses',
+                      AppColors.warning,
+                      (_) => ExpensesReportScreen(
+                          movements: _movements,
+                          formatAmount: widget.formatAmount)),
               ],
             ),
           ),

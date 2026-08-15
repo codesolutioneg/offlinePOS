@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/audit/audit_log.dart';
 import 'package:offline_pos/core/db/database.dart';
+import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/theme/app_colors.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/reports/reports_hub_screen.dart';
@@ -19,11 +20,11 @@ void main() {
   });
   tearDown(() => db.close());
 
-  /// The hub's 9 report cards plus the range picker do not fit an 800x600
-  /// default test surface; a tall window renders them all without needing a
-  /// scroll before every tap.
+  /// The hub's report cards plus the glance card and the range picker do not fit
+  /// an 800x600 default test surface; a tall window renders them all without
+  /// needing a scroll before every tap.
   void tallWindow(WidgetTester t) {
-    t.view.physicalSize = const Size(800, 2200);
+    t.view.physicalSize = const Size(800, 3200);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.resetPhysicalSize);
     addTearDown(t.view.resetDevicePixelRatio);
@@ -50,6 +51,9 @@ void main() {
     'rep-cashier': 'Cashier performance',
     'rep-activity': 'Cancelled, voided & refunded',
     'rep-time': 'Sales by hour',
+    'rep-comparison': 'Period comparison',
+    'rep-modifiers': 'Modifiers',
+    'rep-refunds': 'Refunds & voids',
   };
 
   testWidgets('every report tile is present and opens its report', (t) async {
@@ -141,5 +145,88 @@ void main() {
     await t.pumpAndSettle();
 
     expect(find.text('1 order(s) in range'), findsOneWidget);
+  });
+
+  Order sale(double amount, {int daysAgo = 0}) {
+    final at = DateTime.now().subtract(Duration(days: daysAgo));
+    return Order(
+      deviceId: 'd',
+      cashierId: 'sara',
+      type: OrderType.takeaway,
+      createdAt: DateTime(at.year, at.month, at.day, 12).toUtc(),
+      lines: [
+        OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: amount)
+      ],
+    );
+  }
+
+  testWidgets('the glance card sits at the top of the hub', (t) async {
+    tallWindow(t);
+    await t.pumpWidget(hubWith([sale(100)]));
+
+    expect(find.byKey(const Key('today-glance')), findsOneWidget);
+    expect(find.text('Today at a glance'), findsOneWidget);
+  });
+
+  testWidgets('without a shift store there is no expenses tile', (t) async {
+    tallWindow(t);
+    await t.pumpWidget(hubWith(const []));
+    expect(find.byKey(const Key('rep-expenses')), findsNothing);
+  });
+
+  testWidgets('the expenses report reads the paid-outs out of the shifts',
+      (t) async {
+    tallWindow(t);
+    final shifts = ShiftStore(db);
+    shifts.openShift(openingFloat: 0, cashierId: 'sara');
+    shifts.addMovement('out', 25, reason: 'Taxi', category: 'Transport');
+
+    await t.pumpWidget(MaterialApp(
+      home: ReportsHubScreen(
+        allOrders: const [],
+        categories: const [],
+        formatAmount: (v) => v.toStringAsFixed(2),
+        audit: audit,
+        shifts: shifts,
+      ),
+    ));
+
+    await t.tap(find.byKey(const Key('rep-expenses')));
+    await t.pumpAndSettle();
+
+    expect(find.text('Taxi'), findsOneWidget);
+    expect(find.text('25.00'), findsWidgets);
+  });
+
+  testWidgets('a range with no paid-outs opens an empty expenses report',
+      (t) async {
+    tallWindow(t);
+    await t.pumpWidget(MaterialApp(
+      home: ReportsHubScreen(
+        allOrders: const [],
+        categories: const [],
+        formatAmount: (v) => v.toStringAsFixed(2),
+        audit: audit,
+        shifts: ShiftStore(db),
+      ),
+    ));
+
+    await t.tap(find.byKey(const Key('rep-expenses')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('expenses-empty-state')), findsOneWidget);
+  });
+
+  testWidgets('the comparison gets the period before the chosen one', (t) async {
+    tallWindow(t);
+    await t.pumpWidget(hubWith([sale(100), sale(40, daysAgo: 1)]));
+
+    // The default range is today, so the period before it is yesterday.
+    await t.tap(find.byKey(const Key('rep-comparison')));
+    await t.pumpAndSettle();
+
+    expect(find.text('Today  vs  Previous period'), findsOneWidget);
+    expect(find.text('100.00'), findsWidgets);
+    expect(find.text('40.00'), findsWidgets);
+    expect(find.text('+150%'), findsWidgets);
   });
 }

@@ -1057,6 +1057,12 @@ class _PosAppState extends State<PosApp> {
         categories: widget.catalogue.categories(),
         formatAmount: PosApp.money,
         audit: widget.audit,
+        // Paid-outs live inside shifts, so the expenses report reads them itself.
+        shifts: widget.shifts,
+        openTables: widget.orders
+            .heldAnywhere()
+            .where((o) => o.tableLabel != null)
+            .length,
         onPrint: _printShiftReport,
       ),
     ));
