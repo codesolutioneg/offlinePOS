@@ -1220,6 +1220,9 @@ class _PosAppState extends State<PosApp> {
         categories: widget.catalogue.categories(),
         formatAmount: PosApp.money,
         audit: widget.audit,
+        // One read of a column no selling query touches, so the margin reports have
+        // something to compare the takings against.
+        costs: widget.catalogue.costsById(),
         // Paid-outs live inside shifts, so the expenses report reads them itself.
         shifts: widget.shifts,
         openTables: widget.orders

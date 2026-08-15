@@ -11,8 +11,10 @@ import '../../domain/order.dart';
 import 'activity_report_screen.dart';
 import 'cashier_report_screen.dart';
 import 'category_report_screen.dart';
+import 'cost_sales_report_screen.dart';
 import 'discounts_report_screen.dart';
 import 'expenses_report_screen.dart';
+import 'menu_engineering_report_screen.dart';
 import 'modifier_report_screen.dart';
 import 'payment_analysis_report_screen.dart';
 import 'period_comparison_report_screen.dart';
@@ -46,6 +48,7 @@ class ReportsHubScreen extends StatefulWidget {
     required this.categories,
     required this.formatAmount,
     required this.audit,
+    this.costs = const {},
     this.shifts,
     this.openTables,
     this.onPrint,
@@ -58,6 +61,11 @@ class ReportsHubScreen extends StatefulWidget {
 
   /// The audit trail, for the cancelled/voided/refunded activity report.
   final AuditLog audit;
+
+  /// Product id to unit cost, from the catalogue. Empty until an Odoo that states
+  /// costs has been synced, which is what the margin reports say on their face
+  /// rather than showing every dish as pure profit.
+  final Map<int, double> costs;
 
   /// The shifts, read across the chosen range for the expenses report. Null hides
   /// that tile, for a caller that has no drawer to report on.
@@ -472,6 +480,18 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                           to: _windowTo,
                           actor: _cashier,
                         )),
+                _tile(tr(context, 'Cost vs sales'), Icons.savings_outlined,
+                    'rep-cost', const Color(0xFF16A34A),
+                    (o) => CostSalesReportScreen(
+                        orders: o,
+                        costs: widget.costs,
+                        formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Menu engineering'), Icons.restaurant_menu,
+                    'rep-menu', const Color(0xFF9333EA),
+                    (o) => MenuEngineeringReportScreen(
+                        orders: o,
+                        costs: widget.costs,
+                        formatAmount: widget.formatAmount)),
                 if (widget.shifts != null)
                   _tile(tr(context, 'Expenses'), Icons.money_off, 'rep-expenses',
                       AppColors.warning,
