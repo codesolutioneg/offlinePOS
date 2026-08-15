@@ -709,4 +709,11 @@ const Map<String, String> _ar = {
   'A shift is open from an earlier day. Close it first.':
       'هناك وردية مفتوحة من يوم سابق. أغلقها أولاً.',
   'Not now': 'ليس الآن',
+  'Still open on this till': 'ما زال مفتوحاً على هذه الكاشير',
+  'Parked tabs': 'الفواتير المعلّقة',
+  'Courses waiting to fire': 'أصناف في انتظار الإرسال للمطبخ',
+  'None of this is settled, so none of it is in the cash-up.':
+      'لم يُسدَّد أي منها، لذا لا يظهر أي منها في تقفيل الدرج.',
+  'Go back': 'رجوع',
+  'Close anyway': 'الإغلاق رغم ذلك',
 };

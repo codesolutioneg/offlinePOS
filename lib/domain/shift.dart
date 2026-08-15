@@ -70,6 +70,27 @@ class Shift {
       movements.where((m) => m.type == 'out').fold(0.0, (s, m) => s + m.amount);
 }
 
+/// What is still unfinished on the till when a Z is attempted.
+///
+/// A close is irreversible and it is the moment the day's sales are pushed, so a
+/// tab still parked on a table or a course still waiting on its fire time has to be
+/// seen and decided on. Counting them silently is how a shop finds out the next
+/// morning that a table was never billed.
+class OpenWork {
+  const OpenWork({this.heldOrders = const [], this.timedLines = const []});
+
+  /// One entry per parked tab: where it is and what it is worth.
+  final List<String> heldOrders;
+
+  /// One entry per line still waiting for its course timer to fire.
+  final List<String> timedLines;
+
+  bool get isEmpty => heldOrders.isEmpty && timedLines.isEmpty;
+
+  /// How many things are open in total, which is what the cashier is warned with.
+  int get count => heldOrders.length + timedLines.length;
+}
+
 /// What one payment method took in a shift window.
 ///
 /// [label] is the name the tender was taken under, which is what a manager

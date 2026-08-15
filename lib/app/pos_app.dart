@@ -38,6 +38,7 @@ import '../core/theme/app_colors.dart';
 import '../core/updates/update_service.dart';
 import '../domain/business_day.dart';
 import '../domain/order.dart';
+import '../domain/shift.dart';
 import '../features/admin/attendance_screen.dart';
 import '../features/admin/roles_permissions_screen.dart';
 import '../features/admin/roster_screen.dart';
@@ -1731,6 +1732,20 @@ class _PosAppState extends State<PosApp> {
         cashMethodIds: cashMethodIds,
         formatAmount: PosApp.money,
         onPrintReport: _printShiftReport,
+        // Read at the moment the Z is attempted, not now: a tab can be settled
+        // while the shift screen is open.
+        openWork: () => _openWork(context),
+        // Leaving a parked tab or an unfired course behind is money and food nobody
+        // has accounted for, so it always takes a manager, whatever the cashier's
+        // role allows for an ordinary close. Audited either way: an override and a
+        // refusal are both worth knowing about the morning after.
+        authorizeOpenWork: () async {
+          final who = session.cashierId;
+          final ok = await _authorizeManager(context);
+          widget.audit.record(
+              who, ok ? 'shift.close.override' : 'shift.close.blocked');
+          return ok;
+        },
         // Gated BEFORE the shift closes, since the close is irreversible: the
         // cashier's role may allow it outright, otherwise a manager approves.
         authorizeClose: () => _authorize(Permission.closeShift, context),
@@ -1758,6 +1773,49 @@ class _PosAppState extends State<PosApp> {
         },
       ),
     ));
+  }
+
+  /// What is still unfinished on this till: tabs parked on tables, and lines held
+  /// back for a course that has not fired yet. Both survive a Z, and neither is in
+  /// its takings, so the cashier is shown them by name before the day is closed.
+  ///
+  /// Scoped to this till's own orders, like everything else that decides money: a
+  /// tab parked on the bar till is that till's to settle and close over.
+  OpenWork _openWork(BuildContext context) {
+    final held = widget.orders.held();
+    final session = _session;
+    // The order on the counter counts too: a course timer can be set and the table
+    // left open without ever parking the bill.
+    final orders = <Order>[
+      ...held,
+      if (session != null && session.current.lines.isNotEmpty) session.current,
+    ];
+    final timed = <String>[];
+    for (final o in orders) {
+      for (final l in o.lines.where((l) => l.isTimed)) {
+        timed.add('${_orderWhere(context, o)}: ${l.name} '
+            '${_atClock(l.fireAt!)}');
+      }
+    }
+    return OpenWork(
+      heldOrders: [
+        for (final o in held)
+          '${_orderWhere(context, o)} - ${PosApp.money(o.total)}',
+      ],
+      timedLines: timed,
+    );
+  }
+
+  /// Where an order is, in the words a cashier uses: the table it is on, or what
+  /// kind of sale it is when it is not on one.
+  String _orderWhere(BuildContext context, Order order) =>
+      order.tableLabel ?? tr(context, order.type.label);
+
+  /// A local wall clock, which is what a fire time means to the kitchen.
+  static String _atClock(DateTime utc) {
+    final t = utc.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(t.hour)}:${two(t.minute)}';
   }
 
   /// Print an X or Z shift report to the receipt printer (spooled if it is down).

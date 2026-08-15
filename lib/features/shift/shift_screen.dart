@@ -17,6 +17,8 @@ class ShiftScreen extends StatefulWidget {
     this.cashMethodIds = const {},
     this.onCloseSync,
     this.onPrintReport,
+    this.openWork,
+    this.authorizeOpenWork,
     this.expenseCategories = const ['Transport', 'Food', 'Supplies', 'Maintenance', 'Other'],
   });
 
@@ -40,6 +42,17 @@ class ShiftScreen extends StatefulWidget {
   /// Prints a shift report (X or Z) to the receipt printer. Null hides the print
   /// action. Rows are (label, value) pairs.
   final Future<void> Function(String title, List<(String, String)> rows)? onPrintReport;
+
+  /// What is still unfinished on the till, read the moment a Z is attempted. Null
+  /// means nothing is checked and the close goes straight through, which is how this
+  /// screen behaved before the guard existed.
+  final OpenWork Function()? openWork;
+
+  /// Approval for closing over open work, asked for only when there is some. This is
+  /// the manager override: a parked tab is money nobody has taken yet, so leaving it
+  /// behind is not a cashier's call. Null means the list is shown for information and
+  /// the close proceeds on the cashier's own confirmation.
+  final Future<bool> Function()? authorizeOpenWork;
 
   /// The buckets offered when recording a paid-out (an expense), so petty cash is
   /// categorised rather than an unexplained drawer swing.
@@ -276,6 +289,11 @@ class _ShiftScreenState extends State<ShiftScreen> {
           icon: const Icon(Icons.stop),
           label: Text(tr(context, 'Close shift (Z)')),
           onPressed: () async {
+            // Before anything else, including the cash count: a tab still on a table
+            // is a reason not to be closing at all, and finding that out after
+            // counting the drawer wastes the count.
+            if (!await _clearOpenWork()) return;
+            if (!mounted) return;
             final counted = await _promptAmount(tr(context, 'Close shift'), label: tr(context, 'Counted cash'));
             if (counted == null) return;
             if (!mounted) return;
@@ -305,6 +323,63 @@ class _ShiftScreenState extends State<ShiftScreen> {
       ),
     ]);
   }
+
+  /// Whether the Z may go ahead over whatever is still open on the till.
+  ///
+  /// Nothing open, or nothing being checked, and this is a no-op. Otherwise the list
+  /// is shown in full, and closing over it takes a manager.
+  Future<bool> _clearOpenWork() async {
+    final work = widget.openWork?.call();
+    if (work == null || work.isEmpty) return true;
+    final proceed = await _confirmOpenWork(work);
+    if (proceed != true || !mounted) return false;
+    final authorize = widget.authorizeOpenWork;
+    return authorize == null || await authorize();
+  }
+
+  /// Everything still open, named, so nothing is left behind by accident.
+  Future<bool?> _confirmOpenWork(OpenWork work) => showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          key: const Key('open-work'),
+          title: Text(tr(ctx, 'Still open on this till')),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (work.heldOrders.isNotEmpty) ...[
+                  Text(tr(ctx, 'Parked tabs'),
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ...work.heldOrders.map(Text.new),
+                  const SizedBox(height: 8),
+                ],
+                if (work.timedLines.isNotEmpty) ...[
+                  Text(tr(ctx, 'Courses waiting to fire'),
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ...work.timedLines.map(Text.new),
+                  const SizedBox(height: 8),
+                ],
+                Text(
+                    tr(ctx,
+                        'None of this is settled, so none of it is in the cash-up.'),
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(tr(ctx, 'Go back'))),
+            FilledButton(
+              key: const Key('close-over-open-work'),
+              style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(tr(ctx, 'Close anyway')),
+            ),
+          ],
+        ),
+      );
 
   /// A last check before a Z closes the shift and pushes the day's sales: it shows
   /// the drawer numbers that are about to be locked in, so a mistap is caught
