@@ -376,7 +376,11 @@ class _PosAppState extends State<PosApp> {
   /// A receipt builder wired to the current on-device settings, so the sale slip,
   /// the deletion slip and the sample all lay out identically. [openDrawer] is only
   /// ever true for a cash sale's first copy.
-  ReceiptBuilder _receiptBuilder({bool openDrawer = false}) {
+  ReceiptBuilder _receiptBuilder({
+    bool openDrawer = false,
+    bool? showItemPrice,
+    bool showTotals = true,
+  }) {
     final s = widget.settings;
     return ReceiptBuilder(
       shopName: s.shopName ?? widget.config.shopName,
@@ -391,11 +395,31 @@ class _PosAppState extends State<PosApp> {
       showNumber: s.receiptShowNumber,
       showTable: s.receiptShowTable,
       showPayment: s.receiptShowPayment,
-      showItemPrice: s.receiptShowItemPrice,
+      showItemPrice: showItemPrice ?? s.receiptShowItemPrice,
+      showTotals: showTotals,
       dividerStyle: s.receiptDividerStyle,
       openDrawer: openDrawer,
       formatAmount: PosApp.money,
     );
+  }
+
+  /// The pass's own copy of the slip: the same sale, with the amount column off, on
+  /// whichever station the shop nominated. Off unless a station is set.
+  ///
+  /// Sent the way a kitchen ticket is, so a station that is down falls back to the
+  /// receipt printer and its spool rather than losing the copy, and never on a
+  /// reprint: the customer's slip comes out again, the pass does not need the same
+  /// bag listed twice.
+  Future<void> _printSubReceipt(Order order) async {
+    final s = widget.settings;
+    final station = s.subReceiptStation;
+    if (station.isEmpty) return;
+    final hide = s.subReceiptHidePrices;
+    // Hiding prices takes the money off the whole slip, not just the item column: a
+    // copy that still footed a total is a second receipt.
+    final bytes = _receiptBuilder(showItemPrice: !hide, showTotals: !hide)
+        .build(order);
+    await _sendToStation(station, bytes, 'subreceipt-${order.uuid}-$station');
   }
 
   /// Print a record slip when items are voided or an order is cancelled, so every
@@ -522,6 +546,9 @@ class _PosAppState extends State<PosApp> {
           // printer is down.
         }
       }
+      // After the customer's copies, so the slip a cashier is waiting for is never
+      // behind the pass's copy on the same roll.
+      if (!reprint) await _printSubReceipt(order);
     } on PrinterUnavailable {
       // Already held in the spool by [SpooledPrinter]. Surfacing it here would put a
       // dialog between the cashier and the next customer.

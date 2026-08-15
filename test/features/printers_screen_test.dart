@@ -330,4 +330,36 @@ void main() {
       expect(changedCount, 1);
     });
   });
+
+  group('the copy for the pass', () {
+    testWidgets('is off until a station is picked, then names one', (t) async {
+      await tall(t);
+      printers.remember('kitchen', host: '192.168.1.50');
+      await t.pumpWidget(app());
+
+      expect(settings.subReceiptStation, '');
+      // The hide-prices switch only exists once there is a copy to hide them on.
+      expect(find.byKey(const Key('sub-receipt-hide-prices')), findsNothing);
+
+      await t.tap(find.byKey(const Key('sub-receipt-station')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('kitchen').last);
+      await t.pumpAndSettle();
+
+      expect(settings.subReceiptStation, 'kitchen');
+      expect(settings.subReceiptHidePrices, isTrue);
+      expect(changedCount, 1);
+    });
+
+    testWidgets('prices can be left on the copy', (t) async {
+      await tall(t);
+      settings.subReceiptStation = 'kitchen';
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('sub-receipt-hide-prices')));
+      await t.pumpAndSettle();
+
+      expect(settings.subReceiptHidePrices, isFalse);
+    });
+  });
 }

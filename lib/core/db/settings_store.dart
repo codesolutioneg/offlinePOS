@@ -459,6 +459,23 @@ class SettingsStore {
   String get receiptDividerStyle => getString('receipt_divider_style') ?? 'line';
   set receiptDividerStyle(String v) => setString('receipt_divider_style', v);
 
+  // ── the second copy of the slip ──────────────────────────────────
+
+  /// The station a no-price copy of every sale slip is sent to, so the pass gets a
+  /// packing list of what the bag holds. Empty (the default) means no copy is
+  /// printed at all and the till behaves exactly as it did before this existed.
+  ///
+  /// A station name, not an address: it is routed through the same registry every
+  /// kitchen ticket is, so a copy follows the printer when its lease moves.
+  String get subReceiptStation => getString('sub_receipt_station') ?? '';
+  set subReceiptStation(String v) => setString('sub_receipt_station', v.trim());
+
+  /// Whether that copy leaves the amount column off. On by default, because the
+  /// reason to print it at the pass is that a runner should not be handing a
+  /// customer a second priced slip.
+  bool get subReceiptHidePrices => getBool('sub_receipt_hide_prices', fallback: true);
+  set subReceiptHidePrices(bool v) => setBool('sub_receipt_hide_prices', v);
+
   // ── what the printer can spell ───────────────────────────────────
 
   /// Which single-byte table the receipt printer is told to render bytes with:

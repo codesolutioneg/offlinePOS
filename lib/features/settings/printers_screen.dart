@@ -143,7 +143,7 @@ class _PrintersScreenState extends State<PrintersScreen> {
           const SizedBox(height: 24),
           _sectionHeader(
               context, tr(context, 'Receipt & paper'), Icons.receipt_long, AppColors.primary),
-          _receiptOptions(),
+          _receiptOptions(stations),
           const SizedBox(height: 24),
           _sectionHeader(context, tr(context, 'Kitchen routing'), Icons.restaurant, AppColors.warning),
           ..._routingRows(stations, categoryAssignments),
@@ -179,9 +179,10 @@ class _PrintersScreenState extends State<PrintersScreen> {
 
   /// Paper width, copies and the cash-drawer kick, so a manager tunes the receipt
   /// to their actual printer instead of accepting one hard-coded shape.
-  Widget _receiptOptions() {
+  Widget _receiptOptions(List<String> stations) {
     final cols = widget.settings.receiptColumns;
     final copies = widget.settings.receiptCopies;
+    final subStation = widget.settings.subReceiptStation;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -237,6 +238,40 @@ class _PrintersScreenState extends State<PrintersScreen> {
               _notify();
             },
           ),
+          const Divider(),
+          // A copy of the sale slip for whoever packs the order. Off until a station
+          // is picked, because a shop with one printer does not want two slips.
+          Row(children: [
+            Expanded(
+              child: Text(tr(context, 'Copy for the pass'),
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            DropdownButton<String>(
+              key: const Key('sub-receipt-station'),
+              value: stations.contains(subStation) ? subStation : '',
+              items: [
+                DropdownMenuItem(value: '', child: Text(tr(context, 'Off'))),
+                for (final station in stations)
+                  DropdownMenuItem(value: station, child: Text(station)),
+              ],
+              onChanged: (v) {
+                widget.settings.subReceiptStation = v ?? '';
+                _notify();
+              },
+            ),
+          ]),
+          if (subStation.isNotEmpty)
+            SwitchListTile(
+              key: const Key('sub-receipt-hide-prices'),
+              contentPadding: EdgeInsets.zero,
+              title: Text(tr(context, 'Hide prices on that copy')),
+              subtitle: Text(tr(context, 'A packing list: names and quantities only')),
+              value: widget.settings.subReceiptHidePrices,
+              onChanged: (v) {
+                widget.settings.subReceiptHidePrices = v;
+                _notify();
+              },
+            ),
           const Divider(),
           // Which script the printer itself can spell, and what to do about the
           // lines it cannot. Here rather than in the receipt designer because both

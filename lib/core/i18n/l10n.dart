@@ -699,4 +699,10 @@ const Map<String, String> _ar = {
   'Edit a paid order': 'تعديل طلب مدفوع',
   'Put a paid sale back on the counter before it syncs':
       'إعادة بيع مدفوع إلى الشاشة قبل مزامنته',
+  // printing and ops: the pass copy, the logo, tender labels, the server check,
+  // the database backup and the backup printer
+  'Off': 'متوقف',
+  'Copy for the pass': 'نسخة لقسم التحضير',
+  'Hide prices on that copy': 'إخفاء الأسعار في تلك النسخة',
+  'A packing list: names and quantities only': 'قائمة تجهيز: الأسماء والكميات فقط',
 };
