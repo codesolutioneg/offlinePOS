@@ -25,6 +25,7 @@ import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/orders/order_history_screen.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
+import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
@@ -163,12 +164,13 @@ void main() {
       if (find.byType(SellScreen).evaluate().isNotEmpty) break;
     }
     await t.pumpAndSettle();
-    // Sign-in tries to open the floor from the shell's own context, which sits
-    // above the MaterialApp and so has no Navigator. It throws on every sign-in
-    // and the floor never opens; the till lands straight on the counter instead.
-    // Consumed rather than hidden: this is not what these tests are about, but it
-    // is real and the workaround here should disappear when it is fixed.
-    expect(t.takeException(), isA<FlutterError>());
+    // Nothing is parked on this till (the sale under test is already paid), so
+    // signing in lands on the floor. These tests are about the counter, so come
+    // back to it the way a cashier would.
+    if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
+      await t.pageBack();
+      await t.pumpAndSettle();
+    }
     // The first-sale walkthrough covers the counter on a fresh till. Skipped, so
     // these tests exercise the till a cashier actually works on.
     await t.tap(find.byKey(const Key('wizard-skip')));

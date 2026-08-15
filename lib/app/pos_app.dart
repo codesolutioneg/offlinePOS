@@ -180,6 +180,10 @@ const _firstSaleSteps = [
 ];
 
 class _PosAppState extends State<PosApp> {
+  /// The navigator MaterialApp builds, so code that runs outside any screen (the
+  /// post-sign-in jump to the floor) can still push one.
+  final GlobalKey<NavigatorState> _navigator = GlobalKey<NavigatorState>();
+
   PosSession? _session;
   bool _firstSaleHelp = false;
   String? _printError;
@@ -336,7 +340,11 @@ class _PosAppState extends State<PosApp> {
         session.current.lines.isEmpty &&
         session.current.tableLabel == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _openFloor(context, session);
+        // Through the navigator's own context, not this shell's: this state is the
+        // parent of MaterialApp, so Navigator.of would look upwards and find
+        // nothing.
+        final below = _navigator.currentContext;
+        if (mounted && below != null) _openFloor(below, session);
       });
     }
   }
@@ -548,6 +556,10 @@ class _PosAppState extends State<PosApp> {
       valueListenable: _locale,
       builder: (context, locale, _) => MaterialApp(
         title: 'offlinePOS',
+        // Held because this shell sits ABOVE the navigator it builds, so its own
+        // context cannot push a route. Sign-in opens the floor from outside any
+        // screen, and did nothing at all until this key existed.
+        navigatorKey: _navigator,
         // Tuned for a touch screen: comfortable spacing and buttons/inputs tall
         // enough to tap reliably with a finger.
         theme: ThemeData(
