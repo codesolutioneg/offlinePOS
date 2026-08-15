@@ -362,6 +362,13 @@ class _PosAppState extends State<PosApp> {
     });
     // Support asks who is on the till before anything else.
     widget.sync.cashierId = cashier.id;
+    // Ask for the menu now rather than when the age gate expires. A cashier
+    // opening the till at 08:00 sells this morning's prices, not last night's.
+    // Never awaited: read-only, off the selling path, and a till with no line
+    // just carries on with what it has.
+    unawaited(widget.sync.refresh(force: true).then((_) {
+      if (mounted) setState(() {});
+    }));
     _publishActivity();
     final session = _session;
     if (session == null) return;
@@ -1540,6 +1547,16 @@ class _PosAppState extends State<PosApp> {
         },
       ),
       SettingsEntry(
+        title: 'Refresh menu',
+        subtitle: _menuAgeLabel(),
+        icon: Icons.sync,
+        keyValue: 'set-refresh-menu',
+        group: 'Server',
+        // Ungated on purpose: pulling prices is a read, it books nothing, and the
+        // person who notices a wrong price is whoever is at the counter.
+        onTap: () => unawaited(_refreshMenuNow(context)),
+      ),
+      SettingsEntry(
         title: 'Shop network',
         subtitle: 'Share open tabs, tickets and the floor plan',
         icon: Icons.lan_outlined,
@@ -1577,6 +1594,51 @@ class _PosAppState extends State<PosApp> {
     ];
     push(SettingsHubScreen(entries: entries));
   }
+
+  /// How old the prices on this till are, in the shortest true form. Shown on the
+  /// Refresh menu row so the age is readable long before the sell screen's
+  /// day-old banner appears.
+  String _menuAgeLabel() {
+    final at = widget.catalogue.refreshedAt;
+    if (at == null) return 'Prices have never been downloaded';
+    final age = DateTime.now().toUtc().difference(at);
+    if (age.inMinutes < 1) return 'Prices updated just now';
+    if (age.inHours < 1) return 'Prices updated ${age.inMinutes} minute(s) ago';
+    if (age.inDays < 1) return 'Prices updated ${age.inHours} hour(s) ago';
+    return 'Prices updated ${age.inDays} day(s) ago';
+  }
+
+  /// Pull the menu on demand, and say what actually happened. The wait is on a
+  /// settings screen, never on a sale, and a till with no line keeps selling from
+  /// the prices it already has.
+  Future<void> _refreshMenuNow(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    // Translated before the await: the context may be gone by the time it lands.
+    final words = {
+      for (final o in RefreshOutcome.values) o: tr(context, _refreshWords[o]!),
+    };
+    messenger.showSnackBar(SnackBar(
+      key: const Key('menu-refreshing'),
+      content: Text(tr(context, 'Getting the latest prices...')),
+      duration: const Duration(seconds: 30),
+    ));
+    final outcome = await widget.sync.refresh(force: true);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        key: const Key('menu-refresh-result'),
+        content: Text(words[outcome]!),
+      ));
+    if (mounted) setState(() {});
+  }
+
+  static const Map<RefreshOutcome, String> _refreshWords = {
+    RefreshOutcome.updated: 'Menu and prices updated.',
+    RefreshOutcome.unchanged: 'Already up to date.',
+    RefreshOutcome.unreachable:
+        'No connection. The till keeps selling from the prices it has.',
+    RefreshOutcome.failed: 'The server answered, but the menu did not come down.',
+  };
 
   /// What this device is on the shop LAN, and who else it can see. The fabric is
   /// read through a callback rather than copied in, so the peer list and the last
