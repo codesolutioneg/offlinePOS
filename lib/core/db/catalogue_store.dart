@@ -141,6 +141,22 @@ class CatalogueStore {
     }
   }
 
+  /// Keep [found] alongside the customers the last pull brought down, so a partner
+  /// looked up once on the server is pickable again with the line down. Matched on
+  /// the partner id: a customer already held is refreshed, not duplicated. The next
+  /// full pull replaces the lot, which is what keeps this from growing forever.
+  void mergeCustomers(List<Customer> found) {
+    if (found.isEmpty) return;
+    final byId = {for (final c in customers(limit: 1 << 30)) c.id: c};
+    for (final c in found) {
+      byId[c.id] = c;
+    }
+    _db.raw.execute(
+        "INSERT INTO catalogue_meta (key, value) VALUES ('customers', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [jsonEncode(byId.values.map((c) => c.toMap()).toList())]);
+  }
+
   List<Category> categories() => _db.raw
       .select('SELECT * FROM categories ORDER BY sequence, name')
       .map((r) => Category(
