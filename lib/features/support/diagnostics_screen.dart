@@ -32,6 +32,7 @@ class DiagnosticsScreen extends StatefulWidget {
     this.cashierId,
     this.printError,
     this.authorize,
+    this.onBackup,
   });
 
   final SyncService sync;
@@ -57,6 +58,11 @@ class DiagnosticsScreen extends StatefulWidget {
   /// is off, and invisible everywhere else.
   final String? printError;
 
+  /// Copies the whole encrypted database somewhere a human can pick it up, and
+  /// returns where it landed. Null on a build with nowhere to write, which hides
+  /// the action rather than offering one that cannot work.
+  final Future<String> Function()? onBackup;
+
   /// Gate for adding, editing or forgetting a printer here: it is the same
   /// managePrinters right the Settings printer screen uses, so support cannot be a
   /// back door around it. Reprint and find-printer stay open to any cashier.
@@ -69,6 +75,10 @@ class DiagnosticsScreen extends StatefulWidget {
 class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   bool _syncing = false;
   String? _printerBusy;
+
+  /// Where the last backup landed, or why there is none. A path a cashier can read
+  /// out is the whole point of the button.
+  String? _backupMessage;
 
   Future<void> _syncNow() async {
     setState(() => _syncing = true);
@@ -97,6 +107,34 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     setState(() => _printerBusy = 'spool');
     await widget.spool!.flush();
     if (mounted) setState(() => _printerBusy = null);
+  }
+
+  /// Take a copy of the till, on demand.
+  ///
+  /// Manager-gated like every other configuration action here: the file is
+  /// encrypted, but it is still every sale the shop has taken.
+  Future<void> _backup() async {
+    if (widget.authorize != null &&
+        !await widget.authorize!(Permission.openSettings)) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _printerBusy = 'backup';
+      _backupMessage = tr(context, 'Copying...');
+    });
+    try {
+      final path = await widget.onBackup!();
+      if (!mounted) return;
+      setState(() => _backupMessage = path);
+    } catch (e) {
+      if (!mounted) return;
+      // Says what went wrong rather than leaving a manager believing there is a
+      // backup somewhere.
+      setState(() => _backupMessage = '${tr(context, 'Backup failed')}: $e');
+    } finally {
+      if (mounted) setState(() => _printerBusy = null);
+    }
   }
 
   Future<void> _checkForUpdate() async {
@@ -241,6 +279,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
             label: Text(_syncing ? tr(context, 'Syncing...') : tr(context, 'Sync now')),
           ),
           ..._updateSection(),
+          if (widget.onBackup != null) ..._backupSection(),
           if (widget.printers != null) ..._printerSection(),
           if (widget.wizards != null && widget.cashierId != null)
             TextButton.icon(
@@ -279,6 +318,31 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       ],
     ];
   }
+
+  /// One copy of the whole till, encrypted exactly as it sits on disk, for the day
+  /// the machine does not come back on.
+  List<Widget> _backupSection() => [
+        const SizedBox(height: 16),
+        Text(tr(context, 'Backup'), style: const TextStyle(fontWeight: FontWeight.bold)),
+        Text(
+          tr(context,
+              'A copy of everything on this till, including sales that have not synced. It stays encrypted.'),
+          style: const TextStyle(fontSize: 12, color: Colors.black54),
+        ),
+        TextButton.icon(
+          key: const Key('backup-db'),
+          onPressed: _printerBusy == null ? _backup : null,
+          icon: const Icon(Icons.save_alt),
+          label: Text(_printerBusy == 'backup'
+              ? tr(context, 'Copying...')
+              : tr(context, 'Back up now')),
+        ),
+        if (_backupMessage != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: SelectableText(_backupMessage!, key: const Key('backup-result')),
+          ),
+      ];
 
   /// Printers are listed by name, because that is what a receipt is routed by. The
   /// address underneath is only the last one that answered, and support needs to see

@@ -34,6 +34,7 @@ import '../core/printing/spool_store.dart';
 import '../core/sync/odoo_endpoint.dart';
 import '../core/sync/odoo_wiring.dart';
 import '../core/sync/outbox.dart';
+import '../core/sync/server_probe.dart';
 import '../core/sync/sync_service.dart';
 import '../core/updates/update_service.dart';
 import '../domain/order.dart';
@@ -95,6 +96,8 @@ class PosApp extends StatefulWidget {
     required this.attendance,
     this.config = const TillConfig(),
     this.receiptSpool,
+    this.checkServer,
+    this.backup,
     this.activity,
     this.provisioningPin,
     this.updates,
@@ -115,6 +118,16 @@ class PosApp extends StatefulWidget {
   final String deviceId;
   final OdooEndpointStore endpoints;
   final OdooWiring odoo;
+
+  /// Asks the configured server whether it is there and whether it knows this
+  /// login, for the button on the server screen. Null on a build with no way to
+  /// reach out, which hides the button rather than showing one that cannot answer.
+  final Future<ServerCheckResult> Function(OdooEndpoint)? checkServer;
+
+  /// Copies the whole encrypted database somewhere a human can pick it up, and
+  /// answers with where it landed. Held here rather than built here because this
+  /// shell is given stores, not the database they sit in.
+  final Future<String> Function()? backup;
 
   /// The floor plan and the on-device settings a manager edits on the device.
   final TableStore tables;
@@ -1669,6 +1682,7 @@ class _PosAppState extends State<PosApp> {
         // Rewire the live sender the moment settings are saved, so a till just
         // pointed at a server drains its queue without a restart.
         onSaved: widget.odoo.configure,
+        check: widget.checkServer,
       ),
     ));
   }
@@ -1766,6 +1780,7 @@ class _PosAppState extends State<PosApp> {
         cashierId: _session?.cashierId,
         printError: _printError,
         authorize: (p) => _authorize(p, context),
+        onBackup: widget.backup,
       ),
     ));
   }

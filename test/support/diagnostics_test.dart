@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/audit/audit_log.dart';
@@ -179,5 +181,82 @@ void main() {
     await t.tap(find.byKey(const Key('sync-now')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('sync-now')), findsOneWidget);
+  });
+
+  group('backing the till up', () {
+    /// A window tall enough that the whole support list is on screen, so a button
+    /// below the fold is tappable.
+    Future<void> tall(WidgetTester t) async {
+      await t.binding.setSurfaceSize(const Size(900, 2000));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+    }
+
+    Widget appWithBackup({
+      Future<String> Function()? backup,
+      Future<bool> Function(Permission)? authorize,
+    }) =>
+        MaterialApp(
+          home: DiagnosticsScreen(
+            sync: sync,
+            outboxStore: store,
+            authorize: authorize,
+            onBackup: backup ?? () async => '/tmp/backup-20260815-0930.db',
+          ),
+        );
+
+    testWidgets('a build with nowhere to write shows no button', (t) async {
+      await t.pumpWidget(app());
+      expect(find.byKey(const Key('backup-db')), findsNothing);
+    });
+
+    testWidgets('the path is shown, so it can be read out over the phone',
+        (t) async {
+      await tall(t);
+      await t.pumpWidget(appWithBackup());
+
+      await t.tap(find.byKey(const Key('backup-db')));
+      await t.pumpAndSettle();
+
+      expect(
+          t.widget<SelectableText>(find.byKey(const Key('backup-result'))).data,
+          '/tmp/backup-20260815-0930.db');
+    });
+
+    testWidgets('a failure says so rather than implying there is a copy',
+        (t) async {
+      await tall(t);
+      await t.pumpWidget(
+          appWithBackup(backup: () async => throw const FileSystemException('full')));
+
+      await t.tap(find.byKey(const Key('backup-db')));
+      await t.pumpAndSettle();
+
+      expect(
+          t.widget<SelectableText>(find.byKey(const Key('backup-result'))).data,
+          contains('Backup failed'));
+    });
+
+    testWidgets('it is manager-gated like every other action here', (t) async {
+      var taken = 0;
+      final asked = <Permission>[];
+      await tall(t);
+      await t.pumpWidget(appWithBackup(
+        backup: () async {
+          taken++;
+          return '/tmp/backup.db';
+        },
+        authorize: (p) async {
+          asked.add(p);
+          return false;
+        },
+      ));
+
+      await t.tap(find.byKey(const Key('backup-db')));
+      await t.pumpAndSettle();
+
+      expect(asked, [Permission.openSettings]);
+      expect(taken, 0);
+      expect(find.byKey(const Key('backup-result')), findsNothing);
+    });
   });
 }

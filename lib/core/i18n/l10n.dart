@@ -732,4 +732,20 @@ const Map<String, String> _ar = {
   'Nowhere': 'لا شيء',
   'The slip says it was rerouted': 'يُذكر على الورقة أنها حُوِّلت',
   'spare': 'البديلة',
+  'Test connection': 'اختبار الاتصال',
+  'Asking the server...': 'جارٍ سؤال الخادم...',
+  'Connected. The login was accepted.': 'تم الاتصال. تم قبول بيانات الدخول.',
+  'No answer from that address.': 'لا يوجد رد من هذا العنوان.',
+  'Something answered, but it is not an Odoo server.':
+      'هناك رد، لكنه ليس من خادم أودو.',
+  'The server is up, but it refused this login.':
+      'الخادم يعمل، لكنه رفض بيانات الدخول.',
+  'Nothing is sent or booked. Queued sales still go out at shift close.':
+      'لا يُرسَل ولا يُسجَّل شيء. المبيعات المنتظرة تُرسَل عند إغلاق الوردية.',
+  'Backup': 'نسخة احتياطية',
+  'Back up now': 'إنشاء نسخة الآن',
+  'Copying...': 'جارٍ النسخ...',
+  'Backup failed': 'فشل النسخ الاحتياطي',
+  'A copy of everything on this till, including sales that have not synced. It stays encrypted.':
+      'نسخة من كل ما على هذا الجهاز، بما فيها المبيعات غير المزامَنة. تبقى مشفّرة.',
 };
