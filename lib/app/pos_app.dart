@@ -659,6 +659,10 @@ class _PosAppState extends State<PosApp> {
               },
               gridColumns: widget.settings.gridColumns,
               extraCustomers: (q) => widget.customers.search(query: q, limit: 30),
+              // A customer captured mid-order is kept on the till like any other, so
+              // the next order can pick them instead of retyping them.
+              onAddCustomer: ({required name, phone, address}) =>
+                  widget.customers.add(name: name, phone: phone, address: address),
               // Dividers are floor decoration, never a table an order sits at.
               tables: () => widget.tables
                   .all()

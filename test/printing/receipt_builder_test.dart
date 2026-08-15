@@ -224,6 +224,18 @@ void main() {
     expect(kicks, isFalse);
   });
 
+  test('a customer on a counter sale prints on the slip', () {
+    final order = Order(
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      type: OrderType.takeaway,
+      partnerId: 42,
+      customerName: 'Nadia',
+      lines: [OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100)],
+    );
+    expect(render(order), contains('Customer: Nadia'));
+  });
+
   test('a menu in any script still produces a receipt', () {
     // Building a receipt used to throw on a product name outside Latin-1, which
     // for a euro-priced or Arabic menu is every receipt. It threw before the spool

@@ -12,6 +12,7 @@ import '../../core/widgets/feedback.dart';
 import '../../core/widgets/numeric_keypad.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
+import '../customers/customer_management_screen.dart' show CustomerFormDialog, CustomerFormResult;
 import 'modifier_sheet.dart';
 
 /// The selling screen: catalogue on the right, the order on the left.
@@ -49,6 +50,7 @@ class SellScreen extends StatefulWidget {
     this.onToggleFavourite,
     this.gridColumns = 0,
     this.extraCustomers,
+    this.onAddCustomer,
     this.tables,
     this.heldOrders,
     this.onPickTable,
@@ -150,6 +152,12 @@ class SellScreen extends StatefulWidget {
   /// Local (till-created) customers matching a query, merged into the picker so a
   /// customer added on the device is reusable.
   final List<Customer> Function(String query)? extraCustomers;
+
+  /// Save a customer captured mid-order and return them, so the picker can attach
+  /// someone the till has never seen without leaving the sale. Null hides the
+  /// "Add new" action.
+  final Customer Function({required String name, String? phone, String? address})?
+      onAddCustomer;
 
   /// The floor's table labels, offered as quick picks when moving items to another
   /// table. Null falls back to free text.
@@ -332,9 +340,14 @@ class _SellScreenState extends State<SellScreen> {
       );
 
   /// Search the existing customers (Odoo partners + till-local) and return the one
-  /// picked, so a delivery is attached to a known customer rather than re-typed and
-  /// duplicated. Null if cancelled.
-  Future<Customer?> _pickExistingCustomer() async {
+  /// picked, so a sale is attached to a known customer rather than re-typed and
+  /// duplicated.
+  ///
+  /// Returns the [Customer] chosen, the string 'clear' when the cashier says the
+  /// sale is a walk-in, or null when the picker was dismissed. Walk-in has to be
+  /// distinguishable from cancel: one means "this customer is nobody", the other
+  /// means "leave the customer alone".
+  Future<Object?> _pickExistingCustomer() async {
     final ctrl = TextEditingController();
     final result = await showDialog<Object?>(
       context: context,
@@ -381,6 +394,15 @@ class _SellScreenState extends State<SellScreen> {
               ]),
             ),
             actions: [
+              if (widget.onAddCustomer != null)
+                TextButton(
+                  key: const Key('customer-add-new'),
+                  onPressed: () async {
+                    final created = await _addCustomer();
+                    if (created != null && ctx.mounted) Navigator.pop(ctx, created);
+                  },
+                  child: Text(tr(ctx, 'Add new')),
+                ),
               TextButton(
                 key: const Key('customer-clear'),
                 onPressed: () => Navigator.pop(ctx, 'clear'),
@@ -392,7 +414,30 @@ class _SellScreenState extends State<SellScreen> {
         );
       },
     );
-    return result is Customer ? result : null;
+    return result;
+  }
+
+  /// Capture a customer the till has never seen, on the same form the customers
+  /// screen uses, and keep them: a regular typed into an order once should be
+  /// pickable on the next one. Null if the form was cancelled.
+  Future<Customer?> _addCustomer() async {
+    final add = widget.onAddCustomer;
+    if (add == null) return null;
+    final form = await showDialog<CustomerFormResult>(
+      context: context,
+      builder: (_) => const CustomerFormDialog(),
+    );
+    if (form == null) return null;
+    return add(name: form.name, phone: form.phone, address: form.address);
+  }
+
+  /// Attach a customer to the open order, whatever its type: a takeaway regular and
+  /// a dine-in table booking are as much a named customer as a delivery is. Walk-in
+  /// clears whoever was on it.
+  Future<void> _chooseCustomer() async {
+    final picked = await _pickExistingCustomer();
+    if (picked == null) return;
+    _changed(() => s.setCustomer(picked is Customer ? picked : null));
   }
 
   /// What the cashier typed, as a percentage. In amount mode the money is converted
@@ -1025,6 +1070,9 @@ class _SellScreenState extends State<SellScreen> {
     // The existing customer picked, so the delivery links to that partner rather
     // than being saved as a free-typed name (which would duplicate them in Odoo).
     Customer? picked;
+    // Set when the cashier said walk-in, so saving drops the partner that was on
+    // the order instead of keeping a link the dialog no longer shows.
+    var cleared = false;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -1042,12 +1090,25 @@ class _SellScreenState extends State<SellScreen> {
                 icon: const Icon(Icons.person_search),
                 label: Text(tr(ctx, 'Find existing customer')),
                 onPressed: () async {
-                  final c = await _pickExistingCustomer();
-                  if (c == null) return;
-                  picked = c;
+                  final result = await _pickExistingCustomer();
+                  if (result == null) return;
+                  // Walk-in on a delivery means "this is nobody I have on file":
+                  // drop the partner link and the details typed against it, rather
+                  // than leaving a stale customer attached to the address.
+                  if (result is! Customer) {
+                    picked = null;
+                    cleared = true;
+                    setSt(() {
+                      name.clear();
+                      phone.clear();
+                    });
+                    return;
+                  }
+                  picked = result;
+                  cleared = false;
                   setSt(() {
-                    name.text = c.name;
-                    if (c.phone != null) phone.text = c.phone!;
+                    name.text = result.name;
+                    if (result.phone != null) phone.text = result.phone!;
                   });
                 },
               ),
@@ -1087,7 +1148,11 @@ class _SellScreenState extends State<SellScreen> {
       _changed(() {
         // Link the chosen partner first (sets partnerId), then overlay the typed
         // name/phone/address; the partner id survives so the sale is not a duplicate.
-        if (picked != null) s.setCustomer(picked);
+        if (picked != null) {
+          s.setCustomer(picked);
+        } else if (cleared) {
+          s.setCustomer(null);
+        }
         s.setDeliveryCustomer(
             name: name.text, phone: phone.text, address: addr.text);
         s.setDeliveryCost(double.tryParse(cost.text.trim()) ?? 0);
@@ -1940,8 +2005,8 @@ class _SellScreenState extends State<SellScreen> {
   Widget _contextBar() {
     final o = s.current;
     return Column(children: [
-      // Only delivery needs a customer (a name to call and an address to send to);
-      // a dine-in or takeaway sale has no "walk-in" to capture.
+      // Delivery gets the full block, because it needs an address and a charge as
+      // well as a name; every other type gets the customer chip below.
       if (o.type == OrderType.delivery)
         ListTile(
           dense: true,
@@ -1976,6 +2041,17 @@ class _SellScreenState extends State<SellScreen> {
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Wrap(spacing: 8, runSpacing: 4, children: [
+          // A named customer is not a delivery-only idea: a takeaway regular and a
+          // dine-in booking are both worth booking against the partner rather than
+          // as an anonymous sale. First in the row, where delivery puts its own
+          // customer block, so the till reads the same whatever the order type.
+          if (o.type != OrderType.delivery)
+            ActionChip(
+              key: const Key('customer-chip'),
+              avatar: const Icon(Icons.person_outline, size: 16),
+              label: Text(o.customerName ?? tr(context, 'Customer')),
+              onPressed: _chooseCustomer,
+            ),
           if (o.type == OrderType.dineIn) ...[
             if (o.tableLabel != null)
               ActionChip(

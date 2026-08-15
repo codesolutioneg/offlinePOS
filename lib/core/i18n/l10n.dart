@@ -705,4 +705,5 @@ const Map<String, String> _ar = {
   'The cashier can type an amount off; it is applied as the matching percentage':
       'يكتب الكاشير مبلغ الخصم ويُطبَّق بالنسبة المكافئة له',
   'Amount off': 'مبلغ الخصم',
+  'Add new': 'إضافة جديد',
 };

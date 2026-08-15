@@ -243,14 +243,11 @@ class PosSession {
       _applyTax(line);
     }
     if (type != OrderType.delivery) {
-      // Dine-in and takeaway carry no customer, so switching away from delivery
-      // clears the whole customer, not just the address, or a stale partner would
-      // ride along on a sale whose UI no longer shows (or lets you clear) it.
+      // The customer survives the switch: every order type can name one, and the
+      // till shows and clears it on all of them. Only what is delivery's alone goes,
+      // because an address and a delivery charge mean nothing on a counter sale.
       current.deliveryCost = 0;
       current.customerAddress = null;
-      current.partnerId = null;
-      current.customerName = null;
-      current.customerPhone = null;
     }
     orders.save(current);
   }
