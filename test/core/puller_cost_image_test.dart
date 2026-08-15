@@ -82,6 +82,16 @@ void main() {
     expect(pull.productImages, isEmpty);
   });
 
+  test('one refused extra does not take the other down with it', () async {
+    // A POS user with no rights to the cost field, on a server that will happily
+    // hand over the picture: the shop asked for pictures and must get them.
+    final pull = await odoo(refuses: {'standard_price'}, withImages: true).pull();
+    expect(pull.products, hasLength(2));
+    expect(pull.products.first.cost, 0);
+    expect(pull.productImages.keys, [10],
+        reason: 'the picture is readable, so it must still arrive');
+  });
+
   test('a picture that will not decode is treated as no picture', () async {
     final pull = await OdooPuller(
       withImages: true,

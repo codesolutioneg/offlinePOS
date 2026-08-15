@@ -225,22 +225,43 @@ class OdooPuller {
     return res.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
   }
 
-  /// A read that also asks for [optional] fields and gives them up one at a time
-  /// when the server refuses them. An add-on older than a flag must still give up its
-  /// modifiers: losing the whole menu to gain a default would be a bad trade, and
-  /// losing the cost because the same server has no picture would be another. The
-  /// last one listed is surrendered first, so put the least important there.
+  /// A read that also asks for [optional] fields and keeps whichever of them the
+  /// server will actually give.
+  ///
+  /// An add-on older than a flag must still give up its modifiers: losing the whole
+  /// menu to gain a default would be a bad trade. Nor may one refused extra take the
+  /// others down with it, so when the combined read fails each extra is asked about
+  /// on its own and the read is repeated with the survivors. Those probes cost a row
+  /// each and only happen on a server that refused something, which is once a pull
+  /// and never on the path of a sale.
   Future<List<Map<String, dynamic>>> _searchReadOptional(String model,
       List<String> fields, List<String> optional, List<dynamic> domain) async {
-    for (var keep = optional.length; keep > 0; keep--) {
-      try {
-        return await _searchRead(
-            model, [...fields, ...optional.take(keep)], domain);
-      } catch (_) {
-        // Try again with one fewer extra; the plain read below is the floor.
+    if (optional.isEmpty) return _searchRead(model, fields, domain);
+    try {
+      return await _searchRead(model, [...fields, ...optional], domain);
+    } catch (_) {
+      final allowed = <String>[];
+      for (final field in optional) {
+        if (await _serves(model, field, domain)) allowed.add(field);
       }
+      return _searchRead(model, [...fields, ...allowed], domain);
     }
-    return _searchRead(model, fields, domain);
+  }
+
+  /// Whether the server will read [field] on [model] at all, asked with one row so
+  /// the question costs nothing on a large catalogue.
+  Future<bool> _serves(String model, String field, List<dynamic> domain) async {
+    try {
+      await call(model, 'search_read', [
+        domain,
+        ['id', field]
+      ], {
+        'limit': 1
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Odoo returns a many2one as `[id, label]`, or `false` when unset.
