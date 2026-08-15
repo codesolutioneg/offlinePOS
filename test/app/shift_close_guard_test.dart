@@ -178,6 +178,35 @@ void main() {
     expect(find.textContaining('Steak'), findsOneWidget);
   });
 
+  testWidgets('a paid sale whose late course has not fired still counts',
+      (t) async {
+    // Paid and waiting for the shift-close batch, with the mains held back: the
+    // money is in, the food is not out, and closing the day is not the end of it.
+    final order = Order(
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      type: OrderType.takeaway,
+    )..lines.add(OrderLine(
+        productId: 2,
+        name: 'Lamb',
+        quantity: 1,
+        unitPrice: 300,
+        fireAt: DateTime.now().toUtc().add(const Duration(hours: 1))));
+    order.state = OrderState.paid;
+    orders.save(order);
+
+    await t.pumpWidget(app(await cashierOnTheTill()));
+    await signIn(t);
+    await openShiftScreen(t);
+
+    await t.tap(find.byKey(const Key('close-shift')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('open-work')), findsOneWidget);
+    expect(find.text('Parked tabs'), findsNothing);
+    expect(find.textContaining('Lamb'), findsOneWidget);
+  });
+
   testWidgets('a cashier who cannot get a manager cannot close over open work',
       (t) async {
     parkedTab();

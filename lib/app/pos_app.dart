@@ -1784,14 +1784,18 @@ class _PosAppState extends State<PosApp> {
   OpenWork _openWork(BuildContext context) {
     final held = widget.orders.held();
     final session = _session;
-    // The order on the counter counts too: a course timer can be set and the table
-    // left open without ever parking the bill.
-    final orders = <Order>[
-      ...held,
-      if (session != null && session.current.lines.isNotEmpty) session.current,
-    ];
+    // Every order a course can still be waiting on: parked tabs, the one on the
+    // counter (a timer can be set on a table that was never parked), and sales
+    // already paid whose later course has not fired yet. The same list the ticker
+    // fires from, so the two never disagree about what is still coming.
+    final withTimers = <String, Order>{
+      for (final o in held) o.uuid: o,
+      for (final o in widget.orders.awaitingSync()) o.uuid: o,
+      if (session != null && session.current.lines.isNotEmpty)
+        session.current.uuid: session.current,
+    };
     final timed = <String>[];
-    for (final o in orders) {
+    for (final o in withTimers.values) {
       for (final l in o.lines.where((l) => l.isTimed)) {
         timed.add('${_orderWhere(context, o)}: ${l.name} '
             '${_atClock(l.fireAt!)}');
