@@ -410,8 +410,12 @@ class _SellScreenState extends State<SellScreen> {
             // a slow server or an error simply leaves it as it is.
             void askServer(String term) {
               final search = widget.searchServerCustomers;
-              if (search == null || term.trim().length < 3) return;
+              if (search == null) return;
+              // Recorded before the length test as well, so a reply to a longer term
+              // the cashier has since deleted back to two letters is dropped rather
+              // than dressing the list with names that do not match what they typed.
               searching = term;
+              if (term.trim().length < 3) return;
               unawaited(search(term).then((found) {
                 if (found.isEmpty || searching != term || !ctx.mounted) return;
                 final have = results.map((c) => c.id).toSet();
@@ -1143,9 +1147,9 @@ class _SellScreenState extends State<SellScreen> {
     final drivers = widget.drivers?.call() ?? const <Driver>[];
     // Matched by name, which is what the order stores: a channel renamed or deleted
     // in settings leaves the order's own label alone rather than rewriting history.
-    var channel = channels
-        .where((c) => c.name == s.current.deliveryChannel)
-        .firstOrNull;
+    final wasOn =
+        channels.where((c) => c.name == s.current.deliveryChannel).firstOrNull;
+    var channel = wasOn;
     // A driver taken off the roster mid-delivery stays selectable on the order they
     // are already carrying, so saving the dialog cannot quietly drop their name.
     final driverNames = <String>[
@@ -1312,7 +1316,8 @@ class _SellScreenState extends State<SellScreen> {
         // Last, so an aggregator's own partner wins over whoever was picked above:
         // the company is who the shop invoices, and the typed name stays on the
         // slip as the person the driver is looking for.
-        s.setDeliveryChannel(channel, companyOrderNo: companyNo.text);
+        s.setDeliveryChannel(channel,
+            companyOrderNo: companyNo.text, previous: wasOn);
         s.setDriver(driver);
       });
     }

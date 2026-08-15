@@ -257,6 +257,24 @@ void main() {
         reason: 'every keystroke asking the server would be a call per letter');
   });
 
+  testWidgets('a reply to a term the cashier has deleted is dropped', (t) async {
+    draftOnTheTill();
+
+    await t.pumpWidget(app());
+    await signIn(t);
+    await t.tap(find.byKey(const Key('customer-chip')));
+    await t.pumpAndSettle();
+    // Typed, then cut back before the answer lands. What comes back matches the
+    // term that is gone, so putting it on screen would be a list that does not
+    // answer what the cashier is looking at.
+    await t.enterText(find.byKey(const Key('customer-search')), 'Farida');
+    await t.enterText(find.byKey(const Key('customer-search')), 'Na');
+    await t.pumpAndSettle();
+
+    expect(find.text('Farida Kamel'), findsNothing);
+    expect(find.text('Nadia Local'), findsOneWidget);
+  });
+
   testWidgets('taking the money asks the server nothing', (t) async {
     draftOnTheTill();
 

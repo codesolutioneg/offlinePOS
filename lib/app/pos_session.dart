@@ -309,7 +309,16 @@ class PosSession {
   /// Where this delivery came from and the number that channel calls it, both local
   /// to the till. A channel that is invoiced as a company also carries its partner,
   /// so the sale books against the aggregator rather than against the guest.
-  void setDeliveryChannel(DeliveryChannel? channel, {String? companyOrderNo}) {
+  ///
+  /// [previous] is the channel the order was already on, so moving off a company
+  /// channel takes its partner with it. Without that, a sale switched from an
+  /// aggregator to the shop's own phone would still be booked against the
+  /// aggregator, and the money would land on the wrong account.
+  void setDeliveryChannel(DeliveryChannel? channel,
+      {String? companyOrderNo, DeliveryChannel? previous}) {
+    if (previous?.partnerId != null && current.partnerId == previous!.partnerId) {
+      current.partnerId = null;
+    }
     current
       ..deliveryChannel = channel?.name
       ..companyOrderNo = _blankToNull(companyOrderNo);

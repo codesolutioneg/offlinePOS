@@ -270,6 +270,68 @@ void main() {
       expect(find.byKey(const Key('delivery-company-no')), findsOneWidget);
     });
 
+    testWidgets('moving off a company channel takes its partner with it', (t) async {
+      final talabat = delivery.addChannel(name: 'Talabat', partnerId: 77);
+      final phone = delivery.addChannel(name: 'Phone');
+      final order = deliveryOnTheTill();
+
+      await t.pumpWidget(app());
+      await signIn(t);
+      await openDeliveryDialog(t);
+      await t.tap(find.byKey(Key('delivery-channel-${talabat.id}')));
+      await t.pumpAndSettle();
+      await save(t);
+      expect(stored(order.uuid).partnerId, 77);
+
+      // The customer rings the shop directly next time and the cashier corrects it.
+      await openDeliveryDialog(t);
+      await t.tap(find.byKey(Key('delivery-channel-${phone.id}')));
+      await t.pumpAndSettle();
+      await save(t);
+
+      expect(stored(order.uuid).deliveryChannel, 'Phone');
+      expect(stored(order.uuid).partnerId, isNull,
+          reason: 'the sale must not still be booked to the aggregator');
+    });
+
+    testWidgets('taking the channel off entirely clears its partner too', (t) async {
+      final talabat = delivery.addChannel(name: 'Talabat', partnerId: 77);
+      final order = deliveryOnTheTill();
+
+      await t.pumpWidget(app());
+      await signIn(t);
+      await openDeliveryDialog(t);
+      await t.tap(find.byKey(Key('delivery-channel-${talabat.id}')));
+      await t.pumpAndSettle();
+      await save(t);
+      await openDeliveryDialog(t);
+      // Tapping the selected chip again deselects it.
+      await t.tap(find.byKey(Key('delivery-channel-${talabat.id}')));
+      await t.pumpAndSettle();
+      await save(t);
+
+      expect(stored(order.uuid).deliveryChannel, isNull);
+      expect(stored(order.uuid).partnerId, isNull);
+    });
+
+    testWidgets('a customer picked by hand survives a channel with no partner',
+        (t) async {
+      final phone = delivery.addChannel(name: 'Phone');
+      final order = deliveryOnTheTill();
+      order.partnerId = 42;
+      orders.save(order, announce: false);
+
+      await t.pumpWidget(app());
+      await signIn(t);
+      await openDeliveryDialog(t);
+      await t.tap(find.byKey(Key('delivery-channel-${phone.id}')));
+      await t.pumpAndSettle();
+      await save(t);
+
+      expect(stored(order.uuid).partnerId, 42,
+          reason: 'only a partner the channel stamped is the channel\'s to remove');
+    });
+
     testWidgets('turning the sale into a takeaway drops the channel', (t) async {
       final channel = delivery.addChannel(name: 'Talabat', partnerId: 77);
       final order = deliveryOnTheTill();
