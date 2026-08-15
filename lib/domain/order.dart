@@ -523,6 +523,15 @@ class Order {
         ..amended = (m['amended'] as bool?) ?? false;
 }
 
+/// The label an on-account tender carries, and the one thing that says a sale was
+/// left on a customer's tab rather than settled at the counter.
+///
+/// A label rather than a field on the order: the money is a tender like any other,
+/// it books through the payment method the shop nominated, and reports that read
+/// tenders (the payment mix, the receivables list) all see it without a second
+/// concept travelling through the payload.
+const String kOnAccountLabel = 'On account';
+
 /// One tender against a sale: which Odoo payment method, how much, and any tip
 /// taken on that tender. Several of these on one order is a split payment.
 class OrderPayment {

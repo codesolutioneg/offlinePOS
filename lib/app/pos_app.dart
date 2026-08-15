@@ -824,6 +824,9 @@ class _PosAppState extends State<PosApp> {
               // What this cashier's role may open. Read per build, so a manager
               // narrowing it takes effect on the next order rather than at restart.
               allowedOrderTypes: _allowedOrderTypes,
+              // The tender an on-account sale books against, when the shop runs
+              // accounts. Absent, the payment sheet offers no such thing.
+              payLaterMethodId: widget.settings.payLaterMethodId,
               // Dividers are floor decoration, never a table an order sits at.
               tables: () => widget.tables
                   .all()

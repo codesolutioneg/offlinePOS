@@ -865,4 +865,18 @@ const Map<String, String> _ar = {
   'shift': 'وردية',
   'shifts': 'ورديات',
   'still on the clock': 'ما زال على رأس العمل',
+  'Pay later books against': 'الدفع الآجل يُسجَّل على',
+  'An on-account sale needs a customer, and shows in the receivables report':
+      'البيع على الحساب يتطلب عميلًا، ويظهر في تقرير المستحقات',
+  'Put it on the account': 'تسجيله على الحساب',
+  'On account (needs a customer)': 'على الحساب (يتطلب عميلًا)',
+  'Add a customer to the order before billing it.':
+      'أضف عميلًا إلى الطلب قبل تسجيله على الحساب.',
+  'On account': 'على الحساب',
+  'Nothing on account': 'لا شيء على الحساب',
+  'Every sale in this range was settled.': 'كل المبيعات في هذه الفترة مسدَّدة.',
+  'Owed by customer': 'المستحق على كل عميل',
+  'Total outstanding': 'إجمالي المستحقات',
+  'Sales on account': 'المبيعات على الحساب',
+  'Unnamed': 'بدون اسم',
 };

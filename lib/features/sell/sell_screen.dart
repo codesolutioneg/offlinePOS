@@ -64,6 +64,7 @@ class SellScreen extends StatefulWidget {
       OrderType.takeaway,
       OrderType.delivery,
     },
+    this.payLaterMethodId,
   });
 
   final PosSession session;
@@ -194,6 +195,11 @@ class SellScreen extends StatefulWidget {
   /// that runs a delivery desk or a counter-only till narrows it per role, and the
   /// chips for the rest are simply not offered.
   final Set<OrderType> allowedOrderTypes;
+
+  /// The payment method an on-account ("pay later") sale books against. Null, the
+  /// default, means the shop does not run accounts and the payment sheet is
+  /// unchanged.
+  final int? payLaterMethodId;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -1352,6 +1358,18 @@ class _SellScreenState extends State<SellScreen> {
     _tellKitchenOutcome(result, key: const Key('resent-kitchen'));
   }
 
+  /// The tender an on-account sale books against, or null when the shop has not
+  /// nominated one (or the catalogue no longer carries it, after a method was
+  /// removed in Odoo: the option disappears rather than booking against nothing).
+  PaymentMethod? _onAccountMethod() {
+    final id = widget.payLaterMethodId;
+    if (id == null) return null;
+    for (final m in s.catalogue.paymentMethods()) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
+
   void _pay() {
     if (!s.hasLines) return;
     // If shares were already taken (even split), the main Pay settles what is left,
@@ -1365,6 +1383,11 @@ class _SellScreenState extends State<SellScreen> {
         total: partPaid ? s.current.balance : s.total,
         format: widget.formatAmount,
         methods: s.catalogue.paymentMethods(),
+        // Only on the whole bill: a share left on account is a part-paid tab and a
+        // receivable at once, which is more bookkeeping than a till should invent.
+        onAccountMethod: partPaid ? null : _onAccountMethod(),
+        hasCustomer: s.current.partnerId != null ||
+            (s.current.customerName ?? '').isNotEmpty,
         onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
           if (partPaid) {
@@ -2770,6 +2793,8 @@ class _PaymentSheet extends StatefulWidget {
     required this.format,
     required this.methods,
     required this.onConfirm,
+    this.onAccountMethod,
+    this.hasCustomer = false,
   });
 
   final double total;
@@ -2777,6 +2802,14 @@ class _PaymentSheet extends StatefulWidget {
   final List<PaymentMethod> methods;
   final void Function(
       List<OrderPayment> payments, String label, double tip, double? cashReceived) onConfirm;
+
+  /// The method an on-account sale books against, when the shop runs accounts.
+  /// Null leaves the sheet exactly as it was.
+  final PaymentMethod? onAccountMethod;
+
+  /// Whether the order names the customer whose tab this would go on. Without one
+  /// there is nobody to bill, so the action is offered but refused.
+  final bool hasCustomer;
 
   @override
   State<_PaymentSheet> createState() => _PaymentSheetState();
@@ -2869,6 +2902,27 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       payments = <OrderPayment>[];
     }
     widget.onConfirm(payments, label, _tipAmount, cashReceived);
+  }
+
+  /// Put the whole bill on the customer's tab. One tender, the full amount, under
+  /// its own label, so the sale books and reports like any other sale while the
+  /// receivables list can still pick it out. Refused without a customer: an unnamed
+  /// debt is money written off.
+  void _confirmOnAccount() {
+    final method = widget.onAccountMethod;
+    if (method == null) return;
+    if (!widget.hasCustomer) {
+      showToast(
+          context, tr(context, 'Add a customer to the order before billing it.'),
+          kind: ToastKind.error, key: const Key('on-account-refused'));
+      return;
+    }
+    widget.onConfirm(
+      [OrderPayment(methodId: method.id, amount: _grand, label: kOnAccountLabel)],
+      kOnAccountLabel,
+      _tipAmount,
+      null,
+    );
   }
 
   List<double> _quickAmounts() {
@@ -3041,6 +3095,20 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 label: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
               ),
             ),
+            if (widget.onAccountMethod != null) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 52,
+                child: OutlinedButton.icon(
+                  key: const Key('pay-later'),
+                  onPressed: _confirmOnAccount,
+                  icon: const Icon(Icons.account_balance_wallet_outlined),
+                  label: Text(widget.hasCustomer
+                      ? tr(context, 'Put it on the account')
+                      : tr(context, 'On account (needs a customer)')),
+                ),
+              ),
+            ],
             const SizedBox(height: 4),
             TextButton(
               onPressed: () => Navigator.pop(context),

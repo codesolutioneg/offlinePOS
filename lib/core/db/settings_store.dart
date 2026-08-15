@@ -575,6 +575,21 @@ class SettingsStore {
     paymentMethodLabels = map;
   }
 
+  // ── letting a customer settle later ──────────────────────────────
+
+  /// The payment method an on-account sale books against, or null when the shop
+  /// does not run accounts. Off by default, and deliberately a nomination rather
+  /// than an invented tender: the wire contract books real methods, so a shop that
+  /// wants "pay later" points it at the method their accounts already use for a
+  /// customer balance (never the cash one, or the drawer would be counted short).
+  int? get payLaterMethodId {
+    final id = int.tryParse(getString('pay_later_method_id') ?? '');
+    return (id == null || id <= 0) ? null : id;
+  }
+
+  set payLaterMethodId(int? v) =>
+      setString('pay_later_method_id', (v == null || v <= 0) ? null : '$v');
+
   // ── the shop's mark on the paper ─────────────────────────────────
 
   /// Print the shop logo at the top of the receipt. Off until a shop asks for it,

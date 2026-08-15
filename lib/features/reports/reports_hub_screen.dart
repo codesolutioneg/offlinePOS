@@ -18,6 +18,7 @@ import 'expenses_report_screen.dart';
 import 'modifier_report_screen.dart';
 import 'payment_analysis_report_screen.dart';
 import 'period_comparison_report_screen.dart';
+import 'receivables_report_screen.dart';
 import 'refunds_voids_report_screen.dart';
 import 'sales_by_time_report_screen.dart';
 import 'sales_report_screen.dart';
@@ -499,6 +500,10 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                       (_) => ExpensesReportScreen(
                           movements: _movements,
                           formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'On account'), Icons.account_balance_wallet_outlined,
+                    'rep-receivables', const Color(0xFFEA580C),
+                    (o) => ReceivablesReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
                 if (widget.attendance != null)
                   _tile(tr(context, 'Hours worked'), Icons.schedule,
                       'rep-attendance', const Color(0xFF6366F1),
