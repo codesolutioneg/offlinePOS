@@ -117,6 +117,36 @@ class AuthService {
     return false;
   }
 
+  /// Prove one particular cashier is standing at the till, without signing them in.
+  ///
+  /// What a shared till needs when one person picks up a tab another one opened:
+  /// the owner unlocks their own tab and walks away again, and the shift stays with
+  /// whoever is actually on the drawer. Counted against the same per-cashier
+  /// lockout as [unlock], so this cannot be used to guess a PIN around it.
+  Future<bool> authorizeCashier(String cashierId, String pin) async {
+    if (!_policy.isWellFormed(pin)) return false;
+    final now = _now();
+    if (_guard.isLocked(cashierId, now: now)) {
+      _audit.record(cashierId, 'pin.locked_out');
+      return false;
+    }
+    final user = _users.byId(cashierId);
+    if (user == null || !user.active) {
+      // Same answer as a wrong PIN: a rejection must not reveal who exists.
+      _guard.recordFailure(cashierId, now: now);
+      _audit.record(cashierId, 'pin.rejected');
+      return false;
+    }
+    if (!await _hasher.verify(pin, user.pinSalt, user.pinHash)) {
+      _guard.recordFailure(cashierId, now: now);
+      _audit.record(cashierId, 'pin.rejected');
+      return false;
+    }
+    _guard.recordSuccess(cashierId);
+    _audit.record(cashierId, 'cashier.authorized');
+    return true;
+  }
+
   Future<Cashier> enrol({
     required String id,
     required String name,

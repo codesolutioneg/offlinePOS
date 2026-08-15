@@ -836,4 +836,14 @@ const Map<String, String> _ar = {
       'لم يستجب ذلك الجهاز، فتبقى الطاولة لديه. سدّدها هناك.',
   'That device would not hand the tab over.':
       'رفض ذلك الجهاز تسليم الطاولة.',
+  'Ask before opening someone else\'s tab': 'اسأل قبل فتح طاولة كاشير آخر',
+  'Transfer tables': 'نقل الطاولات',
+  'This tab belongs to another cashier': 'هذه الطاولة لكاشير آخر',
+  'Enter their PIN, or a manager PIN.': 'أدخل رمزه، أو رمز مدير.',
+  'Open tab': 'فتح الطاولة',
+  'That PIN did not open this tab': 'هذا الرمز لم يفتح الطاولة',
+  'No tabs are open on this till': 'لا توجد طاولات مفتوحة على هذا الجهاز',
+  'Move tabs from': 'نقل الطاولات من',
+  'Move tabs to': 'نقل الطاولات إلى',
+  'Tabs moved': 'تم نقل الطاولات',
 };

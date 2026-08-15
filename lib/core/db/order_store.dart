@@ -94,17 +94,18 @@ class OrderStore {
     }
   }
 
-  /// The device column follows the payload on an update, because a tab can change
-  /// hands: leaving it behind would file the order under the till that gave it away
-  /// while the bill on it says otherwise, and every read that decides money is
-  /// scoped by that column.
+  /// The device and cashier columns follow the payload on an update, because a tab
+  /// can change hands both ways: to another till, and to another cashier on this
+  /// one. Leaving them behind would file the order under whoever used to have it
+  /// while the bill on it says otherwise, and the reads that decide money are
+  /// scoped by exactly those columns.
   void _insert(Order order) {
     _db.raw.execute(
       '''
       INSERT INTO orders (uuid, device_id, cashier_id, created_at, state, server_id, total, payload)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(uuid) DO UPDATE SET
-        device_id = excluded.device_id,
+        device_id = excluded.device_id, cashier_id = excluded.cashier_id,
         state = excluded.state, server_id = excluded.server_id,
         total = excluded.total, payload = excluded.payload
       ''',
@@ -316,6 +317,21 @@ class OrderStore {
   /// the bill can be lost in the copy.
   static Order _withDevice(Order order, String deviceId) =>
       Order.fromMap({...order.toMap(), 'device_id': deviceId});
+
+  /// Move a parked tab to another cashier on this till, and say whether it moved.
+  ///
+  /// What a manager does when somebody goes home mid-service: the tables they
+  /// opened have to answer to whoever is on the floor now, or they cannot be picked
+  /// up under table security and they land on the wrong cashier's flash. Only a
+  /// held tab moves; a paid sale keeps the cashier who rang it, because that name
+  /// is the only record of who took the money.
+  bool reassignCashier(String uuid, String toCashierId) {
+    final order = byUuid(uuid);
+    if (order == null || order.state != OrderState.held) return false;
+    if (order.cashierId == toCashierId) return true;
+    save(Order.fromMap({...order.toMap(), 'cashier_id': toCashierId}));
+    return true;
+  }
 
   /// Active kitchen tickets for the KDS board: orders that have been sent to the
   /// kitchen (held or paid) and are not yet served, newest first.

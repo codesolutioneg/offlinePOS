@@ -560,6 +560,17 @@ class SettingsStore {
   bool get lanAllowTakeover => getBool('lan_allow_takeover');
   set lanAllowTakeover(bool v) => setBool('lan_allow_takeover', v);
 
+  // ── the floor with more than one person on it ────────────────────
+
+  /// Whether a tab opened by one cashier asks before another one picks it up.
+  ///
+  /// Off by default, because most shops run one cashier at a time and a prompt
+  /// between a waiter and their own table is friction for nothing. A shop where
+  /// several people share a till and each answers for their own drawer wants the
+  /// other answer: the cashier who opened the tab unlocks it, or a manager does.
+  bool get tableSecurity => getBool('table_security');
+  set tableSecurity(bool v) => setBool('table_security', v);
+
   /// Receipt paper width in characters: 42 for 80mm (default), 32 for 58mm.
   int get receiptColumns => int.tryParse(getString('receipt_columns') ?? '') ?? 42;
   set receiptColumns(int n) => setString('receipt_columns', '$n');

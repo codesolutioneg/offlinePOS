@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/db/settings_store.dart';
 import '../../core/db/table_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
@@ -26,7 +27,18 @@ class TableFloorScreen extends StatefulWidget {
     this.exclude,
     this.onTakeaway,
     this.onDelivery,
+    this.settings,
+    this.onTransferTables,
   });
+
+  /// The on-device settings the floor itself owns (whether a tab asks before
+  /// another cashier picks it up). Null hides the menu that edits them, which is
+  /// what the table picker wants.
+  final SettingsStore? settings;
+
+  /// Move every tab one cashier is holding to another one, for the manager whose
+  /// waiter went home mid-service. Null hides the action.
+  final VoidCallback? onTransferTables;
 
   /// Start a takeaway or delivery order straight from the floor home, the two ways
   /// an order begins without a table. Null hides the button (e.g. in pick mode).
@@ -427,13 +439,16 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               icon: const Icon(Icons.edit_note),
               label: Text(tr(context, 'Other')),
             )
-          else
+          else ...[
             IconButton(
               key: const Key('toggle-edit'),
               tooltip: _editing ? tr(context, 'Done') : tr(context, 'Edit floor'),
               icon: Icon(_editing ? Icons.check : Icons.edit),
               onPressed: () => setState(() => _editing = !_editing),
             ),
+            if (widget.settings != null || widget.onTransferTables != null)
+              _floorMenu(),
+          ],
         ],
       ),
       floatingActionButton: _editing && !widget.pickMode
@@ -506,6 +521,38 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             ),
         ],
       ),
+    );
+  }
+
+  /// The floor's own settings and the actions that go with them, on the screen a
+  /// manager already opens to lay the room out rather than three menus away.
+  Widget _floorMenu() {
+    final settings = widget.settings;
+    return PopupMenuButton<String>(
+      key: const Key('floor-menu'),
+      icon: const Icon(Icons.more_vert),
+      onSelected: (value) {
+        if (value == 'security' && settings != null) {
+          setState(() => settings.tableSecurity = !settings.tableSecurity);
+        } else if (value == 'transfer') {
+          widget.onTransferTables?.call();
+        }
+      },
+      itemBuilder: (ctx) => [
+        if (settings != null)
+          CheckedPopupMenuItem(
+            key: const Key('floor-table-security'),
+            value: 'security',
+            checked: settings.tableSecurity,
+            child: Text(tr(ctx, 'Ask before opening someone else\'s tab')),
+          ),
+        if (widget.onTransferTables != null)
+          PopupMenuItem(
+            key: const Key('floor-transfer-tables'),
+            value: 'transfer',
+            child: Text(tr(ctx, 'Transfer tables')),
+          ),
+      ],
     );
   }
 
