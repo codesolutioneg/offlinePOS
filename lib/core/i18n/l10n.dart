@@ -854,4 +854,7 @@ const Map<String, String> _ar = {
       'الطلب المفتوح على طاولة يمكن دائمًا تحصيله.',
   'This role does not open dine-in orders.':
       'هذا الدور لا يفتح طلبات تناول في المحل.',
+  'Ask for the guest count': 'السؤال عن عدد الضيوف',
+  'When a table is seated from the floor': 'عند إجلاس طاولة من المخطط',
+  'How many guests?': 'كم عدد الضيوف؟',
 };

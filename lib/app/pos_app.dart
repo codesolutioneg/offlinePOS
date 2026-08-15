@@ -1334,7 +1334,7 @@ class _PosAppState extends State<PosApp> {
                 setState(() => session.startFresh(OrderType.delivery));
                 Navigator.of(floorContext).pop();
               },
-        onOpenTable: (t) {
+        onOpenTable: (t) async {
           // Tapping the table the current order is already seated at just returns
           // to it rather than parking it and starting a duplicate.
           if (session.current.tableLabel == t.name &&
@@ -1371,19 +1371,64 @@ class _PosAppState extends State<PosApp> {
               return;
             }
           }
+          // How many are sitting down, when the shop asks. Before the order is
+          // started, so backing out of the prompt leaves no half-seated table
+          // behind, and only when a table is actually being seated: recalling a
+          // tab already has its covers.
+          int? covers;
+          if (held.isEmpty && widget.settings.askGuestCount) {
+            covers = await _askGuestCount(floorContext, t.seats);
+            if (covers == null) return;
+          }
           setState(() {
             if (held.isNotEmpty) {
               session.recall(held.first.uuid);
             } else {
               session.startFresh(OrderType.dineIn);
               session.setTable(t.name);
-              if (t.seats > 0) session.setGuestCount(t.seats);
+              // The prompt's answer when there was one, otherwise the table's own
+              // seat count, which is what the floor has always seeded.
+              final seated = covers ?? t.seats;
+              if (seated > 0) session.setGuestCount(seated);
             }
           });
-          Navigator.of(floorContext).pop();
+          if (floorContext.mounted) Navigator.of(floorContext).pop();
         },
       ),
     ));
+  }
+
+  /// How many are sitting at the table just tapped, offered as quick counts with
+  /// the table's own seats first. Returns null when the waiter backs out, which
+  /// aborts the seating rather than opening a tab nobody asked for.
+  Future<int?> _askGuestCount(BuildContext context, int seats) {
+    final counts = <int>{if (seats > 0) seats, 1, 2, 3, 4, 6, 8}.toList()..sort();
+    return showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('guest-count-prompt'),
+        title: Text(tr(ctx, 'How many guests?')),
+        content: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final n in counts)
+              ActionChip(
+                key: Key('guests-$n'),
+                label: Text('$n'),
+                onPressed: () => Navigator.pop(ctx, n),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            key: const Key('guests-cancel'),
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+        ],
+      ),
+    );
   }
 
   /// The settings hub: one door onto everything a manager configures on the device.

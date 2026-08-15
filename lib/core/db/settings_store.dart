@@ -465,6 +465,13 @@ class SettingsStore {
     return tail.padLeft(3, 'X');
   }
 
+  /// Ask how many are sitting down when a table is seated. Off by default: a shop
+  /// where one cashier serves the room gains nothing from a dialog between tapping
+  /// a table and ringing the first drink, and the covers can still be set from the
+  /// Guests chip whenever they matter.
+  bool get askGuestCount => getBool('ask_guest_count');
+  set askGuestCount(bool v) => setBool('ask_guest_count', v);
+
   /// Product-grid density: tiles per row. 0 = auto (fit by width).
   int get gridColumns => int.tryParse(getString(_gridColumns) ?? '') ?? 0;
   set gridColumns(int n) => setString(_gridColumns, n <= 0 ? null : '$n');
