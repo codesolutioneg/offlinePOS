@@ -641,6 +641,9 @@ class _PosAppState extends State<PosApp> {
               // close, so the shared Odoo login is not hit per order.
               online: widget.sync.online,
               pendingToSync: () => widget.sync.pendingSales,
+              // Tickets and receipts a printer would not take. They flush themselves,
+              // but until they do the kitchen has not seen them.
+              spooledJobs: () => _receiptPrinter.spooledCount,
               categoryColors: widget.settings.categoryColors,
               quickComments: widget.settings.quickComments,
               discountReasons: widget.settings.discountReasons,
@@ -695,12 +698,13 @@ class _PosAppState extends State<PosApp> {
                 session.hold();
                 _publishActivity();
               },
-              // Fire the kitchen ticket but keep the order on the counter.
-              onSendToKitchen: () => unawaited(_fireKitchen(session.current)),
+              // Fire the kitchen ticket but keep the order on the counter. The
+              // result is handed back so the screen can say what really happened.
+              onSendToKitchen: () => _fireKitchen(session.current),
               // Re-fire every line (a lost or re-requested ticket), ignoring the
               // already-printed flag.
-              onResendToKitchen: () => unawaited(
-                  _fireKitchen(session.current, only: session.current.lines, resend: true)),
+              onResendToKitchen: () =>
+                  _fireKitchen(session.current, only: session.current.lines, resend: true),
               onLineVoided: (line, reason) {
                 // The deletion slip is the till's own record that an item was taken
                 // off, printed for every void. The kitchen cancel slip only fires
@@ -1476,14 +1480,18 @@ class _PosAppState extends State<PosApp> {
   /// path of a tap: a kitchen printer that is off must not stop the sale. When no
   /// kitchen printer answers, the ticket falls back to the receipt printer so a
   /// slip still comes out that staff can carry to the pass.
-  Future<void> _fireKitchen(Order order, {List<OrderLine>? only, bool resend = false}) async {
+  ///
+  /// Returns what actually became of the ticket, so the cashier can be told the
+  /// truth rather than a cheerful "Sent to kitchen" over a printer that is off.
+  Future<KitchenFireResult> _fireKitchen(Order order,
+      {List<OrderLine>? only, bool resend = false}) async {
     // A normal Send fires only lines that are due now; a course-timed line with a
     // future timer is held back until the ticker fires it. An explicit `only` list
     // (a resend, or the ticker's due lines) is honoured as given.
     final now = DateTime.now().toUtc();
     final lines =
         only ?? order.lines.where((l) => !l.printedToKitchen && l.dueAt(now)).toList();
-    if (lines.isEmpty) return;
+    if (lines.isEmpty) return KitchenFireResult.sent;
     final builder = KitchenTicketBuilder();
     // Route each line to its category's station, so a multi-station kitchen sends
     // hot food and bar drinks to different printers. Unmapped categories fall to
@@ -1505,6 +1513,9 @@ class _PosAppState extends State<PosApp> {
     // resend after a partial failure must not reprint at a station that already got
     // the ticket. A line records each station it lands at, so retries are idempotent
     // per station and a later void follows it even if routing changes.
+    // The worst thing that happened to any station's copy, since that is what the
+    // cashier has to act on.
+    var outcome = KitchenFireResult.sent;
     for (final entry in routed.entries) {
       final station = entry.key;
       // A deliberate resend reprints everything; an ordinary fire only sends the
@@ -1514,8 +1525,9 @@ class _PosAppState extends State<PosApp> {
           : entry.value.where((l) => !l.firedStations.contains(station)).toList();
       if (pending.isEmpty) continue;
       final bytes = builder.build(order, only: pending, station: station);
-      final ok = await _sendToStation(station, bytes, 'kot-${order.uuid}-$station');
-      if (!ok) continue;
+      final result = await _sendToStation(station, bytes, 'kot-${order.uuid}-$station');
+      outcome = outcome.worst(result);
+      if (result == KitchenFireResult.lost) continue;
       for (final l in pending) {
         // Dedupe: a deliberate resend must not append the same station twice, or a
         // later void would send duplicate cancel slips to it.
@@ -1529,6 +1541,7 @@ class _PosAppState extends State<PosApp> {
       }
     }
     widget.orders.save(order);
+    return outcome;
   }
 
   Future<void> _fireVoid(Order order, OrderLine line, String reason) async {
@@ -1547,14 +1560,16 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
-  /// Send a kitchen ticket to [station]. Returns true if it reached a printer or was
-  /// safely spooled for retry, false if it was lost outright (so the caller can keep
-  /// the lines un-fired and retry later).
-  Future<bool> _sendToStation(String station, List<int> bytes, String reference) async {
+  /// Send a kitchen ticket to [station]: [KitchenFireResult.sent] if a printer took
+  /// it, [KitchenFireResult.spooled] if it is held for the background flush, and
+  /// [KitchenFireResult.lost] if it reached neither (so the caller can keep the lines
+  /// un-fired and retry later).
+  Future<KitchenFireResult> _sendToStation(
+      String station, List<int> bytes, String reference) async {
     final payload = Uint8List.fromList(bytes);
     try {
       await RegistryPrinter(widget.printers, station).send(payload);
-      return true;
+      return KitchenFireResult.sent;
     } on PrinterUnavailable {
       // No station printer: fall back to the receipt printer. It persists the ticket
       // to the spool on any failure before rethrowing, so once we hand it over the
@@ -1562,22 +1577,25 @@ class _PosAppState extends State<PosApp> {
       // delivered: firing the lines here is what stops a re-fire duplicating it.
       try {
         await _receiptPrinter.send(payload, reference: reference);
+        return KitchenFireResult.sent;
       } on PrinterUnavailable {
-        // Held in the spool; the background flush will retry it.
+        // Held in the spool; the background flush will retry it. Nothing is cooking
+        // yet, so say so.
+        return KitchenFireResult.spooled;
       } catch (e) {
         // Also spooled (SpooledPrinter persists before it rethrows); note it for
-        // diagnostics but still treat the ticket as delivered.
+        // diagnostics. Durable, but still not on a pass anybody can read.
         widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.spooled',
             detail: '$reference: $e');
+        return KitchenFireResult.spooled;
       }
-      return true;
     } catch (e) {
       // The station printer failed with something other than "unavailable", so the
       // ticket reached neither a printer nor the spool: keep the lines un-fired so a
       // later re-fire retries them.
       widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
           detail: '$reference: $e');
-      return false;
+      return KitchenFireResult.lost;
     }
   }
 

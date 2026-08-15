@@ -706,4 +706,9 @@ const Map<String, String> _ar = {
       'يكتب الكاشير مبلغ الخصم ويُطبَّق بالنسبة المكافئة له',
   'Amount off': 'مبلغ الخصم',
   'Add new': 'إضافة جديد',
+  'Ticket held, printer offline. It will print automatically.':
+      'التذكرة محتجزة، الطابعة غير متصلة. ستُطبع تلقائيًا.',
+  'Ticket did not print. Tell the kitchen and try again.':
+      'لم تُطبع التذكرة. أبلغ المطبخ ثم أعد المحاولة.',
+  'to print': 'في انتظار الطباعة',
 };

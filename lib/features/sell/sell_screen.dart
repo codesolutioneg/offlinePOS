@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../app/pos_session.dart';
 import '../../core/auth/permissions.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/printing/kitchen_ticket.dart' show KitchenFireResult;
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/numeric_keypad.dart';
@@ -37,6 +38,7 @@ class SellScreen extends StatefulWidget {
     this.onLineVoided,
     this.online,
     this.pendingToSync,
+    this.spooledJobs,
     this.categoryColors = const {},
     this.quickComments = const ['No onions', 'Extra spicy', 'Well done', 'Allergy'],
     this.discountReasons = const [],
@@ -86,12 +88,13 @@ class SellScreen extends StatefulWidget {
   final VoidCallback? onHold;
 
   /// Fires the kitchen ticket for the current order but leaves it on the counter,
-  /// so a table's food can be sent without parking the order.
-  final VoidCallback? onSendToKitchen;
+  /// so a table's food can be sent without parking the order. Answers with what
+  /// became of the ticket, so the cashier is told the truth about it.
+  final Future<KitchenFireResult> Function()? onSendToKitchen;
 
   /// Re-fires every line to the kitchen, even those already sent, for when a ticket
   /// was lost or the kitchen asks for it again. Surfaced on a long-press of Send.
-  final VoidCallback? onResendToKitchen;
+  final Future<KitchenFireResult> Function()? onResendToKitchen;
 
   /// Prints the check for the open order before it is paid, so a waiter can take the
   /// bill to the table. Paper only: the order is not changed and nothing is settled.
@@ -111,6 +114,11 @@ class SellScreen extends StatefulWidget {
 
   /// How many sales are held on the till waiting for the shift-close batch.
   final int Function()? pendingToSync;
+
+  /// How many print jobs (receipts and kitchen tickets) are held because a printer
+  /// would not take them. Shown beside the online badge, since a held ticket is
+  /// food that is not being cooked yet.
+  final int Function()? spooledJobs;
 
   /// Category id to colour (ARGB), so the product grid is colour-coded per category
   /// the way Dishflow does. Empty leaves tiles plain.
@@ -1183,16 +1191,38 @@ class _SellScreenState extends State<SellScreen> {
     }
   }
 
-  void _sendToKitchen() {
+  Future<void> _sendToKitchen() async {
     if (!s.hasLines) return;
-    widget.onSendToKitchen?.call();
+    final fire = widget.onSendToKitchen;
+    if (fire == null) return;
+    // Nothing on screen is blocked while the printer is tried: the order is already
+    // saved and the cashier can keep ringing. What waits is only the message, because
+    // "Sent to kitchen" before the printer has answered is the lie this fixes.
+    final result = await fire();
+    if (!mounted) return;
     setState(() {});
-    if (mounted) {
-      showToast(context, tr(context, 'Sent to kitchen.'),
-          kind: ToastKind.success,
-          key: const Key('sent-kitchen'),
-          duration: const Duration(seconds: 2));
-    }
+    _tellKitchenOutcome(result, key: const Key('sent-kitchen'));
+  }
+
+  /// Say what actually happened to the ticket. Green only when a printer took it;
+  /// amber when it is held and will print itself; red when the kitchen has nothing
+  /// and someone has to walk the order over.
+  void _tellKitchenOutcome(KitchenFireResult result, {required Key key}) {
+    final (message, kind) = switch (result) {
+      KitchenFireResult.sent => (tr(context, 'Sent to kitchen.'), ToastKind.success),
+      KitchenFireResult.spooled => (
+          tr(context, 'Ticket held, printer offline. It will print automatically.'),
+          ToastKind.warning
+        ),
+      KitchenFireResult.lost => (
+          tr(context, 'Ticket did not print. Tell the kitchen and try again.'),
+          ToastKind.error
+        ),
+    };
+    showToast(context, message,
+        kind: kind,
+        key: key,
+        duration: Duration(seconds: result == KitchenFireResult.sent ? 2 : 4));
   }
 
   Future<void> _resendToKitchen() async {
@@ -1209,12 +1239,11 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (ok != true) return;
-    widget.onResendToKitchen?.call();
+    final resend = widget.onResendToKitchen;
+    if (resend == null) return;
+    final result = await resend();
     if (!mounted) return;
-    showToast(context, tr(context, 'Sent to kitchen.'),
-        kind: ToastKind.success,
-        key: const Key('resent-kitchen'),
-        duration: const Duration(seconds: 2));
+    _tellKitchenOutcome(result, key: const Key('resent-kitchen'));
   }
 
   void _pay() {
@@ -1789,6 +1818,7 @@ class _SellScreenState extends State<SellScreen> {
     final online = widget.online;
     Widget badge(bool isOnline) {
       final pending = widget.pendingToSync?.call() ?? 0;
+      final held = widget.spooledJobs?.call() ?? 0;
       final color = isOnline ? Colors.green : Colors.grey;
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -1808,6 +1838,20 @@ class _SellScreenState extends State<SellScreen> {
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   label: Text('$pending ${tr(context, 'to sync')}', style: const TextStyle(fontSize: 11)),
+                ),
+              ),
+            // Paper waiting on a printer, which is a different problem from sales
+            // waiting on the server and needs its own badge.
+            if (held > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Chip(
+                  key: const Key('spool-count'),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  avatar: Icon(Icons.print_disabled, size: 14, color: AppColors.warning),
+                  label: Text('$held ${tr(context, 'to print')}',
+                      style: const TextStyle(fontSize: 11)),
                 ),
               ),
           ],
