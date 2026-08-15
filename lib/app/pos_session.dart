@@ -3,6 +3,7 @@ import '../core/db/catalogue_store.dart';
 import '../core/db/order_store.dart';
 import '../core/sync/outbox.dart';
 import '../domain/catalogue.dart';
+import '../domain/delivery.dart';
 import '../domain/order.dart';
 
 /// The live selling state for one cashier on one till.
@@ -262,6 +263,11 @@ class PosSession {
       // because an address and a delivery charge mean nothing on a counter sale.
       current.deliveryCost = 0;
       current.customerAddress = null;
+      // The same reasoning covers the delivery-only trio: there is no channel, no
+      // aggregator reference and nobody driving a sale handed over the counter.
+      current.deliveryChannel = null;
+      current.companyOrderNo = null;
+      current.driverName = null;
     }
     orders.save(current);
   }
@@ -297,6 +303,25 @@ class PosSession {
       ..customerName = _blankToNull(name)
       ..customerPhone = _blankToNull(phone)
       ..customerAddress = _blankToNull(address);
+    orders.save(current);
+  }
+
+  /// Where this delivery came from and the number that channel calls it, both local
+  /// to the till. A channel that is invoiced as a company also carries its partner,
+  /// so the sale books against the aggregator rather than against the guest.
+  void setDeliveryChannel(DeliveryChannel? channel, {String? companyOrderNo}) {
+    current
+      ..deliveryChannel = channel?.name
+      ..companyOrderNo = _blankToNull(companyOrderNo);
+    if (channel?.partnerId != null) current.partnerId = channel!.partnerId;
+    orders.save(current);
+  }
+
+  /// Who is carrying this delivery. The name is stamped rather than a reference to
+  /// the driver list, so a printed slip still says who took it after that driver
+  /// leaves and is taken off the roster.
+  void setDriver(String? name) {
+    current.driverName = _blankToNull(name);
     orders.save(current);
   }
 
