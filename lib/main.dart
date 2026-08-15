@@ -28,6 +28,7 @@ import 'core/db/printer_store.dart';
 import 'core/db/shift_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
 import 'core/export/db_backup.dart';
+import 'core/lan/lan_cart_board.dart';
 import 'core/lan/lan_credential.dart';
 import 'core/lan/lan_wiring.dart';
 import 'core/onboarding/wizard_store.dart';
@@ -95,6 +96,10 @@ Future<void> main() async {
     // disk, and only the till that rang a sale may ever recall, report or book it.
     ownDeviceId: deviceId,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+    // Whether the counter is put on the shop network for a customer-facing display
+    // to show. Off unless a shop has one, and then it is the only thing the fabric
+    // writes while an order is being rung.
+    publishesCart: lanOn ? () => LanCartBoard(settings).publishing : null,
     // A change that committed but could not be announced is a shop whose devices
     // have quietly stopped agreeing. The sale is already safe, so this is the only
     // way support finds out.

@@ -3,6 +3,7 @@ import '../db/order_store.dart';
 import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
 import '../db/table_store.dart';
+import 'lan_cart_board.dart';
 import 'lan_event.dart';
 import 'lan_event_log.dart';
 import 'lan_shift_board.dart';
@@ -147,6 +148,7 @@ class LanApplier {
         LanEventKind.orderClaim => _applyClaim(event),
         LanEventKind.reservationUpsert => _applyReservation(event),
         LanEventKind.shiftLifecycle => _applyShiftNotice(event),
+        LanEventKind.cartDisplay => _applyCart(event),
       };
       if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
@@ -215,6 +217,13 @@ class LanApplier {
     final id = event.payload['product_id'];
     if (id is! int) throw FormatException('availability for ${event.recordUuid}');
     _settings.applyProductAvailable(id, event.payload['available'] == true);
+    return true;
+  }
+
+  /// What another till has on its counter, for a display to show. Kept on a board
+  /// and nothing else: a cart is not an order and must never become one here.
+  bool _applyCart(LanEvent event) {
+    LanCartBoard(_settings).remember(LanCartSnapshot.fromMap(event.payload));
     return true;
   }
 

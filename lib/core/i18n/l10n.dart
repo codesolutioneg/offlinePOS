@@ -871,4 +871,10 @@ const Map<String, String> _ar = {
   'New orders are held until this till is closed too.':
       'الطلبات الجديدة موقوفة حتى يُغلق هذا الجهاز أيضًا.',
   'The day is closed': 'يوم العمل مغلق',
+  'Show this counter on a customer display': 'عرض هذا الكاشير على شاشة العميل',
+  'Sends what is being rung to a display device in the shop. Off unless there is one: it is the only thing shared while an order is on the counter.':
+      'يرسل ما يجري تسجيله إلى شاشة عرض في المتجر. متوقف ما لم توجد شاشة: فهو الشيء الوحيد الذي يُشارَك أثناء تسجيل الطلب.',
+  'Show which till': 'أي كاشير يُعرض',
+  'Whichever is busiest': 'الأكثر نشاطًا',
+  'Welcome': 'أهلًا بك',
 };

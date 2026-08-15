@@ -20,6 +20,7 @@ import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
 import '../core/db/table_store.dart';
+import '../core/lan/lan_cart_board.dart';
 import '../core/lan/lan_claim.dart';
 import '../core/lan/lan_shift_board.dart';
 import '../core/lan/lan_wiring.dart';
@@ -50,6 +51,7 @@ import '../features/admin/roster_screen.dart';
 import '../features/support/audit_log_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/customers/customer_management_screen.dart';
+import '../features/display/customer_display_screen.dart';
 import '../features/kitchen/kitchen_display_screen.dart';
 import '../features/onboarding/wizard_overlay.dart';
 import '../features/orders/open_orders_screen.dart';
@@ -744,19 +746,56 @@ class _PosAppState extends State<PosApp> {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
-        home: widget.config.kdsMode
-            ? _kitchenOnly()
-            : session == null
-                ? LoginScreen(
-                    auth: widget.auth,
-                    users: widget.users,
-                    onSignedIn: _signedIn,
-                    provisioningPin: widget.provisioningPin,
-                  )
-                : _selling(session),
+        home: widget.config.displayMode
+            ? _displayOnly()
+            : widget.config.kdsMode
+                ? _kitchenOnly()
+                : session == null
+                    ? LoginScreen(
+                        auth: widget.auth,
+                        users: widget.users,
+                        onSignedIn: _signedIn,
+                        provisioningPin: widget.provisioningPin,
+                      )
+                    : _selling(session),
       ),
     );
   }
+
+  /// A device that is a customer-facing display and nothing else.
+  ///
+  /// A device mode exactly like the kitchen board, and for the same reasons: no
+  /// sign-in, no shift, nothing it can be typed into, and every line on it arrived
+  /// over the shop LAN from the till at the counter. It holds no session and no
+  /// outbox, so a screen facing the queue cannot ring anything up, and a display
+  /// that loses the network shows its idle panel rather than the last customer's
+  /// shopping.
+  Widget _displayOnly() => Builder(
+        // Builder, so the settings route targets the Navigator inside this MaterialApp.
+        builder: (context) => CustomerDisplayScreen(
+          board: LanCartBoard(widget.settings),
+          formatAmount: PosApp.money,
+          shopName: widget.settings.shopName ?? widget.config.shopName,
+          tills: [for (final p in widget.lan?.peers.all ?? const []) p.deviceId],
+          nameFor: (id) {
+            for (final p in widget.lan?.peers.all ?? const []) {
+              if (p.deviceId == id) return p.name;
+            }
+            return id;
+          },
+          actions: [
+            IconButton(
+              key: const Key('display-network'),
+              // Ungated for the same reason the kitchen board's door is: this device
+              // has no roster, so a manager PIN here would be a lock with no key.
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => _lanScreen(() => setState(() {})))),
+              icon: const Icon(Icons.lan_outlined, size: 18),
+              tooltip: tr(context, 'Shop network'),
+            ),
+          ],
+        ),
+      );
 
   /// A device that is a kitchen screen and nothing else.
   ///

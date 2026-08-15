@@ -9,6 +9,7 @@ import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
 import 'package:offline_pos/core/lan/lan_applier.dart';
+import 'package:offline_pos/core/lan/lan_cart_board.dart';
 import 'package:offline_pos/core/lan/lan_claim.dart';
 import 'package:offline_pos/core/lan/lan_credential.dart';
 import 'package:offline_pos/core/lan/lan_event.dart';
@@ -58,6 +59,7 @@ class TestTill {
       db,
       ownDeviceId: deviceId,
       publish: (kind, uuid, payload) => fabric.publish(kind, uuid, payload),
+      publishesCart: () => LanCartBoard(settings).publishing,
     );
     tables = TableStore(
       db,

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../../domain/order.dart';
+import '../lan/lan_cart_board.dart';
 import '../lan/lan_event.dart';
 import 'database.dart';
 
@@ -26,8 +27,10 @@ class OrderStore {
     this._db, {
     this.ownDeviceId,
     LanPublish? publish,
+    bool Function()? publishesCart,
     void Function(String uuid, Object error)? onAnnounceFailed,
   })  : _publish = publish,
+        _publishesCart = publishesCart,
         _onAnnounceFailed = onAnnounceFailed;
 
   final Db _db;
@@ -41,6 +44,12 @@ class OrderStore {
   /// transaction, no event, no socket.
   final LanPublish? _publish;
 
+  /// Whether this till feeds a customer-facing display. Read at the moment of the
+  /// write rather than held, so switching the display off stops the writes at once.
+  /// Null (and false) is the ordinary till, which then behaves exactly as it did
+  /// before displays existed: a draft announces nothing at all.
+  final bool Function()? _publishesCart;
+
   /// Told when a change was committed but could not be announced. The sale wins,
   /// so this is how a shop finds out its tills stopped replicating.
   final void Function(String uuid, Object error)? _onAnnounceFailed;
@@ -52,13 +61,42 @@ class OrderStore {
   /// two devices claiming the same sale and echoing it back and forth.
   void save(Order order, {bool announce = true}) {
     final publish = _publish;
-    final shares = announce && publish != null && _isShared(order);
-    _write(
-      order,
-      shares
-          ? () => publish(LanEventKind.orderUpsert, order.uuid, order.toMap())
-          : null,
-    );
+    if (!announce || publish == null) {
+      _write(order, null);
+      return;
+    }
+    final shares = _isShared(order);
+    final cart = _cartEventFor(order);
+    if (!shares && cart == null) {
+      _write(order, null);
+      return;
+    }
+    _write(order, () {
+      if (shares) publish(LanEventKind.orderUpsert, order.uuid, order.toMap());
+      if (cart != null) publish(LanEventKind.cartDisplay, ownDeviceId ?? '', cart);
+    });
+  }
+
+  /// The counter as a customer-facing display should show it, or null when this
+  /// till is not feeding one.
+  ///
+  /// A draft is the cart being rung; anything committed means the counter is done
+  /// with it, so the display is cleared rather than left showing a bill somebody
+  /// has already paid to the next customer in the queue.
+  Map<String, dynamic>? _cartEventFor(Order order) {
+    if (ownDeviceId == null || !(_publishesCart?.call() ?? false)) return null;
+    if (order.deviceId != ownDeviceId) return null;
+    final live = order.state == OrderState.draft;
+    return LanCartSnapshot(
+      deviceId: ownDeviceId!,
+      lines: [
+        if (live)
+          for (final l in order.lines)
+            LanCartLine(name: l.name, quantity: l.quantity, total: l.total),
+      ],
+      total: live ? order.total : 0,
+      at: DateTime.now().toUtc(),
+    ).toMap();
   }
 
   /// Whether this order is shared state.

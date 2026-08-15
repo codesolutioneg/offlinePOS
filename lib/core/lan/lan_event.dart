@@ -45,13 +45,26 @@ enum LanEventKind {
   /// told rather than each closing whenever somebody remembers, and deliberately
   /// only ever advisory: a device that hears nothing sells exactly as it always
   /// did, because a shop must not stop trading when a switch dies.
-  shiftLifecycle('shift.lifecycle');
+  shiftLifecycle('shift.lifecycle'),
 
-  const LanEventKind(this.wire);
+  /// What one till has on its counter right now, for a customer-facing display.
+  ///
+  /// The one snapshot kind, and the only thing here that is written while an order
+  /// is being rung, so it is opt-in per till and superseding: the log keeps the
+  /// latest one per device and drops the rest, because a cart from a minute ago is
+  /// of no use to anybody and a shift's worth of taps is not something to keep.
+  cartDisplay('cart.display', snapshot: true);
+
+  const LanEventKind(this.wire, {this.snapshot = false});
 
   /// The name on the wire. Fixed apart from the enum so renaming a Dart constant
   /// cannot silently break a till running the previous build.
   final String wire;
+
+  /// Whether an event of this kind replaces the one before it for the same record.
+  /// True only where the payload is a picture of right now rather than a change to
+  /// be applied in order, so dropping the older one loses nothing.
+  final bool snapshot;
 
   static LanEventKind? fromWire(String wire) {
     for (final kind in LanEventKind.values) {

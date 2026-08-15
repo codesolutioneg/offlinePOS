@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../core/db/schema.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/lan/lan_cart_board.dart';
 import '../../core/lan/lan_credential.dart';
 import '../../core/lan/lan_peer.dart';
 import '../../core/lan/lan_shift_board.dart';
@@ -72,6 +73,7 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
   late bool _enabled = widget.settings.lanEnabled(fallback: widget.buildDefault);
   late bool _allowTakeover = widget.settings.lanAllowTakeover;
   late LanDayClosePolicy _dayClose = LanShiftBoard(widget.settings).policy;
+  late bool _displayCart = LanCartBoard(widget.settings).publishing;
 
   @override
   void dispose() {
@@ -190,6 +192,22 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
               widget.settings.lanAllowTakeover = v;
               widget.onChanged();
               setState(() => _allowTakeover = v);
+            },
+          ),
+          SwitchListTile(
+            key: const Key('lan-display-cart'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Show this counter on a customer display')),
+            subtitle: Text(tr(
+                context,
+                'Sends what is being rung to a display device in the shop. Off '
+                    'unless there is one: it is the only thing shared while an '
+                    'order is on the counter.')),
+            value: _displayCart,
+            onChanged: (v) {
+              LanCartBoard(widget.settings).publishing = v;
+              widget.onChanged();
+              setState(() => _displayCart = v);
             },
           ),
           ListTile(
