@@ -124,17 +124,55 @@ class EscPosCodePage {
       ];
 }
 
-/// The two printing choices the receipt layouts cannot pass in.
+/// How big every character on a slip is set, before any emphasis a line asks for.
+///
+/// A thermal printer multiplies the character cell, it does not resize a font, so the
+/// only honest choices are whole multiples. Taller-only is the useful middle: the
+/// glyphs double in height while the same number of them still fit across the roll,
+/// so nothing about the layout has to move. Doubling the width halves how many
+/// characters a line holds, which [EscPos] accounts for rather than letting the
+/// amount column run off the paper.
+class EscPosTextScale {
+  const EscPosTextScale({required this.name, this.width = 1, this.height = 1});
+
+  final String name;
+
+  /// 1 to 8, the multipliers `GS ! n` carries in its two nibbles.
+  final int width;
+  final int height;
+
+  bool get isNormal => width == 1 && height == 1;
+
+  static const EscPosTextScale normal = EscPosTextScale(name: 'normal');
+  static const EscPosTextScale tall =
+      EscPosTextScale(name: 'tall', height: 2);
+  static const EscPosTextScale large =
+      EscPosTextScale(name: 'large', width: 2, height: 2);
+
+  /// The profiles a manager can pick between, by the key stored on the device.
+  static const Map<String, EscPosTextScale> byKey = {
+    'normal': normal,
+    'tall': tall,
+    'large': large,
+  };
+}
+
+/// The printing choices the receipt layouts cannot pass in.
 ///
 /// [ReceiptBuilder] and [KitchenTicketBuilder] construct an [EscPos] deep inside a
 /// layout with nothing but a column count, and the printing layer is deliberately
-/// free of the database, so the shop's table and its Arabic preference are published
-/// here once by [SettingsStore] instead of being threaded through every builder.
+/// free of the database, so the shop's table, its Arabic preference and how big it
+/// prints are published here once by [SettingsStore] instead of being threaded
+/// through every builder.
 class EscPosPrintProfile {
-  EscPosPrintProfile({EscPosCodePage? codePage, this.rasterUnmappable = true})
-      : codePage = codePage ?? EscPosCodePage.windows1252;
+  EscPosPrintProfile({
+    EscPosCodePage? codePage,
+    this.rasterUnmappable = true,
+    EscPosTextScale? textScale,
+  })  : codePage = codePage ?? EscPosCodePage.windows1252,
+        textScale = textScale ?? EscPosTextScale.normal;
 
-  /// Replaced whole rather than mutated, so a reader either sees the old pair or
+  /// Replaced whole rather than mutated, so a reader either sees the old set or
   /// the new one and never a half-applied change.
   static EscPosPrintProfile shared = EscPosPrintProfile();
 
@@ -144,6 +182,9 @@ class EscPosPrintProfile {
   /// On unless a shop turns it off: it costs a Latin receipt nothing, because no
   /// line of one has a rune the table is missing.
   final bool rasterUnmappable;
+
+  /// The base character size of the whole document.
+  final EscPosTextScale textScale;
 }
 
 /// A line to be rendered, described by everything that changes its pixels.
@@ -160,6 +201,8 @@ class RasterRequest {
     this.doubleWidth = false,
     this.doubleHeight = false,
     this.align = EscPosAlign.left,
+    this.widthScale = 1,
+    this.heightScale = 1,
   });
 
   final String text;
@@ -169,9 +212,20 @@ class RasterRequest {
   final int dots;
 
   final bool bold;
+
+  /// The emphasis THIS line asked for, on top of the document's base size.
   final bool doubleWidth;
   final bool doubleHeight;
   final EscPosAlign align;
+
+  /// The document's base character size (see [EscPosTextScale]), which a rendered
+  /// line has to match or the receipt would change size where it switches to dots.
+  final int widthScale;
+  final int heightScale;
+
+  /// How many times over the printer would draw this line's cell, emphasis included.
+  int get totalWidthScale => widthScale * (doubleWidth ? 2 : 1);
+  int get totalHeightScale => heightScale * (doubleHeight ? 2 : 1);
 
   @override
   bool operator ==(Object other) =>
@@ -182,11 +236,13 @@ class RasterRequest {
       other.bold == bold &&
       other.doubleWidth == doubleWidth &&
       other.doubleHeight == doubleHeight &&
-      other.align == align;
+      other.align == align &&
+      other.widthScale == widthScale &&
+      other.heightScale == heightScale;
 
   @override
-  int get hashCode =>
-      Object.hash(text, right, dots, bold, doubleWidth, doubleHeight, align);
+  int get hashCode => Object.hash(text, right, dots, bold, doubleWidth,
+      doubleHeight, align, widthScale, heightScale);
 }
 
 /// A rendered line: one bit per dot, rows top to bottom, most significant bit
@@ -303,19 +359,29 @@ class EscPosDeferredDocs {
 /// adds nothing to the supply chain.
 class EscPos {
   EscPos({
-    this.columns = 42,
+    int columns = 42,
     EscPosCodePage? codePage,
     bool? rasterUnmappable,
+    EscPosTextScale? textScale,
     int? dotsPerLine,
   })  : codePage = codePage ?? EscPosPrintProfile.shared.codePage,
         rasterUnmappable =
             rasterUnmappable ?? EscPosPrintProfile.shared.rasterUnmappable,
+        textScale = textScale ?? EscPosPrintProfile.shared.textScale,
+        // Set wider, a character eats more of the roll, so the layout gets fewer of
+        // them. The paper did not change, so the dots did not either.
+        columns = columns ~/
+            (textScale ?? EscPosPrintProfile.shared.textScale).width,
         // Rounded down to whole bytes because that is the unit GS v 0 counts a
         // raster row in.
         dotsPerLine = (dotsPerLine ?? columns * dotsPerColumn) & ~7;
 
-  /// Characters per line. 42 for 80mm paper, 32 for 58mm.
+  /// Characters per line at the current size. 42 for 80mm paper, 32 for 58mm, and
+  /// half of either when the shop prints double width.
   final int columns;
+
+  /// The base character size every line of this document is set at.
+  final EscPosTextScale textScale;
 
   /// A shop selling in a script this cannot carry changes the table here and on
   /// the printer together; the two have to agree or the paper is gibberish.
@@ -360,6 +426,10 @@ class EscPos {
     _doubleWidth = false;
     _doubleHeight = false;
     _align = EscPosAlign.left;
+    // ESC @ leaves the printer at one by one, so a shop printing bigger says so
+    // once, here, and every line after it inherits it. A till on the normal size
+    // emits nothing and its receipts are byte for byte what they always were.
+    if (!textScale.isNormal) _sizeCommand();
     return this;
   }
 
@@ -375,15 +445,34 @@ class EscPos {
     return this;
   }
 
-  /// Double width and/or height. ESC ! n with bits 4 (height) and 5 (width).
+  /// Emphasise this line over the document's base size, or with no arguments go
+  /// back to it. Composes rather than replaces: a shop printing everything double
+  /// height and a TOTAL asking for double height again is one instruction, not two
+  /// fighting each other.
   EscPos size({bool doubleWidth = false, bool doubleHeight = false}) {
-    var n = 0;
-    if (doubleHeight) n |= 0x10;
-    if (doubleWidth) n |= 0x20;
-    _out.add([_esc, 0x21, n]);
     _doubleWidth = doubleWidth;
     _doubleHeight = doubleHeight;
+    _sizeCommand();
     return this;
+  }
+
+  /// The character-size instruction for the current base plus emphasis.
+  ///
+  /// On the normal base this is the `ESC ! n` this file has always sent, so nothing
+  /// about a default receipt changes. A scaled document needs multipliers `ESC !`
+  /// has no room for, so it speaks `GS ! n` instead: one nibble each for width and
+  /// height, both clamped to what the command can carry.
+  void _sizeCommand() {
+    if (textScale.isNormal) {
+      var n = 0;
+      if (_doubleHeight) n |= 0x10;
+      if (_doubleWidth) n |= 0x20;
+      _out.add([_esc, 0x21, n]); // ESC ! n
+      return;
+    }
+    final w = (textScale.width * (_doubleWidth ? 2 : 1)).clamp(1, 8);
+    final h = (textScale.height * (_doubleHeight ? 2 : 1)).clamp(1, 8);
+    _out.add([_gs, 0x21, ((w - 1) << 4) | (h - 1)]); // GS ! n
   }
 
   /// A fragment, with no line end. Never rendered: a band replaces a whole line, and
@@ -426,6 +515,8 @@ class EscPos {
         doubleWidth: _doubleWidth,
         doubleHeight: _doubleHeight,
         align: rasterAlign ?? _align,
+        widthScale: textScale.width,
+        heightScale: textScale.height,
       ),
     ));
     return this;

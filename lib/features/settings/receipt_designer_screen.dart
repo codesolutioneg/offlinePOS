@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/printing/escpos.dart';
 import '../../core/printing/printer_logo.dart';
 
 /// Lets a manager pick what shows up on the printed customer receipt: a
@@ -65,6 +66,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
   late bool _showItemPrice;
   late String _dividerStyle;
   late int _columns;
+  late String _fontProfile;
   late bool _printLogo;
   late bool _logoRaster;
   final TextEditingController _logoPath = TextEditingController();
@@ -92,6 +94,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     _dividerStyle = _dividerStyles.contains(style) ? style : 'line';
     // The same paper width the printers screen sets, so the two never disagree.
     _columns = widget.settings.receiptColumns == 32 ? 32 : 42;
+    _fontProfile = widget.settings.receiptFontProfile;
     _printLogo = widget.settings.receiptPrintLogo;
     _logoRaster = widget.settings.receiptLogoRaster;
     // The preview reads the controllers' text directly; without a listener it
@@ -127,6 +130,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     widget.settings.receiptShowItemPrice = _showItemPrice;
     widget.settings.receiptDividerStyle = _dividerStyle;
     widget.settings.receiptColumns = _columns;
+    widget.settings.receiptFontProfile = _fontProfile;
     widget.settings.receiptPrintLogo = _printLogo;
     widget.settings.receiptLogoRaster = _logoRaster;
     widget.onChanged();
@@ -280,14 +284,22 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
   /// screen's own state, not the printer pipeline: a manager sees the effect of
   /// every toggle immediately instead of only after a test print.
   Widget _previewPanel(BuildContext context) {
-    const mono = TextStyle(fontFamily: 'monospace', fontSize: 12, height: 1.5, color: Colors.black87);
-    final columns = _columns;
+    // The mock is set at the size the paper would be: a wider character fits fewer
+    // of them on the roll, and a taller one just reads bigger.
+    final scale = EscPosTextScale.byKey[_fontProfile] ?? EscPosTextScale.normal;
+    final mono = TextStyle(
+        fontFamily: 'monospace',
+        fontSize: 12.0 * scale.height,
+        height: 1.5,
+        color: Colors.black87);
+    final columns = _columns ~/ scale.width;
     final shopName = widget.settings.shopName?.trim();
     final header = _header.text.trim();
     final footer = _footer.text.trim();
-    // Roughly the width of [columns] monospace characters, so the 58 mm choice
-    // visibly narrows the mock the way it narrows the real roll.
-    final width = columns * 7.3 + 32;
+    // Roughly the width of the roll in monospace characters, so the 58 mm choice
+    // visibly narrows the mock the way it narrows the real roll. The character
+    // count already shrank with the size, so the paper itself must not.
+    final width = columns * scale.width * 7.3 + 32;
 
     return Container(
       key: const Key('receipt-preview'),
@@ -439,6 +451,36 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
               onSelectionChanged: (s) => setState(() => _columns = s.first),
             ),
           ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Text(tr(context, 'Text size'), style: const TextStyle(fontWeight: FontWeight.w600)),
+            const Spacer(),
+            SegmentedButton<String>(
+              segments: [
+                ButtonSegment(
+                    value: 'normal',
+                    label: Text(tr(context, 'Normal'), key: const Key('t-font-normal'))),
+                ButtonSegment(
+                    value: 'tall',
+                    label: Text(tr(context, 'Tall'), key: const Key('t-font-tall'))),
+                ButtonSegment(
+                    value: 'large',
+                    label: Text(tr(context, 'Large'), key: const Key('t-font-large'))),
+              ],
+              selected: {_fontProfile},
+              onSelectionChanged: (s) => setState(() => _fontProfile = s.first),
+            ),
+          ]),
+          if (_fontProfile == 'large')
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                tr(context,
+                    'Bigger text prints fewer characters on a line, so the layout follows the choice.'),
+                key: const Key('font-large-note'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
           const SizedBox(height: 12),
           Row(children: [
             Text(tr(context, 'Divider style'), style: const TextStyle(fontWeight: FontWeight.w600)),

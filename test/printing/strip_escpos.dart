@@ -23,7 +23,7 @@ String strippedText(List<int> bytes) {
       final band = _bandAt(bytes, i);
       // GS v 0 carries a rendered line: skipping only the header would let a
       // megabyte of pixels through as if it were printed text.
-      i += band?.length ?? 4; // GS V B n otherwise
+      i += band?.length ?? _gsLength(bytes, i);
       continue;
     }
     out.add(b);
@@ -31,6 +31,12 @@ String strippedText(List<int> bytes) {
   }
   return String.fromCharCodes(out);
 }
+
+/// How long a GS sequence is: `GS ! n` sets the character size in three bytes,
+/// everything else this app emits (GS V B n) takes four. Getting this wrong leaks a
+/// parameter byte into the text and inflates every width assertion.
+int _gsLength(List<int> bytes, int i) =>
+    i + 1 < bytes.length && bytes[i + 1] == 0x21 ? 3 : 4;
 
 /// One rendered line found in a document.
 class PrintedBand {
@@ -125,7 +131,7 @@ String documentShape(List<int> bytes) {
       continue;
     }
     if (b == 0x1d) {
-      i += 4;
+      i += _gsLength(bytes, i);
       continue;
     }
     text.add(b);
