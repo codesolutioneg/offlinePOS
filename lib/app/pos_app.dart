@@ -821,6 +821,9 @@ class _PosAppState extends State<PosApp> {
               // the next order can pick them instead of retyping them.
               onAddCustomer: ({required name, phone, address}) =>
                   widget.customers.add(name: name, phone: phone, address: address),
+              // What this cashier's role may open. Read per build, so a manager
+              // narrowing it takes effect on the next order rather than at restart.
+              allowedOrderTypes: _allowedOrderTypes,
               // Dividers are floor decoration, never a table an order sits at.
               tables: () => widget.tables
                   .all()
@@ -1300,9 +1303,15 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
+  /// The kinds of sale the signed-in role may open. Unrestricted until a manager
+  /// says otherwise, and a manager themselves is never restricted.
+  Set<OrderType> get _allowedOrderTypes =>
+      widget.settings.orderTypesFor(widget.auth.signedIn?.role ?? 'cashier');
+
   void _openFloor(BuildContext context, PosSession session) {
     final occ = _floorOccupancy(session);
     final occupied = occ.occupied;
+    final allowed = _allowedOrderTypes;
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (floorContext) => TableFloorScreen(
         store: widget.tables,
@@ -1310,15 +1319,21 @@ class _PosAppState extends State<PosApp> {
         occupiedInfo: occ.info,
         formatAmount: PosApp.money,
         // The two table-less ways to start an order, straight from the floor home.
-        // Each starts a fresh order of that type and drops to the order screen.
-        onTakeaway: () {
-          setState(() => session.startFresh(OrderType.takeaway));
-          Navigator.of(floorContext).pop();
-        },
-        onDelivery: () {
-          setState(() => session.startFresh(OrderType.delivery));
-          Navigator.of(floorContext).pop();
-        },
+        // Each starts a fresh order of that type and drops to the order screen. A
+        // type this role may not ring has no button rather than a button that
+        // refuses.
+        onTakeaway: !allowed.contains(OrderType.takeaway)
+            ? null
+            : () {
+                setState(() => session.startFresh(OrderType.takeaway));
+                Navigator.of(floorContext).pop();
+              },
+        onDelivery: !allowed.contains(OrderType.delivery)
+            ? null
+            : () {
+                setState(() => session.startFresh(OrderType.delivery));
+                Navigator.of(floorContext).pop();
+              },
         onOpenTable: (t) {
           // Tapping the table the current order is already seated at just returns
           // to it rather than parking it and starting a duplicate.
@@ -1341,6 +1356,17 @@ class _PosAppState extends State<PosApp> {
               ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
                 content: Text(tr(floorContext,
                     'This table is open on another device. Settle it there.')),
+              ));
+              return;
+            }
+            // Seating a table opens a dine-in, so a role that does not ring them is
+            // told plainly instead of landing on a sale it may not have started.
+            // Recalling a tab that is already open is untouched by this: settling
+            // somebody else's table is not opening one.
+            if (!allowed.contains(OrderType.dineIn)) {
+              ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
+                content: Text(
+                    tr(floorContext, 'This role does not open dine-in orders.')),
               ));
               return;
             }

@@ -849,4 +849,9 @@ const Map<String, String> _ar = {
   'Price for one': 'سعر الوحدة',
   'Anything added to the item keeps its own price':
       'الإضافات على الصنف تحتفظ بأسعارها',
+  'Order types this role may open': 'أنواع الطلبات المسموحة لهذا الدور',
+  'A tab already open on a table can always be settled.':
+      'الطلب المفتوح على طاولة يمكن دائمًا تحصيله.',
+  'This role does not open dine-in orders.':
+      'هذا الدور لا يفتح طلبات تناول في المحل.',
 };

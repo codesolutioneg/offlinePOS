@@ -59,6 +59,11 @@ class SellScreen extends StatefulWidget {
     this.onNewOrder,
     this.onResendToKitchen,
     this.onPrintBill,
+    this.allowedOrderTypes = const {
+      OrderType.dineIn,
+      OrderType.takeaway,
+      OrderType.delivery,
+    },
   });
 
   final PosSession session;
@@ -184,6 +189,11 @@ class SellScreen extends StatefulWidget {
   /// Show the home floor plan to start the next order (tap a table, or the
   /// takeaway/delivery buttons). Wired by the shell, which owns the floor screen.
   final VoidCallback? onNewOrder;
+
+  /// The kinds of sale the signed-in role may open. Everything by default; a shop
+  /// that runs a delivery desk or a counter-only till narrows it per role, and the
+  /// chips for the rest are simply not offered.
+  final Set<OrderType> allowedOrderTypes;
 
   @override
   State<SellScreen> createState() => _SellScreenState();
@@ -2103,7 +2113,11 @@ class _SellScreenState extends State<SellScreen> {
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             children: [
-              for (final t in OrderType.values) ...[
+              // Only the types this role rings, plus whatever the order in hand
+              // already is: a tab handed over from another till has to stay
+              // settleable even when this cashier could not have opened it.
+              for (final t in OrderType.values)
+                if (widget.allowedOrderTypes.contains(t) || s.current.type == t) ...[
                 ChoiceChip(
                   key: Key('order-type-${t.name.toLowerCase()}'),
                   label: Text(tr(context, t.label)),

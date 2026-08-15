@@ -45,6 +45,7 @@ class SettingsStore {
   static const _favourites = 'favourite_products';
   static const _gridColumns = 'grid_columns';
   static const _rolePermissions = 'role_permissions';
+  static const _roleOrderTypes = 'role_order_types';
   static const _codePage = 'receipt_code_page';
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
@@ -701,4 +702,58 @@ class SettingsStore {
 
   /// Whether [role] may do [p] without a manager PIN.
   bool roleCan(String role, Permission p) => permissionsFor(role).contains(p);
+
+  // ── which sales a role may open ──────────────────────────────────
+  // A delivery desk that cannot seat a table, or a counter that does not take
+  // delivery orders, is a shop decision rather than a permission: there is no
+  // manager PIN that makes sense as an override, so a type a role may not ring
+  // simply is not offered.
+
+  /// The order types [role] may start. Everything, until a manager narrows it: a
+  /// till that has never seen this screen behaves exactly as it did before.
+  /// A manager is never restricted, in line with every other role rule here.
+  Set<OrderType> orderTypesFor(String role) {
+    if (role == 'manager') return OrderType.values.toSet();
+    final raw = getString(_roleOrderTypes);
+    if (raw == null) return OrderType.values.toSet();
+    try {
+      final map = jsonDecode(raw) as Map;
+      if (!map.containsKey(role)) return OrderType.values.toSet();
+      final names = (map[role] as List).map((e) => e.toString()).toSet();
+      final allowed = OrderType.values.where((t) => names.contains(t.name)).toSet();
+      // A role that may ring nothing could take no money at all, so an empty set
+      // reads as unrestricted rather than as a till nobody can sell on.
+      return allowed.isEmpty ? OrderType.values.toSet() : allowed;
+    } catch (_) {
+      return OrderType.values.toSet();
+    }
+  }
+
+  bool roleCanRing(String role, OrderType type) =>
+      orderTypesFor(role).contains(type);
+
+  /// Allow or refuse one order type for [role]. A no-op for 'manager', and for
+  /// taking away the last type a role has left.
+  void setRoleOrderType(String role, OrderType type, bool allowed) {
+    if (role == 'manager') return;
+    final current = orderTypesFor(role).toSet();
+    if (allowed) {
+      current.add(type);
+    } else {
+      if (current.length <= 1) return;
+      current.remove(type);
+    }
+    final map = <String, List<String>>{};
+    final raw = getString(_roleOrderTypes);
+    if (raw != null) {
+      try {
+        (jsonDecode(raw) as Map).forEach((k, v) =>
+            map[k as String] = (v as List).map((e) => e.toString()).toList());
+      } catch (_) {
+        // Unreadable saved value: replaced by what is being set now.
+      }
+    }
+    map[role] = current.map((t) => t.name).toList();
+    setString(_roleOrderTypes, jsonEncode(map));
+  }
 }
