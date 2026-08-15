@@ -21,6 +21,7 @@ import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
 import '../core/db/table_store.dart';
 import '../core/lan/lan_claim.dart';
+import '../core/lan/lan_shift_board.dart';
 import '../core/lan/lan_wiring.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
@@ -1321,6 +1322,10 @@ class _PosAppState extends State<PosApp> {
     final occupied = occ.occupied;
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (floorContext) => TableFloorScreen(
+        // Read as the floor is built, so a close that arrives over the fabric shows
+        // the next time a waiter looks at the plan rather than at the next restart.
+        dayNotice: _dayCloseNotice(floorContext)?.text,
+        blockNewOrders: _dayCloseNotice(floorContext)?.blocking ?? false,
         store: widget.tables,
         occupiedLabels: occupied,
         occupiedInfo: occ.info,
@@ -1388,6 +1393,42 @@ class _PosAppState extends State<PosApp> {
         },
       ),
     ));
+  }
+
+  // ── the shop's trading day, across devices ───────────────────────
+
+  /// Tell the other devices this till has closed the day.
+  ///
+  /// Best effort and never in the way: the shift is already closed and the drawer
+  /// already counted when this runs, so a fabric that is off, a switch that is out
+  /// or a peer that is asleep changes nothing about the cash-up.
+  void _announceDayClose(PosSession session) => widget.lan?.announceDayClose(
+        businessDate: BusinessDay.of(DateTime.now().toUtc()).key,
+        cashierId: session.cashierId,
+      );
+
+  /// What another till has said about today, and whether this one should stop
+  /// starting new work over it.
+  ///
+  /// Null unless all of it is true: this device is on the fabric, the shop asked for
+  /// the coordination, another till has closed THIS trading day, and this one still
+  /// has a shift open. A device that hears nothing degrades to exactly the behaviour
+  /// it had before any of this existed, which is the rule the whole feature is bound
+  /// by: the shop must not stop trading because a switch died.
+  ({String text, bool blocking})? _dayCloseNotice(BuildContext context) {
+    if (widget.lan == null) return null;
+    final board = LanShiftBoard(widget.settings);
+    final policy = board.policy;
+    if (policy == LanDayClosePolicy.off) return null;
+    if (widget.shifts.currentOpenShift() == null) return null;
+    final notice = board.closedOn(BusinessDay.of(DateTime.now().toUtc()).key);
+    if (notice == null) return null;
+    final blocking = policy == LanDayClosePolicy.block;
+    return (
+      text: '${tr(context, 'The day was closed on')} ${notice.deviceName}. '
+          '${tr(context, blocking ? 'New orders are held until this till is closed too.' : 'Close this till too.')}',
+      blocking: blocking,
+    );
   }
 
   /// Bring a parked tab back to the counter, asking whose it is first when the shop
@@ -2074,6 +2115,9 @@ class _PosAppState extends State<PosApp> {
         // batch. Returns a message for the cashier: how it went, or that the
         // orders are safe and will sync once the connection is back.
         onCloseSync: () async {
+          // The drawer is counted and the shift is already closed, so telling the
+          // other devices costs the cash-up nothing and cannot delay it.
+          _announceDayClose(session);
           // Sweep any paid sale that never reached the outbox back in first, so the
           // count below reflects everything owed to the server, not just what
           // happened to be queued.

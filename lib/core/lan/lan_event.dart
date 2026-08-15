@@ -1,10 +1,12 @@
 /// What one till tells the others it just did.
 ///
-/// The first wave carries exactly three things, because those are the ones a shop
-/// notices are missing the moment it runs a second device: a parked or paid order,
-/// where a ticket is in the kitchen, and the floor plan a manager laid out. Nothing
-/// here invents a new record type, so every event applies through a store that
-/// already exists and every screen keeps reading the same local database.
+/// The first three are what a shop notices are missing the moment it runs a second
+/// device: a parked or paid order, where a ticket is in the kitchen, and the floor
+/// plan a manager laid out. The rest are the shop's own facts, which turn out to
+/// behave the same way: an item off the menu, a tab changing hands, a table booked
+/// ahead, a day closed. Nothing here invents a record type, so every event applies
+/// through a store that already exists and every screen keeps reading the same local
+/// database.
 enum LanEventKind {
   /// A held or paid order, the whole payload. Drafts are deliberately absent: an
   /// order still being rung is not shared state, and replicating every tap would
@@ -37,7 +39,13 @@ enum LanEventKind {
   /// A table booked ahead, changed or called off. Shared for the same reason the
   /// floor plan is: a booking taken at the counter has to reach the handheld the
   /// waiter is holding, or two people promise one table.
-  reservationUpsert('reservation.upsert');
+  reservationUpsert('reservation.upsert'),
+
+  /// A till saying its trading day is over. Carried so the other devices can be
+  /// told rather than each closing whenever somebody remembers, and deliberately
+  /// only ever advisory: a device that hears nothing sells exactly as it always
+  /// did, because a shop must not stop trading when a switch dies.
+  shiftLifecycle('shift.lifecycle');
 
   const LanEventKind(this.wire);
 

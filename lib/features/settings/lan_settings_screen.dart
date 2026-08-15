@@ -6,6 +6,7 @@ import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/lan/lan_credential.dart';
 import '../../core/lan/lan_peer.dart';
+import '../../core/lan/lan_shift_board.dart';
 import '../../core/lan/lan_wiring.dart';
 
 /// What a device with no fabric has to report: nothing. A real answer rather than a
@@ -70,6 +71,7 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
       TextEditingController(text: widget.settings.lanShopKey ?? '');
   late bool _enabled = widget.settings.lanEnabled(fallback: widget.buildDefault);
   late bool _allowTakeover = widget.settings.lanAllowTakeover;
+  late LanDayClosePolicy _dayClose = LanShiftBoard(widget.settings).policy;
 
   @override
   void dispose() {
@@ -189,6 +191,38 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
               widget.onChanged();
               setState(() => _allowTakeover = v);
             },
+          ),
+          ListTile(
+            key: const Key('lan-day-close-policy'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'When another till closes the day')),
+            subtitle: Text(tr(
+                context,
+                'A device that hears nothing sells exactly as it always did, so '
+                    'this never stops the shop when the network is down.')),
+            trailing: DropdownButton<LanDayClosePolicy>(
+              value: _dayClose,
+              onChanged: (p) {
+                if (p == null) return;
+                LanShiftBoard(widget.settings).policy = p;
+                widget.onChanged();
+                setState(() => _dayClose = p);
+              },
+              items: [
+                DropdownMenuItem(
+                  value: LanDayClosePolicy.off,
+                  child: Text(tr(context, 'Say nothing')),
+                ),
+                DropdownMenuItem(
+                  value: LanDayClosePolicy.warn,
+                  child: Text(tr(context, 'Warn the others')),
+                ),
+                DropdownMenuItem(
+                  value: LanDayClosePolicy.block,
+                  child: Text(tr(context, 'Hold new orders')),
+                ),
+              ],
+            ),
           ),
           const Divider(height: 24),
           TextField(

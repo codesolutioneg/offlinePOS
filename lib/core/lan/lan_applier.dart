@@ -5,6 +5,7 @@ import '../db/settings_store.dart';
 import '../db/table_store.dart';
 import 'lan_event.dart';
 import 'lan_event_log.dart';
+import 'lan_shift_board.dart';
 import 'lan_peer.dart';
 
 /// What became of one event, which is what decides whether the peer's cursor may
@@ -145,6 +146,7 @@ class LanApplier {
         LanEventKind.productAvailability => _applyAvailability(event),
         LanEventKind.orderClaim => _applyClaim(event),
         LanEventKind.reservationUpsert => _applyReservation(event),
+        LanEventKind.shiftLifecycle => _applyShiftNotice(event),
       };
       if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
@@ -213,6 +215,14 @@ class LanApplier {
     final id = event.payload['product_id'];
     if (id is! int) throw FormatException('availability for ${event.recordUuid}');
     _settings.applyProductAvailable(id, event.payload['available'] == true);
+    return true;
+  }
+
+  /// A till telling the shop its day is over. Written to the board the floor reads,
+  /// never acted on here: what a device does about it is a policy the device owns,
+  /// and applying an event must not be able to stop anybody selling.
+  bool _applyShiftNotice(LanEvent event) {
+    LanShiftBoard(_settings).remember(LanShiftNotice.fromMap(event.payload));
     return true;
   }
 

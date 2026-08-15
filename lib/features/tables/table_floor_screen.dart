@@ -7,6 +7,7 @@ import '../../core/db/settings_store.dart';
 import '../../core/db/table_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/widgets/feedback.dart';
 import 'reservations_screen.dart';
 
 /// The floor plan: tables drawn where the shop placed them, tapped to start or
@@ -33,7 +34,19 @@ class TableFloorScreen extends StatefulWidget {
     this.onTransferTables,
     this.reservations,
     this.nowFn = DateTime.now,
+    this.dayNotice,
+    this.blockNewOrders = false,
   });
+
+  /// What another till has said about the trading day, shown as a strip above the
+  /// plan. Null on a one-till shop and whenever nothing has been said, which is the
+  /// ordinary case.
+  final String? dayNotice;
+
+  /// Whether starting NEW work is held while [dayNotice] stands. Never stops a tab
+  /// that is already open from being opened and settled: food that has been ordered
+  /// has to be payable whatever any policy says.
+  final bool blockNewOrders;
 
   /// The book, so a table with guests due shortly says so on the plan rather than
   /// only in a list nobody has open. Null leaves the floor exactly as it was.
@@ -488,6 +501,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           : null,
       body: Column(
         children: [
+          if (widget.dayNotice case final notice?) _dayNoticeStrip(notice),
           _sectionStrip(),
           if (widget.pickMode) _legend(),
           const Divider(height: 1),
@@ -512,7 +526,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                     Expanded(
                       child: FilledButton.icon(
                         key: const Key('floor-takeaway'),
-                        onPressed: widget.onTakeaway,
+                        onPressed: () {
+                          if (!_newWorkHeld()) widget.onTakeaway!();
+                        },
                         icon: const Icon(Icons.takeout_dining),
                         label: Text(tr(context, 'Takeaway')),
                       ),
@@ -523,7 +539,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                     Expanded(
                       child: FilledButton.icon(
                         key: const Key('floor-delivery'),
-                        onPressed: widget.onDelivery,
+                        onPressed: () {
+                          if (!_newWorkHeld()) widget.onDelivery!();
+                        },
                         icon: const Icon(Icons.delivery_dining),
                         label: Text(tr(context, 'Delivery')),
                       ),
@@ -534,6 +552,32 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         ],
       ),
     );
+  }
+
+  /// The day closed somewhere else in the shop, said on the screen where new work
+  /// starts rather than in a dialog that gets dismissed unread.
+  Widget _dayNoticeStrip(String notice) => Material(
+        key: const Key('floor-day-notice'),
+        color: widget.blockNewOrders ? AppColors.error : AppColors.warning,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(children: [
+            const Icon(Icons.nightlight_round, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text(notice, style: const TextStyle(color: Colors.white))),
+          ]),
+        ),
+      );
+
+  /// Whether starting something new is held right now, telling the cashier why when
+  /// it is. A tab already open is never held: it is settled through the tile, which
+  /// does not come through here.
+  bool _newWorkHeld() {
+    if (!widget.blockNewOrders) return false;
+    showToast(context, widget.dayNotice ?? tr(context, 'The day is closed'),
+        kind: ToastKind.error);
+    return true;
   }
 
   /// The floor's own settings and the actions that go with them, on the screen a
@@ -802,7 +846,12 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       if (isDivider) return tile;
       return InkWell(
         key: Key('table-tile-${t.id}'),
-        onTap: () => widget.onOpenTable(t),
+        // A free table is new work and can be held; an occupied one is a bill
+        // somebody is waiting to pay and never is.
+        onTap: () {
+          if (!occupied && _newWorkHeld()) return;
+          widget.onOpenTable(t);
+        },
         child: tile,
       );
     }

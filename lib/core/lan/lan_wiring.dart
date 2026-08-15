@@ -16,6 +16,7 @@ import 'lan_credential.dart';
 import 'lan_event_log.dart';
 import 'lan_fabric.dart';
 import 'lan_peer.dart';
+import 'lan_shift_board.dart';
 import 'lan_transport.dart';
 
 /// Everything the shop network screen reports about this device.
@@ -241,6 +242,33 @@ class LanNode {
 
   /// One catch-up pass now, for the Sync now button on the settings screen.
   Future<void> pass() => _fabric.pass();
+
+  /// Tell the shop this till has closed its trading day.
+  ///
+  /// Advisory and one-way: nothing waits for an answer, nothing is retried beyond
+  /// the ordinary catch-up, and a device that hears it decides for itself what to
+  /// do. Called after the drawer is counted and the shift is already closed, so a
+  /// fabric that is not there costs a log line and nothing else.
+  /// Keyed on the device rather than on the shift, because what the other tills act
+  /// on is "that till is done for today", one fact per device: a second close
+  /// replaces the first instead of leaving two notices to disagree.
+  String get dayCloseRecord => 'day-close-$deviceId';
+
+  void announceDayClose({
+    required String businessDate,
+    String? cashierId,
+  }) =>
+      publish(
+        LanEventKind.shiftLifecycle,
+        dayCloseRecord,
+        LanShiftNotice(
+          deviceId: deviceId,
+          deviceName: deviceName,
+          businessDate: businessDate,
+          at: DateTime.now().toUtc(),
+          cashierId: cashierId,
+        ).toMap(),
+      );
 
   /// Take a tab another till has parked, with that till's agreement.
   ///

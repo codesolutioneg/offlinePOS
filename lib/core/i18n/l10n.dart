@@ -860,4 +860,15 @@ const Map<String, String> _ar = {
   'Cancel booking': 'إلغاء الحجز',
   'Booked': 'محجوز',
   'Cancelled': 'ملغي',
+  'When another till closes the day': 'عند إغلاق جهاز آخر ليوم العمل',
+  'A device that hears nothing sells exactly as it always did, so this never stops the shop when the network is down.':
+      'الجهاز الذي لا يصله شيء يبيع كما كان تمامًا، فلا يتوقف المتجر أبدًا عند انقطاع الشبكة.',
+  'Say nothing': 'بدون تنبيه',
+  'Warn the others': 'تنبيه الأجهزة الأخرى',
+  'Hold new orders': 'إيقاف الطلبات الجديدة',
+  'The day was closed on': 'تم إغلاق يوم العمل على',
+  'Close this till too.': 'أغلق هذا الجهاز أيضًا.',
+  'New orders are held until this till is closed too.':
+      'الطلبات الجديدة موقوفة حتى يُغلق هذا الجهاز أيضًا.',
+  'The day is closed': 'يوم العمل مغلق',
 };

@@ -31,6 +31,7 @@ exists, and every screen keeps reading the local database.
 | `product.availability` | One product marked sold out or put back on | Running out is a fact about the shop, not about a sale. The till nobody shouted at has to refuse the same item |
 | `order.claim` | A parked tab changing hands, sent by the till giving it up | The one ownership change in the fabric. Only the current owner sends it, and it sends it as part of letting go, so the tab still has exactly one owner at every instant |
 | `reservation.upsert` | A table booked ahead, changed or called off | Shared for the same reason the floor plan is: a booking taken at the counter has to reach the handheld, or two people promise one table |
+| `shift.lifecycle` | A till saying its trading day is over | So a shop closes as a shop. Strictly advisory: what a device does about it is that device's own policy, and hearing nothing means behaving exactly as before |
 
 Replication makes a device show more, never own more. `OrderStore` splits its reads and
 the split is load-bearing:
@@ -200,6 +201,30 @@ encrypted settings store, and copied to the other devices from the shop network 
 unpairs every other device until each is given the new one, which is the right move
 after a key has been handed to someone who should not have it and the wrong move by
 accident, so it asks first.
+
+## Closing the day as a shop
+
+A `shift.lifecycle` notice says one till has counted its drawer for a trading day. It
+is sent after the close, never before, so the cash-up cannot be delayed by it, and
+every device decides for itself what to do with it (**Shop network, When another till
+closes the day**):
+
+| Policy | What the other tills do |
+|---|---|
+| Say nothing (default) | Nothing. Each till closes when it likes, as before this existed |
+| Warn the others | A strip on the floor plan naming the device that closed |
+| Hold new orders | The same strip, and the floor refuses to START anything: no takeaway, no delivery, no free table |
+
+Holding never reaches a tab that is already open. Food that has been ordered has to be
+payable whatever a policy says, so an occupied table opens and settles normally under
+every policy.
+
+The notice is scoped to the trading day it closed, which is what makes it expire on
+its own at the cutover rather than needing to be cleared, and it is dropped entirely
+once this till has closed too. A till that was off the LAN picks the notice up on its
+next catch-up and is prompted then. **A device with no fabric, or one that can reach
+nobody, behaves exactly as it did before any of this existed**: the coordination can
+only ever be a nudge, because a shop whose switch died still has to be able to trade.
 
 ## Schema-version compatibility
 
