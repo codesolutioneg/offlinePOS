@@ -28,9 +28,13 @@ class SettingsEntry {
 /// sell screen stays about selling and the config lives behind one door rather than
 /// scattered across the app.
 class SettingsHubScreen extends StatelessWidget {
-  const SettingsHubScreen({super.key, required this.entries});
+  const SettingsHubScreen({super.key, required this.entries, this.header});
 
   final List<SettingsEntry> entries;
+
+  /// Drawn above the first section. Used for the setup checklist, which belongs
+  /// with the rows that answer it rather than on a screen of its own.
+  final Widget? header;
 
   @override
   Widget build(BuildContext context) {
@@ -39,6 +43,7 @@ class SettingsHubScreen extends StatelessWidget {
       appBar: AppBar(title: Text(tr(context, 'Settings'))),
       body: ListView(
         children: [
+          ?header,
           for (var i = 0; i < sections.length; i++) ...[
             if (i > 0) const Divider(height: 1),
             if (sections[i].title != null)
