@@ -109,9 +109,6 @@ class DeliveryStore {
   void setDriverActive(String id, bool active) => _db.raw
       .execute('UPDATE drivers SET active = ? WHERE id = ?', [active ? 1 : 0, id]);
 
-  void removeDriver(String id) =>
-      _db.raw.execute('DELETE FROM drivers WHERE id = ?', [id]);
-
   static String? _blankToNull(String? v) {
     final t = v?.trim() ?? '';
     return t.isEmpty ? null : t;

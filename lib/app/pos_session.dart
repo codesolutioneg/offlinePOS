@@ -231,6 +231,9 @@ class PosSession {
     order.guestCount = null;
     order.note = null;
     order.deliveryCost = 0;
+    order.deliveryChannel = null;
+    order.companyOrderNo = null;
+    order.driverName = null;
     order.tip = 0;
     // An emptied order is a fresh bill on the same row, so it takes the service charge
     // the shop is on now rather than keeping a stamp from the sale that was cleared.

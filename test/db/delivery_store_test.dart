@@ -83,13 +83,11 @@ void main() {
     expect(delivery.drivers().single.active, isFalse);
   });
 
-  test('a driver can be edited and deleted outright', () {
+  test('a driver can be corrected without losing their orders', () {
     final driver = delivery.addDriver(name: 'Hany', phone: '0100');
     delivery.updateDriver(driver.id, name: 'Hany Samir', phone: '0111', active: true);
     expect(delivery.drivers().single.name, 'Hany Samir');
     expect(delivery.drivers().single.phone, '0111');
-    delivery.removeDriver(driver.id);
-    expect(delivery.drivers(), isEmpty);
   });
 
   test('the picker lists active drivers by name', () {
