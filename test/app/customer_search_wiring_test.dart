@@ -110,6 +110,10 @@ void main() {
       outboxStore: SqliteOutboxStore(db),
       deviceId: 'till-1',
       appVersion: 'test',
+      // A real till always has one, and it is what stops a refresh reaching for a
+      // socket that is not there. Without it here, an "offline" till in this file
+      // was offline only in the badge, and sign-in still pulled the catalogue.
+      probe: () async => online,
     );
     // What a till that has reached the server once looks like. Nothing about a sale
     // depends on it; it is the flag the search asks before bothering.
