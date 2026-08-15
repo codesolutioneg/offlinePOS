@@ -1509,13 +1509,13 @@ class _PosAppState extends State<PosApp> {
         stationsOf.putIfAbsent(l.uuid, () => {}).add(entry.key);
       }
     }
+    // The worst thing that happened to any station's copy, since that is what the
+    // cashier has to act on.
+    var outcome = KitchenFireResult.sent;
     // Send per station, but only the lines that have NOT already reached it: a
     // resend after a partial failure must not reprint at a station that already got
     // the ticket. A line records each station it lands at, so retries are idempotent
     // per station and a later void follows it even if routing changes.
-    // The worst thing that happened to any station's copy, since that is what the
-    // cashier has to act on.
-    var outcome = KitchenFireResult.sent;
     for (final entry in routed.entries) {
       final station = entry.key;
       // A deliberate resend reprints everything; an ordinary fire only sends the
