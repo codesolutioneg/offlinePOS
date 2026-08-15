@@ -1,5 +1,6 @@
 import '../../domain/order.dart';
 import '../db/order_store.dart';
+import '../db/settings_store.dart';
 import '../db/table_store.dart';
 import 'lan_event.dart';
 import 'lan_event_log.dart';
@@ -27,10 +28,12 @@ class LanApplier {
     required this.deviceId,
     required OrderStore orders,
     required TableStore tables,
+    required SettingsStore settings,
     required LanEventLog log,
     LanLog? onRefused,
   })  : _orders = orders,
         _tables = tables,
+        _settings = settings,
         _log = log,
         _onRefused = onRefused;
 
@@ -39,6 +42,7 @@ class LanApplier {
 
   final OrderStore _orders;
   final TableStore _tables;
+  final SettingsStore _settings;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -133,6 +137,7 @@ class LanApplier {
         LanEventKind.orderUpsert => _applyOrder(event),
         LanEventKind.kitchenStatus => _applyKitchenStatus(event),
         LanEventKind.tableUpsert => _applyTable(event),
+        LanEventKind.productAvailability => _applyAvailability(event),
       };
       if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
@@ -186,6 +191,13 @@ class LanApplier {
     // would put a ticket on the board that no till owns.
     if (_orders.byUuid(event.recordUuid) == null) return false;
     _orders.setKitchenStatus(event.recordUuid, status, announce: false);
+    return true;
+  }
+
+  bool _applyAvailability(LanEvent event) {
+    final id = event.payload['product_id'];
+    if (id is! int) throw FormatException('availability for ${event.recordUuid}');
+    _settings.applyProductAvailable(id, event.payload['available'] == true);
     return true;
   }
 

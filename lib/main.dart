@@ -104,6 +104,10 @@ Future<void> main() async {
     db,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
   );
+  // What the kitchen shouted, told to every device: an item off the menu is a fact
+  // about the shop, so the 86 board is shared the same way a parked tab is.
+  settings.publish =
+      lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null;
 
   // Senders are registered once the device is enrolled and authenticated. Until
   // then the outbox simply accumulates, which is the correct offline behaviour:
@@ -228,6 +232,7 @@ Future<void> main() async {
       deviceName: settings.lanDeviceName ?? deviceId,
       orders: orders,
       tables: tables,
+      settings: settings,
       audit: audit,
       port: config.lanPort,
       beaconPort: config.lanBeaconPort,

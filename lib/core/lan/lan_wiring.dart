@@ -4,6 +4,7 @@ import 'dart:io';
 import '../audit/audit_log.dart';
 import '../db/database.dart';
 import '../db/order_store.dart';
+import '../db/settings_store.dart';
 import '../db/table_store.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
@@ -64,6 +65,7 @@ class LanNode {
     required String shopKey,
     required OrderStore orders,
     required TableStore tables,
+    required SettingsStore settings,
     required AuditLog audit,
     required int port,
     required int beaconPort,
@@ -86,6 +88,7 @@ class LanNode {
       deviceId: deviceId,
       orders: orders,
       tables: tables,
+      settings: settings,
       log: eventLog,
       onRefused: log,
     );

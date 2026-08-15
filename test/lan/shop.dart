@@ -4,6 +4,7 @@ import 'package:offline_pos/core/audit/audit_log.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/schema.dart';
+import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
 import 'package:offline_pos/core/lan/lan_applier.dart';
@@ -60,10 +61,13 @@ class TestTill {
       db,
       publish: (kind, uuid, payload) => fabric.publish(kind, uuid, payload),
     );
+    settings = SettingsStore(db)
+      ..publish = (kind, uuid, payload) => fabric.publish(kind, uuid, payload);
     applier = LanApplier(
       deviceId: deviceId,
       orders: orders,
       tables: tables,
+      settings: settings,
       log: log,
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
@@ -102,6 +106,7 @@ class TestTill {
   late final Outbox outbox;
   late final OrderStore orders;
   late final TableStore tables;
+  late final SettingsStore settings;
   late final LanApplier applier;
   late final LanProtocol protocol;
   late final LanPeerDirectory peers;

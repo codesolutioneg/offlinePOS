@@ -116,6 +116,7 @@ void main() {
         shopKey: 'the-shop-key',
         orders: OrderStore(db, ownDeviceId: 'till-a'),
         tables: TableStore(db),
+        settings: SettingsStore(db),
         audit: AuditLog(db),
         port: 0,
         beaconPort: 0,

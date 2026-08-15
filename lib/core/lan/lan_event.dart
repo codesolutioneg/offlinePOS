@@ -20,7 +20,13 @@ enum LanEventKind {
   /// not a kind: it is derived from the parked orders, which already replicate, so
   /// a second source of truth for "table 5 is busy" cannot disagree with the bill
   /// sitting on it.
-  tableUpsert('table.upsert');
+  tableUpsert('table.upsert'),
+
+  /// One product marked sold out or put back on. Its own kind rather than part of
+  /// an order, because running out is a fact about the shop and not about a sale:
+  /// the till that hears it last must end up refusing the same item as the one that
+  /// heard the kitchen shout.
+  productAvailability('product.availability');
 
   const LanEventKind(this.wire);
 

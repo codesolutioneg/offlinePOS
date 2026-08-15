@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import '../../domain/business_day.dart';
 import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
+import '../lan/lan_event.dart';
 import '../printing/escpos.dart';
 import '../printing/printer_logo.dart';
 import 'database.dart';
@@ -21,6 +22,15 @@ class SettingsStore {
   }
 
   final Db _db;
+
+  /// Announces a shop-wide setting change to the LAN fabric, or null with the
+  /// fabric off (and then this class writes exactly what it always wrote).
+  ///
+  /// Assigned after construction rather than taken in the constructor, because the
+  /// switch that decides whether there is a fabric at all is read from this very
+  /// store: the node cannot exist before it.
+  LanPublish? _publish;
+  set publish(LanPublish? v) => _publish = v;
 
   // ── keys ─────────────────────────────────────────────────────────
   static const _shopName = 'shop_name';
@@ -391,22 +401,71 @@ class SettingsStore {
     publishPrintProfile();
   }
 
-  /// Products marked sold-out ("86'd") on this till, so a run-out item can be
-  /// blocked mid-service without waiting for an Odoo catalogue change.
+  /// Products marked sold-out ("86'd"), so a run-out item can be blocked
+  /// mid-service without waiting for an Odoo catalogue change.
+  ///
+  /// Shop-wide when the LAN fabric is on: running out is a fact about the kitchen,
+  /// not about one till, so the change is announced and every device ends up
+  /// refusing the same item.
   Set<int> get unavailableProducts =>
       getStringList(_unavailableProducts).map((e) => int.tryParse(e) ?? -1).where((e) => e >= 0).toSet();
 
   set unavailableProducts(Set<int> ids) =>
       setStringList(_unavailableProducts, ids.map((e) => '$e').toList());
 
+  /// The record key one product's availability is replicated under, so the
+  /// last-write-wins clock is kept per product rather than per till.
+  static String availabilityRecord(int productId) => 'product-$productId';
+
   void setProductAvailable(int productId, bool available) {
-    final set = unavailableProducts;
-    if (available) {
-      set.remove(productId);
-    } else {
-      set.add(productId);
+    final publish = _publish;
+    _writeAvailability(
+      productId,
+      available,
+      publish == null
+          ? null
+          : () => publish(
+                LanEventKind.productAvailability,
+                availabilityRecord(productId),
+                {'product_id': productId, 'available': available},
+              ),
+    );
+  }
+
+  /// Apply an availability change that arrived from another till. Announces
+  /// nothing: the origin till already told everybody, and echoing it back would
+  /// have two devices claiming the same shout from the kitchen.
+  void applyProductAvailable(int productId, bool available) =>
+      _writeAvailability(productId, available, null);
+
+  /// The single writer, optionally with its fabric event in the same transaction.
+  ///
+  /// A failed announce still commits: a till that knows an item is off must act on
+  /// it whatever the other devices heard, exactly as a sale outranks replication.
+  void _writeAvailability(int productId, bool available, void Function()? announce) {
+    void write() {
+      final set = unavailableProducts;
+      if (available) {
+        set.remove(productId);
+      } else {
+        set.add(productId);
+      }
+      unavailableProducts = set;
     }
-    unavailableProducts = set;
+
+    if (announce == null) {
+      write();
+      return;
+    }
+    _db.raw.execute('BEGIN');
+    try {
+      write();
+      announce();
+      _db.raw.execute('COMMIT');
+    } catch (_) {
+      _db.raw.execute('ROLLBACK');
+      write();
+    }
   }
 
   /// Products pinned as favourites for a quick-access grid.
