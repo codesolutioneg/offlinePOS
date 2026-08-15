@@ -2557,11 +2557,15 @@ class _LineTile extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: sent ? AppColors.sent.withValues(alpha: 0.05) : null,
         borderRadius: BorderRadius.circular(10),
         border: Border(left: BorderSide(color: edge, width: 4)),
       ),
       child: ListTile(
+        // The wash is the tile's own, not a box painted behind it: a ListTile draws
+        // its background and its ink on the nearest Material, so a coloured box
+        // around it hides the tap ripple, which newer Flutter refuses outright.
+        tileColor: sent ? AppColors.sent.withValues(alpha: 0.05) : null,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         onTap: onTapLine,
         contentPadding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
         title: Row(children: [
