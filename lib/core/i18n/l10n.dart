@@ -872,7 +872,6 @@ const Map<String, String> _ar = {
   'The server answered, but the menu did not come down.':
       'رد الخادم، لكن قائمة الأصناف لم تصل.',
   'Prices have never been downloaded': 'لم يتم تنزيل الأسعار من قبل',
-  'just now': 'لحظات',
   'minute(s) ago': 'دقيقة',
   'hour(s) ago': 'ساعة',
   'day(s) ago': 'يوم',
