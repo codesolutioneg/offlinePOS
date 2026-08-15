@@ -135,7 +135,7 @@ void main() {
 
   /// A client wired to [server] instead of a socket.
   SmtpClient clientFor(FakeSmtpServer server) =>
-      SmtpClient(connect: (_, __) async => server);
+      SmtpClient(connect: (_, _) async => server);
 
   /// The body a shop owner would actually read.
   String bodyOf(String wire) {
@@ -264,7 +264,7 @@ void main() {
 
   test('a server that cannot be reached is a failure, not a hang', () async {
     final client = SmtpClient(
-      connect: (_, __) async => throw const SocketFailure(),
+      connect: (_, _) async => throw const SocketFailure(),
     );
     await expectLater(
       client.send(

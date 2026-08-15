@@ -139,7 +139,7 @@ void main() {
     final service = EmailService(
       queue: queue,
       config: () => _config,
-      transport: (_, __) async => throw StateError('something unexpected'),
+      transport: (_, _) async => throw StateError('something unexpected'),
       now: () => clock,
     );
     // No expectLater: the point is that this simply returns.

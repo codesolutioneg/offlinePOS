@@ -26,6 +26,8 @@ import 'core/db/print_job_store.dart';
 import 'core/db/printer_store.dart';
 import 'core/db/shift_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
+import 'core/email/email_outbox.dart';
+import 'core/email/email_service.dart';
 import 'core/export/db_backup.dart';
 import 'core/lan/lan_credential.dart';
 import 'core/lan/lan_wiring.dart';
@@ -263,6 +265,13 @@ Future<void> main() async {
     customers: CustomerStore(db),
     attendance: AttendanceStore(db),
     lan: lan,
+    // The Z report by mail. Reads the settings on every attempt, so a password
+    // corrected mid-evening is used by the next retry without a restart.
+    emailer: EmailService(
+      queue: EmailOutbox(db),
+      config: () => settings.smtp,
+      audit: audit,
+    ),
   ));
 }
 
