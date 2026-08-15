@@ -127,7 +127,8 @@ class LanApplier {
     if (event.originDeviceId == deviceId) return _Landing.refused;
     try {
       if (!_wins(event)) return _Landing.refused;
-      if (event.kind == LanEventKind.kitchenStatus &&
+      if ((event.kind == LanEventKind.kitchenStatus ||
+              event.kind == LanEventKind.orderClaim) &&
           _orders.byUuid(event.recordUuid) == null) {
         // Deferred rather than refused: the owning till's upsert is still coming,
         // and the difference decides whether the cursor may move past this.
@@ -138,6 +139,7 @@ class LanApplier {
         LanEventKind.kitchenStatus => _applyKitchenStatus(event),
         LanEventKind.tableUpsert => _applyTable(event),
         LanEventKind.productAvailability => _applyAvailability(event),
+        LanEventKind.orderClaim => _applyClaim(event),
       };
       if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
@@ -192,6 +194,14 @@ class LanApplier {
     if (_orders.byUuid(event.recordUuid) == null) return false;
     _orders.setKitchenStatus(event.recordUuid, status, announce: false);
     return true;
+  }
+
+  /// A tab that changed hands somewhere else. Every till follows the owner, so the
+  /// floor plan on a third device knows which till to send a waiter to.
+  bool _applyClaim(LanEvent event) {
+    final to = event.payload['to'];
+    if (to is! String) throw FormatException('claim for ${event.recordUuid}');
+    return _orders.applyHandOver(event.recordUuid, to);
   }
 
   bool _applyAvailability(LanEvent event) {

@@ -8,6 +8,7 @@ import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
 import 'package:offline_pos/core/lan/lan_applier.dart';
+import 'package:offline_pos/core/lan/lan_claim.dart';
 import 'package:offline_pos/core/lan/lan_credential.dart';
 import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/lan/lan_event_log.dart';
@@ -71,11 +72,18 @@ class TestTill {
       log: log,
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
+    claims = LanClaimDesk(
+      deviceId: deviceId,
+      orders: orders,
+      allowed: () => settings.lanAllowTakeover,
+      audit: (event, detail) => audited.add('$event: $detail'),
+    );
     protocol = LanProtocol(
       deviceId: deviceId,
       log: log,
       applier: applier,
       credential: credential,
+      claims: claims,
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
     peers = LanPeerDirectory(log: (event, detail) => refusals.add('$event: $detail'));
@@ -108,6 +116,7 @@ class TestTill {
   late final TableStore tables;
   late final SettingsStore settings;
   late final LanApplier applier;
+  late final LanClaimDesk claims;
   late final LanProtocol protocol;
   late final LanPeerDirectory peers;
   late final LanFabric fabric;
@@ -115,6 +124,10 @@ class TestTill {
   /// Events and peers this till turned away, and pull/notify failures it logged.
   final List<String> refusals = [];
   final List<String> errors = [];
+
+  /// What this till put in the audit trail about tabs changing hands, on either
+  /// side of the handover.
+  final List<String> audited = [];
 
   void close() => db.close();
 }
@@ -206,6 +219,31 @@ class TestShop {
     if (reply.status != 200) {
       throw StateError('${peer.deviceId} answered ${reply.status}');
     }
+  }
+
+  /// One till asking another for a parked tab, over the same JSON, the same stamp
+  /// and the same handler a socket would carry it to. Answers with what the claimer
+  /// wrote, or null when the owner refused or could not be reached.
+  Future<Order?> claim(String from, TestTill owner, String orderUuid,
+      {String? cashier}) async {
+    final peer = peerFor(owner);
+    final body = jsonEncode({
+      'device_id': from,
+      'schema': Schema.version,
+      'order_uuid': orderUuid,
+      'cashier': ?cashier,
+    });
+    final till = _reach(from, peer);
+    final reply = till.protocol.handlePost(
+      LanProtocol.claimPath,
+      body,
+      auth: _stamp(from, method: 'POST', path: LanProtocol.claimPath, body: body),
+    );
+    if (reply.status != 200) return null;
+    final payload = _overTheWire(reply.body)['order'] as Map;
+    return tills[from]!
+        .claims
+        .accept(payload.cast<String, dynamic>(), cashier: cashier);
   }
 
   /// A notify from a till claiming a schema version this shop does not run, as an

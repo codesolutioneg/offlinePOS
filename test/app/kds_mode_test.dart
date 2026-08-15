@@ -154,6 +154,10 @@ void main() {
     await t.pump(const Duration(milliseconds: 400));
 
     expect(find.byType(LanSettingsScreen), findsOneWidget);
+    // Below the switches on a screen this short, so scroll to it rather than
+    // assert on whatever happens to fit the viewport.
+    await t.dragUntilVisible(find.byKey(const Key('lan-device-id')),
+        find.byType(ListView), const Offset(0, -120));
     expect(find.text('kds-1'), findsOneWidget);
   });
 }

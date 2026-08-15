@@ -69,6 +69,7 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
   late final TextEditingController _shopKey =
       TextEditingController(text: widget.settings.lanShopKey ?? '');
   late bool _enabled = widget.settings.lanEnabled(fallback: widget.buildDefault);
+  late bool _allowTakeover = widget.settings.lanAllowTakeover;
 
   @override
   void dispose() {
@@ -172,6 +173,22 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
                     'next starts.')),
             value: _enabled,
             onChanged: _setEnabled,
+          ),
+          SwitchListTile(
+            key: const Key('lan-allow-takeover'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Let another device take over a tab')),
+            subtitle: Text(tr(
+                context,
+                'Off, a tab is settled on the till it was opened on. On, a manager '
+                    'on another device can take it, and this one gives it up as it '
+                    'agrees, so it is never open in two places.')),
+            value: _allowTakeover,
+            onChanged: (v) {
+              widget.settings.lanAllowTakeover = v;
+              widget.onChanged();
+              setState(() => _allowTakeover = v);
+            },
           ),
           const Divider(height: 24),
           TextField(

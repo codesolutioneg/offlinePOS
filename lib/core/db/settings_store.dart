@@ -551,6 +551,15 @@ class SettingsStore {
   String? get lanShopKey => getString('lan_shop_key');
   set lanShopKey(String? v) => setString('lan_shop_key', v?.trim());
 
+  /// Whether another till may take over a tab parked on this one.
+  ///
+  /// Off by default, and that default is the safe answer rather than a timid one: a
+  /// bill is settled where it was opened, so nothing can end up booked twice. A shop
+  /// running waiter handhelds against a counter cashier needs the other answer, and
+  /// switches it on knowing that the handover still asks this device first.
+  bool get lanAllowTakeover => getBool('lan_allow_takeover');
+  set lanAllowTakeover(bool v) => setBool('lan_allow_takeover', v);
+
   /// Receipt paper width in characters: 42 for 80mm (default), 32 for 58mm.
   int get receiptColumns => int.tryParse(getString('receipt_columns') ?? '') ?? 42;
   set receiptColumns(int n) => setString('receipt_columns', '$n');

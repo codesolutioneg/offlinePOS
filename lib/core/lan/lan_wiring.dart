@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import '../../domain/order.dart';
 import '../audit/audit_log.dart';
 import '../db/database.dart';
 import '../db/order_store.dart';
@@ -8,6 +9,7 @@ import '../db/settings_store.dart';
 import '../db/table_store.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
+import 'lan_claim.dart';
 import 'lan_event.dart';
 import 'lan_credential.dart';
 import 'lan_event_log.dart';
@@ -46,12 +48,14 @@ class LanNode {
     required LanHost host,
     required LanBeacon beacon,
     required LanHttpClient client,
+    required LanClaimDesk claims,
     required this.peers,
   })  : _log = log,
         _fabric = fabric,
         _host = host,
         _beacon = beacon,
-        _client = client;
+        _client = client,
+        _claims = claims;
 
   /// Builds every part and joins them up. Nothing binds or announces until
   /// [start] is called.
@@ -75,6 +79,10 @@ class LanNode {
     Future<List<String>> Function()? localAddresses,
     Future<RawDatagramSocket> Function(InternetAddress address, int port)?
         beaconBind,
+    /// The same kind of seam: a suite can stand two assembled tills next to each
+    /// other and prove a tab really changes hands, without a shop network. Null on
+    /// a till, which is the whole point.
+    LanHttpClient? client,
   }) {
     // Every fabric refusal, dead peer and failed announce lands in the audit trail
     // under 'system', which is where support already looks. A shop that quietly
@@ -93,14 +101,22 @@ class LanNode {
       onRefused: log,
     );
     final credential = LanCredential(shopKey);
-    final client = LanHttpClient(credential: credential);
+    final http = client ?? LanHttpClient(credential: credential);
+    final claims = LanClaimDesk(
+      deviceId: deviceId,
+      orders: orders,
+      // Read at the moment of the ask, so a manager who switches takeovers off has
+      // switched them off for the request that arrives a second later.
+      allowed: () => settings.lanAllowTakeover,
+      audit: log,
+    );
     final fabric = LanFabric(
       deviceId: deviceId,
       log: eventLog,
       applier: applier,
       peers: peers,
-      fetch: client.fetch,
-      notify: (peer, events) => client.notify(peer, events, deviceId),
+      fetch: http.fetch,
+      notify: (peer, events) => http.notify(peer, events, deviceId),
       onError: log,
     );
     return LanNode(
@@ -109,13 +125,15 @@ class LanNode {
       log: eventLog,
       fabric: fabric,
       peers: peers,
-      client: client,
+      client: http,
+      claims: claims,
       host: LanHost(
         protocol: LanProtocol(
           deviceId: deviceId,
           log: eventLog,
           applier: applier,
           credential: credential,
+          claims: claims,
           onRefused: log,
         ),
         port: port,
@@ -148,6 +166,7 @@ class LanNode {
   final LanHost _host;
   final LanBeacon _beacon;
   final LanHttpClient _client;
+  final LanClaimDesk _claims;
 
   /// The start in flight, or the one that finished. Held so two callers cannot each
   /// bind the same port: the app shell starts the node, and the LAN switch can ask
@@ -219,4 +238,57 @@ class LanNode {
 
   /// One catch-up pass now, for the Sync now button on the settings screen.
   Future<void> pass() => _fabric.pass();
+
+  /// Take a tab another till has parked, with that till's agreement.
+  ///
+  /// The owner has to answer: it is the one that gives the tab up, and it does so
+  /// in the same breath as agreeing, so there is never an instant where two tills
+  /// could each settle it. An owner that is off, asleep or on the wrong side of a
+  /// dead switch is therefore a refusal and not a delay, because the alternative is
+  /// a bill paid twice.
+  ///
+  /// Never on a selling path: this is a deliberate action behind a manager gate,
+  /// and the till it runs on is not mid-sale.
+  Future<LanClaimResult> claim(Order order, {String? cashier}) async {
+    final owner = _peerFor(order.deviceId);
+    if (owner == null) {
+      return (
+        order: null,
+        refusal: LanClaimRefusal.ownerUnreachable,
+        detail: order.deviceId,
+      );
+    }
+    try {
+      final payload = await _client.claim(owner,
+          orderUuid: order.uuid, deviceId: deviceId, cashier: cashier);
+      final taken = _claims.accept(payload, cashier: cashier);
+      if (taken == null) {
+        return (
+          order: null,
+          refusal: LanClaimRefusal.refused,
+          detail: 'the answer was not this tab',
+        );
+      }
+      return (order: taken, refusal: null, detail: null);
+    } catch (e) {
+      // A refusal and an unreachable till are told apart by the status the owner
+      // managed to send: no answer at all is the case where the tab must stay put.
+      final refused = '$e'.contains(' 409 ');
+      return (
+        order: null,
+        refusal:
+            refused ? LanClaimRefusal.refused : LanClaimRefusal.ownerUnreachable,
+        detail: '$e',
+      );
+    }
+  }
+
+  /// The peer that owns [deviceId], or null when this device has not seen it
+  /// recently enough to ask it anything.
+  LanPeer? _peerFor(String ownerDeviceId) {
+    for (final peer in peers.active) {
+      if (peer.deviceId == ownerDeviceId) return peer;
+    }
+    return null;
+  }
 }

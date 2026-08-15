@@ -26,7 +26,13 @@ enum LanEventKind {
   /// an order, because running out is a fact about the shop and not about a sale:
   /// the till that hears it last must end up refusing the same item as the one that
   /// heard the kitchen shout.
-  productAvailability('product.availability');
+  productAvailability('product.availability'),
+
+  /// A parked tab changing hands, announced by the till that gave it up. Only the
+  /// owner ever sends it, and it sends it as part of letting go, so a tab still has
+  /// exactly one owner at every instant: the single-writer rule survives the
+  /// handover instead of being suspended for it.
+  orderClaim('order.claim');
 
   const LanEventKind(this.wire);
 

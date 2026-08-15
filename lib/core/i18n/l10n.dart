@@ -824,4 +824,16 @@ const Map<String, String> _ar = {
   'Backup failed': 'فشل النسخ الاحتياطي',
   'A copy of everything on this till, including sales that have not synced. It stays encrypted.':
       'نسخة من كل ما على هذا الجهاز، بما فيها المبيعات غير المزامَنة. تبقى مشفّرة.',
+  // the multi-till wave: the shop network beyond one device
+  'Let another device take over a tab': 'السماح لجهاز آخر بأخذ طاولة مفتوحة',
+  'Off, a tab is settled on the till it was opened on. On, a manager on another device can take it, and this one gives it up as it agrees, so it is never open in two places.':
+      'عند الإيقاف، تُسدَّد الطاولة على الجهاز الذي فُتحت عليه. عند التشغيل، يستطيع مدير على جهاز آخر أخذها، ويتنازل عنها هذا الجهاز لحظة موافقته، فلا تكون مفتوحة في مكانين.',
+  'Take over this tab?': 'أخذ هذه الطاولة؟',
+  'It is open on another device. That device is asked first and gives it up, so it cannot be settled in two places.':
+      'الطاولة مفتوحة على جهاز آخر. يُسأل ذلك الجهاز أولًا ويتنازل عنها، فلا يمكن تسديدها في مكانين.',
+  'Take over': 'أخذ الطاولة',
+  'That device did not answer, so the tab stays with it. Settle it there.':
+      'لم يستجب ذلك الجهاز، فتبقى الطاولة لديه. سدّدها هناك.',
+  'That device would not hand the tab over.':
+      'رفض ذلك الجهاز تسليم الطاولة.',
 };

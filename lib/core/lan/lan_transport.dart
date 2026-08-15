@@ -4,6 +4,7 @@ import 'dart:io';
 
 import '../db/schema.dart';
 import 'lan_applier.dart';
+import 'lan_claim.dart';
 import 'lan_credential.dart';
 import 'lan_event.dart';
 import 'lan_event_log.dart';
@@ -52,11 +53,13 @@ class LanProtocol {
     required LanEventLog log,
     required LanApplier applier,
     required LanCredential credential,
+    LanClaimDesk? claims,
     this.pageSize = 200,
     LanLog? onRefused,
   })  : _log = log,
         _applier = applier,
         _credential = credential,
+        _claims = claims,
         _onRefused = onRefused;
 
   /// Everything a peer has after `since`.
@@ -65,10 +68,21 @@ class LanProtocol {
   /// Events a peer is handing over right now.
   static const String notifyPath = '/lan/notify';
 
+  /// A peer asking for a parked tab this till owns.
+  ///
+  /// Its own request rather than an event, because it is the one thing in the
+  /// fabric that needs an answer: everything else is told, and this is asked. The
+  /// ask is what makes the handover safe, so a till that cannot be reached simply
+  /// keeps its tab.
+  static const String claimPath = '/lan/claim';
+
   final String deviceId;
   final LanEventLog _log;
   final LanApplier _applier;
   final LanCredential _credential;
+
+  /// Null on a device that hands nothing over (a kitchen screen owns no tabs).
+  final LanClaimDesk? _claims;
   final int pageSize;
   final LanLog? _onRefused;
 
@@ -99,7 +113,9 @@ class LanProtocol {
   }
 
   LanReply handlePost(String path, String body, {String? auth}) {
-    if (path != notifyPath) return const LanReply(404, {'error': 'unknown path'});
+    if (path != notifyPath && path != claimPath) {
+      return const LanReply(404, {'error': 'unknown path'});
+    }
     // Before the body is even parsed: an unpaired device gets no say in what this
     // till spends its time decoding.
     final unpaired = _authRefusal(auth, method: 'POST', path: path, body: body);
@@ -119,6 +135,7 @@ class LanProtocol {
     if (peer is! String || peer.isEmpty) {
       return const LanReply(400, {'error': 'no device_id'});
     }
+    if (path == claimPath) return _handleClaim(decoded, peer);
     final raw = decoded['events'];
     if (raw is! List) return const LanReply(400, {'error': 'no events'});
     final events = <LanEvent>[];
@@ -139,6 +156,37 @@ class LanProtocol {
     }
     final applied = _applier.applyAll(peer, events, highSeq: highSeq);
     return LanReply(200, {'applied': applied});
+  }
+
+  /// Hand a parked tab to the peer asking for it, or say no and why.
+  ///
+  /// A refusal is 409 rather than an error: the peer asked a reasonable question
+  /// and the answer is that the tab is not this till's to give. The answer carries
+  /// the whole order so the claimer writes exactly what was let go of, rather than
+  /// a version it happened to have replicated earlier.
+  LanReply _handleClaim(Map<String, dynamic> decoded, String peer) {
+    final desk = _claims;
+    if (desk == null) {
+      return const LanReply(409, {'error': 'this device hands nothing over'});
+    }
+    final uuid = decoded['order_uuid'];
+    if (uuid is! String || uuid.isEmpty) {
+      return const LanReply(400, {'error': 'no order_uuid'});
+    }
+    final cashier = decoded['cashier'];
+    final result =
+        desk.grant(uuid, peer, cashier: cashier is String ? cashier : null);
+    final order = result.order;
+    if (order == null) {
+      return LanReply(409, {'error': result.detail ?? 'refused'});
+    }
+    return LanReply(200, {
+      'device_id': deviceId,
+      'schema': Schema.version,
+      // Named so the claimer's audit entry can say where the tab came from without
+      // having to trust its own idea of who owned it a moment ago.
+      'order': {...order.toMap(), 'claim_from': deviceId},
+    });
   }
 
   /// The first gate every request passes: proof the caller holds the shop key.
@@ -343,6 +391,34 @@ class LanHttpClient {
       _credential.stamp(
           method: 'POST', path: LanProtocol.notifyPath, body: body),
     );
+  }
+
+  /// Ask [peer] to hand over one parked tab, and answer with the order it let go
+  /// of. Throws when the peer refuses or cannot be reached, which is exactly the
+  /// case where the tab must stay where it is.
+  Future<Map<String, dynamic>> claim(
+    LanPeer peer, {
+    required String orderUuid,
+    required String deviceId,
+    String? cashier,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'order_uuid': orderUuid,
+      'cashier': ?cashier,
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.claimPath),
+      body,
+      _credential.stamp(
+          method: 'POST', path: LanProtocol.claimPath, body: body),
+    );
+    final decoded = (jsonDecode(text) as Map).cast<String, dynamic>();
+    final order = decoded['order'];
+    if (order is! Map) throw const FormatException('claim answered with no order');
+    return order.cast<String, dynamic>();
   }
 
   Future<String> _send(String method, Uri url, String? body, String stamp) async {

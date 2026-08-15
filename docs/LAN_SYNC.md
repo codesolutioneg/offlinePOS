@@ -28,6 +28,8 @@ exists, and every screen keeps reading the local database.
 | `order.upsert` | A held or paid order, whole payload, or a discarded tab flagged `deleted` | Drafts are deliberately absent. An order being rung changes on every tap and no other device has a use for it |
 | `kitchen.status` | One ticket's new board status | So a kitchen screen can advance a ticket it does not own without claiming authorship of somebody else's sale |
 | `table.upsert` | A floor element added, moved, resized or deleted | Table *occupancy* is not a kind: it is derived from the parked orders, which already replicate, so a second source of truth for "table 5 is busy" cannot disagree with the bill on it |
+| `product.availability` | One product marked sold out or put back on | Running out is a fact about the shop, not about a sale. The till nobody shouted at has to refuse the same item |
+| `order.claim` | A parked tab changing hands, sent by the till giving it up | The one ownership change in the fabric. Only the current owner sends it, and it sends it as part of letting go, so the tab still has exactly one owner at every instant |
 
 Replication makes a device show more, never own more. `OrderStore` splits its reads and
 the split is load-bearing:
@@ -82,6 +84,24 @@ as it did before.
 ```
 
 answered with `{"applied": <count>}`.
+
+**`POST /lan/claim`**
+
+```json
+{ "device_id": "...", "schema": 15, "order_uuid": "...", "cashier": "..." }
+```
+
+answered with `{"device_id": "...", "schema": 15, "order": { }}`, or `409` and a
+reason. The one request in the fabric that asks rather than tells, because it is the
+one thing that needs an answer: a tab moves only when the till that owns it gives it
+up, and it gives it up inside the same handler that agrees, so there is no instant
+where two devices could each settle the bill. A till that does not answer therefore
+keeps its tab. That refusal is the feature: taking a tab from a device that could not
+be asked is how one bill gets settled twice. Both sides record the handover in the
+audit trail (`order.claim.granted`, `order.claim.taken`, `order.claim.refused`), and
+the owner announces it to everyone else as an `order.claim` event so a third device
+sends the waiter to the right till. Off by default per device (**Shop network, Let
+another device take over a tab**) and manager-gated on the device asking.
 
 Pulling is the truth and pushing is only latency. Each device asks each peer for
 everything after the cursor it holds on disk, so a device that was off, asleep or on the

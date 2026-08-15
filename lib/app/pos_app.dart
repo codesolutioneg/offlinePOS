@@ -19,6 +19,7 @@ import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
 import '../core/db/table_store.dart';
+import '../core/lan/lan_claim.dart';
 import '../core/lan/lan_wiring.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
@@ -1338,6 +1339,12 @@ class _PosAppState extends State<PosApp> {
                 .where((o) => o.tableLabel == t.name)
                 .toList();
             if (elsewhere.isNotEmpty) {
+              // Unless the shop runs handhelds and has said a tab may change
+              // hands, in which case the other till is asked and has to agree.
+              if (widget.lan != null && widget.settings.lanAllowTakeover) {
+                unawaited(_takeOverTab(floorContext, session, elsewhere.first));
+                return;
+              }
               ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
                 content: Text(tr(floorContext,
                     'This table is open on another device. Settle it there.')),
@@ -1358,6 +1365,59 @@ class _PosAppState extends State<PosApp> {
         },
       ),
     ));
+  }
+
+  /// Take a tab parked on another till, so the counter can settle what a handheld
+  /// opened. Manager-gated, because it moves a bill between two sets of books.
+  ///
+  /// The owning till has to agree and gives the tab up as it agrees, so the tab is
+  /// never open in two places. A till that cannot be reached is therefore a refusal
+  /// and not a wait: it cannot let go, and taking it anyway is how one bill gets
+  /// settled twice. Nothing here is on a selling path; the sale that follows is an
+  /// ordinary local recall.
+  Future<void> _takeOverTab(
+      BuildContext context, PosSession session, Order tab) async {
+    final lan = widget.lan;
+    if (lan == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Take over this tab?')),
+        content: Text(tr(
+            ctx,
+            'It is open on another device. That device is asked first and gives '
+                'it up, so it cannot be settled in two places.')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('confirm-takeover'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Take over')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    if (!await _authorizeManager(context)) return;
+    final result = await lan.claim(tab, cashier: session.cashierId);
+    if (!context.mounted) return;
+    if (result.order == null) {
+      showToast(
+          context,
+          tr(
+              context,
+              result.refusal == LanClaimRefusal.ownerUnreachable
+                  ? 'That device did not answer, so the tab stays with it. '
+                      'Settle it there.'
+                  : 'That device would not hand the tab over.'),
+          kind: ToastKind.error);
+      return;
+    }
+    setState(() => session.recall(tab.uuid));
+    _publishActivity();
+    Navigator.of(context).pop();
   }
 
   /// The settings hub: one door onto everything a manager configures on the device.

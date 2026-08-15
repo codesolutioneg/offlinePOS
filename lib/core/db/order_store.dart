@@ -94,12 +94,17 @@ class OrderStore {
     }
   }
 
+  /// The device column follows the payload on an update, because a tab can change
+  /// hands: leaving it behind would file the order under the till that gave it away
+  /// while the bill on it says otherwise, and every read that decides money is
+  /// scoped by that column.
   void _insert(Order order) {
     _db.raw.execute(
       '''
       INSERT INTO orders (uuid, device_id, cashier_id, created_at, state, server_id, total, payload)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(uuid) DO UPDATE SET
+        device_id = excluded.device_id,
         state = excluded.state, server_id = excluded.server_id,
         total = excluded.total, payload = excluded.payload
       ''',
@@ -258,6 +263,59 @@ class OrderStore {
       rethrow;
     }
   }
+
+  // ── a tab changing hands ─────────────────────────────────────────
+
+  /// Give a parked tab to another till, and say what was handed over.
+  ///
+  /// Null is a refusal, and the refusals are the whole point of the method. Only a
+  /// HELD order can move: a draft is being rung by a cashier standing at a counter,
+  /// and a paid one is money this till is going to book. Only the till that owns it
+  /// can give it away, so two devices cannot both hand out the same tab, and the
+  /// giving up and the announcing happen in one transaction, so there is no instant
+  /// where nobody owns it or both do.
+  ///
+  /// The order is rebuilt rather than edited because its device is what identifies
+  /// the till that will settle it: making that field writable would let anything
+  /// anywhere quietly reassign a sale.
+  Order? handOver(String uuid, String toDeviceId) {
+    final order = byUuid(uuid);
+    if (order == null) return null;
+    if (order.state != OrderState.held) return null;
+    if (order.deviceId == toDeviceId) return order;
+    if (ownDeviceId != null && order.deviceId != ownDeviceId) return null;
+    final moved = _withDevice(order, toDeviceId);
+    final publish = _publish;
+    _write(
+      moved,
+      publish == null
+          ? null
+          : () => publish(LanEventKind.orderClaim, uuid,
+              {'to': toDeviceId, 'from': order.deviceId}),
+    );
+    return moved;
+  }
+
+  /// Record a handover that happened elsewhere. Announces nothing: the till that
+  /// gave the tab up is the one that said so, and a second announcement would be a
+  /// second claim of authorship over one move.
+  ///
+  /// A tab that is already paid is left alone whatever the event says. Money that
+  /// has been taken belongs to the till that took it, and no later ownership change
+  /// may move it somewhere it would be booked again.
+  bool applyHandOver(String uuid, String toDeviceId) {
+    final order = byUuid(uuid);
+    if (order == null) return false;
+    if (order.state != OrderState.held) return false;
+    if (order.deviceId == toDeviceId) return true;
+    _write(_withDevice(order, toDeviceId), null);
+    return true;
+  }
+
+  /// The same order under a different till. Goes through the map so nothing about
+  /// the bill can be lost in the copy.
+  static Order _withDevice(Order order, String deviceId) =>
+      Order.fromMap({...order.toMap(), 'device_id': deviceId});
 
   /// Active kitchen tickets for the KDS board: orders that have been sent to the
   /// kitchen (held or paid) and are not yet served, newest first.
