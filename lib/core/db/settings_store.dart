@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import '../../domain/business_day.dart';
 import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
+import '../email/smtp_config.dart';
 import '../printing/escpos.dart';
 import '../printing/printer_logo.dart';
 import 'database.dart';
@@ -46,6 +47,14 @@ class SettingsStore {
   static const _gridColumns = 'grid_columns';
   static const _rolePermissions = 'role_permissions';
   static const _customRoles = 'custom_roles';
+  static const _smtpHost = 'smtp_host';
+  static const _smtpPort = 'smtp_port';
+  static const _smtpSecurity = 'smtp_security';
+  static const _smtpUsername = 'smtp_username';
+  static const _smtpPassword = 'smtp_password';
+  static const _smtpFrom = 'smtp_from';
+  static const _zReportRecipients = 'z_report_recipients';
+  static const _emailZReport = 'email_z_report';
   static const _codePage = 'receipt_code_page';
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
@@ -777,5 +786,62 @@ class SettingsStore {
     final lower = role.toLowerCase();
     if (builtInRoles.contains(lower)) return false;
     return !customRoles.any((r) => r.toLowerCase() == lower);
+  }
+
+  // ── outgoing mail ────────────────────────────────────────────────
+  // The shop's own mailbox, for sending the Z report to an owner who is not in
+  // the building. The password lives here like every other setting, in a
+  // SQLCipher database encrypted at rest, and is never written to a log or a
+  // receipt.
+
+  String? get smtpHost => getString(_smtpHost);
+  set smtpHost(String? v) => setString(_smtpHost, v?.trim());
+
+  int get smtpPort =>
+      int.tryParse(getString(_smtpPort) ?? '') ??
+      SmtpConfig.defaultPortFor(smtpSecurity);
+  set smtpPort(int v) => setString(_smtpPort, v <= 0 ? null : '$v');
+
+  SmtpSecurity get smtpSecurity => SmtpSecurity.fromKey(getString(_smtpSecurity));
+  set smtpSecurity(SmtpSecurity v) => setString(_smtpSecurity, v.key);
+
+  String? get smtpUsername => getString(_smtpUsername);
+  set smtpUsername(String? v) => setString(_smtpUsername, v?.trim());
+
+  String? get smtpPassword => getString(_smtpPassword);
+  set smtpPassword(String? v) => setString(_smtpPassword, v);
+
+  String? get smtpFrom => getString(_smtpFrom);
+  set smtpFrom(String? v) => setString(_smtpFrom, v?.trim());
+
+  /// Who the Z report goes to. Empty is the default and means nothing is sent.
+  List<String> get zReportRecipients => getStringList(_zReportRecipients);
+  set zReportRecipients(List<String> v) => setStringList(
+      _zReportRecipients,
+      [
+        for (final r in v)
+          if (r.trim().isNotEmpty) r.trim(),
+      ]);
+
+  /// The master switch. Off by default: a shop that has not asked for mail at
+  /// shift close does not get any.
+  bool get emailZReport => getBool(_emailZReport, fallback: false);
+  set emailZReport(bool v) => setBool(_emailZReport, v);
+
+  /// The mail settings as one value, or null when the switch is off or there is
+  /// not enough here to try. Read fresh on every send, so a corrected password
+  /// takes effect on the next attempt rather than the next restart.
+  SmtpConfig? get smtp {
+    if (!emailZReport) return null;
+    final config = SmtpConfig(
+      host: smtpHost ?? '',
+      port: smtpPort,
+      security: smtpSecurity,
+      from: smtpFrom ?? '',
+      recipients: zReportRecipients,
+      username: smtpUsername,
+      password: smtpPassword,
+    );
+    return config.isComplete ? config : null;
   }
 }

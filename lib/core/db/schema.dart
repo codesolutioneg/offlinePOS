@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 16;
+  static const int version = 17;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -414,6 +414,32 @@ class Schema {
     [
       'ALTER TABLE modifier_groups ADD COLUMN auto_add INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE modifiers ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0',
+    ],
+
+    // v16 -> v17: mail the shop owner is waiting for.
+    //
+    // The Z report is the one number an owner who is not in the building wants at
+    // the end of the night, and a printed ticket in a drawer is not it. Sending is
+    // best effort and must never be able to hold up a cash-up, so the message is
+    // written here first and delivered afterwards: the same discipline as the
+    // order outbox, and for the same reason.
+    [
+      '''
+      CREATE TABLE email_outbox (
+        uuid            TEXT PRIMARY KEY,
+        recipients      TEXT NOT NULL,
+        subject         TEXT NOT NULL,
+        body            TEXT NOT NULL,
+        queued_at       TEXT NOT NULL,
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TEXT,
+        last_error      TEXT,
+        sent_at         TEXT
+      )
+      ''',
+      // Queued first, oldest first, so a night's backlog leaves in the order it
+      // happened rather than newest-first.
+      'CREATE INDEX idx_email_outbox_pending ON email_outbox (sent_at, queued_at)',
     ],
   ];
 }
