@@ -157,6 +157,7 @@ void main() {
     await t.pumpAndSettle();
 
     expect(find.byKey(const Key('open-work')), findsOneWidget);
+    expect(find.text('Still open on this till (1)'), findsOneWidget);
     expect(find.text('7 - 250.00'), findsOneWidget);
     // Backing out leaves the shift exactly as it was, with no cash count asked for.
     await t.tap(find.text('Go back'));

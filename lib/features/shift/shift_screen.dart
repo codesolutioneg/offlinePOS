@@ -350,7 +350,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           key: const Key('open-work'),
-          title: Text(tr(ctx, 'Still open on this till')),
+          // The count leads the title: whatever else is skimmed, how many things
+          // are being closed over is the number that must not be lost.
+          title: Text('${tr(ctx, 'Still open on this till')} (${work.count})'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
