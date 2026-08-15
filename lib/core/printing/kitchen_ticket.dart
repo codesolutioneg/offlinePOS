@@ -54,6 +54,22 @@ class KitchenTicketBuilder {
     p.size(doubleHeight: true).bold(true).line(order.type.label.toUpperCase())..bold(false)..size();
     if (order.tableLabel != null) p.line('Table: ${order.tableLabel}');
     if (order.guestCount != null) p.line('Guests: ${order.guestCount}');
+    // The pass is where a delivery is bagged and handed over, so the ticket carries
+    // enough to match bag to rider: who it is for, which app sent it and its number
+    // there. The address is not repeated here; that belongs on the slip that goes
+    // out with the food.
+    if (order.type == OrderType.delivery) {
+      if (order.customerName != null) p.line('For: ${order.customerName}');
+      if (order.customerPhone != null && order.customerPhone!.isNotEmpty) {
+        p.line('Phone: ${order.customerPhone}');
+      }
+      final channel = [
+        if (order.deliveryChannel != null) order.deliveryChannel!,
+        if (order.companyOrderNo != null) '#${order.companyOrderNo}',
+      ].join(' ');
+      if (channel.isNotEmpty) p.line('Channel: $channel');
+      if (order.driverName != null) p.line('Driver: ${order.driverName}');
+    }
     p.line('${_stamp(order.createdAt)}  #${order.displayNo}');
     p.line('By: ${order.cashierId}');
     p.rule();
