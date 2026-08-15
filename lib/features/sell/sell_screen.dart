@@ -2025,7 +2025,13 @@ class _SellScreenState extends State<SellScreen> {
                   ),
           ),
           const Divider(height: 1),
-          _totals(),
+          // Chrome above the navigator (the shift nudge) takes height off every
+          // screen, and a delivery with a customer and a discount is a tall summary.
+          // The totals give way and scroll rather than clip: a total a cashier
+          // cannot read is worse than one they have to nudge into view. The action
+          // buttons below stay put, because a Pay button that scrolls away is not a
+          // Pay button.
+          Flexible(child: SingleChildScrollView(child: _totals())),
           _actions(),
         ],
       );
@@ -2198,15 +2204,6 @@ class _SellScreenState extends State<SellScreen> {
                       : tr(context, 'Add discount')),
                 ),
                 const Spacer(),
-                // Next to the total, where a waiter looks when the table asks for the
-                // bill, and not buried in a menu that only dine-in reaches.
-                if (widget.onPrintBill != null)
-                  IconButton(
-                    key: const Key('print-bill'),
-                    tooltip: tr(context, 'Print bill'),
-                    icon: const Icon(Icons.receipt_long_outlined),
-                    onPressed: _printBill,
-                  ),
               ]),
           ],
         ),
@@ -2233,6 +2230,21 @@ class _SellScreenState extends State<SellScreen> {
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
       child: Column(children: [
         Row(children: [
+          // Where a waiter looks when the table asks for the bill. It lives with the
+          // actions rather than in the summary above, because the summary scrolls
+          // when the chrome squeezes it and a bill nobody can reach is not a feature.
+          // Nothing to bill on an empty order, so it stays away until there is.
+          if (widget.onPrintBill != null && s.hasLines) ...[
+            SizedBox(
+              height: 52,
+              child: OutlinedButton(
+                key: const Key('print-bill'),
+                onPressed: _printBill,
+                child: const Icon(Icons.receipt_long_outlined),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           Expanded(
             child: SizedBox(
               height: 52,

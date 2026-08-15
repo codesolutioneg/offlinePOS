@@ -330,4 +330,85 @@ void main() {
       expect(changedCount, 1);
     });
   });
+
+  group('the copy for the pass', () {
+    testWidgets('is off until a station is picked, then names one', (t) async {
+      await tall(t);
+      printers.remember('kitchen', host: '192.168.1.50');
+      await t.pumpWidget(app());
+
+      expect(settings.subReceiptStation, '');
+      // The hide-prices switch only exists once there is a copy to hide them on.
+      expect(find.byKey(const Key('sub-receipt-hide-prices')), findsNothing);
+
+      await t.tap(find.byKey(const Key('sub-receipt-station')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('kitchen').last);
+      await t.pumpAndSettle();
+
+      expect(settings.subReceiptStation, 'kitchen');
+      expect(settings.subReceiptHidePrices, isTrue);
+      expect(changedCount, 1);
+    });
+
+    testWidgets('only printers that exist are offered, not routing names',
+        (t) async {
+      await tall(t);
+      // 'kitchen' is always offered as a routing target below, because a category
+      // can be pointed at a station before the printer is bought. A copy sent there
+      // would just print a second slip at the till, so it is not offered here.
+      await t.pumpWidget(app());
+
+      final picker = t.widget<DropdownButton<String>>(
+          find.byKey(const Key('sub-receipt-station')));
+      expect(picker.items!.map((i) => i.value), ['']);
+    });
+
+    testWidgets('prices can be left on the copy', (t) async {
+      await tall(t);
+      settings.subReceiptStation = 'kitchen';
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('sub-receipt-hide-prices')));
+      await t.pumpAndSettle();
+
+      expect(settings.subReceiptHidePrices, isFalse);
+    });
+  });
+
+  group('a spare printer', () {
+    testWidgets('is picked on the printer itself and written down', (t) async {
+      await tall(t);
+      printers.remember('receipt', host: '192.168.1.50');
+      printers.remember('bar', host: '192.168.1.60');
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('edit-receipt')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('printer-backup')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('bar').last);
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('save-add-printer')));
+      await t.pumpAndSettle();
+
+      expect(printers['receipt']!.backup, 'bar');
+      // And it is on the row, so support can see where a ticket goes.
+      expect(find.textContaining('spare: bar'), findsOneWidget);
+    });
+
+    testWidgets('a printer is not offered itself as its own spare', (t) async {
+      await tall(t);
+      printers.remember('receipt', host: '192.168.1.50');
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('edit-receipt')));
+      await t.pumpAndSettle();
+
+      final picker =
+          t.widget<DropdownButton<String>>(find.byKey(const Key('printer-backup')));
+      // Nothing but "Nowhere": the only printer in the shop is this one.
+      expect(picker.items!.map((i) => i.value), ['']);
+    });
+  });
 }

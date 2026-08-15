@@ -26,6 +26,7 @@ import 'core/db/print_job_store.dart';
 import 'core/db/printer_store.dart';
 import 'core/db/shift_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
+import 'core/export/db_backup.dart';
 import 'core/lan/lan_credential.dart';
 import 'core/lan/lan_wiring.dart';
 import 'core/onboarding/wizard_store.dart';
@@ -36,6 +37,7 @@ import 'core/sync/outbox.dart';
 import 'core/sync/odoo_endpoint.dart';
 import 'core/sync/odoo_puller.dart';
 import 'core/sync/odoo_wiring.dart';
+import 'core/sync/server_probe.dart';
 import 'core/sync/sync_service.dart';
 import 'core/updates/update_gate.dart';
 import 'core/updates/update_service.dart';
@@ -148,20 +150,11 @@ Future<void> main() async {
   // A cheap, unauthenticated reachability check: version_info answers on any
   // running Odoo. It books nothing, so it is safe to run on the timer purely to
   // keep the online/offline badge honest. Orders are never pushed here.
-  Future<bool> probeOnline() async {
-    final e = endpoints.load();
-    if (e == null || !e.isComplete) return false;
-    try {
-      final reply = await post(
-        Uri.parse(e.baseUrl).resolve('/web/webclient/version_info'),
-        const {'Content-Type': 'application/json'},
-        '{"jsonrpc":"2.0","method":"call","params":{}}',
-      ).timeout(const Duration(seconds: 6));
-      return reply.statusCode >= 200 && reply.statusCode < 500;
-    } catch (_) {
-      return false;
-    }
-  }
+  Future<bool> probeOnline() => serverIsReachable(endpoints.load(), post);
+
+  // The same probe with the login question added, for the Test connection button on
+  // the server screen. Button-driven only: it authenticates, and the badge must not.
+  Future<ServerCheckResult> checkTheServer(OdooEndpoint e) => checkServer(e, post);
 
   final sync = SyncService(
     outbox: outbox,
@@ -260,6 +253,10 @@ Future<void> main() async {
     provisioningPin: provisioningPin,
     updates: _updateService(config, sync, activity, dir),
     endpoints: endpoints,
+    checkServer: checkTheServer,
+    // One copy of the whole till, encrypted as it sits, for the day the machine
+    // does not come back on.
+    backup: () => backupDatabase(db),
     odoo: odoo,
     tables: tables,
     settings: settings,

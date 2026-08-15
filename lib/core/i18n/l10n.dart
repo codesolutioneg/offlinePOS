@@ -775,4 +775,53 @@ const Map<String, String> _ar = {
   'Ticket did not print. Tell the kitchen and try again.':
       'لم تُطبع التذكرة. أبلغ المطبخ ثم أعد المحاولة.',
   'to print': 'في انتظار الطباعة',
+  // printing and ops: the pass copy, the logo, tender labels, the server check,
+  // the database backup and the backup printer
+  'Off': 'متوقف',
+  'Copy for the pass': 'نسخة لقسم التحضير',
+  'Hide prices on that copy': 'إخفاء الأسعار في تلك النسخة',
+  'A packing list: names and quantities only': 'قائمة تجهيز: الأسماء والكميات فقط',
+  'Logo': 'الشعار',
+  'LOGO': 'الشعار',
+  'Print the shop logo': 'طباعة شعار المحل',
+  'Above the shop name, from the printer\'s own memory':
+      'أعلى اسم المحل، من ذاكرة الطابعة نفسها',
+  'Logo image file': 'ملف صورة الشعار',
+  'Send the logo to the printer': 'إرسال الشعار إلى الطابعة',
+  'Give the file path of the logo image.': 'اكتب مسار ملف صورة الشعار.',
+  'That file could not be read as an image.': 'تعذّرت قراءة هذا الملف كصورة.',
+  'Logo stored in the printer.': 'تم تخزين الشعار في الطابعة.',
+  'Kept on the till. The printer did not answer, so send it again.':
+      'حُفظ على الجهاز. لم تستجب الطابعة، أعد الإرسال لاحقًا.',
+  'Loaded': 'محمَّل',
+  'Send the picture with every receipt': 'إرسال الصورة مع كل فاتورة',
+  'Only for a printer that cannot store a logo. Slower on every sale.':
+      'فقط للطابعة التي لا تستطيع تخزين شعار. أبطأ في كل عملية بيع.',
+  'Payment methods': 'طرق الدفع',
+  'What each tender is called on the receipt': 'اسم كل طريقة دفع على الفاتورة',
+  'Printed name': 'الاسم المطبوع',
+  'Only the wording on the receipt changes. Sales and reports keep the method as it is.':
+      'يتغيّر النص على الفاتورة فقط. المبيعات والتقارير تحتفظ بطريقة الدفع كما هي.',
+  'No payment methods yet. They arrive with the menu on the next sync.':
+      'لا توجد طرق دفع بعد. تصل مع قائمة الأصناف في المزامنة القادمة.',
+  'If it is off, print at': 'إذا كانت متوقفة، اطبع على',
+  'Nowhere': 'لا شيء',
+  'The slip says it was rerouted': 'يُذكر على الورقة أنها حُوِّلت',
+  'spare': 'البديلة',
+  'Test connection': 'اختبار الاتصال',
+  'Asking the server...': 'جارٍ سؤال الخادم...',
+  'Connected. The login was accepted.': 'تم الاتصال. تم قبول بيانات الدخول.',
+  'No answer from that address.': 'لا يوجد رد من هذا العنوان.',
+  'Something answered, but it is not an Odoo server.':
+      'هناك رد، لكنه ليس من خادم أودو.',
+  'The server is up, but it refused this login.':
+      'الخادم يعمل، لكنه رفض بيانات الدخول.',
+  'Nothing is sent or booked. Queued sales still go out at shift close.':
+      'لا يُرسَل ولا يُسجَّل شيء. المبيعات المنتظرة تُرسَل عند إغلاق الوردية.',
+  'Backup': 'نسخة احتياطية',
+  'Back up now': 'إنشاء نسخة الآن',
+  'Copying...': 'جارٍ النسخ...',
+  'Backup failed': 'فشل النسخ الاحتياطي',
+  'A copy of everything on this till, including sales that have not synced. It stays encrypted.':
+      'نسخة من كل ما على هذا الجهاز، بما فيها المبيعات غير المزامَنة. تبقى مشفّرة.',
 };

@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../../domain/business_day.dart';
 import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
 import '../printing/escpos.dart';
+import '../printing/printer_logo.dart';
 import 'database.dart';
 
 /// On-device configuration a manager can change without a rebuild: shop name and
@@ -531,6 +533,84 @@ class SettingsStore {
   /// 'equals', 'dots' or 'stars'.
   String get receiptDividerStyle => getString('receipt_divider_style') ?? 'line';
   set receiptDividerStyle(String v) => setString('receipt_divider_style', v);
+
+  // ── what a tender is called on paper ─────────────────────────────
+
+  /// Payment method id to the name the receipt should print for it, so a shop can
+  /// say "Visa/Mastercard" or "InstaPay" where Odoo says "Bank". Display only: the
+  /// method id and everything that goes to the server are untouched, so a renamed
+  /// tender still books and still reports as itself.
+  Map<int, String> get paymentMethodLabels {
+    final v = getString('payment_method_labels');
+    if (v == null) return const {};
+    try {
+      return (jsonDecode(v) as Map).map(
+          (k, val) => MapEntry(int.parse(k as String), val.toString()));
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  set paymentMethodLabels(Map<int, String> v) => setString(
+      'payment_method_labels', jsonEncode(v.map((k, val) => MapEntry('$k', val))));
+
+  /// Set or clear one override. An empty label clears it, so a manager who empties
+  /// the box gets the method's own name back rather than a blank line on the slip.
+  void setPaymentMethodLabel(int methodId, String? label) {
+    final map = Map<int, String>.from(paymentMethodLabels);
+    final trimmed = label?.trim() ?? '';
+    if (trimmed.isEmpty) {
+      map.remove(methodId);
+    } else {
+      map[methodId] = trimmed;
+    }
+    paymentMethodLabels = map;
+  }
+
+  // ── the shop's mark on the paper ─────────────────────────────────
+
+  /// Print the shop logo at the top of the receipt. Off until a shop asks for it,
+  /// because a logo the printer does not hold prints as nothing at best.
+  bool get receiptPrintLogo => getBool('receipt_print_logo');
+  set receiptPrintLogo(bool v) => setBool('receipt_print_logo', v);
+
+  /// Send the picture with every receipt instead of printing the one in the
+  /// printer's flash. Deliberately off and deliberately its own switch: it is
+  /// kilobytes on the wire per slip, and only a printer with no flash needs it.
+  bool get receiptLogoRaster => getBool('receipt_logo_raster');
+  set receiptLogoRaster(bool v) => setBool('receipt_logo_raster', v);
+
+  /// The dots of the logo last loaded on this device, so the raster route and the
+  /// designer's preview do not need the source file again. Null until one is loaded;
+  /// the flash route does not need it at all.
+  PrinterLogo? get receiptLogo => PrinterLogo.decode(getString('receipt_logo'));
+  set receiptLogo(PrinterLogo? v) => setString('receipt_logo', v?.encode());
+
+  /// The command that puts the mark on a slip, or null when the shop prints none.
+  /// One place decides between the two routes, so the sale receipt, the bill and the
+  /// sample all carry the same header.
+  Uint8List? receiptLogoCommand() {
+    if (!receiptPrintLogo) return null;
+    if (!receiptLogoRaster) return PrinterLogo.printStored();
+    return receiptLogo?.raster();
+  }
+
+  // ── the second copy of the slip ──────────────────────────────────
+
+  /// The station a no-price copy of every sale slip is sent to, so the pass gets a
+  /// packing list of what the bag holds. Empty (the default) means no copy is
+  /// printed at all and the till behaves exactly as it did before this existed.
+  ///
+  /// A station name, not an address: it is routed through the same registry every
+  /// kitchen ticket is, so a copy follows the printer when its lease moves.
+  String get subReceiptStation => getString('sub_receipt_station') ?? '';
+  set subReceiptStation(String v) => setString('sub_receipt_station', v.trim());
+
+  /// Whether that copy leaves the amount column off. On by default, because the
+  /// reason to print it at the pass is that a runner should not be handing a
+  /// customer a second priced slip.
+  bool get subReceiptHidePrices => getBool('sub_receipt_hide_prices', fallback: true);
+  set subReceiptHidePrices(bool v) => setBool('sub_receipt_hide_prices', v);
 
   // ── what the printer can spell ───────────────────────────────────
 

@@ -182,6 +182,17 @@ class _PrintersScreenState extends State<PrintersScreen> {
   Widget _receiptOptions() {
     final cols = widget.settings.receiptColumns;
     final copies = widget.settings.receiptCopies;
+    final subStation = widget.settings.subReceiptStation;
+    // Only printers that actually exist, unlike the routing chips below: a category
+    // can be pointed at a station before its printer is bought, but a copy sent to a
+    // name nothing answers to just prints a second slip at the till.
+    final configured = <String>{
+      for (final printer in widget.printers.printers) printer.name,
+      // Whatever is already chosen stays pickable, even if that printer was removed
+      // since, so the setting never disappears out from under a manager.
+      if (subStation.isNotEmpty) subStation,
+    }.toList()
+      ..sort();
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -237,6 +248,40 @@ class _PrintersScreenState extends State<PrintersScreen> {
               _notify();
             },
           ),
+          const Divider(),
+          // A copy of the sale slip for whoever packs the order. Off until a station
+          // is picked, because a shop with one printer does not want two slips.
+          Row(children: [
+            Expanded(
+              child: Text(tr(context, 'Copy for the pass'),
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            DropdownButton<String>(
+              key: const Key('sub-receipt-station'),
+              value: configured.contains(subStation) ? subStation : '',
+              items: [
+                DropdownMenuItem(value: '', child: Text(tr(context, 'Off'))),
+                for (final station in configured)
+                  DropdownMenuItem(value: station, child: Text(station)),
+              ],
+              onChanged: (v) {
+                widget.settings.subReceiptStation = v ?? '';
+                _notify();
+              },
+            ),
+          ]),
+          if (subStation.isNotEmpty)
+            SwitchListTile(
+              key: const Key('sub-receipt-hide-prices'),
+              contentPadding: EdgeInsets.zero,
+              title: Text(tr(context, 'Hide prices on that copy')),
+              subtitle: Text(tr(context, 'A packing list: names and quantities only')),
+              value: widget.settings.subReceiptHidePrices,
+              onChanged: (v) {
+                widget.settings.subReceiptHidePrices = v;
+                _notify();
+              },
+            ),
           const Divider(),
           // Which script the printer itself can spell, and what to do about the
           // lines it cannot. Here rather than in the receipt designer because both
@@ -372,7 +417,12 @@ class _PrintersScreenState extends State<PrintersScreen> {
     final identity = printer.identity == null ? '' : ' - identity ${printer.identity}';
     final seen =
         printer.lastSeenAt == null ? '' : ' - last seen ${_formatTime(printer.lastSeenAt!)}';
-    return '$address$identity$seen';
+    // The spare is part of what this printer is: support reading the screen has to
+    // see where a ticket goes when this one is off.
+    final backup = printer.backup == null
+        ? ''
+        : ' - ${tr(context, 'spare')}: ${printer.backup}';
+    return '$address$identity$seen$backup';
   }
 
   String _formatTime(DateTime at) {
@@ -553,6 +603,9 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
   late final TextEditingController _host;
   late final TextEditingController _port;
 
+  /// The printer this one falls back to, or empty for none.
+  late String _backup;
+
   @override
   void initState() {
     super.initState();
@@ -560,6 +613,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
     _name = TextEditingController(text: editing?.name ?? '');
     _host = TextEditingController(text: editing?.host ?? '');
     _port = TextEditingController(text: '${editing?.port ?? 9100}');
+    _backup = editing?.backup ?? '';
   }
 
   @override
@@ -582,6 +636,9 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
       widget.printers.forget(oldName);
     }
     widget.printers.remember(name, host: host.isEmpty ? null : host, port: port);
+    // After the remember, so it lands on the printer that now exists under this
+    // name, and explicitly, because clearing the spare has to be possible too.
+    widget.printers.setBackup(name, _backup.isEmpty ? null : _backup);
     // Return the saved name so the caller can repoint routing on a rename.
     Navigator.of(context).pop(name);
   }
@@ -589,6 +646,10 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
   @override
   Widget build(BuildContext context) {
     final editing = widget.editing != null;
+    final others = widget.printers.printers
+        .where((p) => p.name != widget.editing?.name)
+        .toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
     return AlertDialog(
       title: Text(editing ? tr(context, 'Edit printer') : tr(context, 'Add printer')),
       content: SingleChildScrollView(
@@ -640,6 +701,24 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
                 border: const OutlineInputBorder(),
               ),
             ),
+            const SizedBox(height: 12),
+            // Where a job goes when this printer will not take it. Only printers
+            // that already exist are offered, and never this one.
+            Row(children: [
+              Expanded(child: Text(tr(context, 'If it is off, print at'))),
+              DropdownButton<String>(
+                key: const Key('printer-backup'),
+                value: others.map((p) => p.name).contains(_backup) ? _backup : '',
+                items: [
+                  DropdownMenuItem(value: '', child: Text(tr(context, 'Nowhere'))),
+                  for (final other in others)
+                    DropdownMenuItem(value: other.name, child: Text(other.name)),
+                ],
+                onChanged: (v) => setState(() => _backup = v ?? ''),
+              ),
+            ]),
+            Text(tr(context, 'The slip says it was rerouted'),
+                style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
       ),

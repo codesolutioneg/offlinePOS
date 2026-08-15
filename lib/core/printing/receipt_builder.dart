@@ -24,8 +24,11 @@ class ReceiptBuilder {
     this.showTable = true,
     this.showPayment = true,
     this.showItemPrice = true,
+    this.showTotals = true,
     this.dividerStyle = 'line',
     this.openDrawer = false,
+    this.logo,
+    this.paymentLabels = const {},
   });
 
   final String shopName;
@@ -48,6 +51,12 @@ class ReceiptBuilder {
   final bool showPayment;
   final bool showItemPrice;
 
+  /// Print the money at the foot: the breakdown, the tax lines, the total and what
+  /// was tendered. Off turns the slip into a packing list, which is the only thing a
+  /// copy for the pass should be: a runner must not be able to hand it over as a
+  /// second priced receipt.
+  final bool showTotals;
+
   /// Which character separator lines are drawn with, as stored by the receipt
   /// designer. Anything unrecognised falls back to a dashed rule.
   final String dividerStyle;
@@ -56,6 +65,17 @@ class ReceiptBuilder {
 
   /// Kick the cash drawer open at the end, for a cash sale.
   final bool openDrawer;
+
+  /// What each payment method is called on paper, by method id, when the shop wants
+  /// something other than the name that came down from the server. Print-time only:
+  /// the tender itself keeps the id and the label it was rung with.
+  final Map<int, String> paymentLabels;
+
+  /// The printer command that puts the shop's mark above the name, or null for the
+  /// text-only slip this always printed. Composed by the caller (see PrinterLogo)
+  /// because which of the two logo routes a shop is on depends on its hardware, and
+  /// this class stays free of settings.
+  final Uint8List? logo;
 
   Uint8List build(Order order, {bool reprint = false}) =>
       _slip(order, reprint: reprint);
@@ -73,8 +93,11 @@ class ReceiptBuilder {
     final p = EscPos(columns: columns)..reset();
     final divider = _dividerChars[dividerStyle] ?? '-';
 
-    p.align(EscPosAlign.center)
-      ..size(doubleWidth: true, doubleHeight: true)
+    p.align(EscPosAlign.center);
+    // Above the name, where a customer looks first, and while the printer is still
+    // centred so the mark sits in the middle of the roll.
+    if (logo != null) p.command(logo!).feed();
+    p.size(doubleWidth: true, doubleHeight: true)
       ..bold(true)
       ..line(shopName)
       ..bold(false)
@@ -142,10 +165,11 @@ class ReceiptBuilder {
     p.rule(divider);
     // Show the breakdown only when there is one, so a plain sale stays a plain
     // receipt but a discounted delivery with a tip is fully itemised.
-    final hasBreakdown = order.discountPercent > 0 ||
-        order.serviceChargePercent > 0 ||
-        order.deliveryCost > 0 ||
-        order.tip > 0;
+    final hasBreakdown = showTotals &&
+        (order.discountPercent > 0 ||
+            order.serviceChargePercent > 0 ||
+            order.deliveryCost > 0 ||
+            order.tip > 0);
     if (hasBreakdown) {
       p.row('Subtotal', formatAmount(order.subtotal));
       if (order.discountPercent > 0) {
@@ -167,23 +191,26 @@ class ReceiptBuilder {
     // Tax is shown as included in the total (prices are tax-inclusive), so the
     // slip is a valid tax receipt without changing what the customer pays.
     final tax = order.taxTotal;
-    if (showTax && tax > 0.001) {
+    if (showTax && showTotals && tax > 0.001) {
       p.row('Net', formatAmount(order.total - tax));
       p.row('Tax', formatAmount(tax));
     }
-    p.size(doubleHeight: true).bold(true)
-      ..row('TOTAL', formatAmount(order.total))
-      ..bold(false)
-      ..size();
+    if (showTotals) {
+      p.size(doubleHeight: true).bold(true)
+        ..row('TOTAL', formatAmount(order.total))
+        ..bold(false)
+        ..size();
+    }
 
     // Tender breakdown and change. A split payment prints one line per tender.
     // Payments store the settled amount, so a cash overpayment prints the cash
     // received and the change owed from [cashReceived] rather than from the tender.
-    if (!bill && order.payments.isNotEmpty) {
+    if (showTotals && !bill && order.payments.isNotEmpty) {
       p.feed();
       if (showPayment) {
         for (final pay in order.payments) {
-          p.row(pay.label ?? 'Payment', formatAmount(pay.amount));
+          p.row(paymentLabels[pay.methodId] ?? pay.label ?? 'Payment',
+              formatAmount(pay.amount));
         }
       }
       // Orders stored before cash_received existed kept the tender in the payment

@@ -25,6 +25,7 @@ import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
 import '../core/widgets/feedback.dart';
 import '../core/printing/kitchen_ticket.dart';
+import '../core/printing/printer_logo.dart';
 import '../core/printing/printer_registry.dart';
 import '../core/printing/printer_transport.dart';
 import '../core/printing/receipt_builder.dart';
@@ -33,6 +34,7 @@ import '../core/printing/spool_store.dart';
 import '../core/sync/odoo_endpoint.dart';
 import '../core/sync/odoo_wiring.dart';
 import '../core/sync/outbox.dart';
+import '../core/sync/server_probe.dart';
 import '../core/sync/sync_service.dart';
 import '../core/theme/app_colors.dart';
 import '../core/updates/update_service.dart';
@@ -56,6 +58,7 @@ import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
 import '../features/settings/lan_settings_screen.dart';
 import '../features/settings/tax_settings_screen.dart';
+import '../features/settings/payment_methods_screen.dart';
 import '../features/settings/printers_screen.dart';
 import '../features/settings/quick_comments_screen.dart';
 import '../features/settings/receipt_designer_screen.dart';
@@ -96,6 +99,8 @@ class PosApp extends StatefulWidget {
     required this.attendance,
     this.config = const TillConfig(),
     this.receiptSpool,
+    this.checkServer,
+    this.backup,
     this.activity,
     this.provisioningPin,
     this.updates,
@@ -116,6 +121,16 @@ class PosApp extends StatefulWidget {
   final String deviceId;
   final OdooEndpointStore endpoints;
   final OdooWiring odoo;
+
+  /// Asks the configured server whether it is there and whether it knows this
+  /// login, for the button on the server screen. Null on a build with no way to
+  /// reach out, which hides the button rather than showing one that cannot answer.
+  final Future<ServerCheckResult> Function(OdooEndpoint)? checkServer;
+
+  /// Copies the whole encrypted database somewhere a human can pick it up, and
+  /// answers with where it landed. Held here rather than built here because this
+  /// shell is given stores, not the database they sit in.
+  final Future<String> Function()? backup;
 
   /// The floor plan and the on-device settings a manager edits on the device.
   final TableStore tables;
@@ -465,7 +480,11 @@ class _PosAppState extends State<PosApp> {
   /// A receipt builder wired to the current on-device settings, so the sale slip,
   /// the deletion slip and the sample all lay out identically. [openDrawer] is only
   /// ever true for a cash sale's first copy.
-  ReceiptBuilder _receiptBuilder({bool openDrawer = false}) {
+  ReceiptBuilder _receiptBuilder({
+    bool openDrawer = false,
+    bool? showItemPrice,
+    bool showTotals = true,
+  }) {
     final s = widget.settings;
     return ReceiptBuilder(
       shopName: s.shopName ?? widget.config.shopName,
@@ -480,12 +499,43 @@ class _PosAppState extends State<PosApp> {
       showNumber: s.receiptShowNumber,
       showTable: s.receiptShowTable,
       showPayment: s.receiptShowPayment,
-      showItemPrice: s.receiptShowItemPrice,
+      showItemPrice: showItemPrice ?? s.receiptShowItemPrice,
+      showTotals: showTotals,
+      logo: s.receiptLogoCommand(),
+      paymentLabels: s.paymentMethodLabels,
       dividerStyle: s.receiptDividerStyle,
       openDrawer: openDrawer,
       formatAmount: PosApp.money,
     );
   }
+
+  /// The pass's own copy of the slip: the same sale, with the amount column off, on
+  /// whichever station the shop nominated. Off unless a station is set.
+  ///
+  /// Sent the way a kitchen ticket is, so a station that is down falls back to the
+  /// receipt printer and its spool rather than losing the copy, and never on a
+  /// reprint: the customer's slip comes out again, the pass does not need the same
+  /// bag listed twice.
+  Future<void> _printSubReceipt(Order order) async {
+    final s = widget.settings;
+    final station = s.subReceiptStation;
+    if (station.isEmpty) return;
+    final hide = s.subReceiptHidePrices;
+    // Hiding prices takes the money off the whole slip, not just the item column: a
+    // copy that still footed a total is a second receipt.
+    final bytes = _receiptBuilder(showItemPrice: !hide, showTotals: !hide)
+        .build(order);
+    await _sendToStation(station, bytes, 'subreceipt-${order.uuid}-$station');
+  }
+
+  /// Write the shop's mark into the receipt printer's own flash, once, by hand.
+  ///
+  /// Sent past the spool for the same reason the drawer kick is: a flash write that
+  /// sat in a backlog and replayed itself for a week would spend the printer's
+  /// limited write cycles on nothing. It throws when the printer is not there, which
+  /// is what the designer wants to be able to say.
+  Future<void> _uploadLogo(PrinterLogo logo) =>
+      _receiptPrinter.sendNow(logo.defineNv());
 
   /// Print a record slip when items are voided or an order is cancelled, so every
   /// removal leaves a paper trail at the till alongside the audit entry. Spooled
@@ -611,6 +661,9 @@ class _PosAppState extends State<PosApp> {
           // printer is down.
         }
       }
+      // After the customer's copies, so the slip a cashier is waiting for is never
+      // behind the pass's copy on the same roll.
+      if (!reprint) await _printSubReceipt(order);
     } on PrinterUnavailable {
       // Already held in the spool by [SpooledPrinter]. Surfacing it here would put a
       // dialog between the cashier and the next customer.
@@ -1343,6 +1396,19 @@ class _PosAppState extends State<PosApp> {
             ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
+        title: 'Payment methods',
+        subtitle: 'What each tender is called on the receipt',
+        icon: Icons.payments,
+        keyValue: 'set-payment-methods',
+        group: 'Shop',
+        onTap: () => pushGated(
+            Permission.openSettings,
+            PaymentMethodsScreen(
+                settings: widget.settings,
+                methods: widget.catalogue.paymentMethods(),
+                onChanged: refresh)),
+      ),
+      SettingsEntry(
         title: 'Receipt designer',
         subtitle: 'Header, footer, what prints',
         icon: Icons.receipt_long,
@@ -1353,6 +1419,7 @@ class _PosAppState extends State<PosApp> {
             ReceiptDesignerScreen(
                 settings: widget.settings,
                 onChanged: refresh,
+                onUploadLogo: _uploadLogo,
                 onTestPrint: () => _printReceipt(_sampleOrder(), reprint: true))),
       ),
       SettingsEntry(
@@ -1376,6 +1443,7 @@ class _PosAppState extends State<PosApp> {
                 footer: s.receiptFooter ?? widget.config.receiptFooter,
                 columns: s.receiptColumns,
                 dividerStyle: s.receiptDividerStyle,
+                logo: s.receiptLogoCommand(),
                 formatAmount: PosApp.money,
               ).build(_sampleOrder(), reprint: true);
               await RegistryPrinter(widget.printers, name)
@@ -1745,6 +1813,7 @@ class _PosAppState extends State<PosApp> {
         // Rewire the live sender the moment settings are saved, so a till just
         // pointed at a server drains its queue without a restart.
         onSaved: widget.odoo.configure,
+        check: widget.checkServer,
       ),
     ));
   }
@@ -1903,6 +1972,7 @@ class _PosAppState extends State<PosApp> {
         cashierId: _session?.cashierId,
         printError: _printError,
         authorize: (p) => _authorize(p, context),
+        onBackup: widget.backup,
       ),
     ));
   }

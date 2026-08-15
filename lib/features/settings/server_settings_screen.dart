@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../core/sync/odoo_endpoint.dart';
+import '../../core/sync/server_probe.dart';
 
 /// Point this till at an Odoo server.
 ///
@@ -14,12 +15,17 @@ class ServerSettingsScreen extends StatefulWidget {
     super.key,
     required this.store,
     required this.onSaved,
+    this.check,
   });
 
   final OdooEndpointStore store;
 
   /// Called with the saved endpoint so the app can (re)wire the sender live.
   final void Function(OdooEndpoint) onSaved;
+
+  /// Asks the server whether it is there and whether it knows this login. Null
+  /// hides the button, for a build with no way to reach out.
+  final Future<ServerCheckResult> Function(OdooEndpoint)? check;
 
   @override
   State<ServerSettingsScreen> createState() => _ServerSettingsScreenState();
@@ -31,6 +37,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   late final TextEditingController _login;
   late final TextEditingController _pass;
   String? _message;
+  bool _checking = false;
 
   @override
   void initState() {
@@ -67,6 +74,40 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     setState(() => _message = tr(context, 'Saved. Queued sales will sync on the next attempt.'));
   }
 
+  /// Ask the server, and say which kind of no it was.
+  ///
+  /// Checks what is typed on screen rather than what is saved, so a manager can try
+  /// a correction before committing it to the till.
+  Future<void> _test() async {
+    final e = OdooEndpoint(
+      baseUrl: _url.text.trim(),
+      db: _db.text.trim(),
+      login: _login.text.trim(),
+      password: _pass.text.isEmpty ? null : _pass.text,
+    );
+    setState(() {
+      _checking = true;
+      _message = tr(context, 'Asking the server...');
+    });
+    final result = await widget.check!(e);
+    if (!mounted) return;
+    setState(() {
+      _checking = false;
+      _message = switch (result.outcome) {
+        ServerCheck.ok => tr(context, 'Connected. The login was accepted.'),
+        ServerCheck.notConfigured =>
+          tr(context, 'URL, database and login are all required.'),
+        ServerCheck.unreachable => '${tr(context, 'No answer from that address.')}'
+            '${result.detail == null ? '' : ' (${result.detail})'}',
+        ServerCheck.refused => '${tr(context, 'Something answered, but it is not an Odoo server.')}'
+            '${result.detail == null ? '' : ' (${result.detail})'}',
+        ServerCheck.badCredentials =>
+          '${tr(context, 'The server is up, but it refused this login.')}'
+              '${result.detail == null ? '' : ' (${result.detail})'}',
+      };
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -100,6 +141,28 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
             onPressed: _save,
             child: Text(tr(context, 'Save')),
           ),
+          if (widget.check != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('test-connection'),
+              onPressed: _checking ? null : _test,
+              icon: _checking
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.network_check),
+              label: Text(tr(context, 'Test connection')),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                tr(context,
+                    'Nothing is sent or booked. Queued sales still go out at shift close.'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
         ],
       ),
     );
