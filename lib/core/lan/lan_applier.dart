@@ -1,8 +1,12 @@
 import '../../domain/order.dart';
 import '../db/order_store.dart';
+import '../db/reservation_store.dart';
+import '../db/settings_store.dart';
 import '../db/table_store.dart';
+import 'lan_cart_board.dart';
 import 'lan_event.dart';
 import 'lan_event_log.dart';
+import 'lan_shift_board.dart';
 import 'lan_peer.dart';
 
 /// What became of one event, which is what decides whether the peer's cursor may
@@ -27,10 +31,14 @@ class LanApplier {
     required this.deviceId,
     required OrderStore orders,
     required TableStore tables,
+    required SettingsStore settings,
+    required ReservationStore reservations,
     required LanEventLog log,
     LanLog? onRefused,
   })  : _orders = orders,
         _tables = tables,
+        _settings = settings,
+        _reservations = reservations,
         _log = log,
         _onRefused = onRefused;
 
@@ -39,6 +47,8 @@ class LanApplier {
 
   final OrderStore _orders;
   final TableStore _tables;
+  final SettingsStore _settings;
+  final ReservationStore _reservations;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -123,7 +133,8 @@ class LanApplier {
     if (event.originDeviceId == deviceId) return _Landing.refused;
     try {
       if (!_wins(event)) return _Landing.refused;
-      if (event.kind == LanEventKind.kitchenStatus &&
+      if ((event.kind == LanEventKind.kitchenStatus ||
+              event.kind == LanEventKind.orderClaim) &&
           _orders.byUuid(event.recordUuid) == null) {
         // Deferred rather than refused: the owning till's upsert is still coming,
         // and the difference decides whether the cursor may move past this.
@@ -133,6 +144,11 @@ class LanApplier {
         LanEventKind.orderUpsert => _applyOrder(event),
         LanEventKind.kitchenStatus => _applyKitchenStatus(event),
         LanEventKind.tableUpsert => _applyTable(event),
+        LanEventKind.productAvailability => _applyAvailability(event),
+        LanEventKind.orderClaim => _applyClaim(event),
+        LanEventKind.reservationUpsert => _applyReservation(event),
+        LanEventKind.shiftLifecycle => _applyShiftNotice(event),
+        LanEventKind.cartDisplay => _applyCart(event),
       };
       if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
@@ -186,6 +202,45 @@ class LanApplier {
     // would put a ticket on the board that no till owns.
     if (_orders.byUuid(event.recordUuid) == null) return false;
     _orders.setKitchenStatus(event.recordUuid, status, announce: false);
+    return true;
+  }
+
+  /// A tab that changed hands somewhere else. Every till follows the owner, so the
+  /// floor plan on a third device knows which till to send a waiter to.
+  bool _applyClaim(LanEvent event) {
+    final to = event.payload['to'];
+    if (to is! String) throw FormatException('claim for ${event.recordUuid}');
+    return _orders.applyHandOver(event.recordUuid, to);
+  }
+
+  bool _applyAvailability(LanEvent event) {
+    final id = event.payload['product_id'];
+    if (id is! int) throw FormatException('availability for ${event.recordUuid}');
+    _settings.applyProductAvailable(id, event.payload['available'] == true);
+    return true;
+  }
+
+  /// What another till has on its counter, for a display to show. Kept on a board
+  /// and nothing else: a cart is not an order and must never become one here.
+  bool _applyCart(LanEvent event) {
+    LanCartBoard(_settings).remember(LanCartSnapshot.fromMap(event.payload));
+    return true;
+  }
+
+  /// A till telling the shop its day is over. Written to the board the floor reads,
+  /// never acted on here: what a device does about it is a policy the device owns,
+  /// and applying an event must not be able to stop anybody selling.
+  bool _applyShiftNotice(LanEvent event) {
+    LanShiftBoard(_settings).remember(LanShiftNotice.fromMap(event.payload));
+    return true;
+  }
+
+  bool _applyReservation(LanEvent event) {
+    if (event.payload['deleted'] == true) {
+      _reservations.remove(event.recordUuid, announce: false);
+      return true;
+    }
+    _reservations.save(Reservation.fromMap(event.payload), announce: false);
     return true;
   }
 

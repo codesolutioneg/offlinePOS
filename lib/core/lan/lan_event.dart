@@ -1,10 +1,12 @@
 /// What one till tells the others it just did.
 ///
-/// The first wave carries exactly three things, because those are the ones a shop
-/// notices are missing the moment it runs a second device: a parked or paid order,
-/// where a ticket is in the kitchen, and the floor plan a manager laid out. Nothing
-/// here invents a new record type, so every event applies through a store that
-/// already exists and every screen keeps reading the same local database.
+/// The first three are what a shop notices are missing the moment it runs a second
+/// device: a parked or paid order, where a ticket is in the kitchen, and the floor
+/// plan a manager laid out. The rest are the shop's own facts, which turn out to
+/// behave the same way: an item off the menu, a tab changing hands, a table booked
+/// ahead, a day closed. Nothing here invents a record type, so every event applies
+/// through a store that already exists and every screen keeps reading the same local
+/// database.
 enum LanEventKind {
   /// A held or paid order, the whole payload. Drafts are deliberately absent: an
   /// order still being rung is not shared state, and replicating every tap would
@@ -20,13 +22,49 @@ enum LanEventKind {
   /// not a kind: it is derived from the parked orders, which already replicate, so
   /// a second source of truth for "table 5 is busy" cannot disagree with the bill
   /// sitting on it.
-  tableUpsert('table.upsert');
+  tableUpsert('table.upsert'),
 
-  const LanEventKind(this.wire);
+  /// One product marked sold out or put back on. Its own kind rather than part of
+  /// an order, because running out is a fact about the shop and not about a sale:
+  /// the till that hears it last must end up refusing the same item as the one that
+  /// heard the kitchen shout.
+  productAvailability('product.availability'),
+
+  /// A parked tab changing hands, announced by the till that gave it up. Only the
+  /// owner ever sends it, and it sends it as part of letting go, so a tab still has
+  /// exactly one owner at every instant: the single-writer rule survives the
+  /// handover instead of being suspended for it.
+  orderClaim('order.claim'),
+
+  /// A table booked ahead, changed or called off. Shared for the same reason the
+  /// floor plan is: a booking taken at the counter has to reach the handheld the
+  /// waiter is holding, or two people promise one table.
+  reservationUpsert('reservation.upsert'),
+
+  /// A till saying its trading day is over. Carried so the other devices can be
+  /// told rather than each closing whenever somebody remembers, and deliberately
+  /// only ever advisory: a device that hears nothing sells exactly as it always
+  /// did, because a shop must not stop trading when a switch dies.
+  shiftLifecycle('shift.lifecycle'),
+
+  /// What one till has on its counter right now, for a customer-facing display.
+  ///
+  /// The one snapshot kind, and the only thing here that is written while an order
+  /// is being rung, so it is opt-in per till and superseding: the log keeps the
+  /// latest one per device and drops the rest, because a cart from a minute ago is
+  /// of no use to anybody and a shift's worth of taps is not something to keep.
+  cartDisplay('cart.display', snapshot: true);
+
+  const LanEventKind(this.wire, {this.snapshot = false});
 
   /// The name on the wire. Fixed apart from the enum so renaming a Dart constant
   /// cannot silently break a till running the previous build.
   final String wire;
+
+  /// Whether an event of this kind replaces the one before it for the same record.
+  /// True only where the payload is a picture of right now rather than a change to
+  /// be applied in order, so dropping the older one loses nothing.
+  final bool snapshot;
 
   static LanEventKind? fromWire(String wire) {
     for (final kind in LanEventKind.values) {

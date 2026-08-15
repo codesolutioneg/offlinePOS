@@ -33,6 +33,16 @@ class LanEventLog {
     DateTime? at,
   }) {
     final stamp = (at ?? _now()).toUtc();
+    if (kind.snapshot) {
+      // A snapshot supersedes its predecessor, so the log holds one row per record
+      // instead of one per tap. Safe against the cursor rule: a peer moves to the
+      // high-water mark the page reports, which never goes backwards, so a row that
+      // is gone is a gap and not a stall.
+      _db.raw.execute(
+        'DELETE FROM lan_events WHERE kind = ? AND record_uuid = ?',
+        [kind.wire, recordUuid],
+      );
+    }
     _db.raw.execute(
       'INSERT INTO lan_events (kind, record_uuid, payload, at) VALUES (?,?,?,?)',
       [kind.wire, recordUuid, jsonEncode(payload), stamp.toIso8601String()],

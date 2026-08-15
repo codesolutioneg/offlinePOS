@@ -24,12 +24,14 @@ import 'core/db/order_store.dart';
 import 'core/db/settings_store.dart';
 import 'core/db/table_store.dart';
 import 'core/db/print_job_store.dart';
+import 'core/db/reservation_store.dart';
 import 'core/db/printer_store.dart';
 import 'core/db/shift_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
 import 'core/email/email_outbox.dart';
 import 'core/email/email_service.dart';
 import 'core/export/db_backup.dart';
+import 'core/lan/lan_cart_board.dart';
 import 'core/lan/lan_credential.dart';
 import 'core/lan/lan_wiring.dart';
 import 'core/onboarding/wizard_store.dart';
@@ -97,6 +99,10 @@ Future<void> main() async {
     // disk, and only the till that rang a sale may ever recall, report or book it.
     ownDeviceId: deviceId,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+    // Whether the counter is put on the shop network for a customer-facing display
+    // to show. Off unless a shop has one, and then it is the only thing the fabric
+    // writes while an order is being rung.
+    publishesCart: lanOn ? () => LanCartBoard(settings).publishing : null,
     // A change that committed but could not be announced is a shop whose devices
     // have quietly stopped agreeing. The sale is already safe, so this is the only
     // way support finds out.
@@ -107,6 +113,16 @@ Future<void> main() async {
     db,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
   );
+  // Bookings, shared for the same reason the floor plan is: one taken at the
+  // counter has to reach the handheld the waiter is holding.
+  final reservations = ReservationStore(
+    db,
+    publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+  );
+  // What the kitchen shouted, told to every device: an item off the menu is a fact
+  // about the shop, so the 86 board is shared the same way a parked tab is.
+  settings.publish =
+      lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null;
 
   // Senders are registered once the device is enrolled and authenticated. Until
   // then the outbox simply accumulates, which is the correct offline behaviour:
@@ -231,6 +247,8 @@ Future<void> main() async {
       deviceName: settings.lanDeviceName ?? deviceId,
       orders: orders,
       tables: tables,
+      settings: settings,
+      reservations: reservations,
       audit: audit,
       port: config.lanPort,
       beaconPort: config.lanBeaconPort,
@@ -266,6 +284,7 @@ Future<void> main() async {
     customers: CustomerStore(db),
     delivery: DeliveryStore(db),
     attendance: AttendanceStore(db),
+    reservations: reservations,
     lan: lan,
     // The Z report by mail. Reads the settings on every attempt, so a password
     // corrected mid-evening is used by the next retry without a restart.

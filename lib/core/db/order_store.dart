@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../../domain/order.dart';
+import '../lan/lan_cart_board.dart';
 import '../lan/lan_event.dart';
 import 'database.dart';
 
@@ -26,8 +27,10 @@ class OrderStore {
     this._db, {
     this.ownDeviceId,
     LanPublish? publish,
+    bool Function()? publishesCart,
     void Function(String uuid, Object error)? onAnnounceFailed,
   })  : _publish = publish,
+        _publishesCart = publishesCart,
         _onAnnounceFailed = onAnnounceFailed;
 
   final Db _db;
@@ -41,6 +44,12 @@ class OrderStore {
   /// transaction, no event, no socket.
   final LanPublish? _publish;
 
+  /// Whether this till feeds a customer-facing display. Read at the moment of the
+  /// write rather than held, so switching the display off stops the writes at once.
+  /// Null (and false) is the ordinary till, which then behaves exactly as it did
+  /// before displays existed: a draft announces nothing at all.
+  final bool Function()? _publishesCart;
+
   /// Told when a change was committed but could not be announced. The sale wins,
   /// so this is how a shop finds out its tills stopped replicating.
   final void Function(String uuid, Object error)? _onAnnounceFailed;
@@ -52,13 +61,42 @@ class OrderStore {
   /// two devices claiming the same sale and echoing it back and forth.
   void save(Order order, {bool announce = true}) {
     final publish = _publish;
-    final shares = announce && publish != null && _isShared(order);
-    _write(
-      order,
-      shares
-          ? () => publish(LanEventKind.orderUpsert, order.uuid, order.toMap())
-          : null,
-    );
+    if (!announce || publish == null) {
+      _write(order, null);
+      return;
+    }
+    final shares = _isShared(order);
+    final cart = _cartEventFor(order);
+    if (!shares && cart == null) {
+      _write(order, null);
+      return;
+    }
+    _write(order, () {
+      if (shares) publish(LanEventKind.orderUpsert, order.uuid, order.toMap());
+      if (cart != null) publish(LanEventKind.cartDisplay, ownDeviceId ?? '', cart);
+    });
+  }
+
+  /// The counter as a customer-facing display should show it, or null when this
+  /// till is not feeding one.
+  ///
+  /// A draft is the cart being rung; anything committed means the counter is done
+  /// with it, so the display is cleared rather than left showing a bill somebody
+  /// has already paid to the next customer in the queue.
+  Map<String, dynamic>? _cartEventFor(Order order) {
+    if (ownDeviceId == null || !(_publishesCart?.call() ?? false)) return null;
+    if (order.deviceId != ownDeviceId) return null;
+    final live = order.state == OrderState.draft;
+    return LanCartSnapshot(
+      deviceId: ownDeviceId!,
+      lines: [
+        if (live)
+          for (final l in order.lines)
+            LanCartLine(name: l.name, quantity: l.quantity, total: l.total),
+      ],
+      total: live ? order.total : 0,
+      at: DateTime.now().toUtc(),
+    ).toMap();
   }
 
   /// Whether this order is shared state.
@@ -94,12 +132,18 @@ class OrderStore {
     }
   }
 
+  /// The device and cashier columns follow the payload on an update, because a tab
+  /// can change hands both ways: to another till, and to another cashier on this
+  /// one. Leaving them behind would file the order under whoever used to have it
+  /// while the bill on it says otherwise, and the reads that decide money are
+  /// scoped by exactly those columns.
   void _insert(Order order) {
     _db.raw.execute(
       '''
       INSERT INTO orders (uuid, device_id, cashier_id, created_at, state, server_id, total, payload)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(uuid) DO UPDATE SET
+        device_id = excluded.device_id, cashier_id = excluded.cashier_id,
         state = excluded.state, server_id = excluded.server_id,
         total = excluded.total, payload = excluded.payload
       ''',
@@ -257,6 +301,74 @@ class OrderStore {
       _db.raw.execute('ROLLBACK');
       rethrow;
     }
+  }
+
+  // ── a tab changing hands ─────────────────────────────────────────
+
+  /// Give a parked tab to another till, and say what was handed over.
+  ///
+  /// Null is a refusal, and the refusals are the whole point of the method. Only a
+  /// HELD order can move: a draft is being rung by a cashier standing at a counter,
+  /// and a paid one is money this till is going to book. Only the till that owns it
+  /// can give it away, so two devices cannot both hand out the same tab, and the
+  /// giving up and the announcing happen in one transaction, so there is no instant
+  /// where nobody owns it or both do.
+  ///
+  /// The order is rebuilt rather than edited because its device is what identifies
+  /// the till that will settle it: making that field writable would let anything
+  /// anywhere quietly reassign a sale.
+  Order? handOver(String uuid, String toDeviceId) {
+    final order = byUuid(uuid);
+    if (order == null) return null;
+    if (order.state != OrderState.held) return null;
+    if (order.deviceId == toDeviceId) return order;
+    if (ownDeviceId != null && order.deviceId != ownDeviceId) return null;
+    final moved = _withDevice(order, toDeviceId);
+    final publish = _publish;
+    _write(
+      moved,
+      publish == null
+          ? null
+          : () => publish(LanEventKind.orderClaim, uuid,
+              {'to': toDeviceId, 'from': order.deviceId}),
+    );
+    return moved;
+  }
+
+  /// Record a handover that happened elsewhere. Announces nothing: the till that
+  /// gave the tab up is the one that said so, and a second announcement would be a
+  /// second claim of authorship over one move.
+  ///
+  /// A tab that is already paid is left alone whatever the event says. Money that
+  /// has been taken belongs to the till that took it, and no later ownership change
+  /// may move it somewhere it would be booked again.
+  bool applyHandOver(String uuid, String toDeviceId) {
+    final order = byUuid(uuid);
+    if (order == null) return false;
+    if (order.state != OrderState.held) return false;
+    if (order.deviceId == toDeviceId) return true;
+    _write(_withDevice(order, toDeviceId), null);
+    return true;
+  }
+
+  /// The same order under a different till. Goes through the map so nothing about
+  /// the bill can be lost in the copy.
+  static Order _withDevice(Order order, String deviceId) =>
+      Order.fromMap({...order.toMap(), 'device_id': deviceId});
+
+  /// Move a parked tab to another cashier on this till, and say whether it moved.
+  ///
+  /// What a manager does when somebody goes home mid-service: the tables they
+  /// opened have to answer to whoever is on the floor now, or they cannot be picked
+  /// up under table security and they land on the wrong cashier's flash. Only a
+  /// held tab moves; a paid sale keeps the cashier who rang it, because that name
+  /// is the only record of who took the money.
+  bool reassignCashier(String uuid, String toCashierId) {
+    final order = byUuid(uuid);
+    if (order == null || order.state != OrderState.held) return false;
+    if (order.cashierId == toCashierId) return true;
+    save(Order.fromMap({...order.toMap(), 'cashier_id': toCashierId}));
+    return true;
   }
 
   /// Active kitchen tickets for the KDS board: orders that have been sent to the

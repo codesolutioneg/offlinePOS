@@ -28,6 +28,11 @@ exists, and every screen keeps reading the local database.
 | `order.upsert` | A held or paid order, whole payload, or a discarded tab flagged `deleted` | Drafts are deliberately absent. An order being rung changes on every tap and no other device has a use for it |
 | `kitchen.status` | One ticket's new board status | So a kitchen screen can advance a ticket it does not own without claiming authorship of somebody else's sale |
 | `table.upsert` | A floor element added, moved, resized or deleted | Table *occupancy* is not a kind: it is derived from the parked orders, which already replicate, so a second source of truth for "table 5 is busy" cannot disagree with the bill on it |
+| `product.availability` | One product marked sold out or put back on | Running out is a fact about the shop, not about a sale. The till nobody shouted at has to refuse the same item |
+| `order.claim` | A parked tab changing hands, sent by the till giving it up | The one ownership change in the fabric. Only the current owner sends it, and it sends it as part of letting go, so the tab still has exactly one owner at every instant |
+| `reservation.upsert` | A table booked ahead, changed or called off | Shared for the same reason the floor plan is: a booking taken at the counter has to reach the handheld, or two people promise one table |
+| `shift.lifecycle` | A till saying its trading day is over | So a shop closes as a shop. Strictly advisory: what a device does about it is that device's own policy, and hearing nothing means behaving exactly as before |
+| `cart.display` | What one till has on its counter right now | The one thing here written while an order is being rung, so it is opt-in per till and superseding: the log keeps the latest per device and drops the rest |
 
 Replication makes a device show more, never own more. `OrderStore` splits its reads and
 the split is load-bearing:
@@ -82,6 +87,24 @@ as it did before.
 ```
 
 answered with `{"applied": <count>}`.
+
+**`POST /lan/claim`**
+
+```json
+{ "device_id": "...", "schema": 15, "order_uuid": "...", "cashier": "..." }
+```
+
+answered with `{"device_id": "...", "schema": 15, "order": { }}`, or `409` and a
+reason. The one request in the fabric that asks rather than tells, because it is the
+one thing that needs an answer: a tab moves only when the till that owns it gives it
+up, and it gives it up inside the same handler that agrees, so there is no instant
+where two devices could each settle the bill. A till that does not answer therefore
+keeps its tab. That refusal is the feature: taking a tab from a device that could not
+be asked is how one bill gets settled twice. Both sides record the handover in the
+audit trail (`order.claim.granted`, `order.claim.taken`, `order.claim.refused`), and
+the owner announces it to everyone else as an `order.claim` event so a third device
+sends the waiter to the right till. Off by default per device (**Shop network, Let
+another device take over a tab**) and manager-gated on the device asking.
 
 Pulling is the truth and pushing is only latency. Each device asks each peer for
 everything after the cursor it holds on disk, so a device that was off, asleep or on the
@@ -180,6 +203,30 @@ unpairs every other device until each is given the new one, which is the right m
 after a key has been handed to someone who should not have it and the wrong move by
 accident, so it asks first.
 
+## Closing the day as a shop
+
+A `shift.lifecycle` notice says one till has counted its drawer for a trading day. It
+is sent after the close, never before, so the cash-up cannot be delayed by it, and
+every device decides for itself what to do with it (**Shop network, When another till
+closes the day**):
+
+| Policy | What the other tills do |
+|---|---|
+| Say nothing (default) | Nothing. Each till closes when it likes, as before this existed |
+| Warn the others | A strip on the floor plan naming the device that closed |
+| Hold new orders | The same strip, and the floor refuses to START anything: no takeaway, no delivery, no free table |
+
+Holding never reaches a tab that is already open. Food that has been ordered has to be
+payable whatever a policy says, so an occupied table opens and settles normally under
+every policy.
+
+The notice is scoped to the trading day it closed, which is what makes it expire on
+its own at the cutover rather than needing to be cleared, and it is dropped entirely
+once this till has closed too. A till that was off the LAN picks the notice up on its
+next catch-up and is prompted then. **A device with no fabric, or one that can reach
+nobody, behaves exactly as it did before any of this existed**: the coordination can
+only ever be a nudge, because a shop whose switch died still has to be able to trade.
+
 ## Schema-version compatibility
 
 Both ends state `Schema.version`, in the beacon and in every request. Events are only
@@ -209,10 +256,32 @@ instead of waiting for a new binary:
 |---|---|
 | `LAN_FABRIC=true` | Sharing on by default |
 | `KDS_MODE=true` | This device is a kitchen screen, which implies sharing by default |
+| `DISPLAY_MODE=true` | This device is a customer-facing display, which implies sharing by default |
 | `LAN_PORT=<n>` | Serve on `n`, announce on `n + 1` |
 
 With sharing off, nothing is built: no event is appended, no socket is opened, and the
 till behaves exactly as it did before the fabric existed.
+
+## Customer-facing displays
+
+`DISPLAY_MODE=true` makes a device a screen the customer reads and nothing else. It
+boots straight into the display with no sign-in and no shift, exactly like a kitchen
+board, and for the same reason: it takes no money, so a PIN in front of it would be a
+lock with no key. It holds no session and no outbox, so a screen facing the queue
+cannot ring anything up.
+
+The counter it shows is fed by `cart.display` from the till, which is off until a shop
+switches it on (**Shop network, Show this counter on a customer display**). That
+switch exists because this is the one event written while an order is being rung: with
+it off a draft announces nothing at all, exactly as before. With it on, each change is
+one local insert that REPLACES the till's previous snapshot, and the hand-over to the
+peers happens after the tap like everything else, so the log holds one row per till
+rather than one per keystroke.
+
+Parking or paying publishes an empty counter, so the next customer in the queue never
+reads the last one's shopping; a cart nobody has touched for five minutes goes back to
+the idle panel on its own, which is also what a display shows when the network is
+down.
 
 ## Kitchen screens
 

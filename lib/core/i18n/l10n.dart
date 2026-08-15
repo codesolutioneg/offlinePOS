@@ -929,4 +929,57 @@ const Map<String, String> _ar = {
   'report(s) were never sent': 'تقرير لم يُرسَل نهائيًا',
   'Fix the settings above, then send a test.':
       'صحّح الإعدادات أعلاه ثم أرسل رسالة تجريبية.',
+  // the multi-till wave: the shop network beyond one device
+  'Let another device take over a tab': 'السماح لجهاز آخر بأخذ طاولة مفتوحة',
+  'Off, a tab is settled on the till it was opened on. On, a manager on another device can take it, and this one gives it up as it agrees, so it is never open in two places.':
+      'عند الإيقاف، تُسدَّد الطاولة على الجهاز الذي فُتحت عليه. عند التشغيل، يستطيع مدير على جهاز آخر أخذها، ويتنازل عنها هذا الجهاز لحظة موافقته، فلا تكون مفتوحة في مكانين.',
+  'Take over this tab?': 'أخذ هذه الطاولة؟',
+  'It is open on another device. That device is asked first and gives it up, so it cannot be settled in two places.':
+      'الطاولة مفتوحة على جهاز آخر. يُسأل ذلك الجهاز أولًا ويتنازل عنها، فلا يمكن تسديدها في مكانين.',
+  'Take over': 'أخذ الطاولة',
+  'That device did not answer, so the tab stays with it. Settle it there.':
+      'لم يستجب ذلك الجهاز، فتبقى الطاولة لديه. سدّدها هناك.',
+  'That device would not hand the tab over.':
+      'رفض ذلك الجهاز تسليم الطاولة.',
+  'Ask before opening someone else\'s tab': 'اسأل قبل فتح طاولة كاشير آخر',
+  'Transfer tables': 'نقل الطاولات',
+  'This tab belongs to another cashier': 'هذه الطاولة لكاشير آخر',
+  'Enter their PIN, or a manager PIN.': 'أدخل رمزه، أو رمز مدير.',
+  'Open tab': 'فتح الطاولة',
+  'That PIN did not open this tab': 'هذا الرمز لم يفتح الطاولة',
+  'No tabs are open on this till': 'لا توجد طاولات مفتوحة على هذا الجهاز',
+  'Move tabs from': 'نقل الطاولات من',
+  'Move tabs to': 'نقل الطاولات إلى',
+  'Tabs moved': 'تم نقل الطاولات',
+  'Reservations': 'الحجوزات',
+  'New booking': 'حجز جديد',
+  'Booking': 'حجز',
+  'Nothing booked': 'لا توجد حجوزات',
+  'Time (HH:MM)': 'الوقت (سس:دد)',
+  'Covers': 'عدد الأشخاص',
+  'Tomorrow': 'غدًا',
+  'No table yet': 'بدون طاولة بعد',
+  'A name and a time like 19:30': 'الاسم ووقت مثل 19:30',
+  'Seated': 'تم الجلوس',
+  'Did not turn up': 'لم يحضر',
+  'Cancel booking': 'إلغاء الحجز',
+  'Booked': 'محجوز',
+  'Cancelled': 'ملغي',
+  'When another till closes the day': 'عند إغلاق جهاز آخر ليوم العمل',
+  'A device that hears nothing sells exactly as it always did, so this never stops the shop when the network is down.':
+      'الجهاز الذي لا يصله شيء يبيع كما كان تمامًا، فلا يتوقف المتجر أبدًا عند انقطاع الشبكة.',
+  'Say nothing': 'بدون تنبيه',
+  'Warn the others': 'تنبيه الأجهزة الأخرى',
+  'Hold new orders': 'إيقاف الطلبات الجديدة',
+  'The day was closed on': 'تم إغلاق يوم العمل على',
+  'Close this till too.': 'أغلق هذا الجهاز أيضًا.',
+  'New orders are held until this till is closed too.':
+      'الطلبات الجديدة موقوفة حتى يُغلق هذا الجهاز أيضًا.',
+  'The day is closed': 'يوم العمل مغلق',
+  'Show this counter on a customer display': 'عرض هذا الكاشير على شاشة العميل',
+  'Sends what is being rung to a display device in the shop. Off unless there is one: it is the only thing shared while an order is on the counter.':
+      'يرسل ما يجري تسجيله إلى شاشة عرض في المتجر. متوقف ما لم توجد شاشة: فهو الشيء الوحيد الذي يُشارَك أثناء تسجيل الطلب.',
+  'Show which till': 'أي كاشير يُعرض',
+  'Whichever is busiest': 'الأكثر نشاطًا',
+  'Welcome': 'أهلًا بك',
 };

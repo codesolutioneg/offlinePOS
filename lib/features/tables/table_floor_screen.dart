@@ -2,9 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/db/reservation_store.dart';
+import '../../core/db/settings_store.dart';
 import '../../core/db/table_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/widgets/feedback.dart';
+import 'reservations_screen.dart';
 
 /// The floor plan: tables drawn where the shop placed them, tapped to start or
 /// recall a dine-in order. In edit mode a manager lays the floor out by dragging
@@ -26,7 +30,44 @@ class TableFloorScreen extends StatefulWidget {
     this.exclude,
     this.onTakeaway,
     this.onDelivery,
+    this.settings,
+    this.onTransferTables,
+    this.authorize,
+    this.reservations,
+    this.nowFn = DateTime.now,
+    this.dayNotice,
+    this.blockNewOrders = false,
   });
+
+  /// What another till has said about the trading day, shown as a strip above the
+  /// plan. Null on a one-till shop and whenever nothing has been said, which is the
+  /// ordinary case.
+  final String? dayNotice;
+
+  /// Whether starting NEW work is held while [dayNotice] stands. Never stops a tab
+  /// that is already open from being opened and settled: food that has been ordered
+  /// has to be payable whatever any policy says.
+  final bool blockNewOrders;
+
+  /// The book, so a table with guests due shortly says so on the plan rather than
+  /// only in a list nobody has open. Null leaves the floor exactly as it was.
+  final ReservationStore? reservations;
+
+  final DateTime Function() nowFn;
+
+  /// The on-device settings the floor itself owns (whether a tab asks before
+  /// another cashier picks it up). Null hides the menu that edits them, which is
+  /// what the table picker wants.
+  final SettingsStore? settings;
+
+  /// Move every tab one cashier is holding to another one, for the manager whose
+  /// waiter went home mid-service. Null hides the action.
+  final VoidCallback? onTransferTables;
+
+  /// Clears the shell's permission gate before a floor rule is changed. Null (the
+  /// picker, and the suites that only draw the plan) asks nobody, because nothing
+  /// there can change a rule.
+  final Future<bool> Function()? authorize;
 
   /// Start a takeaway or delivery order straight from the floor home, the two ways
   /// an order begins without a table. Null hides the button (e.g. in pick mode).
@@ -427,13 +468,18 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               icon: const Icon(Icons.edit_note),
               label: Text(tr(context, 'Other')),
             )
-          else
+          else ...[
             IconButton(
               key: const Key('toggle-edit'),
               tooltip: _editing ? tr(context, 'Done') : tr(context, 'Edit floor'),
               icon: Icon(_editing ? Icons.check : Icons.edit),
               onPressed: () => setState(() => _editing = !_editing),
             ),
+            if (widget.settings != null ||
+                widget.onTransferTables != null ||
+                widget.reservations != null)
+              _floorMenu(),
+          ],
         ],
       ),
       floatingActionButton: _editing && !widget.pickMode
@@ -461,6 +507,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           : null,
       body: Column(
         children: [
+          if (widget.dayNotice case final notice?) _dayNoticeStrip(notice),
           _sectionStrip(),
           if (widget.pickMode) _legend(),
           const Divider(height: 1),
@@ -485,7 +532,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                     Expanded(
                       child: FilledButton.icon(
                         key: const Key('floor-takeaway'),
-                        onPressed: widget.onTakeaway,
+                        onPressed: () {
+                          if (!_newWorkHeld()) widget.onTakeaway!();
+                        },
                         icon: const Icon(Icons.takeout_dining),
                         label: Text(tr(context, 'Takeaway')),
                       ),
@@ -496,7 +545,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                     Expanded(
                       child: FilledButton.icon(
                         key: const Key('floor-delivery'),
-                        onPressed: widget.onDelivery,
+                        onPressed: () {
+                          if (!_newWorkHeld()) widget.onDelivery!();
+                        },
                         icon: const Icon(Icons.delivery_dining),
                         label: Text(tr(context, 'Delivery')),
                       ),
@@ -506,6 +557,84 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             ),
         ],
       ),
+    );
+  }
+
+  /// The day closed somewhere else in the shop, said on the screen where new work
+  /// starts rather than in a dialog that gets dismissed unread.
+  Widget _dayNoticeStrip(String notice) => Material(
+        key: const Key('floor-day-notice'),
+        color: widget.blockNewOrders ? AppColors.error : AppColors.warning,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(children: [
+            const Icon(Icons.nightlight_round, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text(notice, style: const TextStyle(color: Colors.white))),
+          ]),
+        ),
+      );
+
+  /// Whether starting something new is held right now, telling the cashier why when
+  /// it is. A tab already open is never held: it is settled through the tile, which
+  /// does not come through here.
+  bool _newWorkHeld() {
+    if (!widget.blockNewOrders) return false;
+    showToast(context, widget.dayNotice ?? tr(context, 'The day is closed'),
+        kind: ToastKind.error);
+    return true;
+  }
+
+  /// The floor's own settings and the actions that go with them, on the screen a
+  /// manager already opens to lay the room out rather than three menus away.
+  Widget _floorMenu() {
+    final settings = widget.settings;
+    final book = widget.reservations;
+    return PopupMenuButton<String>(
+      key: const Key('floor-menu'),
+      icon: const Icon(Icons.more_vert),
+      onSelected: (value) async {
+        if (value == 'security' && settings != null) {
+          // Behind the same gate as any other setting: a cashier who could switch
+          // this off could then open anybody's tab, which is the one thing it
+          // exists to stop.
+          if (!(await widget.authorize?.call() ?? true)) return;
+          if (!mounted) return;
+          setState(() => settings.tableSecurity = !settings.tableSecurity);
+        } else if (value == 'transfer') {
+          widget.onTransferTables?.call();
+        } else if (value == 'reservations' && book != null) {
+          await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => ReservationsScreen(
+                store: book, tables: widget.store, nowFn: widget.nowFn),
+          ));
+          // The badges on the plan are read from the book, so coming back from it
+          // has to repaint them.
+          if (mounted) setState(() {});
+        }
+      },
+      itemBuilder: (ctx) => [
+        if (book != null)
+          PopupMenuItem(
+            key: const Key('floor-reservations'),
+            value: 'reservations',
+            child: Text(tr(ctx, 'Reservations')),
+          ),
+        if (settings != null)
+          CheckedPopupMenuItem(
+            key: const Key('floor-table-security'),
+            value: 'security',
+            checked: settings.tableSecurity,
+            child: Text(tr(ctx, 'Ask before opening someone else\'s tab')),
+          ),
+        if (widget.onTransferTables != null)
+          PopupMenuItem(
+            key: const Key('floor-transfer-tables'),
+            value: 'transfer',
+            child: Text(tr(ctx, 'Transfer tables')),
+          ),
+      ],
     );
   }
 
@@ -633,6 +762,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         ),
       );
 
+  /// The bookings due on each table right now, read on every build so the badge
+  /// ages with the ticker rather than freezing when the floor opened.
+  Map<String, Reservation> get _due =>
+      widget.reservations?.dueByTable(widget.nowFn().toUtc()) ?? const {};
+
   Widget _canvas(List<PosTable> tables) {
     final maxX = tables.map((t) => t.x).fold(3.0, (a, b) => a > b ? a : b);
     final maxY = tables.map((t) => t.y).fold(3.0, (a, b) => a > b ? a : b);
@@ -702,18 +836,33 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final isDivider = t.isDivider;
     final occupied = !isDivider && widget.occupiedLabels.contains(t.name);
     final info = isDivider ? null : widget.occupiedInfo[t.name];
+    final booking = isDivider ? null : _due[t.name];
     final tile = _TableTile(
       table: t,
       occupied: occupied,
       total: info == null ? null : widget.formatAmount?.call(info.total),
       ageMinutes: info == null ? null : DateTime.now().difference(info.since).inMinutes,
+      // A free table with guests due in twenty minutes is not free, and a waiter
+      // seating a walk-in on it is the mistake this badge exists to stop.
+      booking: booking == null
+          ? null
+          : (
+              at: booking.at.toLocal(),
+              name: booking.name,
+              covers: booking.covers,
+            ),
     );
     if (!_editing) {
       // A wall/divider is never tapped to open an order; it is just drawn.
       if (isDivider) return tile;
       return InkWell(
         key: Key('table-tile-${t.id}'),
-        onTap: () => widget.onOpenTable(t),
+        // A free table is new work and can be held; an occupied one is a bill
+        // somebody is waiting to pay and never is.
+        onTap: () {
+          if (!occupied && _newWorkHeld()) return;
+          widget.onOpenTable(t);
+        },
         child: tile,
       );
     }
@@ -797,11 +946,16 @@ class _TableTile extends StatelessWidget {
     required this.occupied,
     this.total,
     this.ageMinutes,
+    this.booking,
   });
   final PosTable table;
   final bool occupied;
   final String? total;
   final int? ageMinutes;
+
+  /// The guests due on this table shortly, in local wall-clock time. Null when
+  /// nobody is expected, which is every table in a shop that takes no bookings.
+  final ({DateTime at, String name, int covers})? booking;
 
   @override
   Widget build(BuildContext context) {
@@ -847,6 +1001,23 @@ class _TableTile extends StatelessWidget {
               else
                 Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
                     style: TextStyle(fontSize: 11, color: color)),
+              if (booking case final due?)
+                Padding(
+                  key: Key('table-booked-${table.id}'),
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.schedule, size: 12, color: AppColors.warning),
+                    const SizedBox(width: 2),
+                    Text(
+                      '${due.at.hour.toString().padLeft(2, '0')}:'
+                      '${due.at.minute.toString().padLeft(2, '0')} ${due.name}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.warning,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ]),
+                ),
             ],
           ),
         ),

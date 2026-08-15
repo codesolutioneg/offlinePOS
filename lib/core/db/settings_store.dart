@@ -5,6 +5,7 @@ import '../../domain/business_day.dart';
 import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
 import '../email/smtp_config.dart';
+import '../lan/lan_event.dart';
 import '../printing/escpos.dart';
 import '../printing/printer_logo.dart';
 import 'database.dart';
@@ -22,6 +23,15 @@ class SettingsStore {
   }
 
   final Db _db;
+
+  /// Announces a shop-wide setting change to the LAN fabric, or null with the
+  /// fabric off (and then this class writes exactly what it always wrote).
+  ///
+  /// Assigned after construction rather than taken in the constructor, because the
+  /// switch that decides whether there is a fabric at all is read from this very
+  /// store: the node cannot exist before it.
+  LanPublish? _publish;
+  set publish(LanPublish? v) => _publish = v;
 
   // ── keys ─────────────────────────────────────────────────────────
   static const _shopName = 'shop_name';
@@ -401,22 +411,71 @@ class SettingsStore {
     publishPrintProfile();
   }
 
-  /// Products marked sold-out ("86'd") on this till, so a run-out item can be
-  /// blocked mid-service without waiting for an Odoo catalogue change.
+  /// Products marked sold-out ("86'd"), so a run-out item can be blocked
+  /// mid-service without waiting for an Odoo catalogue change.
+  ///
+  /// Shop-wide when the LAN fabric is on: running out is a fact about the kitchen,
+  /// not about one till, so the change is announced and every device ends up
+  /// refusing the same item.
   Set<int> get unavailableProducts =>
       getStringList(_unavailableProducts).map((e) => int.tryParse(e) ?? -1).where((e) => e >= 0).toSet();
 
   set unavailableProducts(Set<int> ids) =>
       setStringList(_unavailableProducts, ids.map((e) => '$e').toList());
 
+  /// The record key one product's availability is replicated under, so the
+  /// last-write-wins clock is kept per product rather than per till.
+  static String availabilityRecord(int productId) => 'product-$productId';
+
   void setProductAvailable(int productId, bool available) {
-    final set = unavailableProducts;
-    if (available) {
-      set.remove(productId);
-    } else {
-      set.add(productId);
+    final publish = _publish;
+    _writeAvailability(
+      productId,
+      available,
+      publish == null
+          ? null
+          : () => publish(
+                LanEventKind.productAvailability,
+                availabilityRecord(productId),
+                {'product_id': productId, 'available': available},
+              ),
+    );
+  }
+
+  /// Apply an availability change that arrived from another till. Announces
+  /// nothing: the origin till already told everybody, and echoing it back would
+  /// have two devices claiming the same shout from the kitchen.
+  void applyProductAvailable(int productId, bool available) =>
+      _writeAvailability(productId, available, null);
+
+  /// The single writer, optionally with its fabric event in the same transaction.
+  ///
+  /// A failed announce still commits: a till that knows an item is off must act on
+  /// it whatever the other devices heard, exactly as a sale outranks replication.
+  void _writeAvailability(int productId, bool available, void Function()? announce) {
+    void write() {
+      final set = unavailableProducts;
+      if (available) {
+        set.remove(productId);
+      } else {
+        set.add(productId);
+      }
+      unavailableProducts = set;
     }
-    unavailableProducts = set;
+
+    if (announce == null) {
+      write();
+      return;
+    }
+    _db.raw.execute('BEGIN');
+    try {
+      write();
+      announce();
+      _db.raw.execute('COMMIT');
+    } catch (_) {
+      _db.raw.execute('ROLLBACK');
+      write();
+    }
   }
 
   /// Products pinned as favourites for a quick-access grid.
@@ -501,6 +560,26 @@ class SettingsStore {
   /// credential.
   String? get lanShopKey => getString('lan_shop_key');
   set lanShopKey(String? v) => setString('lan_shop_key', v?.trim());
+
+  /// Whether another till may take over a tab parked on this one.
+  ///
+  /// Off by default, and that default is the safe answer rather than a timid one: a
+  /// bill is settled where it was opened, so nothing can end up booked twice. A shop
+  /// running waiter handhelds against a counter cashier needs the other answer, and
+  /// switches it on knowing that the handover still asks this device first.
+  bool get lanAllowTakeover => getBool('lan_allow_takeover');
+  set lanAllowTakeover(bool v) => setBool('lan_allow_takeover', v);
+
+  // ── the floor with more than one person on it ────────────────────
+
+  /// Whether a tab opened by one cashier asks before another one picks it up.
+  ///
+  /// Off by default, because most shops run one cashier at a time and a prompt
+  /// between a waiter and their own table is friction for nothing. A shop where
+  /// several people share a till and each answers for their own drawer wants the
+  /// other answer: the cashier who opened the tab unlocks it, or a manager does.
+  bool get tableSecurity => getBool('table_security');
+  set tableSecurity(bool v) => setBool('table_security', v);
 
   /// Receipt paper width in characters: 42 for 80mm (default), 32 for 58mm.
   int get receiptColumns => int.tryParse(getString('receipt_columns') ?? '') ?? 42;

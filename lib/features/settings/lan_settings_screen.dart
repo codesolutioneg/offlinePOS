@@ -4,8 +4,10 @@ import 'package:flutter/services.dart';
 import '../../core/db/schema.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/lan/lan_cart_board.dart';
 import '../../core/lan/lan_credential.dart';
 import '../../core/lan/lan_peer.dart';
+import '../../core/lan/lan_shift_board.dart';
 import '../../core/lan/lan_wiring.dart';
 
 /// What a device with no fabric has to report: nothing. A real answer rather than a
@@ -69,6 +71,9 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
   late final TextEditingController _shopKey =
       TextEditingController(text: widget.settings.lanShopKey ?? '');
   late bool _enabled = widget.settings.lanEnabled(fallback: widget.buildDefault);
+  late bool _allowTakeover = widget.settings.lanAllowTakeover;
+  late LanDayClosePolicy _dayClose = LanShiftBoard(widget.settings).policy;
+  late bool _displayCart = LanCartBoard(widget.settings).publishing;
 
   @override
   void dispose() {
@@ -172,6 +177,70 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
                     'next starts.')),
             value: _enabled,
             onChanged: _setEnabled,
+          ),
+          SwitchListTile(
+            key: const Key('lan-allow-takeover'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Let another device take over a tab')),
+            subtitle: Text(tr(
+                context,
+                'Off, a tab is settled on the till it was opened on. On, a manager '
+                    'on another device can take it, and this one gives it up as it '
+                    'agrees, so it is never open in two places.')),
+            value: _allowTakeover,
+            onChanged: (v) {
+              widget.settings.lanAllowTakeover = v;
+              widget.onChanged();
+              setState(() => _allowTakeover = v);
+            },
+          ),
+          SwitchListTile(
+            key: const Key('lan-display-cart'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Show this counter on a customer display')),
+            subtitle: Text(tr(
+                context,
+                'Sends what is being rung to a display device in the shop. Off '
+                    'unless there is one: it is the only thing shared while an '
+                    'order is on the counter.')),
+            value: _displayCart,
+            onChanged: (v) {
+              LanCartBoard(widget.settings).publishing = v;
+              widget.onChanged();
+              setState(() => _displayCart = v);
+            },
+          ),
+          ListTile(
+            key: const Key('lan-day-close-policy'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'When another till closes the day')),
+            subtitle: Text(tr(
+                context,
+                'A device that hears nothing sells exactly as it always did, so '
+                    'this never stops the shop when the network is down.')),
+            trailing: DropdownButton<LanDayClosePolicy>(
+              value: _dayClose,
+              onChanged: (p) {
+                if (p == null) return;
+                LanShiftBoard(widget.settings).policy = p;
+                widget.onChanged();
+                setState(() => _dayClose = p);
+              },
+              items: [
+                DropdownMenuItem(
+                  value: LanDayClosePolicy.off,
+                  child: Text(tr(context, 'Say nothing')),
+                ),
+                DropdownMenuItem(
+                  value: LanDayClosePolicy.warn,
+                  child: Text(tr(context, 'Warn the others')),
+                ),
+                DropdownMenuItem(
+                  value: LanDayClosePolicy.block,
+                  child: Text(tr(context, 'Hold new orders')),
+                ),
+              ],
+            ),
           ),
           const Divider(height: 24),
           TextField(

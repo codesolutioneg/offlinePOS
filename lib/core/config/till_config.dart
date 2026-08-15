@@ -23,6 +23,7 @@ class TillConfig {
     this.soleTill = true,
     this.lanFabric = false,
     this.kdsMode = false,
+    this.displayMode = false,
     this.lanPort = 45333,
   });
 
@@ -47,6 +48,7 @@ class TillConfig {
       // be asked for rather than assumed.
       lanFabric: const bool.fromEnvironment('LAN_FABRIC'),
       kdsMode: const bool.fromEnvironment('KDS_MODE'),
+      displayMode: const bool.fromEnvironment('DISPLAY_MODE'),
       lanPort: const int.fromEnvironment('LAN_PORT', defaultValue: 45333),
     );
   }
@@ -96,6 +98,12 @@ class TillConfig {
   /// it is a decision about what the hardware is for, not a preference.
   final bool kdsMode;
 
+  /// This device is a customer-facing display and nothing else: it shows the cart
+  /// being rung at the counter and can neither sell nor be typed into. A build-time
+  /// decision for the same reason [kdsMode] is: it is a decision about what the
+  /// hardware is for, not a preference.
+  final bool displayMode;
+
   /// The port the fabric serves on. The beacon announces on the next port up, so
   /// an installer who has to move it past a busy port only sets one number.
   final int lanPort;
@@ -106,9 +114,10 @@ class TillConfig {
   ///
   /// A kitchen screen counts as asking for the fabric whether or not the LAN flag
   /// was passed with it: it rings up nothing, so every ticket it shows arrived from
-  /// another device, and a KDS build off the LAN is a blank screen. The device
-  /// setting still overrides this either way.
-  bool get lanDefault => lanFabric || kdsMode;
+  /// another device, and a KDS build off the LAN is a blank screen. A customer
+  /// display is the same case for the same reason. The device setting still
+  /// overrides this either way.
+  bool get lanDefault => lanFabric || kdsMode || displayMode;
 
   /// True only when the channel is completely specified. A partly configured
   /// channel is a build mistake, and running with the missing half filled in by a

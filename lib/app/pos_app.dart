@@ -17,11 +17,15 @@ import '../core/db/attendance_store.dart';
 import '../core/db/customer_store.dart';
 import '../core/db/delivery_store.dart';
 import '../core/db/order_store.dart';
+import '../core/db/reservation_store.dart';
 import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
 import '../core/db/table_store.dart';
 import '../core/email/email_service.dart';
+import '../core/lan/lan_cart_board.dart';
+import '../core/lan/lan_claim.dart';
+import '../core/lan/lan_shift_board.dart';
 import '../core/lan/lan_wiring.dart';
 import '../core/onboarding/setup_checklist.dart';
 import '../core/onboarding/wizard_id.dart';
@@ -53,6 +57,7 @@ import '../features/admin/roster_screen.dart';
 import '../features/support/audit_log_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/customers/customer_management_screen.dart';
+import '../features/display/customer_display_screen.dart';
 import '../features/kitchen/kitchen_display_screen.dart';
 import '../features/onboarding/setup_checklist_card.dart';
 import '../features/onboarding/wizard_overlay.dart';
@@ -116,7 +121,12 @@ class PosApp extends StatefulWidget {
     this.updates,
     this.lan,
     this.emailer,
+    this.reservations,
   });
+
+  /// Tables booked ahead. Null on a shop that does not take bookings and in the
+  /// suites that predate them, and then the floor reads exactly as it did.
+  final ReservationStore? reservations;
 
   final AuthService auth;
   final UserStore users;
@@ -823,19 +833,56 @@ class _PosAppState extends State<PosApp> {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
-        home: widget.config.kdsMode
-            ? _kitchenOnly()
-            : session == null
-                ? LoginScreen(
-                    auth: widget.auth,
-                    users: widget.users,
-                    onSignedIn: _signedIn,
-                    provisioningPin: widget.provisioningPin,
-                  )
-                : _selling(session),
+        home: widget.config.displayMode
+            ? _displayOnly()
+            : widget.config.kdsMode
+                ? _kitchenOnly()
+                : session == null
+                    ? LoginScreen(
+                        auth: widget.auth,
+                        users: widget.users,
+                        onSignedIn: _signedIn,
+                        provisioningPin: widget.provisioningPin,
+                      )
+                    : _selling(session),
       ),
     );
   }
+
+  /// A device that is a customer-facing display and nothing else.
+  ///
+  /// A device mode exactly like the kitchen board, and for the same reasons: no
+  /// sign-in, no shift, nothing it can be typed into, and every line on it arrived
+  /// over the shop LAN from the till at the counter. It holds no session and no
+  /// outbox, so a screen facing the queue cannot ring anything up, and a display
+  /// that loses the network shows its idle panel rather than the last customer's
+  /// shopping.
+  Widget _displayOnly() => Builder(
+        // Builder, so the settings route targets the Navigator inside this MaterialApp.
+        builder: (context) => CustomerDisplayScreen(
+          board: LanCartBoard(widget.settings),
+          formatAmount: PosApp.money,
+          shopName: widget.settings.shopName ?? widget.config.shopName,
+          tills: [for (final p in widget.lan?.peers.all ?? const []) p.deviceId],
+          nameFor: (id) {
+            for (final p in widget.lan?.peers.all ?? const []) {
+              if (p.deviceId == id) return p.name;
+            }
+            return id;
+          },
+          actions: [
+            IconButton(
+              key: const Key('display-network'),
+              // Ungated for the same reason the kitchen board's door is: this device
+              // has no roster, so a manager PIN here would be a lock with no key.
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => _lanScreen(() => setState(() {})))),
+              icon: const Icon(Icons.lan_outlined, size: 18),
+              tooltip: tr(context, 'Shop network'),
+            ),
+          ],
+        ),
+      );
 
   /// A device that is a kitchen screen and nothing else.
   ///
@@ -1203,7 +1250,16 @@ class _PosAppState extends State<PosApp> {
       builder: (sheetContext) => OpenOrdersScreen(
         orders: widget.orders.held(),
         formatAmount: PosApp.money,
-        onRecall: (order) => setState(() => session.recall(order.uuid)),
+        // Through the same door as the floor, so table security cannot be walked
+        // around by resuming the tab from the list instead of the plan. The list
+        // closes itself on the tap, so the question about whose tab it is is asked
+        // on the screen underneath, one microtask later.
+        onRecall: (order) => scheduleMicrotask(() {
+          final below = _navigator.currentContext;
+          if (below != null) {
+            unawaited(_resumeTab(below, session, order, closeAfter: false));
+          }
+        }),
         // A parked tab's bill prints without recalling it, so the list stays put.
         onPrintBill: (order) => unawaited(_printBill(order)),
         // Discarding a parked order is money not taken, so it is manager-gated and
@@ -1476,10 +1532,21 @@ class _PosAppState extends State<PosApp> {
     final occupied = occ.occupied;
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (floorContext) => TableFloorScreen(
+        // Read as the floor is built, so a close that arrives over the fabric shows
+        // the next time a waiter looks at the plan rather than at the next restart.
+        dayNotice: _dayCloseNotice(floorContext)?.text,
+        blockNewOrders: _dayCloseNotice(floorContext)?.blocking ?? false,
         store: widget.tables,
         occupiedLabels: occupied,
         occupiedInfo: occ.info,
         formatAmount: PosApp.money,
+        // The floor's own rules, on the screen a manager already opens to lay the
+        // room out.
+        settings: widget.settings,
+        onTransferTables: () => unawaited(_transferTables(floorContext)),
+        authorize: () => _authorize(Permission.openSettings, floorContext),
+        // The book, so a table with guests due shortly says so on the plan.
+        reservations: widget.reservations,
         // The two table-less ways to start an order, straight from the floor home.
         // Each starts a fresh order of that type and drops to the order screen.
         onTakeaway: () {
@@ -1527,6 +1594,12 @@ class _PosAppState extends State<PosApp> {
                 .where((o) => o.tableLabel == t.name)
                 .toList();
             if (elsewhere.isNotEmpty) {
+              // Unless the shop runs handhelds and has said a tab may change
+              // hands, in which case the other till is asked and has to agree.
+              if (widget.lan != null && widget.settings.lanAllowTakeover) {
+                unawaited(_takeOverTab(floorContext, session, elsewhere.first));
+                return;
+              }
               ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
                 content: Text(tr(floorContext,
                     'This table is open on another device. Settle it there.')),
@@ -1534,19 +1607,247 @@ class _PosAppState extends State<PosApp> {
               return;
             }
           }
+          if (held.isNotEmpty) {
+            // Whose tab it is may need answering first; the rest of the tap waits
+            // for that answer rather than opening the bill behind it.
+            unawaited(_resumeTab(floorContext, session, held.first));
+            return;
+          }
           setState(() {
-            if (held.isNotEmpty) {
-              session.recall(held.first.uuid);
-            } else {
-              session.startFresh(OrderType.dineIn);
-              session.setTable(t.name);
-              if (t.seats > 0) session.setGuestCount(t.seats);
-            }
+            session.startFresh(OrderType.dineIn);
+            session.setTable(t.name);
+            if (t.seats > 0) session.setGuestCount(t.seats);
           });
           Navigator.of(floorContext).pop();
         },
       ),
     ));
+  }
+
+  // ── the shop's trading day, across devices ───────────────────────
+
+  /// Tell the other devices this till has closed the day.
+  ///
+  /// Best effort and never in the way: the shift is already closed and the drawer
+  /// already counted when this runs, so a fabric that is off, a switch that is out
+  /// or a peer that is asleep changes nothing about the cash-up.
+  void _announceDayClose(PosSession session) => widget.lan?.announceDayClose(
+        businessDate: BusinessDay.of(DateTime.now().toUtc()).key,
+        cashierId: session.cashierId,
+      );
+
+  /// What another till has said about today, and whether this one should stop
+  /// starting new work over it.
+  ///
+  /// Null unless all of it is true: this device is on the fabric, the shop asked for
+  /// the coordination, another till has closed THIS trading day, and this one still
+  /// has a shift open. A device that hears nothing degrades to exactly the behaviour
+  /// it had before any of this existed, which is the rule the whole feature is bound
+  /// by: the shop must not stop trading because a switch died.
+  ({String text, bool blocking})? _dayCloseNotice(BuildContext context) {
+    if (widget.lan == null) return null;
+    final board = LanShiftBoard(widget.settings);
+    final policy = board.policy;
+    if (policy == LanDayClosePolicy.off) return null;
+    if (widget.shifts.currentOpenShift() == null) return null;
+    final notice = board.closedOn(BusinessDay.of(DateTime.now().toUtc()).key);
+    if (notice == null) return null;
+    final blocking = policy == LanDayClosePolicy.block;
+    return (
+      text: '${tr(context, 'The day was closed on')} ${notice.deviceName}. '
+          '${tr(context, blocking ? 'New orders are held until this till is closed too.' : 'Close this till too.')}',
+      blocking: blocking,
+    );
+  }
+
+  /// Bring a parked tab back to the counter, asking whose it is first when the shop
+  /// has said tabs belong to the cashier who opened them.
+  ///
+  /// One door for every way a tab is resumed, so the answer cannot be walked around
+  /// by opening it from the other screen.
+  /// [closeAfter] is false when the screen that asked has already closed itself.
+  Future<void> _resumeTab(BuildContext context, PosSession session, Order tab,
+      {bool closeAfter = true}) async {
+    if (!await _authorizeTab(context, tab)) return;
+    setState(() => session.recall(tab.uuid));
+    _publishActivity();
+    if (closeAfter && context.mounted) Navigator.of(context).pop();
+  }
+
+  /// Whether the cashier on the till may open [tab].
+  ///
+  /// Free unless the shop asked for table security, and free on your own tab either
+  /// way: the prompt exists for the till several people share, where each answers
+  /// for their own takings, and it would be friction for nothing anywhere else. The
+  /// cashier who opened it can unlock it without signing in, and a manager can
+  /// override; both outcomes are audited, because a tab opened by somebody else is
+  /// exactly the thing that has to be explainable afterwards.
+  Future<bool> _authorizeTab(BuildContext context, Order tab) async {
+    if (!widget.settings.tableSecurity) return true;
+    final who = _session?.cashierId;
+    if (who == null || tab.cashierId == who) return true;
+    final owner = widget.users.byId(tab.cashierId);
+    final pin = await _promptPin(
+      context,
+      tr(context, 'This tab belongs to another cashier'),
+      tr(context, 'Enter their PIN, or a manager PIN.'),
+      subject: owner?.name ?? tab.cashierId,
+    );
+    if (pin == null || pin.isEmpty) return false;
+    final ok = await widget.auth.authorizeCashier(tab.cashierId, pin) ||
+        await widget.auth.authorizeManager(pin);
+    widget.audit.record(who, ok ? 'order.unlocked' : 'order.locked',
+        detail: '${tab.uuid}|${tab.cashierId}');
+    if (!ok && context.mounted) {
+      showToast(context, tr(context, 'That PIN did not open this tab'),
+          kind: ToastKind.error);
+    }
+    return ok;
+  }
+
+  /// A PIN, asked for on behalf of somebody in particular. The manager dialog asks
+  /// the same question of whoever is standing there; this one names the person it
+  /// expects, because a cashier being asked for "a PIN" with no name on it does not
+  /// know whose is wanted.
+  Future<String?> _promptPin(BuildContext context, String title, String message,
+      {required String subject}) {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('$subject. $message'),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('tab-pin'),
+            controller: ctrl,
+            autofocus: true,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'PIN'), border: const OutlineInputBorder()),
+          ),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('tab-pin-ok'),
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: Text(tr(ctx, 'Open tab')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Move every tab one cashier is holding to another one.
+  ///
+  /// The end of a waiter's shift with four tables still sitting: without this the
+  /// tabs stay locked to somebody who has gone home and land on their flash. Only
+  /// parked tabs move, never a paid sale, so who took the money is never rewritten.
+  Future<void> _transferTables(BuildContext context) async {
+    if (!await _authorizeManager(context)) return;
+    final held = widget.orders.held();
+    final holders = held.map((o) => o.cashierId).toSet().toList()..sort();
+    if (!context.mounted) return;
+    if (holders.isEmpty) {
+      showToast(context, tr(context, 'No tabs are open on this till'));
+      return;
+    }
+    final from = await _pickCashier(
+        context, tr(context, 'Move tabs from'), holders);
+    if (from == null || !context.mounted) return;
+    final to = await _pickCashier(
+      context,
+      tr(context, 'Move tabs to'),
+      widget.users.active().map((u) => u.id).where((id) => id != from).toList(),
+    );
+    if (to == null) return;
+    final moved = held.where((o) => o.cashierId == from).toList();
+    for (final tab in moved) {
+      widget.orders.reassignCashier(tab.uuid, to);
+    }
+    widget.audit.record(_session?.cashierId ?? 'system', 'tables.transferred',
+        detail: '$from->$to|${moved.length} tab(s)');
+    if (!context.mounted) return;
+    setState(() {});
+    showToast(context, '${tr(context, 'Tabs moved')}: ${moved.length}',
+        kind: ToastKind.success);
+  }
+
+  /// Pick one of the staff on this till by name, for the transfer.
+  Future<String?> _pickCashier(
+      BuildContext context, String title, List<String> ids) {
+    final byId = {for (final u in widget.users.active()) u.id: u.name};
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(title),
+        children: [
+          for (final id in ids)
+            SimpleDialogOption(
+              key: Key('transfer-$id'),
+              onPressed: () => Navigator.pop(ctx, id),
+              child: Text(byId[id] ?? id),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Take a tab parked on another till, so the counter can settle what a handheld
+  /// opened. Manager-gated, because it moves a bill between two sets of books.
+  ///
+  /// The owning till has to agree and gives the tab up as it agrees, so the tab is
+  /// never open in two places. A till that cannot be reached is therefore a refusal
+  /// and not a wait: it cannot let go, and taking it anyway is how one bill gets
+  /// settled twice. Nothing here is on a selling path; the sale that follows is an
+  /// ordinary local recall.
+  Future<void> _takeOverTab(
+      BuildContext context, PosSession session, Order tab) async {
+    final lan = widget.lan;
+    if (lan == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Take over this tab?')),
+        content: Text(tr(
+            ctx,
+            'It is open on another device. That device is asked first and gives '
+                'it up, so it cannot be settled in two places.')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('confirm-takeover'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Take over')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    if (!await _authorizeManager(context)) return;
+    final result = await lan.claim(tab, cashier: session.cashierId);
+    if (!context.mounted) return;
+    if (result.order == null) {
+      showToast(
+          context,
+          tr(
+              context,
+              result.refusal == LanClaimRefusal.ownerUnreachable
+                  ? 'That device did not answer, so the tab stays with it. '
+                      'Settle it there.'
+                  : 'That device would not hand the tab over.'),
+          kind: ToastKind.error);
+      return;
+    }
+    setState(() => session.recall(tab.uuid));
+    _publishActivity();
+    Navigator.of(context).pop();
   }
 
   /// The settings hub: one door onto everything a manager configures on the device.
@@ -2196,6 +2497,9 @@ class _PosAppState extends State<PosApp> {
         // batch. Returns a message for the cashier: how it went, or that the
         // orders are safe and will sync once the connection is back.
         onCloseSync: () async {
+          // The drawer is counted and the shift is already closed, so telling the
+          // other devices costs the cash-up nothing and cannot delay it.
+          _announceDayClose(session);
           // Sweep any paid sale that never reached the outbox back in first, so the
           // count below reflects everything owed to the server, not just what
           // happened to be queued.
