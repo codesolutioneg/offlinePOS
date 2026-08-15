@@ -351,6 +351,19 @@ void main() {
       expect(changedCount, 1);
     });
 
+    testWidgets('only printers that exist are offered, not routing names',
+        (t) async {
+      await tall(t);
+      // 'kitchen' is always offered as a routing target below, because a category
+      // can be pointed at a station before the printer is bought. A copy sent there
+      // would just print a second slip at the till, so it is not offered here.
+      await t.pumpWidget(app());
+
+      final picker = t.widget<DropdownButton<String>>(
+          find.byKey(const Key('sub-receipt-station')));
+      expect(picker.items!.map((i) => i.value), ['']);
+    });
+
     testWidgets('prices can be left on the copy', (t) async {
       await tall(t);
       settings.subReceiptStation = 'kitchen';

@@ -81,6 +81,17 @@ void main() {
         throwsA(isA<DatabaseHasNoFile>()));
   });
 
+  test('a second backup in the same minute does not replace the first', () async {
+    sell('sale-1');
+    final at = DateTime(2026, 8, 15, 9, 30);
+    final first = await backupDatabase(db, at: at, destination: here);
+    final second = await backupDatabase(db, at: at, destination: here);
+
+    expect(second, isNot(first));
+    expect(File(first).existsSync(), isTrue);
+    expect(File(second).existsSync(), isTrue);
+  });
+
   test('the file on disk is the one that gets copied', () {
     expect(databaseFile(db), endsWith('pos.db'));
   });

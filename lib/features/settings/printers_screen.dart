@@ -143,7 +143,7 @@ class _PrintersScreenState extends State<PrintersScreen> {
           const SizedBox(height: 24),
           _sectionHeader(
               context, tr(context, 'Receipt & paper'), Icons.receipt_long, AppColors.primary),
-          _receiptOptions(stations),
+          _receiptOptions(),
           const SizedBox(height: 24),
           _sectionHeader(context, tr(context, 'Kitchen routing'), Icons.restaurant, AppColors.warning),
           ..._routingRows(stations, categoryAssignments),
@@ -179,10 +179,20 @@ class _PrintersScreenState extends State<PrintersScreen> {
 
   /// Paper width, copies and the cash-drawer kick, so a manager tunes the receipt
   /// to their actual printer instead of accepting one hard-coded shape.
-  Widget _receiptOptions(List<String> stations) {
+  Widget _receiptOptions() {
     final cols = widget.settings.receiptColumns;
     final copies = widget.settings.receiptCopies;
     final subStation = widget.settings.subReceiptStation;
+    // Only printers that actually exist, unlike the routing chips below: a category
+    // can be pointed at a station before its printer is bought, but a copy sent to a
+    // name nothing answers to just prints a second slip at the till.
+    final configured = <String>{
+      for (final printer in widget.printers.printers) printer.name,
+      // Whatever is already chosen stays pickable, even if that printer was removed
+      // since, so the setting never disappears out from under a manager.
+      if (subStation.isNotEmpty) subStation,
+    }.toList()
+      ..sort();
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -248,10 +258,10 @@ class _PrintersScreenState extends State<PrintersScreen> {
             ),
             DropdownButton<String>(
               key: const Key('sub-receipt-station'),
-              value: stations.contains(subStation) ? subStation : '',
+              value: configured.contains(subStation) ? subStation : '',
               items: [
                 DropdownMenuItem(value: '', child: Text(tr(context, 'Off'))),
-                for (final station in stations)
+                for (final station in configured)
                   DropdownMenuItem(value: station, child: Text(station)),
               ],
               onChanged: (v) {

@@ -20,6 +20,19 @@ class DatabaseHasNoFile implements Exception {
   String toString() => 'DatabaseHasNoFile: this database is in memory';
 }
 
+/// The write-ahead log could not be folded into the file, so a copy taken now would
+/// be missing whatever is still in the log.
+///
+/// Thrown rather than swallowed: a backup that quietly lacks today's sales is worse
+/// than no backup, because a shop believes in it. Trying again a moment later is the
+/// answer, which is what the screen says.
+class BackupNotSettled implements Exception {
+  const BackupNotSettled();
+  @override
+  String toString() =>
+      'BackupNotSettled: the database was busy, so nothing was copied. Try again.';
+}
+
 /// The file the main database lives in, or null when it is in memory (the tests).
 ///
 /// Asked of SQLite rather than threaded down from wherever the path was chosen, so
@@ -59,10 +72,15 @@ Future<String> backupDatabase(
   // produce a torn file that looks like a backup and is not one.
   db.raw.execute('PRAGMA wal_autocheckpoint = 0');
   try {
-    db.raw.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    // The busy flag is the whole point of reading the result: a checkpoint that
+    // could not finish leaves committed sales in the log and out of the file about
+    // to be copied.
+    final checkpoint = db.raw.select('PRAGMA wal_checkpoint(TRUNCATE)').first;
+    final busy = checkpoint['busy'] ?? checkpoint.values.first;
+    if (busy != 0) throw const BackupNotSettled();
+
     final dir = destination == null ? await exportDirectory() : await destination();
-    final path =
-        '${dir.path}${Platform.pathSeparator}${exportFileName('backup', at ?? DateTime.now(), 'db')}';
+    final path = _freeName(dir, at ?? DateTime.now());
     await File(source).copy(path);
     return path;
   } finally {
@@ -70,4 +88,21 @@ Future<String> backupDatabase(
     // leave the till growing a log forever.
     db.raw.execute('PRAGMA wal_autocheckpoint = 1000');
   }
+}
+
+/// A path nothing is using yet.
+///
+/// The stamp only goes down to the minute, and two backups a minute apart during a
+/// support call must not have the second one silently replace the first: the one
+/// being overwritten could be the good one.
+String _freeName(Directory dir, DateTime at) {
+  final base = exportFileName('backup', at, 'db');
+  var path = '${dir.path}${Platform.pathSeparator}$base';
+  var n = 2;
+  while (File(path).existsSync()) {
+    path = '${dir.path}${Platform.pathSeparator}'
+        '${base.substring(0, base.length - 3)}-$n.db';
+    n++;
+  }
+  return path;
 }
