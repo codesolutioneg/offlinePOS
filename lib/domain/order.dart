@@ -223,10 +223,13 @@ class Order {
     this.tip = 0,
     this.kitchenStatus = KitchenStatus.pending,
     this.refundOfUuid,
+    int? businessDayCutoverHour,
     List<OrderLine>? lines,
     List<OrderPayment>? payments,
   })  : uuid = uuid ?? Uuid.v4(),
         createdAt = createdAt ?? DateTime.now().toUtc(),
+        businessDayCutoverHour =
+            businessDayCutoverHour ?? BusinessDay.shopCutoverHour,
         lines = lines ?? [],
         payments = payments ?? [];
 
@@ -346,9 +349,18 @@ class Order {
     return t;
   }
 
+  /// The hour the trading day this bill belongs to rolls over, stamped from the
+  /// shop's rule when the order is created. Local only: the server is handed the
+  /// business date it produced, and has no use for the rule behind it.
+  ///
+  /// Stamped rather than read live so a manager moving the cutover cannot move a
+  /// sale that has already been counted, printed or pushed onto another day.
+  final int businessDayCutoverHour;
+
   /// The trading day this sale belongs to, which decides the session it lands in
   /// on the server.
-  BusinessDay get businessDay => BusinessDay.of(createdAt);
+  BusinessDay get businessDay =>
+      BusinessDay.of(createdAt, cutoverHour: businessDayCutoverHour);
 
   Map<String, dynamic> toMap() => {
         // The idempotency key. The server must treat a repeat of this uuid as the
@@ -364,6 +376,7 @@ class Order {
         // wrong.
         'created_at': createdAt.toIso8601String(),
         'business_date': businessDay.key,
+        'business_day_cutover_hour': businessDayCutoverHour,
         'state': state.name,
         'order_type': type.name,
         'server_id': serverId,
@@ -409,6 +422,9 @@ class Order {
     // Whether the till corrected this sale before sending it is the till's own
     // business: the server is handed one sale under one uuid either way.
     m.remove('amended');
+    // The trading day is already on the wire as business_date. The hour that
+    // produced it is a shop rule the server neither reads nor needs.
+    m.remove('business_day_cutover_hour');
     // A locally-created customer has a synthetic negative id, not an Odoo partner.
     // Never send it as partner_id (it would fail the foreign key); the name and
     // phone still travel so the server can match or create the partner itself.
@@ -452,6 +468,11 @@ class Order {
         kitchenStatus: KitchenStatus.values
             .byName((m['kitchen_status'] as String?) ?? KitchenStatus.pending.name),
         refundOfUuid: m['refund_of_uuid'] as String?,
+        // An order saved before the cutover was configurable was rung under the old
+        // fixed rule, so it keeps that one rather than adopting today's setting and
+        // moving itself to another day.
+        businessDayCutoverHour: (m['business_day_cutover_hour'] as num?)?.toInt() ??
+            BusinessDay.defaultCutoverHour,
         lines: ((m['lines'] as List?) ?? const [])
             .map((e) => OrderLine.fromMap(e as Map<String, dynamic>))
             .toList(),

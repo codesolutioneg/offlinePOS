@@ -27,6 +27,40 @@ void main() {
     expect(BusinessDay.of(DateTime(2026, 4, 1, 0, 30)).key, '2026-03-31');
   });
 
+  test('a shop that publishes its own cutover moves the boundary', () {
+    BusinessDay.shopCutoverHour = 5;
+    addTearDown(() => BusinessDay.shopCutoverHour = BusinessDay.defaultCutoverHour);
+    // A 03:00 sale under a 05:00 cutover is still the night before's trading.
+    expect(BusinessDay.of(DateTime(2026, 3, 11, 3, 0)).key, '2026-03-10');
+    expect(BusinessDay.of(DateTime(2026, 3, 11, 5, 0)).key, '2026-03-11');
+    // An order stamps the rule when it is created, so moving the rule afterwards
+    // cannot re-date a sale that is already counted.
+    final order = Order(
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      createdAt: DateTime(2026, 3, 11, 3, 0),
+    );
+    expect(order.businessDay.key, '2026-03-10');
+    BusinessDay.shopCutoverHour = 0;
+    expect(order.businessDay.key, '2026-03-10');
+    expect(order.toMap()['business_date'], '2026-03-10');
+  });
+
+  test('an order rung before the cutover was configurable keeps the old rule', () {
+    BusinessDay.shopCutoverHour = 0;
+    addTearDown(() => BusinessDay.shopCutoverHour = BusinessDay.defaultCutoverHour);
+    final legacy = Order.fromMap({
+      'uuid': 'u1',
+      'device_id': 'till-1',
+      'cashier_id': 'sara',
+      'created_at': DateTime(2026, 3, 11, 1, 0).toIso8601String(),
+      'state': 'paid',
+      'order_type': 'dineIn',
+    });
+    expect(legacy.businessDayCutoverHour, BusinessDay.defaultCutoverHour);
+    expect(legacy.businessDay.key, '2026-03-10');
+  });
+
   test('an order carries the trading day it was rung on, not the sync day', () {
     final order = Order(
       deviceId: 'till-1',

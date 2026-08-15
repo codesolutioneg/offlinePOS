@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../domain/business_day.dart';
 import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
 import '../printing/escpos.dart';
@@ -14,6 +15,7 @@ import 'database.dart';
 class SettingsStore {
   SettingsStore(this._db) {
     publishPrintProfile();
+    publishBusinessDayRule();
   }
 
   final Db _db;
@@ -40,6 +42,7 @@ class SettingsStore {
   static const _rolePermissions = 'role_permissions';
   static const _codePage = 'receipt_code_page';
   static const _arabicRaster = 'receipt_arabic_raster';
+  static const _businessDayCutoverHour = 'business_day_cutover_hour';
 
   // ── generic accessors ────────────────────────────────────────────
   String? getString(String key) {
@@ -267,6 +270,26 @@ class SettingsStore {
   /// types that carry service, and zero for the rest.
   double serviceChargePercentFor(OrderType type) =>
       serviceChargeOrderTypes.contains(type) ? serviceChargePercent : 0;
+
+  // ── the trading day ──────────────────────────────────────────────
+
+  /// The hour the shop's trading day rolls over, 0-23. A restaurant serving past
+  /// midnight books the small hours against the evening that produced them, so the
+  /// night is one report and one cash-up instead of two.
+  int get businessDayCutoverHour =>
+      (int.tryParse(getString(_businessDayCutoverHour) ?? '') ??
+              BusinessDay.defaultCutoverHour)
+          .clamp(0, 23);
+
+  set businessDayCutoverHour(int v) {
+    setString(_businessDayCutoverHour, '${v.clamp(0, 23)}');
+    publishBusinessDayRule();
+  }
+
+  /// Hands the domain the shop's day rule, so an order created anywhere is stamped
+  /// with it. Called on open and on every change, like [publishPrintProfile].
+  void publishBusinessDayRule() =>
+      BusinessDay.shopCutoverHour = businessDayCutoverHour;
 
   /// Repoint every category and product route from [oldStation] to [newStation]
   /// when a printer is renamed, so its tickets keep reaching it rather than

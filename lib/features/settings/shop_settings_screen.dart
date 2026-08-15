@@ -27,6 +27,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late final TextEditingController _taxId;
   late final TextEditingController _receiptFooter;
   late bool _showTax;
+  late int _cutoverHour;
 
   @override
   void initState() {
@@ -35,6 +36,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _taxId = TextEditingController(text: widget.settings.taxId ?? '');
     _receiptFooter = TextEditingController(text: widget.settings.receiptFooter ?? '');
     _showTax = widget.settings.receiptShowTax;
+    _cutoverHour = widget.settings.businessDayCutoverHour;
   }
 
   @override
@@ -50,6 +52,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.taxId = _taxId.text.trim();
     widget.settings.receiptFooter = _receiptFooter.text.trim();
     widget.settings.receiptShowTax = _showTax;
+    widget.settings.businessDayCutoverHour = _cutoverHour;
     widget.onChanged();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
   }
@@ -95,6 +98,26 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             title: Text(tr(context, 'Show tax on receipt')),
             value: _showTax,
             onChanged: (v) => setState(() => _showTax = v),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<int>(
+            key: const Key('business-day-cutover'),
+            initialValue: _cutoverHour,
+            decoration: InputDecoration(
+              labelText: tr(context, 'Business day starts at'),
+              helperText: tr(context,
+                  'Sales before this hour count as the previous trading day'),
+              helperMaxLines: 2,
+              border: const OutlineInputBorder(),
+            ),
+            items: [
+              for (var h = 0; h < 24; h++)
+                DropdownMenuItem(
+                  value: h,
+                  child: Text('${h.toString().padLeft(2, '0')}:00'),
+                ),
+            ],
+            onChanged: (v) => setState(() => _cutoverHour = v ?? _cutoverHour),
           ),
           const SizedBox(height: 16),
           FilledButton(

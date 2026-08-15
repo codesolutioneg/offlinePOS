@@ -699,4 +699,9 @@ const Map<String, String> _ar = {
   'Edit a paid order': 'تعديل طلب مدفوع',
   'Put a paid sale back on the counter before it syncs':
       'إعادة بيع مدفوع إلى الشاشة قبل مزامنته',
+  // shift and day: the trading-day cutover, sign-in nudges, the close guard and
+  // the per-cashier flash
+  'Business day starts at': 'يبدأ يوم العمل الساعة',
+  'Sales before this hour count as the previous trading day':
+      'المبيعات قبل هذه الساعة تُحسب على يوم العمل السابق',
 };

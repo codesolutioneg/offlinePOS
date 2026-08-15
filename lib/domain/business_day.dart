@@ -9,11 +9,27 @@ class BusinessDay {
 
   final DateTime date;
 
-  /// The trading day [at] falls in, given a [cutoverHour] in local time.
+  /// What a shop trades on until it says otherwise: a kitchen that stops serving
+  /// somewhere before 4am books the whole night on the evening it started.
+  static const int defaultCutoverHour = 4;
+
+  /// The hour this shop's trading day rolls over, published from the on-device
+  /// setting so that every order, wherever it is created (a sale, a split check, a
+  /// refund), is stamped with one rule instead of each construction site being
+  /// handed the setting separately. Same shape, and for the same reason, as the
+  /// print profile the printing layer reads.
+  ///
+  /// Read once when an order is created, never when a total or a report is asked
+  /// for: changing the rule moves tomorrow's sales, not the ones already counted.
+  static int shopCutoverHour = defaultCutoverHour;
+
+  /// The trading day [at] falls in, given a [cutoverHour] in local time. Null takes
+  /// the shop's published rule.
   ///
   /// With the default 04:00 cutover, anything before 4am is still yesterday's
   /// trading.
-  factory BusinessDay.of(DateTime at, {int cutoverHour = 4}) {
+  factory BusinessDay.of(DateTime at, {int? cutoverHour}) {
+    cutoverHour ??= shopCutoverHour;
     final local = at.toLocal();
     final shifted = local.hour < cutoverHour
         ? local.subtract(const Duration(days: 1))
