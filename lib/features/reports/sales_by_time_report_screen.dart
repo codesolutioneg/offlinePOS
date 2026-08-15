@@ -13,6 +13,14 @@ class _HourAggregate {
   final double total;
 }
 
+/// One local day-of-week bucket (1 = Monday, matching [DateTime.weekday]).
+class _DayAggregate {
+  _DayAggregate({required this.weekday, required this.count, required this.total});
+  final int weekday;
+  final int count;
+  final double total;
+}
+
 /// A rush-hours report: bins every order by the local hour it was rung, so a
 /// manager can see when the till is busiest at a glance.
 ///
@@ -48,9 +56,37 @@ class SalesByTimeReportScreen extends StatelessWidget {
 
   String _hourLabel(int hour) => '${hour.toString().padLeft(2, '0')}:00';
 
+  /// Buckets orders by local day of the week, Monday first, dropping days with
+  /// no trade for the same reason the hour buckets do. A shop closed on Mondays
+  /// should not read a row of zeroes every week.
+  List<_DayAggregate> _byWeekday() {
+    final counts = <int, int>{};
+    final totals = <int, double>{};
+    for (final o in orders) {
+      final day = o.createdAt.toLocal().weekday;
+      counts[day] = (counts[day] ?? 0) + 1;
+      totals[day] = (totals[day] ?? 0) + o.total;
+    }
+    return [
+      for (final day in counts.keys)
+        _DayAggregate(weekday: day, count: counts[day]!, total: totals[day]!),
+    ]..sort((a, b) => a.weekday.compareTo(b.weekday));
+  }
+
+  static const _weekdayNames = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+
   @override
   Widget build(BuildContext context) {
     final hours = _byHour();
+    final days = _byWeekday();
 
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Sales by hour'))),
@@ -58,8 +94,73 @@ class SalesByTimeReportScreen extends StatelessWidget {
           ? Center(child: Text(tr(context, 'No orders')))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
-              child: _hoursCard(context, hours),
+              child: Column(children: [
+                _hoursCard(context, hours),
+                const SizedBox(height: 12),
+                _daysCard(context, days),
+              ]),
             ),
+    );
+  }
+
+  Widget _daysCard(BuildContext context, List<_DayAggregate> days) {
+    final peakTotal = days.fold(0.0, (m, d) => d.total > m ? d.total : m);
+    final safePeak = peakTotal <= 0 ? 1.0 : peakTotal;
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(tr(context, 'By day of week'),
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const Divider(),
+            Column(
+              key: const Key('weekday-sales-list'),
+              children: [
+                for (final d in days)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(children: [
+                      SizedBox(
+                        width: 84,
+                        child: Text(tr(context, _weekdayNames[d.weekday - 1])),
+                      ),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: FractionallySizedBox(
+                            widthFactor: (d.total / safePeak).clamp(0.0, 1.0),
+                            child: Container(
+                              height: 20,
+                              decoration: BoxDecoration(
+                                color: colorScheme.primary.withValues(
+                                    alpha: d.total == peakTotal ? 1.0 : 0.35),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                          width: 32,
+                          child: Text('${d.count}', textAlign: TextAlign.right)),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 80,
+                        child: Text(formatAmount(d.total),
+                            textAlign: TextAlign.right),
+                      ),
+                    ]),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 

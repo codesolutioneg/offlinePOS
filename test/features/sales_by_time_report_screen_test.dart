@@ -74,4 +74,34 @@ void main() {
         .at(1));
     expect(peakBarSize.width, greaterThan(quietBarSize.width));
   });
+
+  testWidgets('buckets orders by local day of week beside the hours',
+      (tester) async {
+    // A known Monday and the Saturday before it, so the labels are pinned no
+    // matter which day the test runs on.
+    Order onDay(DateTime day, double amount) => Order(
+          deviceId: 'till-1',
+          cashierId: 'sara',
+          createdAt: DateTime(day.year, day.month, day.day, 13).toUtc(),
+          lines: [
+            OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: amount)
+          ],
+        );
+
+    await tester.pumpWidget(app([
+      onDay(DateTime(2026, 8, 10), 100), // Monday
+      onDay(DateTime(2026, 8, 10), 50),
+      onDay(DateTime(2026, 8, 8), 20), // Saturday
+    ]));
+
+    expect(find.byKey(const Key('weekday-sales-list')), findsOneWidget);
+    expect(find.text('Monday'), findsOneWidget);
+    expect(find.text('Saturday'), findsOneWidget);
+    // Days with no trade are not padded in as empty rows.
+    expect(find.text('Tuesday'), findsNothing);
+    // Monday's 150 and Saturday's 20, each once in the weekday card.
+    final list = find.byKey(const Key('weekday-sales-list'));
+    expect(find.descendant(of: list, matching: find.text('150.00')), findsOneWidget);
+    expect(find.descendant(of: list, matching: find.text('20.00')), findsOneWidget);
+  });
 }
