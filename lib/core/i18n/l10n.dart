@@ -824,4 +824,19 @@ const Map<String, String> _ar = {
   'Backup failed': 'فشل النسخ الاحتياطي',
   'A copy of everything on this till, including sales that have not synced. It stays encrypted.':
       'نسخة من كل ما على هذا الجهاز، بما فيها المبيعات غير المزامَنة. تبقى مشفّرة.',
+  // flow and access: the manager's second factor, who may ring what, the price
+  // override, paying on account, hours worked, the guest prompt and the shortcuts
+  'Authenticator': 'تطبيق المصادقة',
+  'Authenticator code': 'رمز المصادقة',
+  'Only if this manager set one up': 'فقط إذا كان هذا المدير قد فعّله',
+  'authenticator on': 'المصادقة مفعّلة',
+  'This manager is asked for a code when they approve.':
+      'يُطلب من هذا المدير رمز عند الاعتماد.',
+  'This manager approves with their PIN alone.':
+      'يعتمد هذا المدير برمزه السري وحده.',
+  'Secret from the authenticator app': 'المفتاح من تطبيق المصادقة',
+  'Letters A-Z and digits 2-7': 'حروف A-Z وأرقام 2-7',
+  'That is not a usable secret yet.': 'هذا المفتاح غير صالح بعد.',
+  'Code right now': 'الرمز الآن',
+  'Turn off': 'إيقاف',
 };

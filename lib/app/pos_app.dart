@@ -1598,31 +1598,50 @@ class _PosAppState extends State<PosApp> {
   Future<bool> _authorizeManager(BuildContext context) async {
     if (widget.auth.signedIn?.isManager ?? false) return true;
     final ctrl = TextEditingController();
-    final pin = await showDialog<String>(
+    final codeCtrl = TextEditingController();
+    // Only a shop that has enrolled an authenticator is shown the second field, so
+    // nothing changes for a till that does not use one.
+    final second = widget.auth.managersUseSecondFactor;
+    final entered = await showDialog<(String, String)>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(tr(ctx, 'Manager approval')),
-        content: TextField(
-          key: const Key('manager-pin'),
-          controller: ctrl,
-          autofocus: true,
-          obscureText: true,
-          keyboardType: TextInputType.number,
-          decoration: InputDecoration(
-              labelText: tr(ctx, 'Manager PIN'), border: const OutlineInputBorder()),
-        ),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            key: const Key('manager-pin'),
+            controller: ctrl,
+            autofocus: true,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Manager PIN'), border: const OutlineInputBorder()),
+          ),
+          if (second) ...[
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('manager-code'),
+              controller: codeCtrl,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                  labelText: tr(ctx, 'Authenticator code'),
+                  helperText: tr(ctx, 'Only if this manager set one up'),
+                  border: const OutlineInputBorder()),
+            ),
+          ],
+        ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
             key: const Key('manager-ok'),
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            onPressed: () =>
+                Navigator.pop(ctx, (ctrl.text.trim(), codeCtrl.text.trim())),
             child: Text(tr(ctx, 'Approve')),
           ),
         ],
       ),
     );
-    if (pin == null || pin.isEmpty) return false;
-    final ok = await widget.auth.authorizeManager(pin);
+    if (entered == null || entered.$1.isEmpty) return false;
+    final ok = await widget.auth.authorizeManager(entered.$1, code: entered.$2);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(tr(context, 'Manager approval failed'))));
