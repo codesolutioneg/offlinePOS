@@ -14,6 +14,7 @@ import '../core/config/till_config.dart';
 import '../core/db/catalogue_store.dart';
 import '../core/db/attendance_store.dart';
 import '../core/db/customer_store.dart';
+import '../core/db/delivery_store.dart';
 import '../core/db/order_store.dart';
 import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
@@ -32,6 +33,7 @@ import '../core/printing/receipt_builder.dart';
 import '../core/printing/registry_printer.dart';
 import '../core/printing/spool_store.dart';
 import '../core/sync/odoo_endpoint.dart';
+import '../core/sync/odoo_puller.dart';
 import '../core/sync/odoo_wiring.dart';
 import '../core/sync/outbox.dart';
 import '../core/sync/server_probe.dart';
@@ -39,6 +41,7 @@ import '../core/sync/sync_service.dart';
 import '../core/theme/app_colors.dart';
 import '../core/updates/update_service.dart';
 import '../domain/business_day.dart';
+import '../domain/catalogue.dart';
 import '../domain/order.dart';
 import '../domain/shift.dart';
 import '../features/admin/attendance_screen.dart';
@@ -55,6 +58,7 @@ import '../features/orders/refund_screen.dart';
 import '../features/reports/reports_hub_screen.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
+import '../features/settings/delivery_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
 import '../features/settings/lan_settings_screen.dart';
 import '../features/settings/tax_settings_screen.dart';
@@ -97,6 +101,7 @@ class PosApp extends StatefulWidget {
     required this.settings,
     required this.customers,
     required this.attendance,
+    this.delivery,
     this.config = const TillConfig(),
     this.receiptSpool,
     this.checkServer,
@@ -138,6 +143,11 @@ class PosApp extends StatefulWidget {
 
   /// Customers created on the till (separate from the read-only Odoo partners).
   final CustomerStore customers;
+
+  /// The delivery lists a shop keeps on the device: zones, channels and drivers.
+  /// Null on a build that was assembled without one, which simply leaves the zone,
+  /// channel and driver controls off the delivery dialog.
+  final DeliveryStore? delivery;
 
   /// Staff clock in / clock out, separate from the cash-drawer shift.
   final AttendanceStore attendance;
@@ -779,6 +789,27 @@ class _PosAppState extends State<PosApp> {
         ),
       );
 
+  /// Customers the till never pulled, asked for while the cashier types in the
+  /// picker. The catalogue pull is bounded at 500 partners, which a shop with a
+  /// real customer book outgrows; this reaches the rest through the same read-only
+  /// call_kw the catalogue uses.
+  ///
+  /// Everything about it degrades to nothing: an offline till never asks, a server
+  /// that errors or times out answers with an empty list, and the picker is already
+  /// full of local results either way. It is never on the way to a payment.
+  Future<List<Customer>> _searchServerCustomers(String term) async {
+    if (!widget.sync.online.value) return const [];
+    try {
+      final found =
+          await OdooPuller(call: widget.odoo.catalogueCall).searchCustomers(term);
+      // Kept, so a partner found once is pickable again with the line down.
+      widget.catalogue.mergeCustomers(found);
+      return found;
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Widget _selling(PosSession session) => Stack(
         fit: StackFit.expand,
         children: [
@@ -821,6 +852,18 @@ class _PosAppState extends State<PosApp> {
               // the next order can pick them instead of retyping them.
               onAddCustomer: ({required name, phone, address}) =>
                   widget.customers.add(name: name, phone: phone, address: address),
+              // A shop with more partners than the catalogue pull carries can find
+              // the rest while the line is up. Off the payment path, and silent
+              // when there is no line: the picker keeps answering from disk.
+              searchServerCustomers: _searchServerCustomers,
+              // The delivery lists, read live so an edit in settings shows on the
+              // next order without a restart.
+              deliveryZones: widget.delivery == null ? null : () => widget.delivery!.zones(),
+              deliveryChannels:
+                  widget.delivery == null ? null : () => widget.delivery!.channels(),
+              drivers: widget.delivery == null
+                  ? null
+                  : () => widget.delivery!.drivers(activeOnly: true),
               // Dividers are floor decoration, never a table an order sits at.
               tables: () => widget.tables
                   .all()
@@ -1300,6 +1343,42 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
+  /// Resume one of the parked deliveries, start a new one, or back out.
+  ///
+  /// Returns the [Order] to pick up, null to ring a new one, or 'cancel' when the
+  /// cashier dismissed the sheet: backing out must not silently start an order.
+  Future<Object?> _pickParkedDelivery(BuildContext context, List<Order> parked) =>
+      showModalBottomSheet<Object?>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: ListView(shrinkWrap: true, children: [
+            ListTile(
+              title: Text(tr(ctx, 'Deliveries waiting'),
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text(tr(ctx, 'Pick one up, or start a new order.')),
+            ),
+            for (final o in parked)
+              ListTile(
+                key: Key('resume-delivery-${o.uuid}'),
+                leading: const Icon(Icons.delivery_dining),
+                title: Text(o.customerName ?? '#${o.displayNo}'),
+                subtitle: Text([
+                  if (o.customerPhone != null) o.customerPhone!,
+                  if (o.deliveryChannel != null) o.deliveryChannel!,
+                  PosApp.money(o.total),
+                ].join('  ·  ')),
+                onTap: () => Navigator.pop(ctx, o),
+              ),
+            ListTile(
+              key: const Key('new-delivery'),
+              leading: const Icon(Icons.add),
+              title: Text(tr(ctx, 'New delivery')),
+              onTap: () => Navigator.pop(ctx, 'new'),
+            ),
+          ]),
+        ),
+      ).then((v) => v ?? 'cancel');
+
   void _openFloor(BuildContext context, PosSession session) {
     final occ = _floorOccupancy(session);
     final occupied = occ.occupied;
@@ -1315,9 +1394,27 @@ class _PosAppState extends State<PosApp> {
           setState(() => session.startFresh(OrderType.takeaway));
           Navigator.of(floorContext).pop();
         },
-        onDelivery: () {
-          setState(() => session.startFresh(OrderType.delivery));
-          Navigator.of(floorContext).pop();
+        onDelivery: () async {
+          // A delivery has no table to tap, so a parked one is only reachable
+          // through Open orders: a cashier taking the next call has no way of
+          // knowing they are about to start a second order for a bag already
+          // waiting. Ask, but only when there is something to resume.
+          final parked = widget.orders
+              .held()
+              .where((o) => o.type == OrderType.delivery)
+              .toList();
+          final resume = parked.isEmpty
+              ? null
+              : await _pickParkedDelivery(floorContext, parked);
+          if (resume == 'cancel') return;
+          setState(() {
+            if (resume is Order) {
+              session.recall(resume.uuid);
+            } else {
+              session.startFresh(OrderType.delivery);
+            }
+          });
+          if (floorContext.mounted) Navigator.of(floorContext).pop();
         },
         onOpenTable: (t) {
           // Tapping the table the current order is already seated at just returns
@@ -1494,6 +1591,22 @@ class _PosAppState extends State<PosApp> {
         group: 'People & customers',
         onTap: () => push(CustomerManagementScreen(store: widget.customers, onChanged: refresh)),
       ),
+      if (widget.delivery != null)
+        SettingsEntry(
+          title: 'Delivery',
+          subtitle: 'Zones, channels, drivers',
+          icon: Icons.delivery_dining,
+          keyValue: 'set-delivery',
+          group: 'Shop',
+          // Zone fees are what a customer is charged, so this sits behind the same
+          // gate as the rest of the shop's pricing.
+          onTap: () => pushGated(
+              Permission.openSettings,
+              DeliverySettingsScreen(
+                  delivery: widget.delivery!,
+                  partners: widget.catalogue.customers(limit: 500),
+                  onChanged: refresh)),
+        ),
       SettingsEntry(
         title: 'Quick notes',
         icon: Icons.sticky_note_2_outlined,
