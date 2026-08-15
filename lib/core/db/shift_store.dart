@@ -3,6 +3,24 @@ import 'dart:convert';
 import '../../domain/shift.dart';
 import 'database.dart';
 
+/// One cash movement together with the shift it happened in.
+///
+/// A [CashMovement] carries no actor of its own, so a report that spans several
+/// shifts would otherwise not be able to say who paid the money out.
+class ShiftMovement {
+  const ShiftMovement({
+    required this.movement,
+    required this.shiftId,
+    required this.cashierId,
+  });
+
+  final CashMovement movement;
+  final String shiftId;
+
+  /// The cashier the shift was opened by.
+  final String cashierId;
+}
+
 /// Shifts and their cash movements, plus the X/Z totals for a shift.
 ///
 /// Entirely local: a shift is the cashier's own accounting of the drawer and does
@@ -58,6 +76,48 @@ class ShiftStore {
         at: DateTime.now().toUtc()));
     _db.raw.execute('UPDATE shifts SET movements = ? WHERE id = ?',
         [jsonEncode(s.movements.map((m) => m.toMap()).toList()), s.id]);
+  }
+
+  /// Every cash movement between [from] and [to], across open and closed shifts.
+  ///
+  /// Paid-outs live inside the shift that recorded them, so a manager asking
+  /// "what did we spend this week" has no way to see past the drawer in front of
+  /// them without this. The bounds are inclusive of [from] and exclusive of [to],
+  /// matching how the reports window orders, and a null bound means unbounded on
+  /// that side. Oldest first, so a report reads in the order the money left.
+  List<ShiftMovement> movements({DateTime? from, DateTime? to, String? cashierId}) {
+    final where = <String>[];
+    final args = <Object?>[];
+    // A shift only holds movements inside its own window, so shifts that closed
+    // before the range or opened after it cannot contribute a single row.
+    if (from != null) {
+      where.add('(closed_at IS NULL OR closed_at >= ?)');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.add('opened_at < ?');
+      args.add(to.toUtc().toIso8601String());
+    }
+    if (cashierId != null) {
+      where.add('cashier_id = ?');
+      args.add(cashierId);
+    }
+    final clause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')} ';
+    final rows = _db.raw
+        .select('SELECT * FROM shifts ${clause}ORDER BY opened_at ASC', args);
+    final out = <ShiftMovement>[];
+    for (final r in rows) {
+      final shift = _row(r);
+      for (final m in shift.movements) {
+        final at = m.at.toUtc();
+        if (from != null && at.isBefore(from.toUtc())) continue;
+        if (to != null && !at.isBefore(to.toUtc())) continue;
+        out.add(ShiftMovement(
+            movement: m, shiftId: shift.id, cashierId: shift.cashierId));
+      }
+    }
+    out.sort((a, b) => a.movement.at.compareTo(b.movement.at));
+    return out;
   }
 
   Shift closeShift({required double countedCash, DateTime? at}) {
