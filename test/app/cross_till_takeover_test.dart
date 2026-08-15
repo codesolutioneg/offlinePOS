@@ -82,6 +82,7 @@ class _Wire extends LanHttpClient {
       auth: LanCredential('the-shop-key')
           .stamp(method: 'POST', path: LanProtocol.claimPath, body: body),
     );
+    if (reply.status == 409) throw LanTabRefused('${reply.body['error']}');
     if (reply.status != 200) {
       throw HttpException('${reply.status} from the other till: ${reply.body}');
     }
@@ -314,6 +315,26 @@ void main() {
         reason: 'a till that cannot be asked cannot let go');
     expect(peerOrders.held().map((o) => o.uuid), [tab.uuid]);
     expect(find.textContaining('did not answer'), findsOneWidget);
+    await lan.dispose();
+  });
+
+  testWidgets('a till that says no is told apart from one that says nothing',
+      (t) async {
+    final tab = tabOnTheOtherTill();
+    // The other till answers, and its answer is no.
+    peerSettings.lanAllowTakeover = false;
+    final lan = node();
+
+    await t.pumpWidget(app(lan));
+    await signIn(t);
+    await tapTableFive(t);
+    await t.tap(find.byKey(const Key('confirm-takeover')));
+    await t.pumpAndSettle();
+
+    expect(find.textContaining('would not hand the tab over'), findsOneWidget);
+    expect(find.textContaining('did not answer'), findsNothing);
+    expect(orders.byUuid(tab.uuid)!.deviceId, 'till-2');
+    expect(peerOrders.held().map((o) => o.uuid), [tab.uuid]);
     await lan.dispose();
   });
 

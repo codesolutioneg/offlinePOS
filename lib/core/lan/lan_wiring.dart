@@ -301,14 +301,15 @@ class LanNode {
         );
       }
       return (order: taken, refusal: null, detail: null);
+    } on LanTabRefused catch (e) {
+      return (order: null, refusal: LanClaimRefusal.refused, detail: e.reason);
     } catch (e) {
-      // A refusal and an unreachable till are told apart by the status the owner
-      // managed to send: no answer at all is the case where the tab must stay put.
-      final refused = '$e'.contains(' 409 ');
+      // Anything that is not an answer is an unreachable till, which is the case
+      // where the tab has to stay exactly where it is: the owner could not let go
+      // of it, so nobody else may pick it up.
       return (
         order: null,
-        refusal:
-            refused ? LanClaimRefusal.refused : LanClaimRefusal.ownerUnreachable,
+        refusal: LanClaimRefusal.ownerUnreachable,
         detail: '$e',
       );
     }

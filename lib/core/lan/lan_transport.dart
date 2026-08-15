@@ -408,13 +408,22 @@ class LanHttpClient {
       'order_uuid': orderUuid,
       'cashier': ?cashier,
     });
-    final text = await _send(
-      'POST',
-      peer.baseUrl.replace(path: LanProtocol.claimPath),
-      body,
-      _credential.stamp(
-          method: 'POST', path: LanProtocol.claimPath, body: body),
-    );
+    final String text;
+    try {
+      text = await _send(
+        'POST',
+        peer.baseUrl.replace(path: LanProtocol.claimPath),
+        body,
+        _credential.stamp(
+            method: 'POST', path: LanProtocol.claimPath, body: body),
+      );
+    } on HttpException catch (e) {
+      // An answer of "no" is not the same failure as no answer, and the caller has
+      // to be able to tell them apart: only one of them means the owning till is
+      // still holding a tab it never agreed to give up.
+      if (e.message.startsWith('409 ')) throw LanTabRefused(e.message);
+      rethrow;
+    }
     final decoded = (jsonDecode(text) as Map).cast<String, dynamic>();
     final order = decoded['order'];
     if (order is! Map) throw const FormatException('claim answered with no order');

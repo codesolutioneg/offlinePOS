@@ -22,6 +22,20 @@ enum LanClaimRefusal {
   refused,
 }
 
+/// The owning till answered and said no.
+///
+/// Its own type rather than a status code read back out of a message, because the
+/// difference between this and "nobody answered" is the whole safety property: one
+/// means the tab stays where it is by choice, the other means it stays where it is
+/// because nothing could let it go.
+class LanTabRefused implements Exception {
+  const LanTabRefused(this.reason);
+  final String reason;
+
+  @override
+  String toString() => 'the other till refused: $reason';
+}
+
 /// The answer to a takeover: the tab, or why not.
 typedef LanClaimResult = ({Order? order, LanClaimRefusal? refusal, String? detail});
 
