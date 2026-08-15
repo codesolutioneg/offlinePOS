@@ -40,6 +40,7 @@ class SellScreen extends StatefulWidget {
     this.pendingToSync,
     this.spooledJobs,
     this.categoryColors = const {},
+    this.productImages = const {},
     this.quickComments = const ['No onions', 'Extra spicy', 'Well done', 'Allergy'],
     this.discountReasons = const [],
     this.discountPercents = const [5, 10, 15, 20],
@@ -123,6 +124,10 @@ class SellScreen extends StatefulWidget {
   /// Category id to colour (ARGB), so the product grid is colour-coded per category
   /// the way Dishflow does. Empty leaves tiles plain.
   final Map<int, int> categoryColors;
+
+  /// Product id to its picture, for the shops that show them. Empty (the default,
+  /// and what a shop with the switch off always gets) leaves every tile coloured.
+  final Map<int, Uint8List> productImages;
 
   /// Manager-curated quick picks for line notes and discount reasons.
   final List<String> quickComments;
@@ -1945,6 +1950,7 @@ class _SellScreenState extends State<SellScreen> {
                       product: products[i],
                       price: widget.formatAmount(products[i].price),
                       color: _colorFor(products[i].categoryId),
+                      image: widget.productImages[products[i].id],
                       unavailable: widget.unavailableProducts.contains(products[i].id),
                       favourite: widget.favourites.contains(products[i].id),
                       onTap: () => _tapProduct(products[i]),
@@ -1983,16 +1989,39 @@ class _SellScreenState extends State<SellScreen> {
         ),
         for (final c in cats) ...[
           const SizedBox(width: 6),
-          ChoiceChip(
-            label: Text(c.name),
-            selected: _categoryId == c.id && !_favesOnly,
-            onSelected: (_) => setState(() {
-              _categoryId = c.id;
-              _favesOnly = false;
-            }),
-          ),
+          _categoryChip(id: c.id, name: c.name),
         ],
       ],
+    );
+  }
+
+  /// A category chip in that category's own colour: a dot of it when the chip is
+  /// idle, the whole chip filled with it when it is the one being shown. The strip
+  /// and the grid then read as one thing, which is the point of colouring either.
+  Widget _categoryChip({required int id, required String name}) {
+    final selected = _categoryId == id && !_favesOnly;
+    final color = _colorFor(id);
+    return ChoiceChip(
+      key: Key('cat-chip-$id'),
+      avatar: color == null || selected
+          ? null
+          : CircleAvatar(backgroundColor: color, radius: 6),
+      label: Text(name),
+      selected: selected,
+      selectedColor: color?.withValues(alpha: 0.9),
+      // White on the shop's colour rather than on the theme's, so a dark chip is
+      // still readable whichever colour the manager picked.
+      labelStyle: selected && color != null
+          ? const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)
+          : null,
+      showCheckmark: false,
+      side: color == null
+          ? null
+          : BorderSide(color: color.withValues(alpha: selected ? 0.9 : 0.4)),
+      onSelected: (_) => setState(() {
+        _categoryId = id;
+        _favesOnly = false;
+      }),
     );
   }
 
@@ -2342,6 +2371,7 @@ class _ProductTile extends StatelessWidget {
     required this.price,
     required this.onTap,
     this.color,
+    this.image,
     this.unavailable = false,
     this.favourite = false,
     this.onLongPress,
@@ -2350,9 +2380,17 @@ class _ProductTile extends StatelessWidget {
   final String price;
   final VoidCallback onTap;
   final Color? color;
+
+  /// The product's picture, when the shop shows pictures and this product has one.
+  /// Null is the normal case and leaves the tile exactly as it has always been.
+  final Uint8List? image;
   final bool unavailable;
   final bool favourite;
   final VoidCallback? onLongPress;
+
+  /// A picture is drawn behind the words, so the words are set to stay readable over
+  /// whatever the photograph turns out to be: white on a dark wash, with a shadow.
+  bool get _onPicture => image != null && !unavailable;
 
   @override
   Widget build(BuildContext context) {
@@ -2368,6 +2406,33 @@ class _ProductTile extends StatelessWidget {
         onLongPress: onLongPress,
         child: Stack(
           children: [
+            // Positioned rather than laid out, so the tile is sized by its words
+            // exactly as it was before pictures existed. Decoding happens off this
+            // frame: the grid is drawn and tappable before the first one arrives.
+            if (_onPicture) ...[
+              Positioned.fill(
+                child: Image.memory(
+                  image!,
+                  key: Key('product-image-${product.id}'),
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  // A picture that will not decode leaves the tile as it would have
+                  // been rather than blanking it, which reads as a missing product.
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                ),
+              ),
+              const Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.black26, Colors.black87],
+                    ),
+                  ),
+                ),
+              ),
+            ],
             Container(
               decoration: (color == null || unavailable)
                   ? null
@@ -2386,14 +2451,24 @@ class _ProductTile extends StatelessWidget {
                               fontSize: 15,
                               height: 1.15,
                               decoration: TextDecoration.lineThrough)
-                          : const TextStyle(fontSize: 15, height: 1.15, fontWeight: FontWeight.w500)),
+                          : TextStyle(
+                              fontSize: 15,
+                              height: 1.15,
+                              fontWeight: FontWeight.w500,
+                              color: _onPicture ? Colors.white : null,
+                              shadows: _onPicture ? _readable : null)),
                   const SizedBox(height: 8),
                   if (unavailable)
                     Text(tr(context, 'Sold out'),
                         key: Key('soldout-${product.id}'),
                         style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 13))
                   else
-                    Text(price, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+                    Text(price,
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 17,
+                            color: _onPicture ? Colors.white : null,
+                            shadows: _onPicture ? _readable : null)),
                 ],
               ),
             ),
@@ -2409,6 +2484,8 @@ class _ProductTile extends StatelessWidget {
     );
     return tile;
   }
+
+  static const _readable = [Shadow(blurRadius: 4, color: Colors.black87)];
 }
 
 /// One table on the visual picker: coloured by occupancy, with the running total

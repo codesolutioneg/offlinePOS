@@ -2,12 +2,17 @@ import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/widgets/feedback.dart';
 import '../../domain/catalogue.dart';
 
-/// Lets a manager tag each category with a colour, so the product grid on the
-/// sell screen reads at a glance the way Dishflow's does: drinks are always one
-/// colour, mains another, no hunting through a flat list mid-rush.
+/// How the till looks: light or dark, whether the grid shows product pictures,
+/// what colour each category reads as, and the two colours the floor is drawn in.
+///
+/// Colour-coding the grid is what lets a cashier find a category at a glance the way
+/// Dishflow's does: drinks are always one colour, mains another, no hunting through a
+/// flat list mid-rush.
 class AppearanceSettingsScreen extends StatefulWidget {
   const AppearanceSettingsScreen({
     super.key,
@@ -19,8 +24,9 @@ class AppearanceSettingsScreen extends StatefulWidget {
   final SettingsStore settings;
   final List<Category> categories;
 
-  /// Fired after every colour change, so anything caching the palette (the sell
-  /// screen's grid) reloads without the manager leaving and re-entering settings.
+  /// Fired after every change, so anything caching the look (the sell screen's
+  /// grid, the app's own theme) reloads without the manager leaving and re-entering
+  /// settings.
   final VoidCallback onChanged;
 
   @override
@@ -54,47 +60,49 @@ class _ClearSwatch {
 const _clearSwatch = _ClearSwatch();
 
 class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
-  Future<void> _pickColor(Category category) async {
-    final current = widget.settings.categoryColors[category.id];
-    final result = await showDialog<Object>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text('Colour for ${category.name}'),
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final color in _palette)
-                  InkWell(
-                    key: Key('swatch-${color.toARGB32()}'),
-                    onTap: () => Navigator.pop(ctx, color),
-                    child: Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                        border: current == color.toARGB32()
-                            ? Border.all(color: Colors.black, width: 2)
-                            : null,
+  Future<Object?> _pickSwatch(String title, int? current) => showDialog<Object>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: Text(title),
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final color in _palette)
+                    InkWell(
+                      key: Key('swatch-${color.toARGB32()}'),
+                      onTap: () => Navigator.pop(ctx, color),
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                          border: current == color.toARGB32()
+                              ? Border.all(color: Colors.black, width: 2)
+                              : null,
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          SimpleDialogOption(
-            key: const Key('swatch-clear'),
-            onPressed: () => Navigator.pop(ctx, _clearSwatch),
-            child: Text(tr(ctx, 'Clear')),
-          ),
-        ],
-      ),
-    );
+            const SizedBox(height: 8),
+            SimpleDialogOption(
+              key: const Key('swatch-clear'),
+              onPressed: () => Navigator.pop(ctx, _clearSwatch),
+              child: Text(tr(ctx, 'Clear')),
+            ),
+          ],
+        ),
+      );
+
+  Future<void> _pickColor(Category category) async {
+    final result = await _pickSwatch('${tr(context, 'Colour for')} ${category.name}',
+        widget.settings.categoryColors[category.id]);
     if (result == null) return;
     setState(() {
       if (result is _ClearSwatch) {
@@ -106,34 +114,142 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
     widget.onChanged();
   }
 
+  /// One of the two floor colours. Clearing puts that side back on the default
+  /// rather than leaving the floor with a colour nobody chose.
+  Future<void> _pickTableColor({required bool free}) async {
+    final s = widget.settings;
+    final current = free ? s.tableColorFree : s.tableColorOccupied;
+    final result = await _pickSwatch(
+        free ? tr(context, 'Free tables') : tr(context, 'Occupied tables'), current);
+    if (result == null) return;
+    setState(() {
+      if (result is _ClearSwatch) {
+        s.setTableColor(
+          free: free ? null : s.tableColorFree,
+          occupied: free ? s.tableColorOccupied : null,
+          clear: true,
+        );
+      } else if (result is Color) {
+        s.setTableColor(
+          free: free ? result.toARGB32() : null,
+          occupied: free ? null : result.toARGB32(),
+        );
+      }
+    });
+    widget.onChanged();
+  }
+
+  Widget _sectionHeader(String title) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+        child: Text(title,
+            style: Theme.of(context)
+                .textTheme
+                .titleMedium
+                ?.copyWith(fontWeight: FontWeight.bold)),
+      );
+
+  Widget _swatchTile({
+    required Key key,
+    required String title,
+    required Color color,
+    required bool isDefault,
+    required VoidCallback onTap,
+  }) =>
+      ListTile(
+        key: key,
+        title: Text(title),
+        subtitle: isDefault ? Text(tr(context, 'Default')) : null,
+        trailing: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        onTap: onTap,
+      );
+
   @override
   Widget build(BuildContext context) {
+    final s = widget.settings;
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Category colours'))),
-      body: widget.categories.isEmpty
-          ? EmptyState(
+      appBar: AppBar(title: Text(tr(context, 'Appearance'))),
+      body: ListView(
+        children: [
+          _sectionHeader(tr(context, 'Theme')),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: SegmentedButton<String>(
+              segments: [
+                ButtonSegment(
+                    value: 'system',
+                    icon: const Icon(Icons.brightness_auto),
+                    label: Text(tr(context, 'Automatic'), key: const Key('theme-system'))),
+                ButtonSegment(
+                    value: 'light',
+                    icon: const Icon(Icons.light_mode_outlined),
+                    label: Text(tr(context, 'Light'), key: const Key('theme-light'))),
+                ButtonSegment(
+                    value: 'dark',
+                    icon: const Icon(Icons.dark_mode_outlined),
+                    label: Text(tr(context, 'Dark'), key: const Key('theme-dark'))),
+              ],
+              selected: {AppTheme.modeKeys.contains(s.themeMode) ? s.themeMode : 'system'},
+              onSelectionChanged: (picked) {
+                setState(() => s.themeMode = picked.first);
+                widget.onChanged();
+              },
+            ),
+          ),
+          _sectionHeader(tr(context, 'Product grid')),
+          SwitchListTile(
+            key: const Key('t-product-images'),
+            title: Text(tr(context, 'Show product pictures')),
+            subtitle: Text(tr(context,
+                'Pictures come down with the menu on the next sync. A product without one keeps its colour.')),
+            value: s.showProductImages,
+            onChanged: (v) {
+              setState(() => s.showProductImages = v);
+              widget.onChanged();
+            },
+          ),
+          _sectionHeader(tr(context, 'Table colours')),
+          _swatchTile(
+            key: const Key('table-colour-free'),
+            title: tr(context, 'Free tables'),
+            color: s.tableColorFree == null
+                ? AppColors.tableFree
+                : Color(s.tableColorFree!),
+            isDefault: s.tableColorFree == null,
+            onTap: () => _pickTableColor(free: true),
+          ),
+          _swatchTile(
+            key: const Key('table-colour-occupied'),
+            title: tr(context, 'Occupied tables'),
+            color: s.tableColorOccupied == null
+                ? AppColors.tableOccupied
+                : Color(s.tableColorOccupied!),
+            isDefault: s.tableColorOccupied == null,
+            onTap: () => _pickTableColor(free: false),
+          ),
+          _sectionHeader(tr(context, 'Category colours')),
+          if (widget.categories.isEmpty)
+            EmptyState(
               icon: Icons.palette_outlined,
               title: tr(context, 'No categories yet'),
               message: tr(context, 'Add categories to the catalogue to colour-code them here'),
             )
-          : ListView.builder(
-              itemCount: widget.categories.length,
-              itemBuilder: (context, index) {
-                final category = widget.categories[index];
-                final argb = widget.settings.categoryColors[category.id];
-                final swatchColor = argb != null ? Color(argb) : _unsetColor;
-                return ListTile(
-                  key: Key('cat-${category.id}'),
-                  title: Text(category.name),
-                  trailing: Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(color: swatchColor, shape: BoxShape.circle),
-                  ),
-                  onTap: () => _pickColor(category),
-                );
-              },
-            ),
+          else
+            for (final category in widget.categories)
+              _swatchTile(
+                key: Key('cat-${category.id}'),
+                title: category.name,
+                color: s.categoryColors[category.id] != null
+                    ? Color(s.categoryColors[category.id]!)
+                    : _unsetColor,
+                isDefault: false,
+                onTap: () => _pickColor(category),
+              ),
+        ],
+      ),
     );
   }
 }

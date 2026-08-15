@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/db/table_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/theme/table_palette.dart';
 
 /// The floor plan: tables drawn where the shop placed them, tapped to start or
 /// recall a dine-in order. In edit mode a manager lays the floor out by dragging
@@ -591,9 +592,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   Widget _legend() => Padding(
         padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
         child: Row(children: [
-          _legendDot(AppColors.tableFree, tr(context, 'Free')),
+          _legendDot(TablePalette.shared.free, tr(context, 'Free')),
           const SizedBox(width: 14),
-          _legendDot(AppColors.tableOccupied, tr(context, 'Occupied')),
+          _legendDot(TablePalette.shared.occupied, tr(context, 'Occupied')),
         ]),
       );
 
@@ -807,7 +808,10 @@ class _TableTile extends StatelessWidget {
   Widget build(BuildContext context) {
     if (table.isDivider) return _divider();
 
-    final color = occupied ? AppColors.tableOccupied : AppColors.tableFree;
+    // The shop's own two colours, which default to the green/red every floor has
+    // been drawn in until a manager says otherwise.
+    final palette = TablePalette.shared;
+    final color = occupied ? palette.occupied : palette.free;
     final wide = table.shape == TableShape.rectangle;
     final round = table.shape == TableShape.round;
     return Container(

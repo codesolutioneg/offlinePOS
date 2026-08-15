@@ -6,6 +6,8 @@ import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
 import '../printing/escpos.dart';
 import '../printing/printer_logo.dart';
+import '../sync/odoo_puller.dart';
+import '../theme/table_palette.dart';
 import 'database.dart';
 
 /// On-device configuration a manager can change without a rebuild: shop name and
@@ -18,6 +20,8 @@ class SettingsStore {
   SettingsStore(this._db) {
     publishPrintProfile();
     publishBusinessDayRule();
+    publishCataloguePullOptions();
+    publishTablePalette();
   }
 
   final Db _db;
@@ -641,6 +645,7 @@ class SettingsStore {
     EscPosPrintProfile.shared = EscPosPrintProfile(
       codePage: EscPosCodePage.byKey[receiptCodePage],
       rasterUnmappable: receiptArabicRaster,
+      textScale: EscPosTextScale.byKey[receiptFontProfile],
     );
   }
 
@@ -701,4 +706,63 @@ class SettingsStore {
 
   /// Whether [role] may do [p] without a manager PIN.
   bool roleCan(String role, Permission p) => permissionsFor(role).contains(p);
+
+  // ── how the till looks and how big the paper prints ──────────────
+
+  /// Light, dark, or whatever the device is set to. Stored as the key rather than
+  /// the enum so this file stays free of Flutter's widget layer; [AppTheme] turns it
+  /// back into a [ThemeMode].
+  String get themeMode => getString('theme_mode') ?? 'system';
+  set themeMode(String v) => setString('theme_mode', v);
+
+  /// Show the product picture on its grid tile.
+  ///
+  /// Off by default and off on a shop that never asks for it: a picture is the only
+  /// part of the catalogue measured in megabytes, so this switch decides whether they
+  /// are downloaded at all as well as whether they are drawn.
+  bool get showProductImages => getBool('show_product_images');
+  set showProductImages(bool v) {
+    setBool('show_product_images', v);
+    publishCataloguePullOptions();
+  }
+
+  /// Hands the catalogue puller the one choice it cannot ask a database for. Called
+  /// on open and on every change, like [publishPrintProfile].
+  void publishCataloguePullOptions() =>
+      CataloguePullOptions.shared = CataloguePullOptions(images: showProductImages);
+
+  /// The two floor colours, as ARGB ints, or null while the shop is on the defaults.
+  int? get tableColorFree => int.tryParse(getString('table_color_free') ?? '');
+  int? get tableColorOccupied =>
+      int.tryParse(getString('table_color_occupied') ?? '');
+
+  void setTableColor({int? free, int? occupied, bool clear = false}) {
+    if (clear) {
+      setString('table_color_free', null);
+      setString('table_color_occupied', null);
+    }
+    if (free != null) setString('table_color_free', '$free');
+    if (occupied != null) setString('table_color_occupied', '$occupied');
+    publishTablePalette();
+  }
+
+  /// Hands the floor the colours it draws with. Called on open and on every change.
+  void publishTablePalette() => TablePalette.shared = TablePalette.fromArgb(
+        free: tableColorFree,
+        occupied: tableColorOccupied,
+      );
+
+  /// How big the body text prints: 'normal', 'tall' (same characters per line, twice
+  /// the height) or 'large' (twice both ways, so half as many characters fit). A
+  /// shop with older eyes on the counter reads the slip; the layout follows the
+  /// choice rather than running off the edge of the roll.
+  String get receiptFontProfile {
+    final v = getString('receipt_font_profile') ?? 'normal';
+    return EscPosTextScale.byKey.containsKey(v) ? v : 'normal';
+  }
+
+  set receiptFontProfile(String v) {
+    setString('receipt_font_profile', v);
+    publishPrintProfile();
+  }
 }
