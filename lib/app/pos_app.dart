@@ -8,6 +8,7 @@ import '../core/i18n/l10n.dart';
 
 import '../core/audit/audit_log.dart';
 import '../core/auth/auth_service.dart';
+import '../core/auth/bootstrap_cashier.dart';
 import '../core/auth/permissions.dart';
 import '../core/auth/user_store.dart';
 import '../core/config/till_config.dart';
@@ -20,6 +21,7 @@ import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
 import '../core/db/table_store.dart';
 import '../core/lan/lan_wiring.dart';
+import '../core/onboarding/setup_checklist.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
@@ -48,6 +50,7 @@ import '../features/support/audit_log_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/customers/customer_management_screen.dart';
 import '../features/kitchen/kitchen_display_screen.dart';
+import '../features/onboarding/setup_checklist_card.dart';
 import '../features/onboarding/wizard_overlay.dart';
 import '../features/orders/open_orders_screen.dart';
 import '../features/orders/order_history_screen.dart';
@@ -209,6 +212,10 @@ class _PosAppState extends State<PosApp> {
 
   PosSession? _session;
   bool _firstSaleHelp = false;
+
+  /// Whether the walkthrough for the provisioning account is up. Only that account
+  /// ever sees it: it is the one that stands in front of an unconfigured till.
+  bool _firstSignInHelp = false;
   String? _printError;
   Timer? _background;
 
@@ -359,6 +366,11 @@ class _PosAppState extends State<PosApp> {
         nextOrderNo: () => widget.settings.nextOrderNumber(widget.deviceId),
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
+      // The provisioning account is whoever is standing at a till that has just
+      // been installed, so it is the one that gets walked through what is left to
+      // do. A real cashier meets the first-sale help instead.
+      _firstSignInHelp = cashier.id == BootstrapCashier.id &&
+          widget.wizards.shouldShow(WizardId.firstSignIn, cashier.id);
     });
     // Support asks who is on the till before anything else.
     widget.sync.cashierId = cashier.id;
@@ -696,6 +708,46 @@ class _PosAppState extends State<PosApp> {
     setState(() => _firstSaleHelp = false);
   }
 
+  void _closeFirstSignInHelp(WizardOutcome outcome, String cashierId) {
+    if (outcome == WizardOutcome.dismissedForever) {
+      widget.wizards.dismiss(WizardId.firstSignIn, cashierId);
+    }
+    setState(() => _firstSignInHelp = false);
+  }
+
+  /// What this till still has to be told, read off the device every time rather
+  /// than cached: a manager who adds a printer and comes back must see it ticked.
+  SetupChecklist _setupChecklist() => SetupChecklist.of(
+        serverConfigured: widget.endpoints.isConfigured,
+        menuDownloaded: widget.catalogue.refreshedAt != null,
+        printerConfigured: widget.printers.printers.isNotEmpty,
+        // The provisioning account does not count as a roster: it is the account
+        // that exists so a real one can be created.
+        staffEnrolled: !BootstrapCashier.stillNeeded(widget.users.active()),
+      );
+
+  /// The walkthrough the provisioning account gets. The last panel is built from
+  /// the checklist, so it names what is actually missing on THIS till rather than
+  /// a generic list that is wrong the moment half of it is done.
+  List<WizardStep> _firstSignInSteps(SetupChecklist list) => [
+        const WizardStep(
+          title: 'This till is ready to sell',
+          body: 'Everything is stored on the device. You can ring a sale right '
+              'now, with or without a connection.',
+        ),
+        const WizardStep(
+          title: 'Finish the setup from Settings',
+          body: 'Open the menu on the left, then Settings. The checklist at the '
+              'top says what is still missing.',
+        ),
+        WizardStep(
+          title: list.isComplete ? 'Nothing left to set up' : 'Still to do',
+          body: list.isComplete
+              ? 'The server, the menu, a printer and your staff are all set.'
+              : list.outstanding.map((s) => '- ${s.title}').join('\n'),
+        ),
+      ];
+
   @override
   Widget build(BuildContext context) {
     final session = _session;
@@ -894,7 +946,15 @@ class _PosAppState extends State<PosApp> {
               },
             ),
           ),
-          if (_firstSaleHelp)
+          // One coach at a time, and setting the till up comes before the first
+          // sale: two scrims over each other is a cashier with no way out.
+          if (_firstSignInHelp)
+            WizardOverlay(
+              steps: _firstSignInSteps(_setupChecklist()),
+              onClosed: (outcome) =>
+                  _closeFirstSignInHelp(outcome, session.cashierId),
+            )
+          else if (_firstSaleHelp)
             WizardOverlay(
               steps: _firstSaleSteps,
               onClosed: (outcome) =>
@@ -1605,7 +1665,32 @@ class _PosAppState extends State<PosApp> {
         },
       ),
     ];
-    push(SettingsHubScreen(entries: entries));
+    push(SettingsHubScreen(entries: entries, header: _setupHeader(context)));
+  }
+
+  /// The setup checklist, or nothing once the till is set up.
+  ///
+  /// Completing it is what puts it away for good: the card is recorded as
+  /// dismissed the moment every item is ticked, so removing a printer months later
+  /// does not bring an onboarding card back over a working shop.
+  Widget? _setupHeader(BuildContext context) {
+    final who = _session?.cashierId;
+    if (who == null) return null;
+    final list = _setupChecklist();
+    if (list.isComplete) {
+      widget.wizards.dismiss(WizardId.setupChecklist, who);
+      return null;
+    }
+    if (!widget.wizards.shouldShow(WizardId.setupChecklist, who)) return null;
+    return SetupChecklistCard(
+      checklist: list,
+      onDismiss: () {
+        widget.wizards.dismiss(WizardId.setupChecklist, who);
+        // Back to the sell screen: the hub was built with the card in it, and
+        // popping is how the change is seen rather than a stale list.
+        Navigator.of(context).pop();
+      },
+    );
   }
 
   /// Move every account on [from] onto [to], keeping their PIN and their active
