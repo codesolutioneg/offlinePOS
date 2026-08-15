@@ -48,9 +48,6 @@ class CatalogueStore {
             [p.id, p.name, p.price, p.categoryId, p.barcode, p.active ? 1 : 0,
              p.soldByWeight ? 1 : 0, p.taxRate, p.cost, productImages[p.id]]);
       }
-      // A refresh replaces the products, so whatever was held in memory describes a
-      // menu that no longer exists.
-      _images = null;
       for (final g in groups) {
         _db.raw.execute(
             'INSERT INTO modifier_groups (id, name, sequence, min_selection, max_selection, required, auto_add) '
@@ -85,6 +82,9 @@ class CatalogueStore {
           "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
           [jsonEncode(customers.map((c) => c.toMap()).toList())]);
       _db.raw.execute('COMMIT');
+      // The products are gone, so whatever pictures were held in memory describe a
+      // menu that no longer exists.
+      _images = null;
     } catch (_) {
       _db.raw.execute('ROLLBACK');
       rethrow;
