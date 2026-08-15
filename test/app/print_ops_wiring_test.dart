@@ -19,6 +19,7 @@ import 'package:offline_pos/core/onboarding/wizard_store.dart';
 import 'package:offline_pos/core/printing/printer_discovery.dart';
 import 'package:offline_pos/core/printing/printer_logo.dart';
 import 'package:offline_pos/core/printing/printer_registry.dart';
+import 'package:offline_pos/core/printing/printer_transport.dart';
 import 'package:offline_pos/core/printing/spool_store.dart';
 import 'package:offline_pos/core/sync/odoo_endpoint.dart';
 import 'package:offline_pos/core/sync/odoo_wiring.dart';
@@ -41,6 +42,58 @@ class _NoPrinters extends PrinterDiscovery {
   Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async => const [];
 }
 
+/// Only these hosts are switched on. A sweep finds nothing, because a test shop has
+/// no subnet.
+class _Subnet extends PrinterDiscovery {
+  _Subnet(this.answering);
+
+  final Set<String> answering;
+
+  @override
+  Future<bool> probe(String host, {int? port}) async => answering.contains(host);
+
+  @override
+  Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async => const [];
+}
+
+/// A printer that keeps what it was handed instead of burning it.
+class _Paper implements PrinterTransport {
+  final List<Uint8List> jobs = [];
+
+  @override
+  Future<void> send(Uint8List bytes) async => jobs.add(bytes);
+}
+
+/// Printers do not answer a reverse lookup here, and a real one would put a DNS
+/// round trip in the middle of every sale.
+Future<String?> _anonymous(String host, int port) async => null;
+
+/// The printed text of a job, with the control bytes taken out.
+String printed(Uint8List bytes) {
+  final out = <int>[];
+  var i = 0;
+  while (i < bytes.length) {
+    final b = bytes[i];
+    if (b == 0x1b) {
+      final cmd = i + 1 < bytes.length ? bytes[i + 1] : 0;
+      i += switch (cmd) {
+        0x40 => 2,
+        0x61 || 0x45 || 0x21 || 0x74 => 3,
+        0x70 => 5,
+        _ => 2,
+      };
+      continue;
+    }
+    if (b == 0x1d) {
+      i += 4;
+      continue;
+    }
+    out.add(b);
+    i++;
+  }
+  return String.fromCharCodes(out);
+}
+
 /// What a cashier's sale actually puts on paper, rung on a real app shell.
 ///
 /// The layouts are covered in test/printing. What is covered here is the seam: a
@@ -54,6 +107,9 @@ void main() {
   late SettingsStore settings;
   late MemorySpoolStore spool;
 
+  /// Replaced by a test that wants printers that actually answer.
+  late PrinterRegistry printers;
+
   setUpAll(useSystemSqlite);
   setUp(() async {
     db = Db.open(':memory:');
@@ -62,6 +118,7 @@ void main() {
     audit = AuditLog(db);
     settings = SettingsStore(db);
     spool = MemorySpoolStore();
+    printers = PrinterRegistry(discovery: _NoPrinters());
     CatalogueStore(db).replaceAll(
       categories: const [Category(id: 1, name: 'Food')],
       products: const [Product(id: 10, name: 'Pizza', price: 250, categoryId: 1)],
@@ -100,7 +157,7 @@ void main() {
         appVersion: 'test',
       ),
       outboxStore: outboxStore,
-      printers: PrinterRegistry(discovery: _NoPrinters()),
+      printers: printers,
       wizards: WizardStore(db),
       shifts: ShiftStore(db),
       deviceId: 'till-1',
@@ -298,6 +355,50 @@ void main() {
 
       final sale = orders.recent(limit: 1).single;
       expect((await slipsMatching(sale.uuid)).single, contains('Card'));
+    });
+  });
+
+  group('when the receipt printer is off', () {
+    testWidgets('the sale prints on the spare, and the paper says so', (t) async {
+      final papers = <String, _Paper>{};
+      // The receipt printer is dead; the spare in the office is not.
+      printers = PrinterRegistry(
+        discovery: _Subnet({'10.0.0.9'}),
+        identify: _anonymous,
+        open: (host, port) => papers.putIfAbsent(host, () => _Paper()),
+      );
+      printers.remember('receipt', host: '10.0.0.5', backup: 'spare');
+      printers.remember('spare', host: '10.0.0.9');
+
+      await sellAPizza(t);
+
+      expect(papers['10.0.0.5'], isNull, reason: 'the dead printer took nothing');
+      final onTheSpare =
+          (papers['10.0.0.9']?.jobs ?? const <Uint8List>[]).map(printed).toList();
+      final receipt = onTheSpare.where((j) => j.contains('TOTAL')).toList();
+      expect(receipt, hasLength(1),
+          reason: 'the sale slip must reach the spare, not only the spool');
+      expect(receipt.single, contains('REROUTED FROM RECEIPT'));
+      // Nothing is held: the paper exists, so there is nothing to reprint.
+      expect(await spool.oldestFirst(), isEmpty);
+    });
+
+    testWidgets('with no spare the sale is held for the printer it belongs to',
+        (t) async {
+      final papers = <String, _Paper>{};
+      printers = PrinterRegistry(
+        discovery: _Subnet({'10.0.0.9'}),
+        identify: _anonymous,
+        open: (host, port) => papers.putIfAbsent(host, () => _Paper()),
+      );
+      printers.remember('receipt', host: '10.0.0.5');
+      printers.remember('spare', host: '10.0.0.9');
+
+      await sellAPizza(t);
+
+      expect(papers['10.0.0.9'], isNull, reason: 'nothing reroutes unasked');
+      final sale = orders.recent(limit: 1).single;
+      expect(await slipsMatching(sale.uuid), hasLength(1));
     });
   });
 }

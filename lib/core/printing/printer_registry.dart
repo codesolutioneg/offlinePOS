@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'printer_discovery.dart';
+import 'printer_transport.dart';
 
 /// How a printer says who it is, independently of the address it currently holds.
 ///
@@ -18,6 +19,7 @@ class ConfiguredPrinter {
     this.port = 9100,
     this.identity,
     this.lastSeenAt,
+    this.backup,
   });
 
   /// The stable, human-chosen identity: 'kitchen', 'bar', 'receipt'. Receipts are
@@ -35,11 +37,18 @@ class ConfiguredPrinter {
 
   final DateTime? lastSeenAt;
 
+  /// The name of the printer a job goes to when this one will not take it. Null,
+  /// which is most shops, means a dead printer spools and waits, exactly as before.
+  /// A name and not an address, like everything else here: the spare is followed
+  /// through a lease change too.
+  final String? backup;
+
   ConfiguredPrinter copyWith({
     String? host,
     int? port,
     String? identity,
     DateTime? lastSeenAt,
+    String? backup,
   }) =>
       ConfiguredPrinter(
         name: name,
@@ -47,6 +56,7 @@ class ConfiguredPrinter {
         port: port ?? this.port,
         identity: identity ?? this.identity,
         lastSeenAt: lastSeenAt ?? this.lastSeenAt,
+        backup: backup ?? this.backup,
       );
 
   Map<String, Object?> toMap() => {
@@ -55,6 +65,7 @@ class ConfiguredPrinter {
         'port': port,
         'identity': identity,
         'last_seen_at': lastSeenAt?.toUtc().toIso8601String(),
+        'backup': backup,
       };
 
   /// Returns null for a row that cannot be trusted, so one corrupt record cannot
@@ -69,6 +80,9 @@ class ConfiguredPrinter {
       port: map['port'] is int ? map['port'] as int : 9100,
       identity: map['identity'] is String ? map['identity'] as String : null,
       lastSeenAt: seen is String ? DateTime.tryParse(seen) : null,
+      backup: map['backup'] is String && (map['backup'] as String).isNotEmpty
+          ? map['backup'] as String
+          : null,
     );
   }
 }
@@ -91,9 +105,11 @@ class PrinterRegistry {
     this.identityTimeout = const Duration(milliseconds: 500),
     this.resolveBudget = const Duration(seconds: 4),
     this.rediscoveryBackoff = const Duration(seconds: 45),
+    PrinterTransport Function(String host, int port)? open,
     DateTime Function()? now,
   })  : _discovery = discovery,
         _identify = identify ?? _reverseDns,
+        _open = open ?? _tcp,
         _now = now ?? DateTime.now;
 
   /// Restores a saved configuration. Anything unreadable in [saved] is skipped
@@ -106,6 +122,7 @@ class PrinterRegistry {
     Duration identityTimeout = const Duration(milliseconds: 500),
     Duration resolveBudget = const Duration(seconds: 4),
     Duration rediscoveryBackoff = const Duration(seconds: 45),
+    PrinterTransport Function(String host, int port)? open,
     DateTime Function()? now,
   }) {
     final registry = PrinterRegistry(
@@ -115,6 +132,7 @@ class PrinterRegistry {
       identityTimeout: identityTimeout,
       resolveBudget: resolveBudget,
       rediscoveryBackoff: rediscoveryBackoff,
+      open: open,
       now: now,
     );
     final rows = saved['printers'];
@@ -131,6 +149,14 @@ class PrinterRegistry {
   final PrinterDiscovery _discovery;
   final PrinterIdentifier _identify;
   final DateTime Function() _now;
+
+  /// How an address that answered becomes something that takes bytes.
+  ///
+  /// Here rather than at the send site because this class already owns the whole
+  /// question of how a name becomes a reachable printer, and because it is the one
+  /// seam that lets the routing above it (a spare printer, above all) be exercised
+  /// without a socket.
+  final PrinterTransport Function(String host, int port) _open;
 
   /// Fired when something worth writing to disk changed: a new address or a newly
   /// learned identity. Not fired for a plain confirmation, so printing a ticket
@@ -169,13 +195,24 @@ class PrinterRegistry {
 
   ConfiguredPrinter? operator [](String name) => _printers[name];
 
+  /// A transport onto [host]:[port], for whatever is sending right now.
+  PrinterTransport transportTo(String host, int port) => _open(host, port);
+
   /// Configures a printer, or points an existing one at a new address.
-  void remember(String name, {String? host, int port = 9100}) {
+  ///
+  /// The spare survives a re-point: support typing in a new address for the kitchen
+  /// printer is not saying the shop stopped having a spare. [setBackup] is how it
+  /// changes or goes away.
+  void remember(String name, {String? host, int port = 9100, String? backup}) {
     final existing = _printers[name];
+    final spare = backup ?? existing?.backup;
     _printers[name] = ConfiguredPrinter(
       name: name,
       host: host,
       port: port,
+      // A printer is never its own spare: that would retry the dead address twice
+      // and print the reroute banner on a job that never moved.
+      backup: spare == name ? null : spare,
       // An address entered by hand may be a different unit, so the learned identity
       // is dropped rather than carried onto whatever now answers there.
       identity: existing != null && existing.host == host ? existing.identity : null,
@@ -185,6 +222,23 @@ class PrinterRegistry {
     // Pointing the till somewhere new is an explicit statement that the world
     // changed, so an earlier failed sweep stops counting.
     _sweepFailedAt.remove(name);
+    onChanged?.call();
+  }
+
+  /// Point [name] at a spare printer, or clear it with null.
+  void setBackup(String name, String? backup) {
+    final printer = _printers[name];
+    if (printer == null) return;
+    final spare = backup == name ? null : backup;
+    if (printer.backup == spare) return;
+    _printers[name] = ConfiguredPrinter(
+      name: printer.name,
+      host: printer.host,
+      port: printer.port,
+      identity: printer.identity,
+      lastSeenAt: printer.lastSeenAt,
+      backup: spare,
+    );
     onChanged?.call();
   }
 
@@ -322,6 +376,9 @@ class PrinterRegistry {
       return null;
     }
   }
+
+  static PrinterTransport _tcp(String host, int port) =>
+      TcpPrinter(host: host, port: port);
 
   static Future<String?> _reverseDns(String host, int _) async {
     final resolved = await InternetAddress(host).reverse();

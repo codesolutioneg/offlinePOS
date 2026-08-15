@@ -362,4 +362,40 @@ void main() {
       expect(settings.subReceiptHidePrices, isFalse);
     });
   });
+
+  group('a spare printer', () {
+    testWidgets('is picked on the printer itself and written down', (t) async {
+      await tall(t);
+      printers.remember('receipt', host: '192.168.1.50');
+      printers.remember('bar', host: '192.168.1.60');
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('edit-receipt')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('printer-backup')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('bar').last);
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('save-add-printer')));
+      await t.pumpAndSettle();
+
+      expect(printers['receipt']!.backup, 'bar');
+      // And it is on the row, so support can see where a ticket goes.
+      expect(find.textContaining('spare: bar'), findsOneWidget);
+    });
+
+    testWidgets('a printer is not offered itself as its own spare', (t) async {
+      await tall(t);
+      printers.remember('receipt', host: '192.168.1.50');
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('edit-receipt')));
+      await t.pumpAndSettle();
+
+      final picker =
+          t.widget<DropdownButton<String>>(find.byKey(const Key('printer-backup')));
+      // Nothing but "Nowhere": the only printer in the shop is this one.
+      expect(picker.items!.map((i) => i.value), ['']);
+    });
+  });
 }

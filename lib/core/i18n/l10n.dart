@@ -728,4 +728,8 @@ const Map<String, String> _ar = {
       'يتغيّر النص على الفاتورة فقط. المبيعات والتقارير تحتفظ بطريقة الدفع كما هي.',
   'No payment methods yet. They arrive with the menu on the next sync.':
       'لا توجد طرق دفع بعد. تصل مع قائمة الأصناف في المزامنة القادمة.',
+  'If it is off, print at': 'إذا كانت متوقفة، اطبع على',
+  'Nowhere': 'لا شيء',
+  'The slip says it was rerouted': 'يُذكر على الورقة أنها حُوِّلت',
+  'spare': 'البديلة',
 };
