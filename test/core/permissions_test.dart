@@ -80,4 +80,77 @@ void main() {
       expect(settings.permissionsFor('runner'), {Permission.reprint});
     });
   });
+
+  group('roles the shop invented', () {
+    late Db db;
+    late SettingsStore settings;
+    setUpAll(useSystemSqlite);
+    setUp(() {
+      db = Db.open(':memory:');
+      settings = SettingsStore(db);
+    });
+    tearDown(() => db.close());
+
+    test('a till starts with the two built-in roles and nothing else', () {
+      expect(settings.customRoles, isEmpty);
+      expect(settings.assignableRoles, ['cashier']);
+    });
+
+    test('a new role is offered to the roster and can be given permissions', () {
+      expect(settings.addCustomRole(' Head  waiter '), isTrue);
+      expect(settings.customRoles, ['Head waiter']);
+      expect(settings.assignableRoles, ['cashier', 'Head waiter']);
+      settings.setRolePermission('Head waiter', Permission.voidLine, true);
+      expect(settings.roleCan('Head waiter', Permission.voidLine), isTrue);
+      expect(settings.roleCan('Head waiter', Permission.openSettings), isFalse);
+    });
+
+    test('the built-in names cannot be re-invented, whatever the letters', () {
+      expect(settings.addCustomRole('Manager'), isFalse);
+      expect(settings.addCustomRole('cashier'), isFalse);
+      expect(settings.addCustomRole('   '), isFalse);
+      expect(settings.customRoles, isEmpty);
+    });
+
+    test('two roles that read the same are one role', () {
+      expect(settings.addCustomRole('Waiter'), isTrue);
+      expect(settings.addCustomRole('waiter'), isFalse);
+      expect(settings.customRoles, ['Waiter']);
+    });
+
+    test('a rename carries the permissions across', () {
+      settings.addCustomRole('Waiter');
+      settings.setRolePermission('Waiter', Permission.applyDiscount, true);
+      expect(settings.renameCustomRole('Waiter', 'Supervisor'), isTrue);
+      expect(settings.customRoles, ['Supervisor']);
+      expect(settings.roleCan('Supervisor', Permission.applyDiscount), isTrue);
+      expect(settings.permissionsFor('Waiter'), isEmpty);
+    });
+
+    test('a rename onto an existing name is refused', () {
+      settings.addCustomRole('Waiter');
+      settings.addCustomRole('Runner');
+      expect(settings.renameCustomRole('Waiter', 'Runner'), isFalse);
+      expect(settings.customRoles, ['Waiter', 'Runner']);
+      // Only the letters changing is still a rename worth allowing.
+      expect(settings.renameCustomRole('Waiter', 'WAITER'), isTrue);
+      expect(settings.customRoles, ['WAITER', 'Runner']);
+    });
+
+    test('deleting a role takes its permissions with it', () {
+      settings.addCustomRole('Waiter');
+      settings.setRolePermission('Waiter', Permission.refund, true);
+      settings.deleteCustomRole('Waiter');
+      expect(settings.customRoles, isEmpty);
+      expect(settings.permissionsFor('Waiter'), isEmpty);
+      // The built-in roles are untouched by any of it.
+      expect(settings.permissionsFor('manager'), Permission.values.toSet());
+      expect(settings.roleCan('cashier', Permission.reprint), isTrue);
+    });
+
+    test('deleting on a till with no custom roles does nothing', () {
+      settings.deleteCustomRole('Waiter');
+      expect(settings.customRoles, isEmpty);
+    });
+  });
 }
