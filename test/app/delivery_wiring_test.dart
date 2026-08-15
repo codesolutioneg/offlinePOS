@@ -336,6 +336,42 @@ void main() {
       expect(stored(order.uuid).toServerPayload().containsKey('driver_name'), isFalse);
     });
 
+    testWidgets('the details dialog can hand it over at ringing time', (t) async {
+      delivery.addDriver(name: 'Hany');
+      final order = deliveryOnTheTill();
+
+      await t.pumpWidget(app());
+      await signIn(t);
+      await openDeliveryDialog(t);
+      await t.tap(find.byKey(const Key('delivery-driver')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Hany').last);
+      await t.pumpAndSettle();
+      await save(t);
+
+      expect(stored(order.uuid).driverName, 'Hany');
+    });
+
+    testWidgets('a driver already on the order is still shown after they leave',
+        (t) async {
+      final driver = delivery.addDriver(name: 'Hany');
+      final order = deliveryOnTheTill();
+
+      await t.pumpWidget(app());
+      await signIn(t);
+      await t.tap(find.byKey(const Key('driver-chip')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(Key('driver-${driver.id}')));
+      await t.pumpAndSettle();
+      // They hand in their keys mid-delivery.
+      delivery.setDriverActive(driver.id, false);
+      await openDeliveryDialog(t);
+      await save(t);
+
+      expect(stored(order.uuid).driverName, 'Hany',
+          reason: 'saving the dialog must not quietly drop the name on the slip');
+    });
+
     testWidgets('the driver picker reads in Arabic', (t) async {
       SettingsStore(db).language = 'ar';
       delivery.addDriver(name: 'Hany');
