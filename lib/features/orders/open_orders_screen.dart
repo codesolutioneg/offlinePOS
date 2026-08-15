@@ -10,7 +10,7 @@ import '../../domain/order.dart';
 /// A held order is money already committed to the kitchen but not yet paid: it
 /// must stay findable by table, not just by whoever remembers the uuid, because
 /// the till is shared across shifts and cashiers do not recall each other's tabs.
-class OpenOrdersScreen extends StatelessWidget {
+class OpenOrdersScreen extends StatefulWidget {
   const OpenOrdersScreen({
     super.key,
     required this.orders,
@@ -33,53 +33,101 @@ class OpenOrdersScreen extends StatelessWidget {
   final void Function(Order order)? onPrintBill;
 
   @override
+  State<OpenOrdersScreen> createState() => _OpenOrdersScreenState();
+}
+
+class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
+  /// Showing only the deliveries. Off by default: this list is a floor's open
+  /// tabs first, and a shop that does no delivery never sees the filter at all.
+  bool _deliveryOnly = false;
+
+  @override
   Widget build(BuildContext context) {
+    // Deliveries are the orders with nowhere to be tapped on the floor plan, so
+    // this is the only place they can be looked over as a group: who is waiting,
+    // how long they have been waiting, and who is carrying them. Not a dispatch
+    // board, and it holds no state of its own; it is a view of the same tabs.
+    final anyDelivery =
+        widget.orders.any((o) => o.type == OrderType.delivery);
+    // The filter is dropped the moment the last delivery leaves the list: a cashier
+    // must never be left staring at an empty screen whose only way back has just
+    // disappeared with it.
+    final shown = _deliveryOnly && anyDelivery
+        ? widget.orders.where((o) => o.type == OrderType.delivery).toList()
+        : widget.orders;
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Open orders'))),
-      body: orders.isEmpty
-          ? Center(child: Text(tr(context, 'No open tables')))
-          : ListView.builder(
-              padding: const EdgeInsets.all(8),
-              itemCount: orders.length,
-              itemBuilder: (_, i) => _OpenOrderCard(
-                order: orders[i],
-                formatAmount: formatAmount,
-                onPrintBill: onPrintBill == null
-                    ? null
-                    : () {
-                        onPrintBill!(orders[i]);
-                        showToast(context, tr(context, 'Bill sent to the printer'),
-                            kind: ToastKind.success, key: const Key('bill-printed'));
-                      },
-                onTap: () {
-                  onRecall(orders[i]);
-                  Navigator.of(context).pop();
-                },
-                onCancel: onCancel == null
-                    ? null
-                    : () async {
-                        final ok = await showDialog<bool>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: Text(tr(ctx, 'Cancel this order?')),
-                            content: Text(tr(ctx,
-                                'The parked order will be discarded. This cannot be undone.')),
-                            actions: [
-                              TextButton(
-                                  onPressed: () => Navigator.pop(ctx, false),
-                                  child: Text(tr(ctx, 'Keep'))),
-                              FilledButton(
-                                  key: const Key('confirm-cancel-order'),
-                                  style: FilledButton.styleFrom(backgroundColor: AppColors.error),
-                                  onPressed: () => Navigator.pop(ctx, true),
-                                  child: Text(tr(ctx, 'Discard'))),
-                            ],
-                          ),
-                        );
-                        if (ok == true) await onCancel!(orders[i]);
-                      },
-              ),
+      body: Column(children: [
+        if (anyDelivery)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Wrap(spacing: 8, children: [
+                ChoiceChip(
+                  key: const Key('open-filter-all'),
+                  label: Text(tr(context, 'All')),
+                  selected: !_deliveryOnly,
+                  onSelected: (_) => setState(() => _deliveryOnly = false),
+                ),
+                ChoiceChip(
+                  key: const Key('open-filter-delivery'),
+                  avatar: const Icon(Icons.delivery_dining, size: 16),
+                  label: Text(tr(context, 'Delivery')),
+                  selected: _deliveryOnly,
+                  onSelected: (_) => setState(() => _deliveryOnly = true),
+                ),
+              ]),
             ),
+          ),
+        Expanded(
+          child: shown.isEmpty
+              ? Center(child: Text(tr(context, 'No open tables')))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(8),
+                  itemCount: shown.length,
+                  itemBuilder: (_, i) => _OpenOrderCard(
+                    order: shown[i],
+                    formatAmount: widget.formatAmount,
+                    onPrintBill: widget.onPrintBill == null
+                        ? null
+                        : () {
+                            widget.onPrintBill!(shown[i]);
+                            showToast(context, tr(context, 'Bill sent to the printer'),
+                                kind: ToastKind.success, key: const Key('bill-printed'));
+                          },
+                    onTap: () {
+                      widget.onRecall(shown[i]);
+                      Navigator.of(context).pop();
+                    },
+                    onCancel: widget.onCancel == null
+                        ? null
+                        : () async {
+                            final ok = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: Text(tr(ctx, 'Cancel this order?')),
+                                content: Text(tr(ctx,
+                                    'The parked order will be discarded. This cannot be undone.')),
+                                actions: [
+                                  TextButton(
+                                      onPressed: () => Navigator.pop(ctx, false),
+                                      child: Text(tr(ctx, 'Keep'))),
+                                  FilledButton(
+                                      key: const Key('confirm-cancel-order'),
+                                      style: FilledButton.styleFrom(
+                                          backgroundColor: AppColors.error),
+                                      onPressed: () => Navigator.pop(ctx, true),
+                                      child: Text(tr(ctx, 'Discard'))),
+                                ],
+                              ),
+                            );
+                            if (ok == true) await widget.onCancel!(shown[i]);
+                          },
+                  ),
+                ),
+        ),
+      ]),
     );
   }
 }
@@ -100,7 +148,19 @@ class _OpenOrderCard extends StatelessWidget {
   final VoidCallback? onPrintBill;
 
   String _label(BuildContext context) =>
-      order.tableLabel ?? '${tr(context, 'Tab')} ${order.displayNo}';
+      order.tableLabel ??
+      (order.type == OrderType.delivery && order.customerName != null
+          ? order.customerName!
+          : '${tr(context, 'Tab')} ${order.displayNo}');
+
+  /// How long this order has been sitting, which on a delivery is the number that
+  /// matters: a bag rung forty minutes ago and still here is a phone call coming.
+  String _age(BuildContext context) {
+    final minutes = DateTime.now().toUtc().difference(order.createdAt).inMinutes;
+    if (minutes < 1) return tr(context, 'just now');
+    if (minutes < 60) return '$minutes${tr(context, 'm')}';
+    return '${minutes ~/ 60}${tr(context, 'h')} ${minutes % 60}${tr(context, 'm')}';
+  }
 
   String get _time {
     final local = order.createdAt.toLocal();
@@ -128,11 +188,18 @@ class _OpenOrderCard extends StatelessWidget {
     final label = _label(context);
     final (statusLabel, statusColor, statusIcon) = _status(context);
     final hasUnsent = order.lines.any((l) => !l.printedToKitchen);
+    final delivery = order.type == OrderType.delivery;
     final subtitleParts = <String>[
       tr(context, order.type.label),
       if (order.guestCount != null) '${order.guestCount} guests',
-      order.cashierId,
-      _time,
+      // A delivery is read by who is carrying it and how long it has been here,
+      // not by who rang it up.
+      if (delivery && order.deliveryChannel != null) order.deliveryChannel!,
+      if (delivery)
+        order.driverName ?? tr(context, 'No driver yet')
+      else
+        order.cashierId,
+      delivery ? '$_time (${_age(context)})' : _time,
     ];
     return Card(
       key: Key('open-order-${order.uuid}'),
