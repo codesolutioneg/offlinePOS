@@ -11,6 +11,24 @@ import 'outbox.dart';
 
 enum SyncState { idle, working, offline }
 
+/// What one catalogue refresh actually did, so a manual "Refresh menu" can say
+/// something true instead of a hopeful "done".
+enum RefreshOutcome {
+  /// New prices are on the till.
+  updated,
+
+  /// Nothing to do: the catalogue is young enough, the pull came back empty, or
+  /// another pass is already running.
+  unchanged,
+
+  /// The server could not be reached. The old prices are still there and selling
+  /// carries on.
+  unreachable,
+
+  /// The server answered with something that did not work.
+  failed,
+}
+
 /// Drives the round trip on a timer: drain the outbox, then refresh the catalogue.
 ///
 /// Nothing here is ever awaited by a selling screen. The till's job is to take money;
@@ -217,16 +235,22 @@ class SyncService {
   /// A read-only pass: check reachability and refresh the catalogue if it is stale.
   /// Never drains the outbox, so it never pushes an order. This is what the timer
   /// runs, keeping the badge and prices current without booking anything.
-  Future<void> refresh() async {
-    if (_state == SyncState.working) return;
+  ///
+  /// [force] skips the age gate only. A price changed in Odoo at 09:00 would
+  /// otherwise sit unseen until the catalogue aged past [catalogueMaxAge], which is
+  /// most of a service; a cashier signing in, or asking for the menu by hand, gets
+  /// the prices now. Nothing else changes: forced or not, this pass still cannot
+  /// send an order.
+  Future<RefreshOutcome> refresh({bool force = false}) async {
+    if (_state == SyncState.working) return RefreshOutcome.unchanged;
     if (_probe != null) {
       online.value = await _probe();
       // No point pulling if nothing is reachable; the badge is already set.
-      if (!online.value) return;
+      if (!online.value) return RefreshOutcome.unreachable;
     }
-    if (_puller == null || !catalogueNeedsRefresh) {
+    if (_puller == null || (!force && !catalogueNeedsRefresh)) {
       if (_probe == null) online.value = true;
-      return;
+      return RefreshOutcome.unchanged;
     }
     try {
       final pull = await _puller.pull();
@@ -245,9 +269,11 @@ class SyncService {
       lastError = null;
       // A successful read proves reachability even when no probe was injected.
       online.value = true;
+      return pull.isUsable ? RefreshOutcome.updated : RefreshOutcome.unchanged;
     } catch (e) {
       lastError = e.toString();
       online.value = false;
+      return RefreshOutcome.failed;
     }
   }
 
