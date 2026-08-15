@@ -17,10 +17,15 @@ class RosterScreen extends StatefulWidget {
     required this.auth,
     required this.onChanged,
     this.canAssignManager = true,
+    this.roles = const ['cashier'],
   });
 
   final UserStore users;
   final AuthService auth;
+
+  /// The roles this till offers, manager aside. Defaults to the one built-in role
+  /// so a caller with no custom roles configured behaves exactly as before.
+  final List<String> roles;
 
   /// Whether the person on this screen may create or touch manager accounts. A
   /// cashier who reaches the roster through the `manageStaff` permission must not
@@ -40,7 +45,8 @@ class _RosterScreenState extends State<RosterScreen> {
   Future<void> _openAddDialog() async {
     final result = await showDialog<_StaffFormResult>(
       context: context,
-      builder: (_) => _StaffFormDialog(canAssignManager: widget.canAssignManager),
+      builder: (_) => _StaffFormDialog(
+          canAssignManager: widget.canAssignManager, roles: widget.roles),
     );
     if (result == null) return;
     // The id is derived from the name rather than typed, so a cashier's login
@@ -67,7 +73,10 @@ class _RosterScreenState extends State<RosterScreen> {
   Future<void> _openEditDialog(Cashier cashier) async {
     final result = await showDialog<_StaffFormResult>(
       context: context,
-      builder: (_) => _StaffFormDialog(existing: cashier, canAssignManager: widget.canAssignManager),
+      builder: (_) => _StaffFormDialog(
+          existing: cashier,
+          canAssignManager: widget.canAssignManager,
+          roles: widget.roles),
     );
     if (result == null) return;
     if (result.pin.isEmpty) {
@@ -160,10 +169,9 @@ class _RosterScreenState extends State<RosterScreen> {
                 return ListTile(
                   key: Key('staff-${c.id}'),
                   title: Text(c.name, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(
-                      c.active
-                          ? (c.isManager ? tr(context, 'Manager') : tr(context, 'Cashier'))
-                          : '${c.isManager ? tr(context, 'Manager') : tr(context, 'Cashier')} · ${tr(context, 'inactive')}'),
+                  subtitle: Text(c.active
+                      ? roleLabel(context, c.role)
+                      : '${roleLabel(context, c.role)} · ${tr(context, 'inactive')}'),
                   // Actions live in an overflow menu so a long name can never push
                   // buttons off the row.
                   trailing: locked
@@ -203,6 +211,15 @@ class _RosterScreenState extends State<RosterScreen> {
   }
 }
 
+/// What a role is called on screen. The two built-in names are translated; a role
+/// the shop invented is shown exactly as it was typed, because nobody has
+/// translated "Head waiter" and inventing an Arabic form for it would be a guess.
+String roleLabel(BuildContext context, String role) => switch (role) {
+      'manager' => tr(context, 'Manager'),
+      'cashier' => tr(context, 'Cashier'),
+      _ => role,
+    };
+
 class _StaffFormResult {
   const _StaffFormResult({required this.name, required this.role, required this.pin});
   final String name;
@@ -214,10 +231,15 @@ class _StaffFormResult {
 /// the current PIN, so a manager is not forced to invent a new one just to fix
 /// a typo in a name.
 class _StaffFormDialog extends StatefulWidget {
-  const _StaffFormDialog({this.existing, this.canAssignManager = true});
+  const _StaffFormDialog({
+    this.existing,
+    this.canAssignManager = true,
+    this.roles = const ['cashier'],
+  });
 
   final Cashier? existing;
   final bool canAssignManager;
+  final List<String> roles;
 
   @override
   State<_StaffFormDialog> createState() => _StaffFormDialogState();
@@ -230,6 +252,18 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
   String? _error;
 
   bool get _isEdit => widget.existing != null;
+
+  /// The non-manager roles to offer. Always includes whatever role this person is
+  /// already on, even one that has since been deleted: a dropdown whose value is
+  /// not among its items asserts, and the edit form would be unopenable.
+  List<String> get _offered {
+    final offered = widget.roles.isEmpty ? ['cashier'] : [...widget.roles];
+    final current = widget.existing?.role;
+    if (current != null && current != 'manager' && !offered.contains(current)) {
+      offered.add(current);
+    }
+    return offered;
+  }
 
   @override
   void initState() {
@@ -287,7 +321,11 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
               initialValue: _role,
               decoration: InputDecoration(labelText: tr(context, 'Role')),
               items: [
-                DropdownMenuItem(value: 'cashier', child: Text(tr(context, 'Cashier'))),
+                for (final r in _offered)
+                  DropdownMenuItem(
+                      key: Key('role-option-$r'),
+                      value: r,
+                      child: Text(roleLabel(context, r))),
                 // Only an actual manager can hand out the manager role.
                 if (widget.canAssignManager)
                   DropdownMenuItem(value: 'manager', child: Text(tr(context, 'Manager'))),
