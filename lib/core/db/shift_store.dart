@@ -137,39 +137,64 @@ class ShiftStore {
   /// portion of each sale counts toward the expected drawer total; card and
   /// other non-cash tenders are takings but never cash on hand.
   ShiftSummary summary(Shift shift, {Set<int> cashMethodIds = const {}}) {
-    final from = shift.openedAt.toIso8601String();
-    final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
-    final rows = _db.raw.select(
-      "SELECT total, payload FROM orders "
-      "WHERE state IN ('paid', 'synced') AND created_at >= ? AND created_at <= ?",
-      [from, to],
-    );
-    var salesTotal = 0.0;
-    var cashSales = 0.0;
-    // Keyed on (label, is-cash) rather than on the label alone, so a tender named
-    // like a cash one but not configured as cash cannot be folded into the cash row
-    // and silently break the drawer reconciliation.
-    final byTender = <(String, bool), double>{};
-    for (final r in rows) {
-      final total = (r['total'] as num).toDouble();
-      salesTotal += total;
-      // One decode per order: the tender split and the cash portion read the same
-      // payments, and the X read runs on every rebuild of the shift screen.
-      final payments = _payments(r['payload'] as String);
-      cashSales += _cashPortion(payments, total, cashMethodIds);
-      _addTenders(payments, total, cashMethodIds, byTender);
+    final takings = _Takings();
+    for (final r in _salesIn(shift)) {
+      _fold(takings, r, cashMethodIds);
     }
     return ShiftSummary(
       openingFloat: shift.openingFloat,
       cashIn: shift.cashIn,
       cashOut: shift.cashOut,
-      salesCount: rows.length,
-      salesTotal: salesTotal,
-      cashSales: cashSales,
+      salesCount: takings.count,
+      salesTotal: takings.salesTotal,
+      cashSales: takings.cashSales,
       countedCash: shift.closingCounted,
-      tenders: _sorted(byTender),
+      tenders: _sorted(takings.byTender),
     );
   }
+
+  /// The same figures split by who rang each sale, biggest taker first.
+  ///
+  /// The drawer belongs to the shift and not to any one cashier, so the float, the
+  /// paid-ins and the paid-outs are deliberately left at zero on every row rather
+  /// than divided up: what a cashier is answerable for is what they took. The rows
+  /// add up to the shift's own sales figures, which is the check a manager runs.
+  Map<String, ShiftSummary> summaryByCashier(Shift shift,
+      {Set<int> cashMethodIds = const {}}) {
+    final byCashier = <String, _Takings>{};
+    for (final r in _salesIn(shift)) {
+      _fold(byCashier.putIfAbsent(r['cashier_id'] as String, _Takings.new), r,
+          cashMethodIds);
+    }
+    final entries = byCashier.entries.toList()
+      ..sort((a, b) {
+        final bySize = b.value.salesTotal.compareTo(a.value.salesTotal);
+        return bySize != 0 ? bySize : a.key.compareTo(b.key);
+      });
+    return {
+      for (final e in entries)
+        e.key: ShiftSummary(
+          openingFloat: 0,
+          cashIn: 0,
+          cashOut: 0,
+          salesCount: e.value.count,
+          salesTotal: e.value.salesTotal,
+          cashSales: e.value.cashSales,
+          tenders: _sorted(e.value.byTender),
+        ),
+    };
+  }
+
+  /// The sales taken in [shift]'s window: paid or already synced, so a close after
+  /// a sync still counts them.
+  List<Map<String, dynamic>> _salesIn(Shift shift) => _db.raw.select(
+        "SELECT cashier_id, total, payload FROM orders "
+        "WHERE state IN ('paid', 'synced') AND created_at >= ? AND created_at <= ?",
+        [
+          shift.openedAt.toIso8601String(),
+          (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String(),
+        ],
+      );
 
   /// The payments recorded on one order payload, empty when none were.
   List<Map<String, Object?>> _payments(String payload) => [
@@ -233,6 +258,18 @@ class ShiftStore {
         return bySize != 0 ? bySize : a.label.compareTo(b.label);
       });
 
+  /// Fold one sale row into [into]. One decode per order: the tender split and the
+  /// cash portion read the same payments, and the X read runs on every rebuild of
+  /// the shift screen.
+  void _fold(_Takings into, Map<String, dynamic> row, Set<int> cashMethodIds) {
+    final total = (row['total'] as num).toDouble();
+    final payments = _payments(row['payload'] as String);
+    into.count++;
+    into.salesTotal += total;
+    into.cashSales += _cashPortion(payments, total, cashMethodIds);
+    _addTenders(payments, total, cashMethodIds, into.byTender);
+  }
+
   Shift _row(Map<String, dynamic> r) => Shift(
         id: r['id'] as String,
         uuid: r['uuid'] as String?,
@@ -247,4 +284,18 @@ class ShiftStore {
             .map((e) => CashMovement.fromMap((e as Map).cast<String, dynamic>()))
             .toList(),
       );
+}
+
+/// A running total while a shift's sales are read, before it becomes a
+/// [ShiftSummary]. Exists so the whole-shift read and the per-cashier split fold a
+/// sale in exactly the same way instead of drifting apart.
+class _Takings {
+  int count = 0;
+  double salesTotal = 0;
+  double cashSales = 0;
+
+  /// Keyed on (label, is-cash) rather than on the label alone, so a tender named
+  /// like a cash one but not configured as cash cannot be folded into the cash row
+  /// and silently break the drawer reconciliation.
+  final Map<(String, bool), double> byTender = {};
 }

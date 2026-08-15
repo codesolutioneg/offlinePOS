@@ -743,4 +743,24 @@ const Map<String, String> _ar = {
       'لم يُبع أي صنف بإضافة في هذه الفترة.',
   'line': 'سطر',
   'lines': 'أسطر',
+  // shift and day: the trading-day cutover, sign-in nudges, the close guard and
+  // the per-cashier flash
+  'Business day starts at': 'يبدأ يوم العمل الساعة',
+  'Sales before this hour count as the previous trading day':
+      'المبيعات قبل هذه الساعة تُحسب على يوم العمل السابق',
+  'No shift is open. Open one with a float?':
+      'لا توجد وردية مفتوحة. هل تفتح واحدة برصيد ابتدائي؟',
+  'A shift is open from an earlier day. Close it first.':
+      'هناك وردية مفتوحة من يوم سابق. أغلقها أولاً.',
+  'Not now': 'ليس الآن',
+  'Still open on this till': 'ما زال مفتوحاً على هذه الكاشير',
+  'Parked tabs': 'الفواتير المعلّقة',
+  'Courses waiting to fire': 'أصناف في انتظار الإرسال للمطبخ',
+  'None of this is settled, so none of it is in the cash-up.':
+      'لم يُسدَّد أي منها، لذا لا يظهر أي منها في تقفيل الدرج.',
+  'Go back': 'رجوع',
+  'Close anyway': 'الإغلاق رغم ذلك',
+  'Cashier flash': 'تقرير سريع لكل كاشير',
+  'No sales in this shift yet': 'لا توجد مبيعات في هذه الوردية بعد',
+  'Cashier flash sent to printer': 'أُرسل تقرير الكاشير إلى الطابعة',
 };

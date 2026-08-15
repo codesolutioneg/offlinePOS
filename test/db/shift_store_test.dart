@@ -211,4 +211,44 @@ void main() {
     final closed = shifts.closeShift(countedCash: 100);
     expect(shifts.summary(closed, cashMethodIds: {1}).variance, 0);
   });
+
+  test('the shift splits by cashier and the rows add up to the whole', () {
+    shifts.openShift(openingFloat: 100, cashierId: 'c1');
+    // Two people sharing one till over a service, which is the whole reason a
+    // per-cashier read exists.
+    orders.save(Order(deviceId: 'd', cashierId: 'c1')
+      ..lines.add(line(40))
+      ..payments = [const OrderPayment(methodId: 1, amount: 40, label: 'Cash')]
+      ..state = OrderState.paid);
+    orders.save(Order(deviceId: 'd', cashierId: 'c2')
+      ..lines.add(line(60))
+      ..payments = [const OrderPayment(methodId: 2, amount: 60, label: 'Visa')]
+      ..state = OrderState.paid);
+    orders.save(Order(deviceId: 'd', cashierId: 'c2')
+      ..lines.add(line(10))
+      ..payments = [const OrderPayment(methodId: 1, amount: 10, label: 'Cash')]
+      ..state = OrderState.paid);
+
+    final shift = shifts.currentOpenShift()!;
+    final whole = shifts.summary(shift, cashMethodIds: {1});
+    final byCashier = shifts.summaryByCashier(shift, cashMethodIds: {1});
+
+    // Biggest taker first, so the busiest cashier is the first row a manager reads.
+    expect(byCashier.keys.toList(), ['c2', 'c1']);
+    expect(byCashier['c1']!.salesTotal, 40);
+    expect(byCashier['c2']!.salesTotal, 70);
+    expect(byCashier.values.fold(0.0, (s, e) => s + e.salesTotal), whole.salesTotal);
+    expect(byCashier.values.fold(0.0, (s, e) => s + e.cashSales), whole.cashSales);
+    expect(byCashier.values.fold(0, (s, e) => s + e.salesCount), whole.salesCount);
+    // c2 took a card and a cash sale; the tender split follows the person.
+    expect(byCashier['c2']!.tenders.map((t) => t.label).toList(), ['Cash', 'Visa']);
+    // The drawer belongs to the shift, so no float is attributed to anyone.
+    expect(byCashier['c1']!.openingFloat, 0);
+    expect(byCashier['c1']!.expectedCash, 40);
+  });
+
+  test('a shift with no sales has nobody to flash', () {
+    shifts.openShift(openingFloat: 100, cashierId: 'c1');
+    expect(shifts.summaryByCashier(shifts.currentOpenShift()!), isEmpty);
+  });
 }
