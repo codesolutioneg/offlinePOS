@@ -705,4 +705,20 @@ const Map<String, String> _ar = {
   'Copy for the pass': 'نسخة لقسم التحضير',
   'Hide prices on that copy': 'إخفاء الأسعار في تلك النسخة',
   'A packing list: names and quantities only': 'قائمة تجهيز: الأسماء والكميات فقط',
+  'Logo': 'الشعار',
+  'LOGO': 'الشعار',
+  'Print the shop logo': 'طباعة شعار المحل',
+  'Above the shop name, from the printer\'s own memory':
+      'أعلى اسم المحل، من ذاكرة الطابعة نفسها',
+  'Logo image file': 'ملف صورة الشعار',
+  'Send the logo to the printer': 'إرسال الشعار إلى الطابعة',
+  'Give the file path of the logo image.': 'اكتب مسار ملف صورة الشعار.',
+  'That file could not be read as an image.': 'تعذّرت قراءة هذا الملف كصورة.',
+  'Logo stored in the printer.': 'تم تخزين الشعار في الطابعة.',
+  'Kept on the till. The printer did not answer, so send it again.':
+      'حُفظ على الجهاز. لم تستجب الطابعة، أعد الإرسال لاحقًا.',
+  'Loaded': 'محمَّل',
+  'Send the picture with every receipt': 'إرسال الصورة مع كل فاتورة',
+  'Only for a printer that cannot store a logo. Slower on every sale.':
+      'فقط للطابعة التي لا تستطيع تخزين شعار. أبطأ في كل عملية بيع.',
 };

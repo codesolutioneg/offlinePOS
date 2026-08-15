@@ -431,6 +431,15 @@ class EscPos {
     return this;
   }
 
+  /// A whole command this builder does not compose itself, above all the shop's
+  /// logo (see PrinterLogo). Deliberately not a general escape hatch: it takes
+  /// finished bytes and never text, so nothing can slip past [codePage] through it,
+  /// and the column arithmetic is untouched because a command draws no characters.
+  EscPos command(List<int> bytes) {
+    _out.add(bytes);
+    return this;
+  }
+
   EscPos feed([int lines = 1]) {
     for (var i = 0; i < lines; i++) {
       _out.addByte(_lf);

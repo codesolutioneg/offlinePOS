@@ -27,6 +27,7 @@ class ReceiptBuilder {
     this.showTotals = true,
     this.dividerStyle = 'line',
     this.openDrawer = false,
+    this.logo,
   });
 
   final String shopName;
@@ -64,6 +65,12 @@ class ReceiptBuilder {
   /// Kick the cash drawer open at the end, for a cash sale.
   final bool openDrawer;
 
+  /// The printer command that puts the shop's mark above the name, or null for the
+  /// text-only slip this always printed. Composed by the caller (see PrinterLogo)
+  /// because which of the two logo routes a shop is on depends on its hardware, and
+  /// this class stays free of settings.
+  final Uint8List? logo;
+
   Uint8List build(Order order, {bool reprint = false}) =>
       _slip(order, reprint: reprint);
 
@@ -80,8 +87,11 @@ class ReceiptBuilder {
     final p = EscPos(columns: columns)..reset();
     final divider = _dividerChars[dividerStyle] ?? '-';
 
-    p.align(EscPosAlign.center)
-      ..size(doubleWidth: true, doubleHeight: true)
+    p.align(EscPosAlign.center);
+    // Above the name, where a customer looks first, and while the printer is still
+    // centred so the mark sits in the middle of the roll.
+    if (logo != null) p.command(logo!).feed();
+    p.size(doubleWidth: true, doubleHeight: true)
       ..bold(true)
       ..line(shopName)
       ..bold(false)

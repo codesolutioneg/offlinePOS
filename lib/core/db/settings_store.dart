@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
 import '../printing/escpos.dart';
+import '../printing/printer_logo.dart';
 import 'database.dart';
 
 /// On-device configuration a manager can change without a rebuild: shop name and
@@ -458,6 +460,34 @@ class SettingsStore {
   /// 'equals', 'dots' or 'stars'.
   String get receiptDividerStyle => getString('receipt_divider_style') ?? 'line';
   set receiptDividerStyle(String v) => setString('receipt_divider_style', v);
+
+  // ── the shop's mark on the paper ─────────────────────────────────
+
+  /// Print the shop logo at the top of the receipt. Off until a shop asks for it,
+  /// because a logo the printer does not hold prints as nothing at best.
+  bool get receiptPrintLogo => getBool('receipt_print_logo');
+  set receiptPrintLogo(bool v) => setBool('receipt_print_logo', v);
+
+  /// Send the picture with every receipt instead of printing the one in the
+  /// printer's flash. Deliberately off and deliberately its own switch: it is
+  /// kilobytes on the wire per slip, and only a printer with no flash needs it.
+  bool get receiptLogoRaster => getBool('receipt_logo_raster');
+  set receiptLogoRaster(bool v) => setBool('receipt_logo_raster', v);
+
+  /// The dots of the logo last loaded on this device, so the raster route and the
+  /// designer's preview do not need the source file again. Null until one is loaded;
+  /// the flash route does not need it at all.
+  PrinterLogo? get receiptLogo => PrinterLogo.decode(getString('receipt_logo'));
+  set receiptLogo(PrinterLogo? v) => setString('receipt_logo', v?.encode());
+
+  /// The command that puts the mark on a slip, or null when the shop prints none.
+  /// One place decides between the two routes, so the sale receipt, the bill and the
+  /// sample all carry the same header.
+  Uint8List? receiptLogoCommand() {
+    if (!receiptPrintLogo) return null;
+    if (!receiptLogoRaster) return PrinterLogo.printStored();
+    return receiptLogo?.raster();
+  }
 
   // ── the second copy of the slip ──────────────────────────────────
 

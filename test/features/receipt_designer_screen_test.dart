@@ -1,7 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
+import 'package:offline_pos/core/printing/printer_logo.dart';
 import 'package:offline_pos/features/settings/receipt_designer_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -140,5 +143,85 @@ void main() {
 
     final narrowBox = t.getSize(find.byKey(const Key('receipt-preview')));
     expect(narrowBox.width, lessThan(wideBox.width));
+  });
+
+  group('the shop logo', () {
+    /// The upload the screen would do to a real printer, recorded instead of sent.
+    Widget appWithUpload({bool printerAnswers = true, List<PrinterLogo>? sent}) =>
+        MaterialApp(
+          home: ReceiptDesignerScreen(
+            settings: settings,
+            onChanged: () => changedCount++,
+            onUploadLogo: (logo) async {
+              if (!printerAnswers) throw StateError('printer off');
+              sent?.add(logo);
+            },
+          ),
+        );
+
+    testWidgets('the toggle persists and the preview shows where the mark lands',
+        (t) async {
+      tallWindow(t);
+      await t.pumpWidget(app());
+
+      expect(find.byKey(const Key('receipt-preview-logo')), findsNothing);
+
+      await t.tap(find.byKey(const Key('t-logo')));
+      await t.pump();
+      expect(find.byKey(const Key('receipt-preview-logo')), findsOneWidget);
+
+      await t.tap(find.byKey(const Key('save-receipt')));
+      await t.pumpAndSettle();
+      expect(settings.receiptPrintLogo, isTrue);
+      // The command a receipt will carry from now on: print stored image 1.
+      expect(settings.receiptLogoCommand(), [0x1c, 0x70, 1, 0]);
+    });
+
+    testWidgets('the raster fallback is a separate, deliberate choice', (t) async {
+      tallWindow(t);
+      settings.receiptPrintLogo = true;
+      settings.receiptLogo =
+          PrinterLogo(widthDots: 8, heightDots: 8, bits: Uint8List(8)..[0] = 0x80);
+      await t.pumpWidget(app());
+
+      await t.tap(find.byKey(const Key('t-logo-raster')));
+      await t.tap(find.byKey(const Key('save-receipt')));
+      await t.pumpAndSettle();
+
+      expect(settings.receiptLogoRaster, isTrue);
+      // Now the dots travel with the receipt instead of the four-byte command.
+      expect(settings.receiptLogoCommand()!.sublist(0, 4), [0x1d, 0x76, 0x30, 0x00]);
+    });
+
+    testWidgets('a file that is not an image is refused before anything is stored',
+        (t) async {
+      tallWindow(t);
+      final sent = <PrinterLogo>[];
+      settings.receiptPrintLogo = true;
+      await t.pumpWidget(appWithUpload(sent: sent));
+
+      await t.enterText(
+          find.byKey(const Key('logo-path')), '/definitely/not/here.png');
+      await t.tap(find.byKey(const Key('upload-logo')));
+      // Reading the file is real IO, which only runs outside the test's fake clock.
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await t.pumpAndSettle();
+
+      expect(find.byKey(const Key('logo-status')), findsOneWidget);
+      expect(settings.receiptLogo, isNull);
+      expect(sent, isEmpty);
+    });
+
+    testWidgets('with no path at all it says so rather than doing nothing',
+        (t) async {
+      tallWindow(t);
+      settings.receiptPrintLogo = true;
+      await t.pumpWidget(appWithUpload());
+
+      await t.tap(find.byKey(const Key('upload-logo')));
+      await t.pumpAndSettle();
+
+      expect(find.byKey(const Key('logo-status')), findsOneWidget);
+    });
   });
 }

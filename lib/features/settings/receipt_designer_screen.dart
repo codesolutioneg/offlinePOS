@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/printing/printer_logo.dart';
 
 /// Lets a manager pick what shows up on the printed customer receipt: a
 /// header line above the shop name, the existing footer, and toggles for the
@@ -11,7 +12,13 @@ import '../../core/i18n/l10n.dart';
 /// name/tax id text), so it lives as its own screen the receipt builder reads
 /// back from at print time via the same [SettingsStore] keys.
 class ReceiptDesignerScreen extends StatefulWidget {
-  const ReceiptDesignerScreen({super.key, required this.settings, required this.onChanged, this.onTestPrint});
+  const ReceiptDesignerScreen({
+    super.key,
+    required this.settings,
+    required this.onChanged,
+    this.onTestPrint,
+    this.onUploadLogo,
+  });
 
   final SettingsStore settings;
 
@@ -21,6 +28,11 @@ class ReceiptDesignerScreen extends StatefulWidget {
   /// Prints a sample receipt with the current settings, so a manager can see the
   /// layout on paper. Null hides the test-print button.
   final Future<void> Function()? onTestPrint;
+
+  /// Writes the logo into the receipt printer's flash, so every later receipt costs
+  /// four bytes instead of a picture. Throws when the printer is not reachable, and
+  /// null hides the upload action entirely.
+  final Future<void> Function(PrinterLogo logo)? onUploadLogo;
 
   @override
   State<ReceiptDesignerScreen> createState() => _ReceiptDesignerScreenState();
@@ -53,6 +65,13 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
   late bool _showItemPrice;
   late String _dividerStyle;
   late int _columns;
+  late bool _printLogo;
+  late bool _logoRaster;
+  final TextEditingController _logoPath = TextEditingController();
+
+  /// What happened to the last upload, in words: a manager pressing a button that
+  /// talks to hardware has to be told whether the hardware answered.
+  String? _logoStatus;
 
   @override
   void initState() {
@@ -73,6 +92,8 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     _dividerStyle = _dividerStyles.contains(style) ? style : 'line';
     // The same paper width the printers screen sets, so the two never disagree.
     _columns = widget.settings.receiptColumns == 32 ? 32 : 42;
+    _printLogo = widget.settings.receiptPrintLogo;
+    _logoRaster = widget.settings.receiptLogoRaster;
     // The preview reads the controllers' text directly; without a listener it
     // would only refresh on the next unrelated setState (e.g. a toggle), so
     // typing in the header or footer would look frozen until something else
@@ -89,6 +110,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     _footer.removeListener(_refreshPreview);
     _header.dispose();
     _footer.dispose();
+    _logoPath.dispose();
     super.dispose();
   }
 
@@ -105,8 +127,102 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     widget.settings.receiptShowItemPrice = _showItemPrice;
     widget.settings.receiptDividerStyle = _dividerStyle;
     widget.settings.receiptColumns = _columns;
+    widget.settings.receiptPrintLogo = _printLogo;
+    widget.settings.receiptLogoRaster = _logoRaster;
     widget.onChanged();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
+  }
+
+  /// Read the file, keep the dots, and put them in the printer.
+  ///
+  /// The dots are saved on the till whatever the printer does, so a shop that
+  /// uploads with the printer off still has its logo and can send it again. The
+  /// message says which of the two happened rather than a bare "Saved".
+  Future<void> _uploadLogo() async {
+    final path = _logoPath.text.trim();
+    if (path.isEmpty) {
+      setState(() => _logoStatus = tr(context, 'Give the file path of the logo image.'));
+      return;
+    }
+    // The printable width of the roll, so a wide picture is scaled to fit the paper
+    // rather than clipped at the edge.
+    final logo = await loadPrinterLogo(path, maxWidthDots: _columns == 32 ? 384 : 576);
+    if (!mounted) return;
+    if (logo == null) {
+      setState(() =>
+          _logoStatus = tr(context, 'That file could not be read as an image.'));
+      return;
+    }
+    widget.settings.receiptLogo = logo;
+    widget.onChanged();
+    try {
+      await widget.onUploadLogo!(logo);
+      if (!mounted) return;
+      setState(() => _logoStatus = tr(context, 'Logo stored in the printer.'));
+    } catch (_) {
+      if (!mounted) return;
+      // Not a failure of the logo, a failure of the printer, and the difference is
+      // what tells a manager whether to pick another file or switch the printer on.
+      setState(() => _logoStatus =
+          tr(context, 'Kept on the till. The printer did not answer, so send it again.'));
+    }
+  }
+
+  /// The logo controls: whether to print one, how it gets to the paper, and the
+  /// one-time upload into the printer's flash.
+  List<Widget> _logoItems(BuildContext context) {
+    final loaded = widget.settings.receiptLogo;
+    return [
+      const SizedBox(height: 12),
+      _sectionHeader(tr(context, 'Logo')),
+      SwitchListTile(
+        key: const Key('t-logo'),
+        title: Text(tr(context, 'Print the shop logo')),
+        subtitle: Text(tr(context, 'Above the shop name, from the printer\'s own memory')),
+        value: _printLogo,
+        onChanged: (v) => setState(() => _printLogo = v),
+      ),
+      if (_printLogo) ...[
+        if (widget.onUploadLogo != null) ...[
+          TextField(
+            key: const Key('logo-path'),
+            controller: _logoPath,
+            decoration: InputDecoration(
+              labelText: tr(context, 'Logo image file'),
+              hintText: '/home/shop/logo.png',
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const Key('upload-logo'),
+            icon: const Icon(Icons.upload),
+            onPressed: _uploadLogo,
+            label: Text(tr(context, 'Send the logo to the printer')),
+          ),
+        ],
+        if (loaded != null)
+          Text(
+            '${tr(context, 'Loaded')}: ${loaded.widthDots} x ${loaded.heightDots}',
+            key: const Key('logo-loaded'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        if (_logoStatus != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(_logoStatus!, key: const Key('logo-status')),
+          ),
+        SwitchListTile(
+          key: const Key('t-logo-raster'),
+          title: Text(tr(context, 'Send the picture with every receipt')),
+          subtitle: Text(tr(context,
+              'Only for a printer that cannot store a logo. Slower on every sale.')),
+          value: _logoRaster,
+          onChanged: (v) => setState(() => _logoRaster = v),
+        ),
+      ],
+    ];
   }
 
   Widget _sectionHeader(String title) => Padding(
@@ -188,6 +304,20 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // The mark itself lives in the printer, so the preview says where it lands
+          // rather than pretending to know what it looks like.
+          if (_printLogo)
+            Container(
+              key: const Key('receipt-preview-logo'),
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade400),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text(tr(context, 'LOGO'),
+                  textAlign: TextAlign.center, style: mono),
+            ),
           Text(
             shopName?.isNotEmpty == true ? shopName! : tr(context, 'Your shop'),
             textAlign: TextAlign.center,
@@ -294,6 +424,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
             value: _showItemPrice,
             onChanged: (v) => setState(() => _showItemPrice = v),
           ),
+          ..._logoItems(context),
           const SizedBox(height: 12),
           _sectionHeader(tr(context, 'Paper & dividers')),
           Row(children: [

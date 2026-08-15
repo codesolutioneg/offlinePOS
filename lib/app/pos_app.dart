@@ -25,6 +25,7 @@ import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
 import '../core/widgets/feedback.dart';
 import '../core/printing/kitchen_ticket.dart';
+import '../core/printing/printer_logo.dart';
 import '../core/printing/printer_registry.dart';
 import '../core/printing/printer_transport.dart';
 import '../core/printing/receipt_builder.dart';
@@ -397,6 +398,7 @@ class _PosAppState extends State<PosApp> {
       showPayment: s.receiptShowPayment,
       showItemPrice: showItemPrice ?? s.receiptShowItemPrice,
       showTotals: showTotals,
+      logo: s.receiptLogoCommand(),
       dividerStyle: s.receiptDividerStyle,
       openDrawer: openDrawer,
       formatAmount: PosApp.money,
@@ -421,6 +423,15 @@ class _PosAppState extends State<PosApp> {
         .build(order);
     await _sendToStation(station, bytes, 'subreceipt-${order.uuid}-$station');
   }
+
+  /// Write the shop's mark into the receipt printer's own flash, once, by hand.
+  ///
+  /// Sent past the spool for the same reason the drawer kick is: a flash write that
+  /// sat in a backlog and replayed itself for a week would spend the printer's
+  /// limited write cycles on nothing. It throws when the printer is not there, which
+  /// is what the designer wants to be able to say.
+  Future<void> _uploadLogo(PrinterLogo logo) =>
+      _receiptPrinter.sendNow(logo.defineNv());
 
   /// Print a record slip when items are voided or an order is cancelled, so every
   /// removal leaves a paper trail at the till alongside the audit entry. Spooled
@@ -1263,6 +1274,7 @@ class _PosAppState extends State<PosApp> {
             ReceiptDesignerScreen(
                 settings: widget.settings,
                 onChanged: refresh,
+                onUploadLogo: _uploadLogo,
                 onTestPrint: () => _printReceipt(_sampleOrder(), reprint: true))),
       ),
       SettingsEntry(
@@ -1286,6 +1298,7 @@ class _PosAppState extends State<PosApp> {
                 footer: s.receiptFooter ?? widget.config.receiptFooter,
                 columns: s.receiptColumns,
                 dividerStyle: s.receiptDividerStyle,
+                logo: s.receiptLogoCommand(),
                 formatAmount: PosApp.money,
               ).build(_sampleOrder(), reprint: true);
               await RegistryPrinter(widget.printers, name)
