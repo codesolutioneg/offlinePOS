@@ -238,6 +238,7 @@ class SyncService {
           productGroupIds: pull.productGroupIds,
           paymentMethods: pull.paymentMethods,
           customers: pull.customers,
+          productImages: pull.productImages,
           refreshedAt: _now().toUtc(),
         );
         catalogueRevision.value++;
@@ -283,6 +284,7 @@ class SyncService {
             productGroupIds: pull.productGroupIds,
             paymentMethods: pull.paymentMethods,
             customers: pull.customers,
+            productImages: pull.productImages,
             refreshedAt: _now().toUtc(),
           );
           catalogueRevision.value++;

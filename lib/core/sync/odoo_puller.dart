@@ -1,15 +1,38 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import '../../domain/catalogue.dart';
+
+/// What a pull is allowed to ask for beyond the menu itself.
+///
+/// Pictures are the only part of the catalogue that is measured in megabytes, so a
+/// shop that does not show them on the grid does not download them either. Published
+/// by [SettingsStore] the way the print profile is, because the puller is built once
+/// at startup and the switch can be flipped at any point after that.
+class CataloguePullOptions {
+  const CataloguePullOptions({this.images = false});
+
+  static CataloguePullOptions shared = const CataloguePullOptions();
+
+  final bool images;
+}
 
 /// Fetches the catalogue from Odoo and maps it into local models.
 ///
 /// The counterpart to [OdooSender]. Runs on a schedule and never on the path of a
 /// sale, so a slow or absent server delays a refresh but never a customer.
 class OdooPuller {
-  OdooPuller({required this.call});
+  OdooPuller({required this.call, this.withImages});
 
   /// Performs one Odoo `call_kw`. Injected so this is testable without a socket.
   final Future<dynamic> Function(String model, String method, List<dynamic> args,
       Map<String, dynamic> kwargs) call;
+
+  /// Overrides the published option, for a test that wants one answer whatever the
+  /// device is set to. Null reads the shop's own choice at the moment of the pull.
+  final bool? withImages;
+
+  bool get _wantsImages => withImages ?? CataloguePullOptions.shared.images;
 
   Future<CataloguePull> pull() async {
     final categories = await _searchRead(
@@ -17,10 +40,14 @@ class OdooPuller {
       ['id', 'name', 'sequence', 'parent_id'],
       [],
     );
-    final products = await _searchRead(
+    // The cost and the picture are asked for as extras: an Odoo that will not give
+    // one of them still gives up the menu, which is the only part a till cannot sell
+    // without. Pictures are asked for only when the shop shows them.
+    final products = await _searchReadOptional(
       'product.product',
       ['id', 'display_name', 'lst_price', 'pos_categ_ids', 'barcode', 'active', 'to_weight',
        'taxes_id', 'product_tmpl_id'],
+      ['standard_price', if (_wantsImages) 'image_128'],
       [
         ['available_in_pos', '=', true]
       ],
@@ -162,8 +189,14 @@ class OdooPuller {
                     .whereType<double>()
                     .firstOrNull ??
                     0,
+                cost: _num(p['standard_price']),
               ))
           .toList(),
+      // A product the server gave no picture for is simply absent, which is what
+      // leaves its tile the colour it is today.
+      productImages: {
+        for (final p in products) (p['id'] as int): ?_image(p['image_128']),
+      },
       groups: mappedGroups,
       productGroupIds: productGroupIds,
       paymentMethods: methods
@@ -192,16 +225,22 @@ class OdooPuller {
     return res.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
   }
 
-  /// A read that also asks for [optional] fields and retries without them when the
-  /// server does not have them. An add-on older than a flag must still give up its
-  /// modifiers: losing the whole menu to gain a default would be a bad trade.
+  /// A read that also asks for [optional] fields and gives them up one at a time
+  /// when the server refuses them. An add-on older than a flag must still give up its
+  /// modifiers: losing the whole menu to gain a default would be a bad trade, and
+  /// losing the cost because the same server has no picture would be another. The
+  /// last one listed is surrendered first, so put the least important there.
   Future<List<Map<String, dynamic>>> _searchReadOptional(String model,
       List<String> fields, List<String> optional, List<dynamic> domain) async {
-    try {
-      return await _searchRead(model, [...fields, ...optional], domain);
-    } catch (_) {
-      return _searchRead(model, fields, domain);
+    for (var keep = optional.length; keep > 0; keep--) {
+      try {
+        return await _searchRead(
+            model, [...fields, ...optional.take(keep)], domain);
+      } catch (_) {
+        // Try again with one fewer extra; the plain read below is the floor.
+      }
     }
+    return _searchRead(model, fields, domain);
   }
 
   /// Odoo returns a many2one as `[id, label]`, or `false` when unset.
@@ -215,6 +254,19 @@ class OdooPuller {
       v is List ? v.whereType<int>().toList() : const [];
 
   static double _num(dynamic v) => v is num ? v.toDouble() : 0;
+
+  /// Odoo hands a picture over as base64, or as `false` for a product with none.
+  /// Anything that will not decode is treated as no picture at all: a broken image
+  /// is not worth failing a catalogue refresh over.
+  static Uint8List? _image(dynamic v) {
+    if (v is! String || v.isEmpty) return null;
+    try {
+      final bytes = base64Decode(v);
+      return bytes.isEmpty ? null : bytes;
+    } catch (_) {
+      return null;
+    }
+  }
 
   static ModifierPriceType _priceType(dynamic v) => switch (v) {
         'percentage' => ModifierPriceType.percentage,
@@ -231,6 +283,7 @@ class CataloguePull {
     required this.productGroupIds,
     this.paymentMethods = const [],
     this.customers = const [],
+    this.productImages = const {},
   });
 
   final List<Category> categories;
@@ -239,6 +292,11 @@ class CataloguePull {
   final Map<int, List<int>> productGroupIds;
   final List<PaymentMethod> paymentMethods;
   final List<Customer> customers;
+
+  /// The picture bytes for the products that have one, by product id. Empty when
+  /// the shop does not show pictures or the server has none, and a product missing
+  /// from here simply keeps its coloured tile.
+  final Map<int, Uint8List> productImages;
 
   /// A pull with no products is refused rather than written: replacing a working
   /// catalogue with an empty one would leave the till unable to sell.

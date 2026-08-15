@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 16;
+  static const int version = 17;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -414,6 +414,18 @@ class Schema {
     [
       'ALTER TABLE modifier_groups ADD COLUMN auto_add INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE modifiers ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0',
+    ],
+
+    // v16 -> v17: what a dish costs and what it looks like.
+    //
+    // Both are optional on the server side, so both keep their empty default on a
+    // till whose Odoo will not part with the field: a zero cost reads as "unknown"
+    // in the margin reports and no picture leaves the grid tile exactly as it is.
+    // The picture is never read by the queries that build the grid, only by the
+    // lookup behind the images toggle, so a menu with photos costs a sale nothing.
+    [
+      'ALTER TABLE products ADD COLUMN cost REAL NOT NULL DEFAULT 0',
+      'ALTER TABLE products ADD COLUMN image BLOB',
     ],
   ];
 }
