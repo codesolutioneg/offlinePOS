@@ -235,6 +235,7 @@ class Order {
     this.tip = 0,
     this.kitchenStatus = KitchenStatus.pending,
     this.refundOfUuid,
+    this.orderNo,
     List<OrderLine>? lines,
     List<OrderPayment>? payments,
   })  : uuid = uuid ?? Uuid.v4(),
@@ -298,6 +299,21 @@ class Order {
   String? refundOfUuid;
 
   bool get isRefund => refundOfUuid != null;
+
+  /// The number a human calls this sale: what the cashier shouts, the customer
+  /// quotes on the phone and the kitchen writes on the pass. Stamped once, when the
+  /// order is parked or paid, and never rewritten.
+  ///
+  /// Local to the till. It is stripped from the server payload, because the server
+  /// numbers its own documents and a till counter arriving there would be a second
+  /// sequence claiming to be the first.
+  String? orderNo;
+
+  /// What to print or show as this order's reference: its human number once it has
+  /// one, and the tail of the uuid before that (a draft being rung has no number
+  /// yet, and a slip still has to be identifiable).
+  String get displayNo =>
+      orderNo ?? uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
 
   /// Cash the customer handed over, when it exceeds what was due. Kept only so the
   /// receipt can print the change; it is NOT the amount booked. The payment stores
@@ -393,6 +409,7 @@ class Order {
         'tip': tip,
         'kitchen_status': kitchenStatus.name,
         'refund_of_uuid': refundOfUuid,
+        'order_no': orderNo,
         'cash_received': cashReceived,
         'amended': amended,
         'lines': lines.map((l) => l.toMap()).toList(),
@@ -421,6 +438,9 @@ class Order {
     // Whether the till corrected this sale before sending it is the till's own
     // business: the server is handed one sale under one uuid either way.
     m.remove('amended');
+    // The human number is the till's counter, for the people in the shop. The server
+    // numbers its own documents, and the uuid is what identifies this sale there.
+    m.remove('order_no');
     // A locally-created customer has a synthetic negative id, not an Odoo partner.
     // Never send it as partner_id (it would fail the foreign key); the name and
     // phone still travel so the server can match or create the partner itself.
@@ -464,6 +484,7 @@ class Order {
         kitchenStatus: KitchenStatus.values
             .byName((m['kitchen_status'] as String?) ?? KitchenStatus.pending.name),
         refundOfUuid: m['refund_of_uuid'] as String?,
+        orderNo: m['order_no'] as String?,
         lines: ((m['lines'] as List?) ?? const [])
             .map((e) => OrderLine.fromMap(e as Map<String, dynamic>))
             .toList(),

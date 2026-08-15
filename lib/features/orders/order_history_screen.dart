@@ -67,7 +67,10 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
         if (o.createdAt.toLocal().isBefore(cutoff)) return false;
       }
       if (q.isEmpty) return true;
-      return OrderHistoryScreen.shortRef(o.uuid).toLowerCase().contains(q) ||
+      // The number on the customer's slip is what they read back, so search takes
+      // that as well as the uuid tail an older sale was filed under.
+      return o.displayNo.toLowerCase().contains(q) ||
+          OrderHistoryScreen.shortRef(o.uuid).toLowerCase().contains(q) ||
           (o.tableLabel ?? '').toLowerCase().contains(q) ||
           (o.customerName ?? '').toLowerCase().contains(q);
     }).toList();
@@ -194,7 +197,7 @@ class _HistoryTile extends StatelessWidget {
     final badge = _syncBadge;
     return ListTile(
       title: Text(
-          '$time  ${OrderHistoryScreen.shortRef(order.uuid)}  ${formatAmount(order.total)}'),
+          '$time  ${order.displayNo}  ${formatAmount(order.total)}'),
       subtitle: Text(tr(context, order.type.label)),
       trailing: badge == null
           ? null
@@ -283,7 +286,7 @@ class OrderDetailScreen extends StatelessWidget {
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
             title: Text(
-                '${tr(context, 'Order')} ${OrderHistoryScreen.shortRef(order.uuid)}')),
+                '${tr(context, 'Order')} ${order.displayNo}')),
         body: ListView(
           padding: const EdgeInsets.all(12),
           children: [

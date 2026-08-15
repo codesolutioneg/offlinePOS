@@ -111,7 +111,7 @@ class ReceiptBuilder {
     // a line when both print.
     final stamped = [
       if (showDateTime) _stamp(order.createdAt),
-      if (showNumber) '#${_shortRef(order)}',
+      if (showNumber) '#${order.displayNo}',
     ].join('  ');
     if (stamped.isNotEmpty) p.line(stamped);
     if (showCashier) p.line('Cashier: ${order.cashierId}');
@@ -244,7 +244,7 @@ class ReceiptBuilder {
     p.size(doubleHeight: true).centred('*** $title ***').size();
     p.align(EscPosAlign.left).rule(divider);
 
-    p.line('${_stamp(at)}  #${_shortRef(order)}');
+    p.line('${_stamp(at)}  #${order.displayNo}');
     if (actor != null) p.line('Cashier: $actor');
     if (order.type == OrderType.dineIn && order.tableLabel != null) {
       p.line('Table ${order.tableLabel}');
@@ -285,11 +285,6 @@ class ReceiptBuilder {
     // till.
     return (p..cut()).build();
   }
-
-  /// The order's own reference: the tail of the client uuid, which is stable and
-  /// unique without needing the server to hand out a number.
-  String _shortRef(Order o) =>
-      o.uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
 
   String _qty(double q) =>
       q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toStringAsFixed(3);

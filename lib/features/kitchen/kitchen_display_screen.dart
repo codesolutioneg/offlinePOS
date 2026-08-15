@@ -220,7 +220,10 @@ class _TicketCard extends StatelessWidget {
   String _title(BuildContext context) {
     final table = order.tableLabel;
     final type = tr(context, order.type.label);
-    return table != null ? '$table · $type' : type;
+    // The number leads: it is what the pass calls out and what the counter asks
+    // for, and it is the only thing a takeaway ticket has to be told apart by.
+    final where = table != null ? '$table · $type' : type;
+    return '#${order.displayNo} · $where';
   }
 
   /// How long the ticket has waited, as a live [Duration] against [now] (which

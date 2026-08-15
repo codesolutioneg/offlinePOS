@@ -224,6 +224,16 @@ void main() {
     expect(kicks, isFalse);
   });
 
+  test('the receipt prints the number the customer will quote back', () {
+    final order = Order(
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      orderNo: '1508-007-A1B',
+      lines: [OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100)],
+    );
+    expect(render(order), contains('#1508-007-A1B'));
+  });
+
   test('a customer on a counter sale prints on the slip', () {
     final order = Order(
       deviceId: 'till-1',

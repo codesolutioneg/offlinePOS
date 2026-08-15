@@ -37,7 +37,7 @@ class KitchenTicketBuilder {
     p.size(doubleHeight: true).bold(true).line(order.type.label.toUpperCase())..bold(false)..size();
     if (order.tableLabel != null) p.line('Table: ${order.tableLabel}');
     if (order.guestCount != null) p.line('Guests: ${order.guestCount}');
-    p.line('${_stamp(order.createdAt)}  #${_shortRef(order)}');
+    p.line('${_stamp(order.createdAt)}  #${order.displayNo}');
     p.line('By: ${order.cashierId}');
     p.rule();
 
@@ -76,7 +76,7 @@ class KitchenTicketBuilder {
       ..size();
     p.align(EscPosAlign.left).rule();
     if (order.tableLabel != null) p.line('Table: ${order.tableLabel}');
-    p.line('#${_shortRef(order)}  ${_stamp(DateTime.now().toUtc())}');
+    p.line('#${order.displayNo}  ${_stamp(DateTime.now().toUtc())}');
     p.rule();
     p.size(doubleHeight: true).bold(true)
       ..line('CANCEL: ${_qty(line.quantity)} x ${line.name}')
@@ -86,9 +86,6 @@ class KitchenTicketBuilder {
     p.line('By: ${order.cashierId}');
     return (p..feed(3)..cut()).build();
   }
-
-  String _shortRef(Order o) =>
-      o.uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
 
   String _qty(double q) =>
       q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toStringAsFixed(3);

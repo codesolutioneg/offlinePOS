@@ -19,6 +19,7 @@ class PosSession {
     required this.cashierId,
     this.taxRateFor,
     this.serviceChargeFor,
+    this.nextOrderNo,
   });
 
   final CatalogueStore catalogue;
@@ -38,6 +39,19 @@ class PosSession {
   /// every time a total is asked for. Null for the whole session means no service
   /// charge anywhere.
   final double Function(OrderType type)? serviceChargeFor;
+
+  /// Hands out the next human order number for this till. Null means orders carry
+  /// no number and everything falls back to the uuid tail, which is what the till
+  /// showed before there was a counter.
+  final String Function()? nextOrderNo;
+
+  /// Give [o] its number the first time it leaves the cashier's hands (parked or
+  /// paid). Never re-numbered: a table that is recalled, split or corrected keeps
+  /// the number the guests and the kitchen already have.
+  void _stampOrderNo(Order o) {
+    if (o.orderNo != null) return;
+    o.orderNo = nextOrderNo?.call();
+  }
 
   /// Apply the configured category/order-type tax rate to a line, if one is set.
   /// A line whose category is not in the matrix keeps the rate it already has.
@@ -303,6 +317,7 @@ class PosSession {
     if (order.lines.isEmpty) return;
     if (table != null) order.tableLabel = table.trim();
     order.state = OrderState.held;
+    _stampOrderNo(order);
     orders.save(order);
     audit.record(cashierId, 'order.held',
         detail: '${order.uuid}|${order.tableLabel ?? ''}');
@@ -354,6 +369,7 @@ class PosSession {
   Order pay({List<OrderPayment> payments = const [], double? cashReceived}) {
     final order = current;
     order.state = OrderState.paid;
+    _stampOrderNo(order);
     order.payments = List.of(payments);
     order.cashReceived = cashReceived;
     orders.save(order);
@@ -375,6 +391,7 @@ class PosSession {
     // includes the tip) nets correctly against the balance rather than paying down
     // the food. Additive, since several shares can each carry a tip.
     if (tip > 0) order.tip += tip;
+    _stampOrderNo(order);
     order.payments = [...order.payments, ...payments];
     if (cashReceived != null) {
       order.cashReceived = (order.cashReceived ?? 0) + cashReceived;
@@ -589,6 +606,9 @@ class PosSession {
       ..state = OrderState.paid
       ..payments = List.of(payments)
       ..cashReceived = cashReceived;
+    // Its own number: a split check is its own paid sale, printed and reported on
+    // its own, so it cannot share the table's.
+    _stampOrderNo(check);
     orders.save(check);
     outbox.enqueue('order.push', check.uuid, check.toServerPayload());
     audit.record(cashierId, 'order.paid', detail: '${check.uuid}|split check');

@@ -327,6 +327,9 @@ class _PosAppState extends State<PosApp> {
         // so a manager changing it mid-service applies to the next bill and not to
         // the ones already on the floor.
         serviceChargeFor: widget.settings.serviceChargePercentFor,
+        // The number staff and customers actually say out loud. Per till and per
+        // trading day, handed out when an order is parked or paid.
+        nextOrderNo: () => widget.settings.nextOrderNumber(widget.deviceId),
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
     });
