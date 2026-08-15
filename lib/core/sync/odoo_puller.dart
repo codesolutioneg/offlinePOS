@@ -44,17 +44,19 @@ class OdooPuller {
     List<Map<String, dynamic>> groups = const [];
     List<Map<String, dynamic>> modifiers = const [];
     try {
-      groups = await _searchRead(
+      groups = await _searchReadOptional(
         'product.modifier.category',
         ['id', 'name', 'sequence', 'min_selection', 'max_selection', 'selection_type',
          'product_template_ids'],
+        ['auto_add'],
         [
           ['active', '=', true]
         ],
       );
-      modifiers = await _searchRead(
+      modifiers = await _searchReadOptional(
         'product.modifier',
         ['id', 'name', 'category_id', 'price', 'price_type', 'sequence', 'product_id'],
+        ['is_default'],
         [
           ['active', '=', true]
         ],
@@ -102,6 +104,7 @@ class OdooPuller {
             priceType: _priceType(m['price_type']),
             sequence: (m['sequence'] ?? 0) as int,
             productId: _id(m['product_id']),
+            isDefault: m['is_default'] == true,
           ));
     }
 
@@ -125,6 +128,7 @@ class OdooPuller {
         minSelection: (g['min_selection'] ?? 0) as int,
         maxSelection: (g['max_selection'] ?? 0) as int,
         required: g['selection_type'] == 'required',
+        autoAdd: g['auto_add'] == true,
         modifiers: byGroup[gid] ?? const [],
       ));
       for (final tmplId in _ids(g['product_template_ids'])) {
@@ -186,6 +190,18 @@ class OdooPuller {
     final res = await call(model, 'search_read', [domain, fields], {});
     if (res is! List) return const [];
     return res.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  /// A read that also asks for [optional] fields and retries without them when the
+  /// server does not have them. An add-on older than a flag must still give up its
+  /// modifiers: losing the whole menu to gain a default would be a bad trade.
+  Future<List<Map<String, dynamic>>> _searchReadOptional(String model,
+      List<String> fields, List<String> optional, List<dynamic> domain) async {
+    try {
+      return await _searchRead(model, [...fields, ...optional], domain);
+    } catch (_) {
+      return _searchRead(model, fields, domain);
+    }
   }
 
   /// Odoo returns a many2one as `[id, label]`, or `false` when unset.

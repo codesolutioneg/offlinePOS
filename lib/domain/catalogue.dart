@@ -42,6 +42,7 @@ class Modifier {
     this.priceType = ModifierPriceType.fixed,
     this.sequence = 0,
     this.productId,
+    this.isDefault = false,
   });
 
   final int id;
@@ -53,6 +54,11 @@ class Modifier {
 
   /// The stock item consumed when this modifier is chosen, when there is one.
   final int? productId;
+
+  /// Whether this option is what the dish comes with unless someone says otherwise
+  /// (the standard sauce, the regular size). Only meaningful inside a group the
+  /// shop lets resolve itself.
+  final bool isDefault;
 
   /// A percentage modifier is a share of the parent price, not a flat amount.
   /// Getting this wrong is how a 10% option ends up billing 10.
@@ -71,6 +77,7 @@ class ModifierGroup {
     this.minSelection = 0,
     this.maxSelection = 0,
     this.required = false,
+    this.autoAdd = false,
     this.modifiers = const [],
   });
 
@@ -82,12 +89,33 @@ class ModifierGroup {
   /// 0 means no ceiling.
   final int maxSelection;
   final bool required;
+
+  /// Whether this group answers itself from its defaults instead of asking. A shop
+  /// that has one standard sauce does not want a sheet in front of every tap; a
+  /// group with a real choice in it must keep asking.
+  final bool autoAdd;
+
   final List<Modifier> modifiers;
 
   ModifierGroup withModifiers(List<Modifier> m) => ModifierGroup(
         id: id, name: name, sequence: sequence, minSelection: minSelection,
-        maxSelection: maxSelection, required: required, modifiers: m,
+        maxSelection: maxSelection, required: required, autoAdd: autoAdd,
+        modifiers: m,
       );
+
+  /// The options this group would apply on its own: its defaults, capped at what
+  /// [maxSelection] allows so a mis-configured group cannot add five sauces.
+  List<Modifier> get defaults {
+    final picked = modifiers.where((m) => m.isDefault).toList();
+    return maxSelection > 0 && picked.length > maxSelection
+        ? picked.sublist(0, maxSelection)
+        : picked;
+  }
+
+  /// Whether this group can be settled without asking the cashier: the shop marked
+  /// it auto-add, and what it would apply is a valid answer for it. A required
+  /// group with no default still has to be asked.
+  bool get resolvesItself => autoAdd && isSatisfiedBy(defaults.length);
 
   /// Whether a chosen quantity satisfies this group. Enforced on the till, because
   /// the server is not there to enforce it.

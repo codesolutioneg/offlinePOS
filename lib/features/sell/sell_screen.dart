@@ -328,6 +328,17 @@ class _SellScreenState extends State<SellScreen> {
       _changed(() => s.addProduct(product));
       return;
     }
+    // Every group answers itself from its defaults: ring it straight through. A
+    // sheet whose only possible answer is the one already filled in costs the
+    // cashier a tap per item and buys nothing.
+    if (groups.every((g) => g.resolvesItself)) {
+      _changed(() => s.addProduct(product,
+          chosen: [
+            for (final g in groups)
+              for (final m in g.defaults) ChosenModifier(m),
+          ]));
+      return;
+    }
     final chosen = await showModalBottomSheet<List<ChosenModifier>>(
       context: context,
       isScrollControlled: true,
