@@ -169,6 +169,18 @@ void main() {
     expect(find.byKey(const Key('shift-nudge')), findsNothing);
   });
 
+  testWidgets('an Arabic till reads the nudge in Arabic', (t) async {
+    // The strip is built above the navigator, which is the one place in this app
+    // where a missing Localizations ancestor would only show up on an Arabic till.
+    SettingsStore(db).language = 'ar';
+
+    await t.pumpWidget(app());
+    await signIn(t);
+
+    expect(find.text('لا توجد وردية مفتوحة. هل تفتح واحدة برصيد ابتدائي؟'),
+        findsOneWidget);
+  });
+
   testWidgets('the nudge does not follow the cashier out to the sign-in screen',
       (t) async {
     await t.pumpWidget(app());
