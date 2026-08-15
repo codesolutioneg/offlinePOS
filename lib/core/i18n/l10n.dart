@@ -839,4 +839,14 @@ const Map<String, String> _ar = {
   'That is not a usable secret yet.': 'هذا المفتاح غير صالح بعد.',
   'Code right now': 'الرمز الآن',
   'Turn off': 'إيقاف',
+  'Change the price of a line on the order': 'تغيير سعر صنف في الطلب',
+  'Item availability': 'توفر الصنف',
+  'Mark an item sold out, or pin it as a favourite':
+      'تحديد صنف كمنتهٍ، أو تثبيته في المفضلة',
+  'Change the price': 'تغيير السعر',
+  'Now': 'الآن',
+  'Price': 'السعر',
+  'Price for one': 'سعر الوحدة',
+  'Anything added to the item keeps its own price':
+      'الإضافات على الصنف تحتفظ بأسعارها',
 };

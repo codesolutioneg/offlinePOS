@@ -305,7 +305,13 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (action == null) return;
-    if (widget.authorize != null && !await widget.authorize!(Permission.priceOverride)) return;
+    // 86 and favourites are what this menu changes, so that is the permission it
+    // asks for. It used to ask for the price-override grant, which is a different
+    // decision entirely and now gates the price itself.
+    if (widget.authorize != null &&
+        !await widget.authorize!(Permission.itemAvailability)) {
+      return;
+    }
     if (action == 'avail') {
       widget.onToggleAvailable?.call(product.id, soldOut);
     } else if (action == 'fave') {
@@ -592,14 +598,24 @@ class _SellScreenState extends State<SellScreen> {
   Future<void> _lineActions(OrderLine line) async {
     final action = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Scrollable so the menu never overflows a short sheet as options grow.
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
           ListTile(
             key: const Key('line-note'),
             leading: const Icon(Icons.sticky_note_2_outlined),
             title: Text(tr(ctx, 'Note for kitchen')),
             subtitle: line.note != null ? Text(line.note!) : null,
             onTap: () => Navigator.pop(ctx, 'note'),
+          ),
+          ListTile(
+            key: const Key('line-price'),
+            leading: const Icon(Icons.sell_outlined),
+            title: Text(tr(ctx, 'Change the price')),
+            subtitle: Text('${tr(ctx, 'Now')} ${widget.formatAmount(line.unitPrice)}'),
+            onTap: () => Navigator.pop(ctx, 'price'),
           ),
           ListTile(
             key: const Key('line-discount'),
@@ -645,9 +661,11 @@ class _SellScreenState extends State<SellScreen> {
             onTap: () => Navigator.pop(ctx, 'void'),
           ),
         ]),
+        ),
       ),
     );
     if (action == 'note') await _lineNote(line);
+    if (action == 'price') await _linePrice(line);
     if (action == 'discount') await _lineDiscount(line);
     if (action == 'seat') await _assignSeat(line);
     if (action == 'split-units') _changed(() => s.splitLineToUnits(line.uuid));
@@ -762,6 +780,43 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (note != null) _changed(() => s.setLineNote(line.uuid, note));
+  }
+
+  /// Sell this line at another price. Gated, and the session records what it was:
+  /// a price typed at the counter has to be as traceable as a discount is.
+  Future<void> _linePrice(OrderLine line) async {
+    if (widget.authorize != null &&
+        !await widget.authorize!(Permission.priceOverride)) {
+      return;
+    }
+    if (!mounted) return;
+    final ctrl = TextEditingController(text: line.unitPrice.toStringAsFixed(2));
+    final price = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${tr(ctx, 'Price')} ${line.name}'),
+        content: TextField(
+          key: const Key('line-price-value'),
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Price for one'),
+              helperText: tr(ctx, 'Anything added to the item keeps its own price'),
+              border: const OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('apply-line-price'),
+            onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())),
+            child: Text(tr(ctx, 'Apply')),
+          ),
+        ],
+      ),
+    );
+    if (price == null || price < 0) return;
+    _changed(() => s.setLinePrice(line.uuid, price));
   }
 
   Future<void> _lineDiscount(OrderLine line) async {

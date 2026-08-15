@@ -115,7 +115,12 @@ class OrderLine {
   final int productId;
   final String name;
   double quantity;
-  final double unitPrice;
+
+  /// What one of these costs, captured from the catalogue when the line was rung.
+  // Mutable only so a manager-gated, audited price override can restate it on the
+  // line; nothing else writes it, and the captured value is still what a later
+  // catalogue change can never touch.
+  double unitPrice;
   final List<OrderModifier> modifiers;
 
   /// A free-text kitchen note for this line ("no onions", "well done").
