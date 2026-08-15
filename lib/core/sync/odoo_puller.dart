@@ -185,6 +185,46 @@ class OdooPuller {
     );
   }
 
+  /// Partners matching [term] by name or phone, straight from the server.
+  ///
+  /// The pull above is bounded at 500 partners, which is a menu-sized list and not
+  /// a customer book: a shop with more of them cannot find the rest on the till.
+  /// This is the way back to them, and it is a read of a standard model through the
+  /// same call_kw the catalogue uses, so it needs nothing new on the server.
+  ///
+  /// Deliberately not on any selling path: it answers a picker, and a caller that
+  /// cannot reach the server gets an exception to swallow rather than a wait.
+  Future<List<Customer>> searchCustomers(String term, {int limit = 20}) async {
+    final q = term.trim();
+    if (q.isEmpty) return const [];
+    final raw = await call('res.partner', 'search_read', [
+      [
+        ['customer_rank', '>', 0],
+        '|',
+        '|',
+        ['name', 'ilike', q],
+        ['phone', 'ilike', q],
+        ['mobile', 'ilike', q],
+      ],
+      ['id', 'name', 'phone', 'mobile']
+    ], {
+      'limit': limit,
+      'order': 'name'
+    });
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((e) => e.cast<String, dynamic>())
+        .map((c) => Customer(
+              id: c['id'] as int,
+              name: (c['name'] ?? '') as String,
+              phone: c['phone'] is String
+                  ? c['phone'] as String
+                  : (c['mobile'] is String ? c['mobile'] as String : null),
+            ))
+        .toList();
+  }
+
   Future<List<Map<String, dynamic>>> _searchRead(
       String model, List<String> fields, List<dynamic> domain) async {
     final res = await call(model, 'search_read', [domain, fields], {});

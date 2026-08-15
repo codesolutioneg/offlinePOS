@@ -824,4 +824,40 @@ const Map<String, String> _ar = {
   'Backup failed': 'فشل النسخ الاحتياطي',
   'A copy of everything on this till, including sales that have not synced. It stays encrypted.':
       'نسخة من كل ما على هذا الجهاز، بما فيها المبيعات غير المزامَنة. تبقى مشفّرة.',
+
+  // Delivery: zones, channels, drivers, and the parked-delivery prompt.
+  'Order number at the channel': 'رقم الطلب لدى القناة',
+  'Driver': 'السائق',
+  'No driver yet': 'بدون سائق',
+  'No drivers yet. Add them in Settings.': 'لا يوجد سائقون. أضِفهم من الإعدادات.',
+  'just now': 'الآن',
+  'm': 'د',
+  'h': 'س',
+  'Deliveries waiting': 'طلبات توصيل منتظرة',
+  'Pick one up, or start a new order.': 'اختر واحدًا منها، أو ابدأ طلبًا جديدًا.',
+  'New delivery': 'طلب توصيل جديد',
+  'Zones, channels, drivers': 'المناطق والقنوات والسائقون',
+  'Zones': 'المناطق',
+  'Channels': 'القنوات',
+  'Drivers': 'السائقون',
+  'A zone fills in the delivery charge. The cashier can still change it.':
+      'المنطقة تملأ رسوم التوصيل تلقائيًا، ويظل بإمكان الكاشير تعديلها.',
+  'No zones yet': 'لا توجد مناطق بعد',
+  'Add zone': 'إضافة منطقة',
+  'Edit zone': 'تعديل المنطقة',
+  'Zone name': 'اسم المنطقة',
+  'Where the order came from. A channel invoiced to a company books against that customer.':
+      'مصدر الطلب. القناة المرتبطة بشركة تُسجَّل مبيعاتها على ذلك العميل.',
+  'No channels yet': 'لا توجد قنوات بعد',
+  'Add channel': 'إضافة قناة',
+  'Edit channel': 'تعديل القناة',
+  'Channel name': 'اسم القناة',
+  'Company customer': 'عميل الشركة',
+  'No company customer': 'بدون عميل شركة',
+  'Who takes the order out. A driver who leaves is switched off and keeps their old orders.':
+      'من يخرج بالطلب. السائق الذي يترك العمل يُوقَف وتبقى طلباته السابقة باسمه.',
+  'No drivers yet': 'لا يوجد سائقون بعد',
+  'Add driver': 'إضافة سائق',
+  'Edit driver': 'تعديل السائق',
+  'No phone': 'بدون هاتف',
 };

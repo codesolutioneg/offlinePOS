@@ -3,6 +3,7 @@ import '../core/db/catalogue_store.dart';
 import '../core/db/order_store.dart';
 import '../core/sync/outbox.dart';
 import '../domain/catalogue.dart';
+import '../domain/delivery.dart';
 import '../domain/order.dart';
 
 /// The live selling state for one cashier on one till.
@@ -230,6 +231,9 @@ class PosSession {
     order.guestCount = null;
     order.note = null;
     order.deliveryCost = 0;
+    order.deliveryChannel = null;
+    order.companyOrderNo = null;
+    order.driverName = null;
     order.tip = 0;
     // An emptied order is a fresh bill on the same row, so it takes the service charge
     // the shop is on now rather than keeping a stamp from the sale that was cleared.
@@ -262,6 +266,11 @@ class PosSession {
       // because an address and a delivery charge mean nothing on a counter sale.
       current.deliveryCost = 0;
       current.customerAddress = null;
+      // The same reasoning covers the delivery-only trio: there is no channel, no
+      // aggregator reference and nobody driving a sale handed over the counter.
+      current.deliveryChannel = null;
+      current.companyOrderNo = null;
+      current.driverName = null;
     }
     orders.save(current);
   }
@@ -297,6 +306,34 @@ class PosSession {
       ..customerName = _blankToNull(name)
       ..customerPhone = _blankToNull(phone)
       ..customerAddress = _blankToNull(address);
+    orders.save(current);
+  }
+
+  /// Where this delivery came from and the number that channel calls it, both local
+  /// to the till. A channel that is invoiced as a company also carries its partner,
+  /// so the sale books against the aggregator rather than against the guest.
+  ///
+  /// [previous] is the channel the order was already on, so moving off a company
+  /// channel takes its partner with it. Without that, a sale switched from an
+  /// aggregator to the shop's own phone would still be booked against the
+  /// aggregator, and the money would land on the wrong account.
+  void setDeliveryChannel(DeliveryChannel? channel,
+      {String? companyOrderNo, DeliveryChannel? previous}) {
+    if (previous?.partnerId != null && current.partnerId == previous!.partnerId) {
+      current.partnerId = null;
+    }
+    current
+      ..deliveryChannel = channel?.name
+      ..companyOrderNo = _blankToNull(companyOrderNo);
+    if (channel?.partnerId != null) current.partnerId = channel!.partnerId;
+    orders.save(current);
+  }
+
+  /// Who is carrying this delivery. The name is stamped rather than a reference to
+  /// the driver list, so a printed slip still says who took it after that driver
+  /// leaves and is taken off the roster.
+  void setDriver(String? name) {
+    current.driverName = _blankToNull(name);
     orders.save(current);
   }
 

@@ -139,6 +139,29 @@ class ReceiptBuilder {
     if (stamped.isNotEmpty) p.line(stamped);
     if (showCashier) p.line('Cashier: ${order.cashierId}');
     if (order.customerName != null) p.line('Customer: ${order.customerName}');
+    // A delivery slip goes out with the bag, so it has to be enough for the driver
+    // to find the door and ring ahead. Name alone is a slip nobody can deliver.
+    // Everything here is captured on the till, and prints with the line down.
+    if (order.type == OrderType.delivery) {
+      if (order.customerPhone != null && order.customerPhone!.isNotEmpty) {
+        p.line('Phone: ${order.customerPhone}');
+      }
+      if (order.customerAddress != null && order.customerAddress!.isNotEmpty) {
+        // Wrapped here rather than left to the printer: half an address is no
+        // address, and a roll that wraps mid-word is hard to read at a door.
+        for (final part in _wrap('Address: ${order.customerAddress}')) {
+          p.line(part);
+        }
+      }
+      // The aggregator's own reference is what the rider and the call centre quote,
+      // so it belongs on the paper next to the channel that issued it.
+      final channel = [
+        if (order.deliveryChannel != null) order.deliveryChannel!,
+        if (order.companyOrderNo != null) '#${order.companyOrderNo}',
+      ].join(' ');
+      if (channel.isNotEmpty) p.line('Channel: $channel');
+      if (order.driverName != null) p.line('Driver: ${order.driverName}');
+    }
     p.rule(divider);
 
     for (final l in order.lines) {
@@ -311,6 +334,26 @@ class ReceiptBuilder {
     // Never kick the drawer on a deletion slip: removing an item does not open the
     // till.
     return (p..cut()).build();
+  }
+
+  /// [text] broken onto lines that fit the roll, at spaces where there is one. A
+  /// single word longer than the paper is left alone for the printer to deal with,
+  /// which is better than cutting a street name in half.
+  List<String> _wrap(String text) {
+    final out = <String>[];
+    var current = '';
+    for (final word in text.split(' ')) {
+      if (current.isEmpty) {
+        current = word;
+      } else if (current.length + 1 + word.length <= columns) {
+        current = '$current $word';
+      } else {
+        out.add(current);
+        current = word;
+      }
+    }
+    if (current.isNotEmpty) out.add(current);
+    return out;
   }
 
   String _qty(double q) =>

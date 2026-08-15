@@ -231,6 +231,9 @@ class Order {
     this.guestCount,
     this.note,
     this.deliveryCost = 0,
+    this.deliveryChannel,
+    this.companyOrderNo,
+    this.driverName,
     this.serviceChargePercent = 0,
     this.tip = 0,
     this.kitchenStatus = KitchenStatus.pending,
@@ -284,6 +287,17 @@ class Order {
   /// A delivery charge added to the total, kept separate so it reports as delivery
   /// income rather than as a sold item.
   double deliveryCost;
+
+  /// Which channel this delivery came through ("Talabat", "Phone"), the number that
+  /// channel calls the order, and who is carrying it.
+  ///
+  /// All three are local to the till and stripped from the server payload. The wire
+  /// contract is fixed: the sale is a delivery, and who it is for travels as the
+  /// partner. An aggregator's own reference and the name of the driver are how the
+  /// shop finds the order on its own floor, and the server has nowhere to put them.
+  String? deliveryChannel;
+  String? companyOrderNo;
+  String? driverName;
 
   /// The service percentage this bill carries, stamped when the order is created and
   /// re-stamped when its type changes, never read from settings at total time: a bill
@@ -418,6 +432,9 @@ class Order {
         'guest_count': guestCount,
         'note': note,
         'delivery_cost': deliveryCost,
+        'delivery_channel': deliveryChannel,
+        'company_order_no': companyOrderNo,
+        'driver_name': driverName,
         'service_charge_percent': serviceChargePercent,
         'tip': tip,
         'kitchen_status': kitchenStatus.name,
@@ -457,6 +474,12 @@ class Order {
     // The human number is the till's counter, for the people in the shop. The server
     // numbers its own documents, and the uuid is what identifies this sale there.
     m.remove('order_no');
+    // How the shop runs its own deliveries: which app the order came through, that
+    // app's own reference for it, and who drove it. The module books a sale, not a
+    // dispatch record, so none of this has a field to land in.
+    m.remove('delivery_channel');
+    m.remove('company_order_no');
+    m.remove('driver_name');
     // A locally-created customer has a synthetic negative id, not an Odoo partner.
     // Never send it as partner_id (it would fail the foreign key); the name and
     // phone still travel so the server can match or create the partner itself.
@@ -494,6 +517,9 @@ class Order {
         guestCount: m['guest_count'] as int?,
         note: m['note'] as String?,
         deliveryCost: (m['delivery_cost'] as num?)?.toDouble() ?? 0,
+        deliveryChannel: m['delivery_channel'] as String?,
+        companyOrderNo: m['company_order_no'] as String?,
+        driverName: m['driver_name'] as String?,
         serviceChargePercent:
             (m['service_charge_percent'] as num?)?.toDouble() ?? 0,
         tip: (m['tip'] as num?)?.toDouble() ?? 0,

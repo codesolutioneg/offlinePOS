@@ -12,6 +12,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/numeric_keypad.dart';
 import '../../domain/catalogue.dart';
+import '../../domain/delivery.dart';
 import '../../domain/order.dart';
 import '../customers/customer_management_screen.dart' show CustomerFormDialog, CustomerFormResult;
 import 'modifier_sheet.dart';
@@ -53,6 +54,10 @@ class SellScreen extends StatefulWidget {
     this.gridColumns = 0,
     this.extraCustomers,
     this.onAddCustomer,
+    this.searchServerCustomers,
+    this.deliveryZones,
+    this.deliveryChannels,
+    this.drivers,
     this.tables,
     this.heldOrders,
     this.onPickTable,
@@ -166,6 +171,21 @@ class SellScreen extends StatefulWidget {
   /// "Add new" action.
   final Customer Function({required String name, String? phone, String? address})?
       onAddCustomer;
+
+  /// Ask the server for customers the till never pulled, for a shop with more
+  /// partners than the catalogue carries. Convenience only: it runs while the
+  /// cashier types in the picker, its answer is merged in when it arrives, and a
+  /// failure or an offline till simply leaves the local results as they are. Never
+  /// awaited by anything on the way to a payment.
+  final Future<List<Customer>> Function(String query)? searchServerCustomers;
+
+  /// The delivery lists the shop configured: zones with a preset charge, the
+  /// channels an order can arrive through, and the drivers who can carry it. Read
+  /// through a function so an edit in settings shows on the next dialog. Null or
+  /// empty simply leaves those controls off the delivery dialog.
+  final List<DeliveryZone> Function()? deliveryZones;
+  final List<DeliveryChannel> Function()? deliveryChannels;
+  final List<Driver> Function()? drivers;
 
   /// The floor's table labels, offered as quick picks when moving items to another
   /// table. Null falls back to free text.
@@ -378,14 +398,44 @@ class _SellScreenState extends State<SellScreen> {
               ...s.catalogue.customers(search: v, limit: 30),
             ];
         var results = lookup('');
+        // The term the last server search was fired for, so a reply that arrives
+        // after the cashier has typed on is dropped instead of replacing the list
+        // under their finger.
+        var searching = '';
         return StatefulBuilder(
-          builder: (ctx, setSt) => AlertDialog(
+          builder: (ctx, setSt) {
+            // A shop with more partners than the pull carries can still reach the
+            // rest, but only as a bonus on top of the local answer: the list is
+            // already filled from disk before this is asked, and an offline till,
+            // a slow server or an error simply leaves it as it is.
+            void askServer(String term) {
+              final search = widget.searchServerCustomers;
+              if (search == null) return;
+              // Recorded before the length test as well, so a reply to a longer term
+              // the cashier has since deleted back to two letters is dropped rather
+              // than dressing the list with names that do not match what they typed.
+              searching = term;
+              if (term.trim().length < 3) return;
+              unawaited(search(term).then((found) {
+                if (found.isEmpty || searching != term || !ctx.mounted) return;
+                final have = results.map((c) => c.id).toSet();
+                setSt(() => results = [
+                      ...results,
+                      ...found.where((c) => have.add(c.id)),
+                    ]);
+              }).catchError((_) {
+                // A search is a convenience. Nothing on this screen depends on it.
+              }));
+            }
+
+            return AlertDialog(
             title: Text(tr(ctx, 'Customer')),
             content: SizedBox(
               width: 360,
               height: 420,
               child: Column(children: [
                 TextField(
+                  key: const Key('customer-search'),
                   controller: ctrl,
                   autofocus: true,
                   decoration: InputDecoration(
@@ -394,7 +444,10 @@ class _SellScreenState extends State<SellScreen> {
                     border: const OutlineInputBorder(),
                     isDense: true,
                   ),
-                  onChanged: (v) => setSt(() => results = lookup(v)),
+                  onChanged: (v) {
+                    setSt(() => results = lookup(v));
+                    askServer(v);
+                  },
                 ),
                 const SizedBox(height: 8),
                 Expanded(
@@ -429,7 +482,8 @@ class _SellScreenState extends State<SellScreen> {
               ),
               TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
             ],
-          ),
+            );
+          },
         );
       },
     );
@@ -1086,6 +1140,25 @@ class _SellScreenState extends State<SellScreen> {
     final addr = TextEditingController(text: s.current.customerAddress ?? '');
     final cost = TextEditingController(
         text: s.current.deliveryCost > 0 ? s.current.deliveryCost.toStringAsFixed(2) : '');
+    final companyNo =
+        TextEditingController(text: s.current.companyOrderNo ?? '');
+    final zones = widget.deliveryZones?.call() ?? const <DeliveryZone>[];
+    final channels = widget.deliveryChannels?.call() ?? const <DeliveryChannel>[];
+    final drivers = widget.drivers?.call() ?? const <Driver>[];
+    // Matched by name, which is what the order stores: a channel renamed or deleted
+    // in settings leaves the order's own label alone rather than rewriting history.
+    final wasOn =
+        channels.where((c) => c.name == s.current.deliveryChannel).firstOrNull;
+    var channel = wasOn;
+    // A driver taken off the roster mid-delivery stays selectable on the order they
+    // are already carrying, so saving the dialog cannot quietly drop their name.
+    final driverNames = <String>[
+      for (final d in drivers) d.name,
+      if (s.current.driverName != null &&
+          !drivers.any((d) => d.name == s.current.driverName))
+        s.current.driverName!,
+    ];
+    var driver = s.current.driverName;
     // The existing customer picked, so the delivery links to that partner rather
     // than being saved as a free-typed name (which would duplicate them in Odoo).
     Customer? picked;
@@ -1148,12 +1221,77 @@ class _SellScreenState extends State<SellScreen> {
                 controller: addr,
                 maxLines: 2,
                 decoration: InputDecoration(labelText: tr(ctx, 'Address'), border: const OutlineInputBorder(), isDense: true)),
+            // Zones price the drive, so the charge is a tap rather than a number
+            // remembered per area and typed again on every order. The field below
+            // stays editable: a zone is a preset, not a rule.
+            if (zones.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(spacing: 6, runSpacing: 4, children: [
+                  for (final z in zones)
+                    ActionChip(
+                      key: Key('delivery-zone-${z.id}'),
+                      label: Text('${z.name}  ${widget.formatAmount(z.fee)}'),
+                      onPressed: () => setSt(
+                          () => cost.text = z.fee.toStringAsFixed(2)),
+                    ),
+                ]),
+              ),
+            ],
             const SizedBox(height: 8),
             TextField(
                 key: const Key('delivery-cost'),
                 controller: cost,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(labelText: tr(ctx, 'Delivery charge'), border: const OutlineInputBorder(), isDense: true)),
+            // Which app sent the order, and the number that app calls it by, which
+            // is what the rider and the call centre quote when they ring.
+            if (channels.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(spacing: 6, runSpacing: 4, children: [
+                  for (final c in channels)
+                    ChoiceChip(
+                      key: Key('delivery-channel-${c.id}'),
+                      label: Text(c.name),
+                      selected: channel?.id == c.id,
+                      onSelected: (on) =>
+                          setSt(() => channel = on ? c : null),
+                    ),
+                ]),
+              ),
+              if (channel != null) ...[
+                const SizedBox(height: 8),
+                TextField(
+                    key: const Key('delivery-company-no'),
+                    controller: companyNo,
+                    decoration: InputDecoration(
+                        labelText: tr(ctx, 'Order number at the channel'),
+                        border: const OutlineInputBorder(),
+                        isDense: true)),
+              ],
+            ],
+            if (driverNames.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String?>(
+                key: const Key('delivery-driver'),
+                initialValue: driver,
+                isExpanded: true,
+                decoration: InputDecoration(
+                    labelText: tr(ctx, 'Driver'),
+                    border: const OutlineInputBorder(),
+                    isDense: true),
+                items: [
+                  DropdownMenuItem<String?>(
+                      value: null, child: Text(tr(ctx, 'No driver yet'))),
+                  for (final n in driverNames)
+                    DropdownMenuItem<String?>(value: n, child: Text(n)),
+                ],
+                onChanged: (v) => setSt(() => driver = v),
+              ),
+            ],
           ]),
         ),
         actions: [
@@ -1175,8 +1313,54 @@ class _SellScreenState extends State<SellScreen> {
         s.setDeliveryCustomer(
             name: name.text, phone: phone.text, address: addr.text);
         s.setDeliveryCost(double.tryParse(cost.text.trim()) ?? 0);
+        // Last, so an aggregator's own partner wins over whoever was picked above:
+        // the company is who the shop invoices, and the typed name stays on the
+        // slip as the person the driver is looking for.
+        s.setDeliveryChannel(channel,
+            companyOrderNo: companyNo.text, previous: wasOn);
+        s.setDriver(driver);
       });
     }
+  }
+
+  /// Hand the open delivery to a driver without reopening the whole dialog: the
+  /// bag is usually assigned when the food is up, not when it is rung.
+  Future<void> _chooseDriver() async {
+    final drivers = widget.drivers?.call() ?? const <Driver>[];
+    final chosen = await showModalBottomSheet<Object?>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(shrinkWrap: true, children: [
+          ListTile(
+            title: Text(tr(ctx, 'Driver'),
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          if (drivers.isEmpty)
+            ListTile(
+              key: const Key('no-drivers'),
+              title: Text(tr(ctx, 'No drivers yet. Add them in Settings.')),
+            ),
+          for (final d in drivers)
+            ListTile(
+              key: Key('driver-${d.id}'),
+              leading: const Icon(Icons.delivery_dining),
+              title: Text(d.name),
+              subtitle: d.phone == null ? null : Text(d.phone!),
+              onTap: () => Navigator.pop(ctx, d.name),
+            ),
+          // Distinguishable from backing out, exactly as walk-in is on the customer
+          // picker: one takes the driver off, the other leaves them on.
+          ListTile(
+            key: const Key('driver-clear'),
+            leading: const Icon(Icons.person_off_outlined),
+            title: Text(tr(ctx, 'No driver yet')),
+            onTap: () => Navigator.pop(ctx, 'clear'),
+          ),
+        ]),
+      ),
+    );
+    if (chosen == null) return;
+    _changed(() => s.setDriver(chosen == 'clear' ? null : chosen as String));
   }
 
   void _hold() {
@@ -2062,6 +2246,15 @@ class _SellScreenState extends State<SellScreen> {
         ),
       );
 
+  /// The one line under a delivery's name: where it goes, how to ring, and which
+  /// channel sent it, which is the block a cashier reads back to a rider.
+  String _deliveryLine(Order o) => [
+        o.customerPhone,
+        o.customerAddress,
+        o.deliveryChannel,
+        if (o.companyOrderNo != null) '#${o.companyOrderNo}',
+      ].whereType<String>().where((e) => e.isNotEmpty).join('  ·  ');
+
   /// Customer, table, guests, note: the details the order type calls for.
   Widget _contextBar() {
     final o = s.current;
@@ -2073,12 +2266,7 @@ class _SellScreenState extends State<SellScreen> {
           dense: true,
           leading: const Icon(Icons.person_pin_circle_outlined),
           title: Text(o.customerName ?? tr(context, 'Delivery customer')),
-          subtitle: (o.customerPhone == null && o.customerAddress == null)
-              ? null
-              : Text([o.customerPhone, o.customerAddress]
-                  .whereType<String>()
-                  .where((e) => e.isNotEmpty)
-                  .join('  ·  ')),
+          subtitle: _deliveryLine(o).isEmpty ? null : Text(_deliveryLine(o)),
           trailing: TextButton(
             key: const Key('customer'),
             onPressed: _deliveryDetails,
@@ -2137,7 +2325,7 @@ class _SellScreenState extends State<SellScreen> {
                 onPressed: _billOptions,
               ),
           ],
-          if (o.type == OrderType.delivery)
+          if (o.type == OrderType.delivery) ...[
             ActionChip(
               key: const Key('delivery'),
               avatar: const Icon(Icons.delivery_dining, size: 16),
@@ -2146,6 +2334,16 @@ class _SellScreenState extends State<SellScreen> {
                   : tr(context, 'Delivery details')),
               onPressed: _deliveryDetails,
             ),
+            // Assigning the bag is its own moment, later than ringing it, so it is
+            // one tap from the order rather than buried in the details dialog.
+            if (widget.drivers != null)
+              ActionChip(
+                key: const Key('driver-chip'),
+                avatar: const Icon(Icons.two_wheeler, size: 16),
+                label: Text(o.driverName ?? tr(context, 'Driver')),
+                onPressed: _chooseDriver,
+              ),
+          ],
           ActionChip(
             key: const Key('order-note'),
             avatar: const Icon(Icons.notes, size: 16),
