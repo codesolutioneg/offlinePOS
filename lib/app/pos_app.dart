@@ -1254,6 +1254,10 @@ class _PosAppState extends State<PosApp> {
         users: widget.users,
         auth: widget.auth,
         onChanged: () => setState(() {}),
+        // Cashier plus whatever roles the shop invented, so a new starter can be
+        // put straight onto one instead of being a cashier with a manager stood
+        // behind them.
+        roles: widget.settings.assignableRoles,
         // Only a signed-in manager may mint or edit manager accounts. A cashier who
         // reaches here via the manageStaff permission can manage cashiers only, so
         // the manager role stays out of reach and self-promotion is impossible.
@@ -1587,12 +1591,40 @@ class _PosAppState extends State<PosApp> {
         onTap: () async {
           final ok = await _authorizeManager(context);
           if (ok && context.mounted) {
-            push(RolesPermissionsScreen(settings: widget.settings, onChanged: refresh));
+            push(RolesPermissionsScreen(
+              settings: widget.settings,
+              onChanged: refresh,
+              staffOnRole: (role) =>
+                  widget.users.active().where((c) => c.role == role).length,
+              onRoleRenamed: _moveStaffToRole,
+              // A deleted role leaves its staff with no permissions at all, so
+              // they land back on the role every account falls back to.
+              onRoleDeleted: (role) => _moveStaffToRole(role, 'cashier'),
+            ));
           }
         },
       ),
     ];
     push(SettingsHubScreen(entries: entries));
+  }
+
+  /// Move every account on [from] onto [to], keeping their PIN and their active
+  /// flag. Called when a role is renamed or deleted, because the roster stores the
+  /// role by name and an account left on a name that no longer exists reads as a
+  /// role with no permissions.
+  void _moveStaffToRole(String from, String to) {
+    for (final c in widget.users.all().where((c) => c.role == from)) {
+      widget.users.upsert(Cashier(
+        id: c.id,
+        name: c.name,
+        role: to,
+        pinSalt: c.pinSalt,
+        pinHash: c.pinHash,
+        active: c.active,
+      ));
+    }
+    widget.audit.record(_session?.cashierId ?? 'system', 'role.reassigned',
+        detail: '$from -> $to');
   }
 
   /// How old the prices on this till are, in the shortest true form. Shown on the
