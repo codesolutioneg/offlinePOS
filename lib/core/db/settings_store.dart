@@ -26,6 +26,7 @@ class SettingsStore {
   static const _discountReasons = 'discount_reasons';
   static const _discountPercents = 'discount_percents';
   static const _maxDiscountPercent = 'max_discount_percent';
+  static const _allowAmountDiscount = 'allow_amount_discount';
   static const _categoryColors = 'category_colors';
   static const _categoryStations = 'category_stations';
   static const _productStations = 'product_stations';
@@ -131,6 +132,14 @@ class SettingsStore {
       double.tryParse(getString(_maxDiscountPercent) ?? '') ?? 0;
   set maxDiscountPercent(double v) =>
       setString(_maxDiscountPercent, v <= 0 ? null : v.toStringAsFixed(0));
+
+  /// Whether the discount dialogs also take a money amount ("50 off"). Off by
+  /// default, because a shop that discounts in percent only should not be shown a
+  /// second field to mis-tap. The amount is converted to the equivalent percentage
+  /// when it is applied, so orders, receipts and reports stay percent-based and the
+  /// configured cap still bites.
+  bool get allowAmountDiscount => getBool(_allowAmountDiscount);
+  set allowAmountDiscount(bool v) => setBool(_allowAmountDiscount, v);
 
   /// Category id to colour (ARGB int), so the product grid can be colour-coded the
   /// way Dishflow does. Empty until a manager sets colours.

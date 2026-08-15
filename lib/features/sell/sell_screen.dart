@@ -41,6 +41,7 @@ class SellScreen extends StatefulWidget {
     this.discountReasons = const [],
     this.discountPercents = const [5, 10, 15, 20],
     this.maxDiscountPercent = 0,
+    this.allowAmountDiscount = false,
     this.authorize,
     this.unavailableProducts = const {},
     this.onToggleAvailable,
@@ -120,6 +121,11 @@ class SellScreen extends StatefulWidget {
   /// Configurable discount preset percentages and an optional cap (0 = none).
   final List<double> discountPercents;
   final double maxDiscountPercent;
+
+  /// Whether the discount dialogs offer a money amount beside the percentage. The
+  /// amount is converted to the equivalent percentage before it is applied, so the
+  /// order, the receipt and every report stay percent-based.
+  final bool allowAmountDiscount;
 
   /// Gate for privileged actions: called with the specific [Permission] the action
   /// needs and returns true if the cashier's role allows it or a manager approves.
@@ -389,6 +395,14 @@ class _SellScreenState extends State<SellScreen> {
     return result is Customer ? result : null;
   }
 
+  /// What the cashier typed, as a percentage. In amount mode the money is converted
+  /// against [base] (the bill's subtotal, or a line's gross), so only ever a
+  /// percentage leaves this screen.
+  double _typedPercent(String text, {required bool byAmount, required double base}) {
+    final typed = double.tryParse(text.trim()) ?? 0;
+    return byAmount ? discountPercentForAmount(typed, base) : typed;
+  }
+
   Future<void> _openDiscount() async {
     // A discount gives away money, so it needs the discount permission.
     if (widget.authorize != null && !await widget.authorize!(Permission.applyDiscount)) return;
@@ -398,29 +412,63 @@ class _SellScreenState extends State<SellScreen> {
             ? s.current.discountPercent.toStringAsFixed(0)
             : '');
     final reasonCtrl = TextEditingController(text: s.current.discountReason ?? '');
+    // Percent unless the shop allows money off and the cashier asks for it. The
+    // amount becomes its equivalent percentage on apply, so nothing downstream has
+    // to learn a second kind of discount.
+    var byAmount = false;
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
         title: Text(tr(ctx, 'Order discount')),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (widget.allowAmountDiscount) ...[
+            Wrap(spacing: 8, children: [
+              ChoiceChip(
+                key: const Key('discount-mode-percent'),
+                label: const Text('%'),
+                selected: !byAmount,
+                onSelected: (_) => setSt(() {
+                  byAmount = false;
+                  ctrl.clear();
+                }),
+              ),
+              ChoiceChip(
+                key: const Key('discount-mode-amount'),
+                label: Text(tr(ctx, 'Amount')),
+                selected: byAmount,
+                onSelected: (_) => setSt(() {
+                  byAmount = true;
+                  ctrl.clear();
+                }),
+              ),
+            ]),
+            const SizedBox(height: 8),
+          ],
           TextField(
+            key: const Key('discount-value'),
             controller: ctrl,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-                labelText: tr(ctx, 'Discount'), suffixText: '%', border: const OutlineInputBorder()),
+                labelText: tr(ctx, byAmount ? 'Amount off' : 'Discount'),
+                suffixText: byAmount ? null : '%',
+                border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           // Quick-pick chips from the manager-configured presets, plus a 0 to clear.
-          Wrap(spacing: 8, children: [
-            ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
-            for (final q in widget.discountPercents)
-              ActionChip(
-                label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
-                onPressed: () =>
-                    ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
-              ),
-          ]),
+          // Percentages only: a preset is a percentage, and offering it while the
+          // field is money would read as an amount.
+          if (!byAmount)
+            Wrap(spacing: 8, children: [
+              ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
+              for (final q in widget.discountPercents)
+                ActionChip(
+                  label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
+                  onPressed: () =>
+                      ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
+                ),
+            ]),
           if (widget.maxDiscountPercent > 0)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -449,12 +497,13 @@ class _SellScreenState extends State<SellScreen> {
           FilledButton(
             key: const Key('apply-discount'),
             onPressed: () => Navigator.pop(ctx, {
-              'pct': double.tryParse(ctrl.text.trim()) ?? 0,
+              'pct': _typedPercent(ctrl.text, byAmount: byAmount, base: s.current.subtotal),
               'reason': reasonCtrl.text.trim(),
             }),
             child: Text(tr(ctx, 'Apply')),
           ),
         ],
+        ),
       ),
     );
     if (result != null) {
@@ -658,27 +707,56 @@ class _SellScreenState extends State<SellScreen> {
     if (!mounted) return;
     final ctrl = TextEditingController(
         text: line.discountPercent > 0 ? line.discountPercent.toStringAsFixed(0) : '');
+    var byAmount = false;
     final pct = await showDialog<double>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
         title: Text('${tr(ctx, 'Discount')} ${line.name}'),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (widget.allowAmountDiscount) ...[
+            Wrap(spacing: 8, children: [
+              ChoiceChip(
+                key: const Key('line-discount-mode-percent'),
+                label: const Text('%'),
+                selected: !byAmount,
+                onSelected: (_) => setSt(() {
+                  byAmount = false;
+                  ctrl.clear();
+                }),
+              ),
+              ChoiceChip(
+                key: const Key('line-discount-mode-amount'),
+                label: Text(tr(ctx, 'Amount')),
+                selected: byAmount,
+                onSelected: (_) => setSt(() {
+                  byAmount = true;
+                  ctrl.clear();
+                }),
+              ),
+            ]),
+            const SizedBox(height: 8),
+          ],
           TextField(
+            key: const Key('line-discount-value'),
             controller: ctrl,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-                labelText: tr(ctx, 'Line discount'), suffixText: '%', border: const OutlineInputBorder()),
+                labelText: tr(ctx, byAmount ? 'Amount off' : 'Line discount'),
+                suffixText: byAmount ? null : '%',
+                border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
-          Wrap(spacing: 8, children: [
-            ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
-            for (final q in widget.discountPercents)
-              ActionChip(
-                label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
-                onPressed: () => ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
-              ),
-          ]),
+          if (!byAmount)
+            Wrap(spacing: 8, children: [
+              ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
+              for (final q in widget.discountPercents)
+                ActionChip(
+                  label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
+                  onPressed: () => ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
+                ),
+            ]),
           if (widget.maxDiscountPercent > 0)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -690,9 +768,13 @@ class _SellScreenState extends State<SellScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
               key: const Key('apply-line-discount'),
-              onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim()) ?? 0),
+              // A line's own gross is what its discount is taken off, so that is the
+              // base a typed amount converts against.
+              onPressed: () => Navigator.pop(
+                  ctx, _typedPercent(ctrl.text, byAmount: byAmount, base: line.gross)),
               child: Text(tr(ctx, 'Apply'))),
         ],
+        ),
       ),
     );
     if (pct == null) return;

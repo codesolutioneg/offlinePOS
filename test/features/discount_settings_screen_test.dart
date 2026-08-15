@@ -37,6 +37,16 @@ void main() {
     expect(settings.maxDiscountPercent, 30);
   });
 
+  testWidgets('money-off discounts are off until a manager turns them on', (t) async {
+    await t.pumpWidget(MaterialApp(
+      home: DiscountSettingsScreen(settings: settings, onChanged: () {}),
+    ));
+    expect(settings.allowAmountDiscount, isFalse);
+    await t.tap(find.byKey(const Key('allow-amount-discount')));
+    await t.pump();
+    expect(settings.allowAmountDiscount, isTrue);
+  });
+
   test('sold-out products round-trip through the settings store', () {
     settings.setProductAvailable(7, false);
     expect(settings.unavailableProducts, {7});

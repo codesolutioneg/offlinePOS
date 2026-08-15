@@ -643,6 +643,7 @@ class _PosAppState extends State<PosApp> {
               discountReasons: widget.settings.discountReasons,
               discountPercents: widget.settings.discountPercents,
               maxDiscountPercent: widget.settings.maxDiscountPercent,
+              allowAmountDiscount: widget.settings.allowAmountDiscount,
               authorize: (p) => _authorize(p, context),
               unavailableProducts: widget.settings.unavailableProducts,
               onToggleAvailable: (id, available) {

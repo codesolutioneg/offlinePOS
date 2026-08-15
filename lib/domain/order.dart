@@ -29,6 +29,18 @@ extension KitchenStatusLabel on KitchenStatus {
       };
 }
 
+/// The percentage that takes [amount] of money off [base].
+///
+/// A cashier who is told "give them 50 off" thinks in money, but a discount lives on
+/// an order as a percentage: that is what the receipt prints, what the reports total,
+/// and what [Order.toServerPayload] folds into the line prices. Converting here, at
+/// the moment it is applied, is what lets an amount be typed without a second concept
+/// travelling through all of that. A base of zero (an empty bill) gives nothing away.
+double discountPercentForAmount(double amount, double base) {
+  if (amount <= 0 || base <= 0) return 0;
+  return (amount / base * 100).clamp(0, 100).toDouble();
+}
+
 /// A modifier applied to a line, priced at the moment of sale.
 ///
 /// The price is captured here rather than looked up later: a receipt must never

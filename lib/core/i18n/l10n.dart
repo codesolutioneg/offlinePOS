@@ -699,4 +699,10 @@ const Map<String, String> _ar = {
   'Edit a paid order': 'تعديل طلب مدفوع',
   'Put a paid sale back on the counter before it syncs':
       'إعادة بيع مدفوع إلى الشاشة قبل مزامنته',
+  // selling flow: money-off discounts, customer on any order type, order number,
+  // and the truth about a kitchen ticket
+  'Allow a discount in money': 'السماح بالخصم بمبلغ',
+  'The cashier can type an amount off; it is applied as the matching percentage':
+      'يكتب الكاشير مبلغ الخصم ويُطبَّق بالنسبة المكافئة له',
+  'Amount off': 'مبلغ الخصم',
 };
