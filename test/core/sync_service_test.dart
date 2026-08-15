@@ -217,6 +217,58 @@ void main() {
     expect(pulls, 1);
   });
 
+  test('a forced refresh re-pulls a catalogue that is not stale yet', () async {
+    // A price changed in Odoo this morning must not wait for the age gate to
+    // expire, which is most of a service away.
+    var pulls = 0;
+    final s = serviceWith(
+      puller: OdooPuller(call: (model, m, a, k) async {
+        if (model == 'product.product') pulls++;
+        return model == 'product.product'
+            ? [{'id': 1, 'display_name': 'A', 'lst_price': 1, 'active': true}]
+            : const [];
+      }),
+    );
+    await s.refresh();
+    expect(pulls, 1);
+    expect(s.catalogueNeedsRefresh, isFalse, reason: 'the age gate is now shut');
+    await s.refresh();
+    expect(pulls, 1, reason: 'an ordinary pass still respects the age gate');
+    expect(await s.refresh(force: true), RefreshOutcome.updated);
+    expect(pulls, 2);
+  });
+
+  test('a forced refresh still never drains the outbox', () async {
+    // The force flag opens the age gate and nothing else: orders leave this till
+    // as one batch at shift close, whoever asked for the menu.
+    var sent = 0;
+    final outbox = Outbox(store: store, senders: {'order.push': (e) async => sent++});
+    await outbox.enqueue('order.push', 'u1', {});
+    final s = serviceWith(
+      outbox: outbox,
+      puller: pullerWith(const [Product(id: 1, name: 'A', price: 5)]),
+      probe: () async => true,
+    );
+    await s.refresh(force: true);
+    expect(sent, 0, reason: 'a forced refresh must not push orders either');
+    expect(store.pendingSalesCount, 1);
+  });
+
+  test('a forced refresh with nothing reachable says so and keeps the prices',
+      () async {
+    cat.replaceAll(
+      categories: const [], products: const [Product(id: 9, name: 'Keep', price: 1)],
+      groups: const [], productGroupIds: const {},
+      refreshedAt: DateTime.utc(2020),
+    );
+    final s = serviceWith(
+      puller: pullerWith(const [Product(id: 1, name: 'A', price: 5)]),
+      probe: () async => false,
+    );
+    expect(await s.refresh(force: true), RefreshOutcome.unreachable);
+    expect(cat.products().single.name, 'Keep');
+  });
+
   test('a flush that cannot deliver arms a retry', () async {
     // The shift close that fails is exactly when a person is least likely to be
     // watching, so the till has to remember the job is unfinished.

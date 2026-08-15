@@ -18,7 +18,10 @@ enum WizardId {
   diagnostics('diagnostics'),
 
   /// Pointing the till at a receipt or kitchen printer.
-  printerSetup('printer_setup');
+  printerSetup('printer_setup'),
+
+  /// The list of what a freshly installed till still has to be told.
+  setupChecklist('setup_checklist');
 
   const WizardId(this.key);
 

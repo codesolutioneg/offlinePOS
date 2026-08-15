@@ -8,6 +8,7 @@ import '../core/i18n/l10n.dart';
 
 import '../core/audit/audit_log.dart';
 import '../core/auth/auth_service.dart';
+import '../core/auth/bootstrap_cashier.dart';
 import '../core/auth/permissions.dart';
 import '../core/auth/user_store.dart';
 import '../core/config/till_config.dart';
@@ -20,7 +21,9 @@ import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
 import '../core/db/table_store.dart';
+import '../core/email/email_service.dart';
 import '../core/lan/lan_wiring.dart';
+import '../core/onboarding/setup_checklist.dart';
 import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
@@ -51,6 +54,7 @@ import '../features/support/audit_log_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/customers/customer_management_screen.dart';
 import '../features/kitchen/kitchen_display_screen.dart';
+import '../features/onboarding/setup_checklist_card.dart';
 import '../features/onboarding/wizard_overlay.dart';
 import '../features/orders/open_orders_screen.dart';
 import '../features/orders/order_history_screen.dart';
@@ -60,6 +64,7 @@ import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/delivery_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
+import '../features/settings/email_settings_screen.dart';
 import '../features/settings/lan_settings_screen.dart';
 import '../features/settings/tax_settings_screen.dart';
 import '../features/settings/payment_methods_screen.dart';
@@ -110,6 +115,7 @@ class PosApp extends StatefulWidget {
     this.provisioningPin,
     this.updates,
     this.lan,
+    this.emailer,
   });
 
   final AuthService auth;
@@ -171,6 +177,11 @@ class PosApp extends StatefulWidget {
   /// Null when this build has no update channel configured.
   final UpdateService? updates;
 
+  /// Sends the Z report to whoever the shop asked for, best effort. Null on a
+  /// build with no mail wired, which hides the setting rather than offering one
+  /// that goes nowhere.
+  final EmailService? emailer;
+
   /// This device's presence on the shop LAN, or null when it is not sharing state
   /// with the other devices. Null is the ordinary case: a one-till shop.
   ///
@@ -219,6 +230,10 @@ class _PosAppState extends State<PosApp> {
 
   PosSession? _session;
   bool _firstSaleHelp = false;
+
+  /// Whether the walkthrough for the provisioning account is up. Only that account
+  /// ever sees it: it is the one that stands in front of an unconfigured till.
+  bool _firstSignInHelp = false;
   String? _printError;
   Timer? _background;
 
@@ -319,6 +334,10 @@ class _PosAppState extends State<PosApp> {
   Future<void> _catchUp() async {
     _fireDueTimedLines();
     if (_receiptPrinter.hasSpooled) await _receiptPrinter.flush();
+    // A Z report queued while the line was down goes out on its own, rather than
+    // waiting for someone to open a settings screen and press something.
+    final emailer = widget.emailer;
+    if (emailer != null) await emailer.flush();
     if (mounted) setState(() {});
     // An update is the least important thing this app does, so it runs last and
     // its own gate decides whether anything actually happens.
@@ -369,9 +388,21 @@ class _PosAppState extends State<PosApp> {
         nextOrderNo: () => widget.settings.nextOrderNumber(widget.deviceId),
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
+      // The provisioning account is whoever is standing at a till that has just
+      // been installed, so it is the one that gets walked through what is left to
+      // do. A real cashier meets the first-sale help instead.
+      _firstSignInHelp = cashier.id == BootstrapCashier.id &&
+          widget.wizards.shouldShow(WizardId.firstSignIn, cashier.id);
     });
     // Support asks who is on the till before anything else.
     widget.sync.cashierId = cashier.id;
+    // Ask for the menu now rather than when the age gate expires. A cashier
+    // opening the till at 08:00 sells this morning's prices, not last night's.
+    // Never awaited: read-only, off the selling path, and a till with no line
+    // just carries on with what it has.
+    unawaited(widget.sync.refresh(force: true).then((_) {
+      if (mounted) setState(() {});
+    }));
     _publishActivity();
     final session = _session;
     if (session == null) return;
@@ -699,6 +730,52 @@ class _PosAppState extends State<PosApp> {
     setState(() => _firstSaleHelp = false);
   }
 
+  void _closeFirstSignInHelp(WizardOutcome outcome, String cashierId) {
+    if (outcome == WizardOutcome.dismissedForever) {
+      widget.wizards.dismiss(WizardId.firstSignIn, cashierId);
+    }
+    setState(() => _firstSignInHelp = false);
+  }
+
+  /// What this till still has to be told, read off the device every time rather
+  /// than cached: a manager who adds a printer and comes back must see it ticked.
+  SetupChecklist _setupChecklist() => SetupChecklist.of(
+        serverConfigured: widget.endpoints.isConfigured,
+        menuDownloaded: widget.catalogue.refreshedAt != null,
+        printerConfigured: widget.printers.printers.isNotEmpty,
+        // The provisioning account does not count as a roster: it is the account
+        // that exists so a real one can be created.
+        staffEnrolled: !BootstrapCashier.stillNeeded(widget.users.active()),
+      );
+
+  /// The walkthrough the provisioning account gets. The last panel is built from
+  /// the checklist, so it names what is actually missing on THIS till rather than
+  /// a generic list that is wrong the moment half of it is done.
+  List<WizardStep> _firstSignInSteps(BuildContext context, SetupChecklist list) => [
+        WizardStep(
+          title: tr(context, 'This till is ready to sell'),
+          body: tr(context,
+              'Everything is stored on the device. You can ring a sale right '
+              'now, with or without a connection.'),
+        ),
+        WizardStep(
+          title: tr(context, 'Finish the setup from Settings'),
+          body: tr(context,
+              'Open the menu on the left, then Settings. The checklist at the '
+              'top says what is still missing.'),
+        ),
+        WizardStep(
+          title: tr(context,
+              list.isComplete ? 'Nothing left to set up' : 'Still to do'),
+          body: list.isComplete
+              ? tr(context,
+                  'The server, the menu, a printer and your staff are all set.')
+              : list.outstanding
+                  .map((s) => '- ${tr(context, s.title)}')
+                  .join('\n'),
+        ),
+      ];
+
   @override
   Widget build(BuildContext context) {
     final session = _session;
@@ -930,7 +1007,18 @@ class _PosAppState extends State<PosApp> {
               },
             ),
           ),
-          if (_firstSaleHelp)
+          // One coach at a time, and setting the till up comes before the first
+          // sale: two scrims over each other is a cashier with no way out.
+          if (_firstSignInHelp)
+            // Builder, so the panels are written in the language the app is in.
+            Builder(
+              builder: (context) => WizardOverlay(
+                steps: _firstSignInSteps(context, _setupChecklist()),
+                onClosed: (outcome) =>
+                    _closeFirstSignInHelp(outcome, session.cashierId),
+              ),
+            )
+          else if (_firstSaleHelp)
             WizardOverlay(
               steps: _firstSaleSteps,
               onClosed: (outcome) =>
@@ -1290,6 +1378,10 @@ class _PosAppState extends State<PosApp> {
         users: widget.users,
         auth: widget.auth,
         onChanged: () => setState(() {}),
+        // Cashier plus whatever roles the shop invented, so a new starter can be
+        // put straight onto one instead of being a cashier with a manager stood
+        // behind them.
+        roles: widget.settings.assignableRoles,
         // Only a signed-in manager may mint or edit manager accounts. A cashier who
         // reaches here via the manageStaff permission can manage cashiers only, so
         // the manager role stays out of reach and self-promotion is impossible.
@@ -1652,6 +1744,34 @@ class _PosAppState extends State<PosApp> {
           if (ok && context.mounted) _openSettings(context);
         },
       ),
+      // Only offered on a build that has a sender: a setting whose switch does
+      // nothing is worse than no setting.
+      if (widget.emailer != null)
+        SettingsEntry(
+          title: 'Email the Z report',
+          subtitle: 'Send the end-of-day figures to the owner',
+          icon: Icons.mail_outline,
+          keyValue: 'set-email',
+          group: 'Server',
+          // A mailbox password and where the day's takings are sent: the same
+          // gate as the rest of the sensitive configuration.
+          onTap: () => pushGated(
+              Permission.openSettings,
+              EmailSettingsScreen(
+                  settings: widget.settings,
+                  emailer: widget.emailer,
+                  onChanged: refresh)),
+        ),
+      SettingsEntry(
+        title: 'Refresh menu',
+        subtitle: _menuAgeLabel(context),
+        icon: Icons.sync,
+        keyValue: 'set-refresh-menu',
+        group: 'Server',
+        // Ungated on purpose: pulling prices is a read, it books nothing, and the
+        // person who notices a wrong price is whoever is at the counter.
+        onTap: () => unawaited(_refreshMenuNow(context)),
+      ),
       SettingsEntry(
         title: 'Shop network',
         subtitle: 'Share open tabs, tickets and the floor plan',
@@ -1683,13 +1803,118 @@ class _PosAppState extends State<PosApp> {
         onTap: () async {
           final ok = await _authorizeManager(context);
           if (ok && context.mounted) {
-            push(RolesPermissionsScreen(settings: widget.settings, onChanged: refresh));
+            push(RolesPermissionsScreen(
+              settings: widget.settings,
+              onChanged: refresh,
+              staffOnRole: (role) =>
+                  widget.users.active().where((c) => c.role == role).length,
+              onRoleRenamed: _moveStaffToRole,
+              // A deleted role leaves its staff with no permissions at all, so
+              // they land back on the role every account falls back to.
+              onRoleDeleted: (role) => _moveStaffToRole(role, 'cashier'),
+            ));
           }
         },
       ),
     ];
-    push(SettingsHubScreen(entries: entries));
+    push(SettingsHubScreen(entries: entries, header: _setupHeader(context)));
   }
+
+  /// The setup checklist, or nothing once the till is set up.
+  ///
+  /// Completing it is what puts it away for good: the card is recorded as
+  /// dismissed the moment every item is ticked, so removing a printer months later
+  /// does not bring an onboarding card back over a working shop.
+  Widget? _setupHeader(BuildContext context) {
+    final who = _session?.cashierId;
+    if (who == null) return null;
+    final list = _setupChecklist();
+    if (list.isComplete) {
+      widget.wizards.dismiss(WizardId.setupChecklist, who);
+      return null;
+    }
+    if (!widget.wizards.shouldShow(WizardId.setupChecklist, who)) return null;
+    return SetupChecklistCard(
+      checklist: list,
+      onDismiss: () {
+        widget.wizards.dismiss(WizardId.setupChecklist, who);
+        // Back to the sell screen: the hub was built with the card in it, and
+        // popping is how the change is seen rather than a stale list.
+        Navigator.of(context).pop();
+      },
+    );
+  }
+
+  /// Move every account on [from] onto [to], keeping their PIN and their active
+  /// flag. Called when a role is renamed or deleted, because the roster stores the
+  /// role by name and an account left on a name that no longer exists reads as a
+  /// role with no permissions.
+  void _moveStaffToRole(String from, String to) {
+    for (final c in widget.users.all().where((c) => c.role == from)) {
+      widget.users.upsert(Cashier(
+        id: c.id,
+        name: c.name,
+        role: to,
+        pinSalt: c.pinSalt,
+        pinHash: c.pinHash,
+        active: c.active,
+      ));
+    }
+    widget.audit.record(_session?.cashierId ?? 'system', 'role.reassigned',
+        detail: '$from -> $to');
+  }
+
+  /// How old the prices on this till are, in the shortest true form. Shown on the
+  /// Refresh menu row so the age is readable long before the sell screen's
+  /// day-old banner appears.
+  ///
+  /// Translated here rather than by the hub tile, because a count is baked into
+  /// the middle of it and an interpolated sentence never matches a lookup.
+  String _menuAgeLabel(BuildContext context) {
+    final at = widget.catalogue.refreshedAt;
+    if (at == null) return tr(context, 'Prices have never been downloaded');
+    final age = DateTime.now().toUtc().difference(at);
+    final prefix = tr(context, 'Prices last updated');
+    if (age.inMinutes < 1) return '$prefix ${tr(context, 'just now')}';
+    final (count, unit) = switch (age) {
+      _ when age.inHours < 1 => (age.inMinutes, 'minute(s) ago'),
+      _ when age.inDays < 1 => (age.inHours, 'hour(s) ago'),
+      _ => (age.inDays, 'day(s) ago'),
+    };
+    return '$prefix $count ${tr(context, unit)}';
+  }
+
+  /// Pull the menu on demand, and say what actually happened. The wait is on a
+  /// settings screen, never on a sale, and a till with no line keeps selling from
+  /// the prices it already has.
+  Future<void> _refreshMenuNow(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    // Translated before the await: the context may be gone by the time it lands.
+    final words = {
+      for (final o in RefreshOutcome.values) o: tr(context, _refreshWords[o]!),
+    };
+    messenger.showSnackBar(SnackBar(
+      key: const Key('menu-refreshing'),
+      content: Text(tr(context, 'Getting the latest prices...')),
+      duration: const Duration(seconds: 30),
+    ));
+    final outcome = await widget.sync.refresh(force: true);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        key: const Key('menu-refresh-result'),
+        content: Text(words[outcome]!),
+      ));
+    if (mounted) setState(() {});
+  }
+
+  static const Map<RefreshOutcome, String> _refreshWords = {
+    RefreshOutcome.updated: 'Menu and prices updated.',
+    RefreshOutcome.unchanged: 'Already up to date.',
+    RefreshOutcome.unreachable:
+        'No connection. The till keeps selling from the prices it has.',
+    RefreshOutcome.failed: 'The server answered, but the menu did not come down.',
+  };
 
   /// What this device is on the shop LAN, and who else it can see. The fabric is
   /// read through a callback rather than copied in, so the peer list and the last
@@ -1963,6 +2188,10 @@ class _PosAppState extends State<PosApp> {
         // Gated BEFORE the shift closes, since the close is irreversible: the
         // cashier's role may allow it outright, otherwise a manager approves.
         authorizeClose: () => _authorize(Permission.closeShift, context),
+        // A copy of the day for whoever is not in the building. Queued and left
+        // to the background lane, so the cash-up is over before the first packet
+        // is sent and a mail server that is down changes nothing about closing.
+        onZClosed: _emailZReport,
         // Closing the shift is when the day's orders are pushed to Odoo in one
         // batch. Returns a message for the cashier: how it went, or that the
         // orders are safe and will sync once the connection is back.
@@ -1986,6 +2215,36 @@ class _PosAppState extends State<PosApp> {
               'pending, try again from Support > Sync now.';
         },
       ),
+    ));
+  }
+
+  /// Queue the closed Z for whoever the shop asked to send it to.
+  ///
+  /// Never awaited and never able to throw: the shift is already closed by the
+  /// time this runs, and the queue owns delivery from here. A till with no mail
+  /// configured queues nothing at all.
+  void _emailZReport(Shift closed, List<(String, String)> rows) {
+    final emailer = widget.emailer;
+    if (emailer == null || !emailer.configured) return;
+    final shop = widget.settings.shopName ?? widget.config.shopName;
+    final when = (closed.closedAt ?? DateTime.now().toUtc()).toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    final stamp = '${when.year}-${two(when.month)}-${two(when.day)} '
+        '${two(when.hour)}:${two(when.minute)}';
+    final body = StringBuffer()
+      ..writeln('$shop  Z report')
+      ..writeln(stamp)
+      ..writeln('Till: ${widget.deviceId}')
+      ..writeln('Closed by: ${closed.cashierId}')
+      ..writeln();
+    for (final row in rows) {
+      body.writeln('${row.$1.padRight(24)}${row.$2}');
+    }
+    // Keyed on the shift, so a close replayed after a crash is one email.
+    unawaited(emailer.send(
+      uuid: 'z-${closed.uuid}',
+      subject: '$shop  Z report  $stamp',
+      body: body.toString(),
     ));
   }
 

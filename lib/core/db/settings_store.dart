@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import '../../domain/business_day.dart';
 import '../../domain/order.dart' show OrderType;
 import '../auth/permissions.dart';
+import '../email/smtp_config.dart';
 import '../printing/escpos.dart';
 import '../printing/printer_logo.dart';
 import 'database.dart';
@@ -45,6 +46,15 @@ class SettingsStore {
   static const _favourites = 'favourite_products';
   static const _gridColumns = 'grid_columns';
   static const _rolePermissions = 'role_permissions';
+  static const _customRoles = 'custom_roles';
+  static const _smtpHost = 'smtp_host';
+  static const _smtpPort = 'smtp_port';
+  static const _smtpSecurity = 'smtp_security';
+  static const _smtpUsername = 'smtp_username';
+  static const _smtpPassword = 'smtp_password';
+  static const _smtpFrom = 'smtp_from';
+  static const _zReportRecipients = 'z_report_recipients';
+  static const _emailZReport = 'email_z_report';
   static const _codePage = 'receipt_code_page';
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
@@ -681,6 +691,9 @@ class SettingsStore {
     return map[role]!.map(Permission.fromKey).whereType<Permission>().toSet();
   }
 
+  void _writeRolePermissionMap(Map<String, Set<String>> map) => setString(
+      _rolePermissions, jsonEncode(map.map((k, v) => MapEntry(k, v.toList()))));
+
   /// Grant or revoke one permission for [role]. A no-op for 'manager', who stays
   /// unrestricted. Seeds from the role's current effective set so toggling one
   /// permission never wipes the defaults a role started with.
@@ -695,10 +708,140 @@ class SettingsStore {
       current.remove(p.key);
     }
     map[role] = current;
-    setString(_rolePermissions,
-        jsonEncode(map.map((k, val) => MapEntry(k, val.toList()))));
+    _writeRolePermissionMap(map);
   }
 
   /// Whether [role] may do [p] without a manager PIN.
   bool roleCan(String role, Permission p) => permissionsFor(role).contains(p);
+
+  // ── roles the shop invented ──────────────────────────────────────
+  // A restaurant is not two job titles. A supervisor who may void and discount but
+  // not touch the server, a runner who may do neither: both are ordinary and both
+  // used to need a manager standing next to the till. The permission plumbing
+  // already takes any role string, so this is only the list of names that exist.
+
+  /// The two names the app itself relies on. Neither can be re-invented as a
+  /// custom role: 'manager' is unrestricted by definition and 'cashier' is the
+  /// fallback every account lands on.
+  static const Set<String> builtInRoles = {'manager', 'cashier'};
+
+  /// Roles added on this till, in the order they were created. A fresh list every
+  /// read: the empty case is a const literal, and callers edit what they get.
+  List<String> get customRoles => [...getStringList(_customRoles)];
+
+  /// Every role the roster may put someone on, manager aside. Manager is handed
+  /// out separately because only a manager may create one.
+  List<String> get assignableRoles => ['cashier', ...customRoles];
+
+  /// Trimmed and collapsed, because "Head  waiter" and "Head waiter" being two
+  /// roles is a difference nobody can see on screen and nobody meant.
+  static String normaliseRole(String name) =>
+      name.trim().replaceAll(RegExp(r'\s+'), ' ');
+
+  /// Adds a role. False when the name is empty, is one of [builtInRoles], or
+  /// already exists. Names are compared case-insensitively for the same reason
+  /// they are collapsed: two roles that read the same are one role.
+  bool addCustomRole(String name) {
+    final role = normaliseRole(name);
+    if (role.isEmpty || !_nameIsFree(role)) return false;
+    setStringList(_customRoles, [...customRoles, role]);
+    return true;
+  }
+
+  /// Renames a role and carries its permissions across, so a rename never
+  /// silently strips what the role was allowed to do.
+  ///
+  /// Staff already on the old name are NOT moved here: this store knows nothing
+  /// about the roster, so the caller reassigns them. Doing it in one place would
+  /// mean this class reaching into another store's rows.
+  bool renameCustomRole(String from, String to) {
+    final target = normaliseRole(to);
+    final roles = customRoles;
+    final at = roles.indexOf(from);
+    if (at < 0 || target.isEmpty) return false;
+    // Same name in different letters is a rename worth allowing; any other clash
+    // is not.
+    if (target.toLowerCase() != from.toLowerCase() && !_nameIsFree(target)) {
+      return false;
+    }
+    roles[at] = target;
+    setStringList(_customRoles, roles);
+    final map = _rolePermissionMap;
+    final held = map.remove(from);
+    if (held != null) map[target] = held;
+    _writeRolePermissionMap(map);
+    return true;
+  }
+
+  /// Removes a role and the permissions saved against it. Staff left on the name
+  /// are the caller's to move, as with a rename.
+  void deleteCustomRole(String name) {
+    final roles = customRoles..remove(name);
+    setStringList(_customRoles, roles);
+    final map = _rolePermissionMap;
+    if (map.remove(name) != null) _writeRolePermissionMap(map);
+  }
+
+  bool _nameIsFree(String role) {
+    final lower = role.toLowerCase();
+    if (builtInRoles.contains(lower)) return false;
+    return !customRoles.any((r) => r.toLowerCase() == lower);
+  }
+
+  // ── outgoing mail ────────────────────────────────────────────────
+  // The shop's own mailbox, for sending the Z report to an owner who is not in
+  // the building. The password lives here like every other setting, in a
+  // SQLCipher database encrypted at rest, and is never written to a log or a
+  // receipt.
+
+  String? get smtpHost => getString(_smtpHost);
+  set smtpHost(String? v) => setString(_smtpHost, v?.trim());
+
+  int get smtpPort =>
+      int.tryParse(getString(_smtpPort) ?? '') ??
+      SmtpConfig.defaultPortFor(smtpSecurity);
+  set smtpPort(int v) => setString(_smtpPort, v <= 0 ? null : '$v');
+
+  SmtpSecurity get smtpSecurity => SmtpSecurity.fromKey(getString(_smtpSecurity));
+  set smtpSecurity(SmtpSecurity v) => setString(_smtpSecurity, v.key);
+
+  String? get smtpUsername => getString(_smtpUsername);
+  set smtpUsername(String? v) => setString(_smtpUsername, v?.trim());
+
+  String? get smtpPassword => getString(_smtpPassword);
+  set smtpPassword(String? v) => setString(_smtpPassword, v);
+
+  String? get smtpFrom => getString(_smtpFrom);
+  set smtpFrom(String? v) => setString(_smtpFrom, v?.trim());
+
+  /// Who the Z report goes to. Empty is the default and means nothing is sent.
+  List<String> get zReportRecipients => getStringList(_zReportRecipients);
+  set zReportRecipients(List<String> v) => setStringList(
+      _zReportRecipients,
+      [
+        for (final r in v)
+          if (r.trim().isNotEmpty) r.trim(),
+      ]);
+
+  /// The master switch. Off by default: a shop that has not asked for mail at
+  /// shift close does not get any.
+  bool get emailZReport => getBool(_emailZReport, fallback: false);
+  set emailZReport(bool v) => setBool(_emailZReport, v);
+
+  /// The mail settings as one value, or null when the switch is off or there is
+  /// not enough here to try. Read fresh on every send, so a corrected password
+  /// takes effect on the next attempt rather than the next restart.
+  SmtpConfig? get smtp {
+    if (!emailZReport) return null;
+    final config = SmtpConfig(
+      host: smtpHost ?? '',
+      port: smtpPort,
+      security: smtpSecurity,
+      from: smtpFrom ?? '',
+      recipients: zReportRecipients,
+      username: smtpUsername,
+      password: smtpPassword,
+    );
+    return config.isComplete ? config : null;
+  }
 }

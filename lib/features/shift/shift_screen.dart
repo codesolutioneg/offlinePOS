@@ -17,6 +17,7 @@ class ShiftScreen extends StatefulWidget {
     this.cashMethodIds = const {},
     this.onCloseSync,
     this.onPrintReport,
+    this.onZClosed,
     this.openWork,
     this.authorizeOpenWork,
     this.expenseCategories = const ['Transport', 'Food', 'Supplies', 'Maintenance', 'Other'],
@@ -42,6 +43,12 @@ class ShiftScreen extends StatefulWidget {
   /// Prints a shift report (X or Z) to the receipt printer. Null hides the print
   /// action. Rows are (label, value) pairs.
   final Future<void> Function(String title, List<(String, String)> rows)? onPrintReport;
+
+  /// The shift that has just closed, with the same rows the Z ticket prints, for
+  /// anything that wants a copy of the day (the emailed report). Fire and forget:
+  /// it runs after the close, it is never awaited, and a throw from it is caught
+  /// here so it cannot reach the cashier.
+  final void Function(Shift closed, List<(String, String)> rows)? onZClosed;
 
   /// What is still unfinished on the till, read the moment a Z is attempted. Null
   /// means nothing is checked and the close goes straight through, which is how this
@@ -312,6 +319,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
             if (widget.authorizeClose != null && !await widget.authorizeClose!()) return;
             if (!mounted) return;
             final closed = widget.store.closeShift(countedCash: counted);
+            _handOverZ(closed);
             if (mounted) _showZ(closed);
             _refresh();
             // Push the day's orders to Odoo now, as one batch. The message tells the
@@ -330,6 +338,22 @@ class _ShiftScreenState extends State<ShiftScreen> {
         ),
       ),
     ]);
+  }
+
+  /// Hand the closed Z to whoever wants a copy of it (the mail queue).
+  ///
+  /// Wrapped, and never awaited. The shift is already closed by the time this
+  /// runs, and nothing about sending a report anywhere may be able to throw in
+  /// front of a cashier counting a drawer.
+  void _handOverZ(Shift closed) {
+    final onClosed = widget.onZClosed;
+    if (onClosed == null) return;
+    try {
+      final sum = widget.store.summary(closed, cashMethodIds: widget.cashMethodIds);
+      onClosed(closed, _rows(sum, withVariance: true));
+    } catch (_) {
+      // Deliberately swallowed: a cash-up does not fail because a report did.
+    }
   }
 
   /// Whether the Z may go ahead over whatever is still open on the till.

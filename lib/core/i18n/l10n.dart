@@ -860,4 +860,74 @@ const Map<String, String> _ar = {
   'Add driver': 'إضافة سائق',
   'Edit driver': 'تعديل السائق',
   'No phone': 'بدون هاتف',
+  // Phase 2 section E remainder: menu refresh, setup checklist, custom roles,
+  // and the emailed Z report.
+  'Refresh menu': 'تحديث قائمة الأصناف',
+  'Prices last updated': 'آخر تحديث للأسعار قبل',
+  'Getting the latest prices...': 'جارٍ جلب أحدث الأسعار...',
+  'Menu and prices updated.': 'تم تحديث الأصناف والأسعار.',
+  'Already up to date.': 'محدّثة بالفعل.',
+  'No connection. The till keeps selling from the prices it has.':
+      'لا يوجد اتصال. يواصل الجهاز البيع بالأسعار الموجودة عليه.',
+  'The server answered, but the menu did not come down.':
+      'رد الخادم، لكن قائمة الأصناف لم تصل.',
+  'Prices have never been downloaded': 'لم يتم تنزيل الأسعار من قبل',
+  'just now': 'لحظات',
+  'minute(s) ago': 'دقيقة',
+  'hour(s) ago': 'ساعة',
+  'day(s) ago': 'يوم',
+  'Finish setting up this till': 'أكمل إعداد هذا الجهاز',
+  'The till already sells. These are what it still needs.':
+      'الجهاز يبيع بالفعل. هذه ما ينقصه بعد.',
+  'Hide': 'إخفاء',
+  'Point the till at your server': 'وجّه الجهاز إلى الخادم',
+  'Where the day is sent when a shift closes.':
+      'المكان الذي تُرسَل إليه مبيعات اليوم عند إغلاق الوردية.',
+  'Download the menu': 'تنزيل قائمة الأصناف',
+  'Products, prices and payment methods come from the server.':
+      'الأصناف والأسعار وطرق الدفع تأتي من الخادم.',
+  'Receipts and kitchen tickets need somewhere to go.':
+      'الفواتير وتذاكر المطبخ تحتاج جهة تُطبع عليها.',
+  'Add your staff': 'أضف الموظفين',
+  'Everyone who rings a sale needs their own PIN.':
+      'كل من يسجّل بيعًا يحتاج رمزًا خاصًا به.',
+  'This till is ready to sell': 'هذا الجهاز جاهز للبيع',
+  'Everything is stored on the device. You can ring a sale right now, with or without a connection.':
+      'كل شيء محفوظ على الجهاز. يمكنك تسجيل بيع الآن، باتصال أو بدونه.',
+  'Finish the setup from Settings': 'أكمل الإعداد من الإعدادات',
+  'Open the menu on the left, then Settings. The checklist at the top says what is still missing.':
+      'افتح القائمة الجانبية ثم الإعدادات. القائمة في الأعلى تبيّن ما ينقص.',
+  'Nothing left to set up': 'لم يتبقَّ شيء للإعداد',
+  'Still to do': 'ما زال مطلوبًا',
+  'The server, the menu, a printer and your staff are all set.':
+      'الخادم والأصناف والطابعة والموظفون كلها جاهزة.',
+  'Add role': 'إضافة دور',
+  'Rename': 'إعادة تسمية',
+  'Rename role': 'إعادة تسمية الدور',
+  'Delete role': 'حذف الدور',
+  'Role name': 'اسم الدور',
+  'That role already exists.': 'هذا الدور موجود بالفعل.',
+  'Nobody is on this role.': 'لا يوجد أحد على هذا الدور.',
+  'staff on this role go back to Cashier.':
+      'من الموظفين على هذا الدور سيعودون إلى دور الكاشير.',
+  'Email the Z report': 'إرسال تقرير Z بالبريد',
+  'Send the end-of-day figures to the owner': 'إرسال أرقام نهاية اليوم إلى المالك',
+  'Email the Z report at shift close': 'إرسال تقرير Z بالبريد عند إغلاق الوردية',
+  'Sent when a shift is closed. If it cannot be sent the till keeps trying in the background, and a cash-up is never held up by it.':
+      'يُرسَل عند إغلاق الوردية. إذا تعذّر الإرسال يواصل الجهاز المحاولة في الخلفية، ولا يتأخر جرد الصندوق بسببه.',
+  'Send to': 'الإرسال إلى',
+  'From address': 'عنوان المرسِل',
+  'Mail server': 'خادم البريد',
+  'Security': 'التأمين',
+  'SSL / TLS': 'SSL / TLS',
+  'STARTTLS': 'STARTTLS',
+  'Username': 'اسم المستخدم',
+  'Send test': 'إرسال رسالة تجريبية',
+  'Sending...': 'جارٍ الإرسال...',
+  'Sent. Check the inbox.': 'تم الإرسال. راجع صندوق الوارد.',
+  'Not sent': 'لم يُرسَل',
+  'report(s) still waiting to be sent': 'تقرير في انتظار الإرسال',
+  'report(s) were never sent': 'تقرير لم يُرسَل نهائيًا',
+  'Fix the settings above, then send a test.':
+      'صحّح الإعدادات أعلاه ثم أرسل رسالة تجريبية.',
 };
