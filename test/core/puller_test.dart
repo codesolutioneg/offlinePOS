@@ -65,4 +65,67 @@ void main() {
     final pull = await puller(products: []).pull();
     expect(pull.isUsable, isFalse);
   });
+
+  test('the auto-add flags come down when the add-on has them', () async {
+    final pull = await OdooPuller(
+      call: (model, method, args, kwargs) async => switch (model) {
+        'product.product' => [
+            {'id': 10, 'display_name': 'Margherita', 'lst_price': 250,
+             'pos_categ_ids': [1], 'active': true, 'to_weight': false,
+             'product_tmpl_id': [90, 'Margherita']},
+          ],
+        'product.modifier.category' => [
+            {'id': 100, 'name': 'Sauce', 'sequence': 1, 'min_selection': 1,
+             'max_selection': 1, 'selection_type': 'required',
+             'product_template_ids': [90], 'auto_add': true},
+          ],
+        'product.modifier' => [
+            {'id': 1000, 'name': 'Tomato', 'category_id': [100, 'Sauce'],
+             'price': 0, 'price_type': 'fixed', 'sequence': 1,
+             'product_id': false, 'is_default': true},
+          ],
+        _ => [],
+      },
+    ).pull();
+    final group = pull.groups.single;
+    expect(group.autoAdd, isTrue);
+    expect(group.modifiers.single.isDefault, isTrue);
+    expect(group.resolvesItself, isTrue);
+  });
+
+  test('an add-on without the flags still gives up its modifiers', () async {
+    // The old server refuses the read that asks for a field it does not have. The
+    // modifiers must survive that, because a menu is worth more than a default.
+    var refusedOnce = false;
+    final pull = await OdooPuller(
+      call: (model, method, args, kwargs) async {
+        final fields = (args[1] as List).cast<String>();
+        if (fields.contains('auto_add') || fields.contains('is_default')) {
+          refusedOnce = true;
+          throw Exception('Invalid field on model');
+        }
+        return switch (model) {
+          'product.product' => [
+              {'id': 10, 'display_name': 'Margherita', 'lst_price': 250,
+               'pos_categ_ids': [1], 'active': true, 'to_weight': false,
+               'product_tmpl_id': [90, 'Margherita']},
+            ],
+          'product.modifier.category' => [
+              {'id': 100, 'name': 'Toppings', 'sequence': 1, 'min_selection': 0,
+               'max_selection': 3, 'selection_type': 'optional',
+               'product_template_ids': [90]},
+            ],
+          'product.modifier' => [
+              {'id': 1000, 'name': 'Cheese', 'category_id': [100, 'Toppings'],
+               'price': 7, 'price_type': 'fixed', 'sequence': 1,
+               'product_id': false},
+            ],
+          _ => [],
+        };
+      },
+    ).pull();
+    expect(refusedOnce, isTrue);
+    expect(pull.groups.single.modifiers.single.name, 'Cheese');
+    expect(pull.groups.single.autoAdd, isFalse);
+  });
 }

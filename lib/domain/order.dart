@@ -29,6 +29,18 @@ extension KitchenStatusLabel on KitchenStatus {
       };
 }
 
+/// The percentage that takes [amount] of money off [base].
+///
+/// A cashier who is told "give them 50 off" thinks in money, but a discount lives on
+/// an order as a percentage: that is what the receipt prints, what the reports total,
+/// and what [Order.toServerPayload] folds into the line prices. Converting here, at
+/// the moment it is applied, is what lets an amount be typed without a second concept
+/// travelling through all of that. A base of zero (an empty bill) gives nothing away.
+double discountPercentForAmount(double amount, double base) {
+  if (amount <= 0 || base <= 0) return 0;
+  return (amount / base * 100).clamp(0, 100).toDouble();
+}
+
 /// A modifier applied to a line, priced at the moment of sale.
 ///
 /// The price is captured here rather than looked up later: a receipt must never
@@ -224,6 +236,7 @@ class Order {
     this.kitchenStatus = KitchenStatus.pending,
     this.refundOfUuid,
     int? businessDayCutoverHour,
+    this.orderNo,
     List<OrderLine>? lines,
     List<OrderPayment>? payments,
   })  : uuid = uuid ?? Uuid.v4(),
@@ -289,6 +302,21 @@ class Order {
   String? refundOfUuid;
 
   bool get isRefund => refundOfUuid != null;
+
+  /// The number a human calls this sale: what the cashier shouts, the customer
+  /// quotes on the phone and the kitchen writes on the pass. Stamped once, when the
+  /// order is parked or paid, and never rewritten.
+  ///
+  /// Local to the till. It is stripped from the server payload, because the server
+  /// numbers its own documents and a till counter arriving there would be a second
+  /// sequence claiming to be the first.
+  String? orderNo;
+
+  /// What to print or show as this order's reference: its human number once it has
+  /// one, and the tail of the uuid before that (a draft being rung has no number
+  /// yet, and a slip still has to be identifiable).
+  String get displayNo =>
+      orderNo ?? uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
 
   /// Cash the customer handed over, when it exceeds what was due. Kept only so the
   /// receipt can print the change; it is NOT the amount booked. The payment stores
@@ -394,6 +422,7 @@ class Order {
         'tip': tip,
         'kitchen_status': kitchenStatus.name,
         'refund_of_uuid': refundOfUuid,
+        'order_no': orderNo,
         'cash_received': cashReceived,
         'amended': amended,
         'lines': lines.map((l) => l.toMap()).toList(),
@@ -425,6 +454,9 @@ class Order {
     // The trading day is already on the wire as business_date. The hour that
     // produced it is a shop rule the server neither reads nor needs.
     m.remove('business_day_cutover_hour');
+    // The human number is the till's counter, for the people in the shop. The server
+    // numbers its own documents, and the uuid is what identifies this sale there.
+    m.remove('order_no');
     // A locally-created customer has a synthetic negative id, not an Odoo partner.
     // Never send it as partner_id (it would fail the foreign key); the name and
     // phone still travel so the server can match or create the partner itself.
@@ -473,6 +505,7 @@ class Order {
         // moving itself to another day.
         businessDayCutoverHour: (m['business_day_cutover_hour'] as num?)?.toInt() ??
             BusinessDay.defaultCutoverHour,
+        orderNo: m['order_no'] as String?,
         lines: ((m['lines'] as List?) ?? const [])
             .map((e) => OrderLine.fromMap(e as Map<String, dynamic>))
             .toList(),

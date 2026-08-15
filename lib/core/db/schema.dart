@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 15;
+  static const int version = 16;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -403,6 +403,17 @@ class Schema {
         origin      TEXT NOT NULL
       )
       ''',
+    ],
+
+    // v15 -> v16: modifier groups that answer themselves.
+    //
+    // A dish with one standard sauce made the cashier confirm a sheet on every tap.
+    // These two flags say which group can settle itself and which option it settles
+    // on. Both default to off, so a till that upgrades behaves exactly as it did
+    // until the catalogue brings the flags down.
+    [
+      'ALTER TABLE modifier_groups ADD COLUMN auto_add INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE modifiers ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0',
     ],
   ];
 }

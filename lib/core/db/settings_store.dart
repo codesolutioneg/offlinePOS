@@ -28,6 +28,9 @@ class SettingsStore {
   static const _discountReasons = 'discount_reasons';
   static const _discountPercents = 'discount_percents';
   static const _maxDiscountPercent = 'max_discount_percent';
+  static const _allowAmountDiscount = 'allow_amount_discount';
+  static const _orderNoDay = 'order_no_day';
+  static const _orderNoSeq = 'order_no_seq';
   static const _categoryColors = 'category_colors';
   static const _categoryStations = 'category_stations';
   static const _productStations = 'product_stations';
@@ -134,6 +137,14 @@ class SettingsStore {
       double.tryParse(getString(_maxDiscountPercent) ?? '') ?? 0;
   set maxDiscountPercent(double v) =>
       setString(_maxDiscountPercent, v <= 0 ? null : v.toStringAsFixed(0));
+
+  /// Whether the discount dialogs also take a money amount ("50 off"). Off by
+  /// default, because a shop that discounts in percent only should not be shown a
+  /// second field to mis-tap. The amount is converted to the equivalent percentage
+  /// when it is applied, so orders, receipts and reports stay percent-based and the
+  /// configured cap still bites.
+  bool get allowAmountDiscount => getBool(_allowAmountDiscount);
+  set allowAmountDiscount(bool v) => setBool(_allowAmountDiscount, v);
 
   /// Category id to colour (ARGB int), so the product grid can be colour-coded the
   /// way Dishflow does. Empty until a manager sets colours.
@@ -410,6 +421,45 @@ class SettingsStore {
       set.remove(productId);
     }
     favourites = set;
+  }
+
+  // ── the number a human calls an order ────────────────────────────
+
+  /// The next order number for this till, as `DDMM-SEQ-TAG`.
+  ///
+  /// The sequence is per trading day and per device: it restarts at 1 at the
+  /// business-day cutover (so a service that runs past midnight keeps counting, and
+  /// tomorrow starts at 1 again), and it carries a tag derived from the device id so
+  /// two tills serving the same room never hand out the same number. Local, and
+  /// deliberately not a server document number: the till has to be able to name an
+  /// order with the line down.
+  ///
+  /// [now] is injectable for the rollover test; production reads the clock.
+  String nextOrderNumber(String deviceId, {DateTime? now}) {
+    final day = BusinessDay.of(now ?? DateTime.now());
+    // A different trading day than the last number handed out means the counter
+    // starts again, which is what makes the numbers short enough to say out loud.
+    final seq = getString(_orderNoDay) == day.key
+        ? (int.tryParse(getString(_orderNoSeq) ?? '') ?? 0) + 1
+        : 1;
+    setString(_orderNoDay, day.key);
+    setString(_orderNoSeq, '$seq');
+    String two(int n) => n.toString().padLeft(2, '0');
+    final d = day.date;
+    return '${two(d.day)}${two(d.month)}-${seq.toString().padLeft(3, '0')}-'
+        '${tillTagFor(deviceId)}';
+  }
+
+  /// A short, stable tag for a device: the last three alphanumeric characters of its
+  /// id, uppercased. The id is a client-generated uuid, so its tail is as good as a
+  /// hash, and three characters keep the number sayable while making a clash between
+  /// the two or three tills in one shop vanishingly unlikely.
+  static String tillTagFor(String deviceId) {
+    final letters =
+        deviceId.toUpperCase().replaceAll(RegExp('[^A-Z0-9]'), '');
+    if (letters.isEmpty) return 'XXX';
+    final tail = letters.length <= 3 ? letters : letters.substring(letters.length - 3);
+    return tail.padLeft(3, 'X');
   }
 
   /// Product-grid density: tiles per row. 0 = auto (fit by width).

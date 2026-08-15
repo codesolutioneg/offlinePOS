@@ -763,4 +763,16 @@ const Map<String, String> _ar = {
   'Cashier flash': 'تقرير سريع لكل كاشير',
   'No sales in this shift yet': 'لا توجد مبيعات في هذه الوردية بعد',
   'Cashier flash sent to printer': 'أُرسل تقرير الكاشير إلى الطابعة',
+  // selling flow: money-off discounts, customer on any order type, order number,
+  // and the truth about a kitchen ticket
+  'Allow a discount in money': 'السماح بالخصم بمبلغ',
+  'The cashier can type an amount off; it is applied as the matching percentage':
+      'يكتب الكاشير مبلغ الخصم ويُطبَّق بالنسبة المكافئة له',
+  'Amount off': 'مبلغ الخصم',
+  'Add new': 'إضافة جديد',
+  'Ticket held, printer offline. It will print automatically.':
+      'التذكرة محتجزة، الطابعة غير متصلة. ستُطبع تلقائيًا.',
+  'Ticket did not print. Tell the kitchen and try again.':
+      'لم تُطبع التذكرة. أبلغ المطبخ ثم أعد المحاولة.',
+  'to print': 'في انتظار الطباعة',
 };

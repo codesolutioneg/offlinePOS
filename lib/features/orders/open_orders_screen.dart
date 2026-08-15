@@ -99,13 +99,8 @@ class _OpenOrderCard extends StatelessWidget {
   final VoidCallback? onCancel;
   final VoidCallback? onPrintBill;
 
-  // A tab with no table still needs a name a cashier can say out loud, so it
-  // falls back to a short uuid tail rather than the full identifier.
-  String get _shortUuid =>
-      order.uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
-
   String _label(BuildContext context) =>
-      order.tableLabel ?? '${tr(context, 'Tab')} $_shortUuid';
+      order.tableLabel ?? '${tr(context, 'Tab')} ${order.displayNo}';
 
   String get _time {
     final local = order.createdAt.toLocal();

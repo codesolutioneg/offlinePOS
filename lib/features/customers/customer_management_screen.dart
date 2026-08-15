@@ -46,9 +46,9 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   }
 
   Future<void> _openAddDialog() async {
-    final result = await showDialog<_CustomerFormResult>(
+    final result = await showDialog<CustomerFormResult>(
       context: context,
-      builder: (_) => const _CustomerFormDialog(),
+      builder: (_) => const CustomerFormDialog(),
     );
     if (result == null) return;
     widget.store.add(name: result.name, phone: result.phone, address: result.address);
@@ -60,10 +60,10 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   /// Correct an existing customer through the same form the add flow uses, so the
   /// two cannot drift apart in validation or fields.
   Future<void> _openEditDialog(Map<String, Object?> row) async {
-    final result = await showDialog<_CustomerFormResult>(
+    final result = await showDialog<CustomerFormResult>(
       context: context,
-      builder: (_) => _CustomerFormDialog(
-        initial: _CustomerFormResult(
+      builder: (_) => CustomerFormDialog(
+        initial: CustomerFormResult(
           name: row['name'] as String,
           phone: row['phone'] as String?,
           address: row['address'] as String?,
@@ -183,27 +183,31 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   }
 }
 
-class _CustomerFormResult {
-  const _CustomerFormResult({required this.name, this.phone, this.address});
+/// What the customer form gives back. Public because the sell screen opens the
+/// same form, so a customer added mid-order is captured exactly like one added on
+/// this screen.
+class CustomerFormResult {
+  const CustomerFormResult({required this.name, this.phone, this.address});
   final String name;
   final String? phone;
   final String? address;
 }
 
-/// The add and edit form. Name is the only required field: phone and address
+/// The add and edit form, also opened from the sell screen's customer picker so the
+/// two cannot drift apart. Name is the only required field: phone and address
 /// matter for a delivery order later, but a walk-in customer's name may be all
 /// the cashier has right now, so those two must not block saving.
-class _CustomerFormDialog extends StatefulWidget {
-  const _CustomerFormDialog({this.initial});
+class CustomerFormDialog extends StatefulWidget {
+  const CustomerFormDialog({super.key, this.initial});
 
   /// The customer being corrected, prefilled into the fields. Null when adding.
-  final _CustomerFormResult? initial;
+  final CustomerFormResult? initial;
 
   @override
-  State<_CustomerFormDialog> createState() => _CustomerFormDialogState();
+  State<CustomerFormDialog> createState() => CustomerFormDialogState();
 }
 
-class _CustomerFormDialogState extends State<_CustomerFormDialog> {
+class CustomerFormDialogState extends State<CustomerFormDialog> {
   late final TextEditingController _name =
       TextEditingController(text: widget.initial?.name ?? '');
   late final TextEditingController _phone =
@@ -228,7 +232,7 @@ class _CustomerFormDialogState extends State<_CustomerFormDialog> {
     }
     final phone = _phone.text.trim();
     final address = _address.text.trim();
-    Navigator.of(context).pop(_CustomerFormResult(
+    Navigator.of(context).pop(CustomerFormResult(
       name: name,
       phone: phone.isEmpty ? null : phone,
       address: address.isEmpty ? null : address,

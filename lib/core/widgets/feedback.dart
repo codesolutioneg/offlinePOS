@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
 
-/// The colour of a toast: green for something that succeeded, red for something
-/// that failed or was blocked, and a neutral default for everything else. The
-/// point is that a cashier reads the outcome from colour first, text second.
-enum ToastKind { success, error, info }
+/// The colour of a toast: green for something that succeeded, amber for something
+/// that half-succeeded and still needs watching, red for something that failed or
+/// was blocked, and a neutral default for everything else. The point is that a
+/// cashier reads the outcome from colour first, text second.
+enum ToastKind { success, warning, error, info }
 
 /// The one place every snackbar in the app goes through, so success and error
 /// always read the same way instead of every screen inventing its own colours.
@@ -22,6 +23,7 @@ void showToast(
 }) {
   final icon = switch (kind) {
     ToastKind.success => Icons.check_circle,
+    ToastKind.warning => Icons.warning_amber_rounded,
     ToastKind.error => Icons.error_outline,
     ToastKind.info => Icons.info,
   };
@@ -29,6 +31,7 @@ void showToast(
   // so the two states a cashier must never confuse are the two that are coloured.
   final Color? background = switch (kind) {
     ToastKind.success => AppColors.success,
+    ToastKind.warning => AppColors.warning,
     ToastKind.error => AppColors.error,
     ToastKind.info => null,
   };

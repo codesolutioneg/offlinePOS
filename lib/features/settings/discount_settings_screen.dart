@@ -21,6 +21,7 @@ class _DiscountSettingsScreenState extends State<DiscountSettingsScreen> {
   late List<String> _reasons = List.of(widget.settings.discountReasons);
   late final TextEditingController _newPercent = TextEditingController();
   late final TextEditingController _newReason = TextEditingController();
+  late bool _amountDiscount = widget.settings.allowAmountDiscount;
   late final TextEditingController _max =
       TextEditingController(text: widget.settings.maxDiscountPercent > 0
           ? widget.settings.maxDiscountPercent.toStringAsFixed(0)
@@ -139,6 +140,21 @@ class _DiscountSettingsScreenState extends State<DiscountSettingsScreen> {
                 onPressed: _saveMax,
                 child: Text(tr(context, 'Save'))),
           ]),
+          const Divider(height: 32),
+          SwitchListTile(
+            key: const Key('allow-amount-discount'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Allow a discount in money'),
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text(tr(context,
+                'The cashier can type an amount off; it is applied as the matching percentage')),
+            value: _amountDiscount,
+            onChanged: (v) {
+              setState(() => _amountDiscount = v);
+              widget.settings.allowAmountDiscount = v;
+              widget.onChanged();
+            },
+          ),
           const Divider(height: 32),
           Text(tr(context, 'Discount reasons'),
               style: const TextStyle(fontWeight: FontWeight.bold)),

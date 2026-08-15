@@ -48,14 +48,16 @@ class CatalogueStore {
       }
       for (final g in groups) {
         _db.raw.execute(
-            'INSERT INTO modifier_groups (id, name, sequence, min_selection, max_selection, required) '
-            'VALUES (?,?,?,?,?,?)',
-            [g.id, g.name, g.sequence, g.minSelection, g.maxSelection, g.required ? 1 : 0]);
+            'INSERT INTO modifier_groups (id, name, sequence, min_selection, max_selection, required, auto_add) '
+            'VALUES (?,?,?,?,?,?,?)',
+            [g.id, g.name, g.sequence, g.minSelection, g.maxSelection,
+             g.required ? 1 : 0, g.autoAdd ? 1 : 0]);
         for (final m in g.modifiers) {
           _db.raw.execute(
-              'INSERT INTO modifiers (id, group_id, name, price, price_type, sequence, product_id) '
-              'VALUES (?,?,?,?,?,?,?)',
-              [m.id, g.id, m.name, m.price, m.priceType.name, m.sequence, m.productId]);
+              'INSERT INTO modifiers (id, group_id, name, price, price_type, sequence, product_id, is_default) '
+              'VALUES (?,?,?,?,?,?,?,?)',
+              [m.id, g.id, m.name, m.price, m.priceType.name, m.sequence,
+               m.productId, m.isDefault ? 1 : 0]);
         }
       }
       productGroupIds.forEach((productId, groupIds) {
@@ -202,6 +204,7 @@ class CatalogueStore {
                 priceType: ModifierPriceType.values.byName(m['price_type'] as String),
                 sequence: m['sequence'] as int,
                 productId: m['product_id'] as int?,
+                isDefault: (m['is_default'] as int? ?? 0) == 1,
               ))
           .toList();
       return ModifierGroup(
@@ -211,6 +214,7 @@ class CatalogueStore {
         minSelection: g['min_selection'] as int,
         maxSelection: g['max_selection'] as int,
         required: (g['required'] as int) == 1,
+        autoAdd: (g['auto_add'] as int? ?? 0) == 1,
         modifiers: mods,
       );
     }).toList();

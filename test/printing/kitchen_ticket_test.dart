@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/printing/kitchen_ticket.dart';
 import 'package:offline_pos/domain/order.dart';
 
+import 'strip_escpos.dart';
+
 void main() {
   OrderLine line(int productId, {int? categoryId, String name = 'Item'}) => OrderLine(
         productId: productId,
@@ -89,6 +91,34 @@ void main() {
       );
       expect(routed['grill'], [a, c]);
       expect(routed['bar'], [b]);
+    });
+  });
+
+  group('the number on the paper', () {
+    Order numbered({String? orderNo}) => Order(
+          deviceId: 'till-1',
+          cashierId: 'sara',
+          orderNo: orderNo,
+          lines: [OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100)],
+        );
+
+    test('the kitchen ticket carries the number the counter will call', () {
+      final text =
+          strippedText(KitchenTicketBuilder().build(numbered(orderNo: '1508-007-A1B')));
+      expect(text, contains('#1508-007-A1B'));
+    });
+
+    test('a cancel slip names the same order the kitchen was given', () {
+      final order = numbered(orderNo: '1508-007-A1B');
+      final text = strippedText(
+          KitchenTicketBuilder().buildVoid(order, order.lines.first, 'wrong table'));
+      expect(text, contains('#1508-007-A1B'));
+    });
+
+    test('an unnumbered order still prints a reference', () {
+      final order = numbered();
+      final text = strippedText(KitchenTicketBuilder().build(order));
+      expect(text, contains('#${order.displayNo}'));
     });
   });
 }

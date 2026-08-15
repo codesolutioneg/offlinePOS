@@ -7,11 +7,13 @@ import 'package:flutter/services.dart';
 import '../../app/pos_session.dart';
 import '../../core/auth/permissions.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/printing/kitchen_ticket.dart' show KitchenFireResult;
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/numeric_keypad.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
+import '../customers/customer_management_screen.dart' show CustomerFormDialog, CustomerFormResult;
 import 'modifier_sheet.dart';
 
 /// The selling screen: catalogue on the right, the order on the left.
@@ -36,11 +38,13 @@ class SellScreen extends StatefulWidget {
     this.onLineVoided,
     this.online,
     this.pendingToSync,
+    this.spooledJobs,
     this.categoryColors = const {},
     this.quickComments = const ['No onions', 'Extra spicy', 'Well done', 'Allergy'],
     this.discountReasons = const [],
     this.discountPercents = const [5, 10, 15, 20],
     this.maxDiscountPercent = 0,
+    this.allowAmountDiscount = false,
     this.authorize,
     this.unavailableProducts = const {},
     this.onToggleAvailable,
@@ -48,6 +52,7 @@ class SellScreen extends StatefulWidget {
     this.onToggleFavourite,
     this.gridColumns = 0,
     this.extraCustomers,
+    this.onAddCustomer,
     this.tables,
     this.heldOrders,
     this.onPickTable,
@@ -83,12 +88,13 @@ class SellScreen extends StatefulWidget {
   final VoidCallback? onHold;
 
   /// Fires the kitchen ticket for the current order but leaves it on the counter,
-  /// so a table's food can be sent without parking the order.
-  final VoidCallback? onSendToKitchen;
+  /// so a table's food can be sent without parking the order. Answers with what
+  /// became of the ticket, so the cashier is told the truth about it.
+  final Future<KitchenFireResult> Function()? onSendToKitchen;
 
   /// Re-fires every line to the kitchen, even those already sent, for when a ticket
   /// was lost or the kitchen asks for it again. Surfaced on a long-press of Send.
-  final VoidCallback? onResendToKitchen;
+  final Future<KitchenFireResult> Function()? onResendToKitchen;
 
   /// Prints the check for the open order before it is paid, so a waiter can take the
   /// bill to the table. Paper only: the order is not changed and nothing is settled.
@@ -109,6 +115,11 @@ class SellScreen extends StatefulWidget {
   /// How many sales are held on the till waiting for the shift-close batch.
   final int Function()? pendingToSync;
 
+  /// How many print jobs (receipts and kitchen tickets) are held because a printer
+  /// would not take them. Shown beside the online badge, since a held ticket is
+  /// food that is not being cooked yet.
+  final int Function()? spooledJobs;
+
   /// Category id to colour (ARGB), so the product grid is colour-coded per category
   /// the way Dishflow does. Empty leaves tiles plain.
   final Map<int, int> categoryColors;
@@ -120,6 +131,11 @@ class SellScreen extends StatefulWidget {
   /// Configurable discount preset percentages and an optional cap (0 = none).
   final List<double> discountPercents;
   final double maxDiscountPercent;
+
+  /// Whether the discount dialogs offer a money amount beside the percentage. The
+  /// amount is converted to the equivalent percentage before it is applied, so the
+  /// order, the receipt and every report stay percent-based.
+  final bool allowAmountDiscount;
 
   /// Gate for privileged actions: called with the specific [Permission] the action
   /// needs and returns true if the cashier's role allows it or a manager approves.
@@ -144,6 +160,12 @@ class SellScreen extends StatefulWidget {
   /// Local (till-created) customers matching a query, merged into the picker so a
   /// customer added on the device is reusable.
   final List<Customer> Function(String query)? extraCustomers;
+
+  /// Save a customer captured mid-order and return them, so the picker can attach
+  /// someone the till has never seen without leaving the sale. Null hides the
+  /// "Add new" action.
+  final Customer Function({required String name, String? phone, String? address})?
+      onAddCustomer;
 
   /// The floor's table labels, offered as quick picks when moving items to another
   /// table. Null falls back to free text.
@@ -306,6 +328,17 @@ class _SellScreenState extends State<SellScreen> {
       _changed(() => s.addProduct(product));
       return;
     }
+    // Every group answers itself from its defaults: ring it straight through. A
+    // sheet whose only possible answer is the one already filled in costs the
+    // cashier a tap per item and buys nothing.
+    if (groups.every((g) => g.resolvesItself)) {
+      _changed(() => s.addProduct(product,
+          chosen: [
+            for (final g in groups)
+              for (final m in g.defaults) ChosenModifier(m),
+          ]));
+      return;
+    }
     final chosen = await showModalBottomSheet<List<ChosenModifier>>(
       context: context,
       isScrollControlled: true,
@@ -326,9 +359,14 @@ class _SellScreenState extends State<SellScreen> {
       );
 
   /// Search the existing customers (Odoo partners + till-local) and return the one
-  /// picked, so a delivery is attached to a known customer rather than re-typed and
-  /// duplicated. Null if cancelled.
-  Future<Customer?> _pickExistingCustomer() async {
+  /// picked, so a sale is attached to a known customer rather than re-typed and
+  /// duplicated.
+  ///
+  /// Returns the [Customer] chosen, the string 'clear' when the cashier says the
+  /// sale is a walk-in, or null when the picker was dismissed. Walk-in has to be
+  /// distinguishable from cancel: one means "this customer is nobody", the other
+  /// means "leave the customer alone".
+  Future<Object?> _pickExistingCustomer() async {
     final ctrl = TextEditingController();
     final result = await showDialog<Object?>(
       context: context,
@@ -375,6 +413,15 @@ class _SellScreenState extends State<SellScreen> {
               ]),
             ),
             actions: [
+              if (widget.onAddCustomer != null)
+                TextButton(
+                  key: const Key('customer-add-new'),
+                  onPressed: () async {
+                    final created = await _addCustomer();
+                    if (created != null && ctx.mounted) Navigator.pop(ctx, created);
+                  },
+                  child: Text(tr(ctx, 'Add new')),
+                ),
               TextButton(
                 key: const Key('customer-clear'),
                 onPressed: () => Navigator.pop(ctx, 'clear'),
@@ -386,7 +433,38 @@ class _SellScreenState extends State<SellScreen> {
         );
       },
     );
-    return result is Customer ? result : null;
+    return result;
+  }
+
+  /// Capture a customer the till has never seen, on the same form the customers
+  /// screen uses, and keep them: a regular typed into an order once should be
+  /// pickable on the next one. Null if the form was cancelled.
+  Future<Customer?> _addCustomer() async {
+    final add = widget.onAddCustomer;
+    if (add == null) return null;
+    final form = await showDialog<CustomerFormResult>(
+      context: context,
+      builder: (_) => const CustomerFormDialog(),
+    );
+    if (form == null) return null;
+    return add(name: form.name, phone: form.phone, address: form.address);
+  }
+
+  /// Attach a customer to the open order, whatever its type: a takeaway regular and
+  /// a dine-in table booking are as much a named customer as a delivery is. Walk-in
+  /// clears whoever was on it.
+  Future<void> _chooseCustomer() async {
+    final picked = await _pickExistingCustomer();
+    if (picked == null) return;
+    _changed(() => s.setCustomer(picked is Customer ? picked : null));
+  }
+
+  /// What the cashier typed, as a percentage. In amount mode the money is converted
+  /// against [base] (the bill's subtotal, or a line's gross), so only ever a
+  /// percentage leaves this screen.
+  double _typedPercent(String text, {required bool byAmount, required double base}) {
+    final typed = double.tryParse(text.trim()) ?? 0;
+    return byAmount ? discountPercentForAmount(typed, base) : typed;
   }
 
   Future<void> _openDiscount() async {
@@ -398,29 +476,63 @@ class _SellScreenState extends State<SellScreen> {
             ? s.current.discountPercent.toStringAsFixed(0)
             : '');
     final reasonCtrl = TextEditingController(text: s.current.discountReason ?? '');
+    // Percent unless the shop allows money off and the cashier asks for it. The
+    // amount becomes its equivalent percentage on apply, so nothing downstream has
+    // to learn a second kind of discount.
+    var byAmount = false;
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
         title: Text(tr(ctx, 'Order discount')),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (widget.allowAmountDiscount) ...[
+            Wrap(spacing: 8, children: [
+              ChoiceChip(
+                key: const Key('discount-mode-percent'),
+                label: const Text('%'),
+                selected: !byAmount,
+                onSelected: (_) => setSt(() {
+                  byAmount = false;
+                  ctrl.clear();
+                }),
+              ),
+              ChoiceChip(
+                key: const Key('discount-mode-amount'),
+                label: Text(tr(ctx, 'Amount')),
+                selected: byAmount,
+                onSelected: (_) => setSt(() {
+                  byAmount = true;
+                  ctrl.clear();
+                }),
+              ),
+            ]),
+            const SizedBox(height: 8),
+          ],
           TextField(
+            key: const Key('discount-value'),
             controller: ctrl,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-                labelText: tr(ctx, 'Discount'), suffixText: '%', border: const OutlineInputBorder()),
+                labelText: tr(ctx, byAmount ? 'Amount off' : 'Discount'),
+                suffixText: byAmount ? null : '%',
+                border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           // Quick-pick chips from the manager-configured presets, plus a 0 to clear.
-          Wrap(spacing: 8, children: [
-            ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
-            for (final q in widget.discountPercents)
-              ActionChip(
-                label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
-                onPressed: () =>
-                    ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
-              ),
-          ]),
+          // Percentages only: a preset is a percentage, and offering it while the
+          // field is money would read as an amount.
+          if (!byAmount)
+            Wrap(spacing: 8, children: [
+              ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
+              for (final q in widget.discountPercents)
+                ActionChip(
+                  label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
+                  onPressed: () =>
+                      ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
+                ),
+            ]),
           if (widget.maxDiscountPercent > 0)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -449,12 +561,13 @@ class _SellScreenState extends State<SellScreen> {
           FilledButton(
             key: const Key('apply-discount'),
             onPressed: () => Navigator.pop(ctx, {
-              'pct': double.tryParse(ctrl.text.trim()) ?? 0,
+              'pct': _typedPercent(ctrl.text, byAmount: byAmount, base: s.current.subtotal),
               'reason': reasonCtrl.text.trim(),
             }),
             child: Text(tr(ctx, 'Apply')),
           ),
         ],
+        ),
       ),
     );
     if (result != null) {
@@ -658,27 +771,56 @@ class _SellScreenState extends State<SellScreen> {
     if (!mounted) return;
     final ctrl = TextEditingController(
         text: line.discountPercent > 0 ? line.discountPercent.toStringAsFixed(0) : '');
+    var byAmount = false;
     final pct = await showDialog<double>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
         title: Text('${tr(ctx, 'Discount')} ${line.name}'),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (widget.allowAmountDiscount) ...[
+            Wrap(spacing: 8, children: [
+              ChoiceChip(
+                key: const Key('line-discount-mode-percent'),
+                label: const Text('%'),
+                selected: !byAmount,
+                onSelected: (_) => setSt(() {
+                  byAmount = false;
+                  ctrl.clear();
+                }),
+              ),
+              ChoiceChip(
+                key: const Key('line-discount-mode-amount'),
+                label: Text(tr(ctx, 'Amount')),
+                selected: byAmount,
+                onSelected: (_) => setSt(() {
+                  byAmount = true;
+                  ctrl.clear();
+                }),
+              ),
+            ]),
+            const SizedBox(height: 8),
+          ],
           TextField(
+            key: const Key('line-discount-value'),
             controller: ctrl,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-                labelText: tr(ctx, 'Line discount'), suffixText: '%', border: const OutlineInputBorder()),
+                labelText: tr(ctx, byAmount ? 'Amount off' : 'Line discount'),
+                suffixText: byAmount ? null : '%',
+                border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
-          Wrap(spacing: 8, children: [
-            ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
-            for (final q in widget.discountPercents)
-              ActionChip(
-                label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
-                onPressed: () => ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
-              ),
-          ]),
+          if (!byAmount)
+            Wrap(spacing: 8, children: [
+              ActionChip(label: Text(tr(ctx, 'None')), onPressed: () => ctrl.text = '0'),
+              for (final q in widget.discountPercents)
+                ActionChip(
+                  label: Text('${q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1)}%'),
+                  onPressed: () => ctrl.text = q.toStringAsFixed(q == q.roundToDouble() ? 0 : 1),
+                ),
+            ]),
           if (widget.maxDiscountPercent > 0)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -690,9 +832,13 @@ class _SellScreenState extends State<SellScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
               key: const Key('apply-line-discount'),
-              onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim()) ?? 0),
+              // A line's own gross is what its discount is taken off, so that is the
+              // base a typed amount converts against.
+              onPressed: () => Navigator.pop(
+                  ctx, _typedPercent(ctrl.text, byAmount: byAmount, base: line.gross)),
               child: Text(tr(ctx, 'Apply'))),
         ],
+        ),
       ),
     );
     if (pct == null) return;
@@ -943,6 +1089,9 @@ class _SellScreenState extends State<SellScreen> {
     // The existing customer picked, so the delivery links to that partner rather
     // than being saved as a free-typed name (which would duplicate them in Odoo).
     Customer? picked;
+    // Set when the cashier said walk-in, so saving drops the partner that was on
+    // the order instead of keeping a link the dialog no longer shows.
+    var cleared = false;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -960,12 +1109,25 @@ class _SellScreenState extends State<SellScreen> {
                 icon: const Icon(Icons.person_search),
                 label: Text(tr(ctx, 'Find existing customer')),
                 onPressed: () async {
-                  final c = await _pickExistingCustomer();
-                  if (c == null) return;
-                  picked = c;
+                  final result = await _pickExistingCustomer();
+                  if (result == null) return;
+                  // Walk-in on a delivery means "this is nobody I have on file":
+                  // drop the partner link and the details typed against it, rather
+                  // than leaving a stale customer attached to the address.
+                  if (result is! Customer) {
+                    picked = null;
+                    cleared = true;
+                    setSt(() {
+                      name.clear();
+                      phone.clear();
+                    });
+                    return;
+                  }
+                  picked = result;
+                  cleared = false;
                   setSt(() {
-                    name.text = c.name;
-                    if (c.phone != null) phone.text = c.phone!;
+                    name.text = result.name;
+                    if (result.phone != null) phone.text = result.phone!;
                   });
                 },
               ),
@@ -1005,7 +1167,11 @@ class _SellScreenState extends State<SellScreen> {
       _changed(() {
         // Link the chosen partner first (sets partnerId), then overlay the typed
         // name/phone/address; the partner id survives so the sale is not a duplicate.
-        if (picked != null) s.setCustomer(picked);
+        if (picked != null) {
+          s.setCustomer(picked);
+        } else if (cleared) {
+          s.setCustomer(null);
+        }
         s.setDeliveryCustomer(
             name: name.text, phone: phone.text, address: addr.text);
         s.setDeliveryCost(double.tryParse(cost.text.trim()) ?? 0);
@@ -1036,16 +1202,38 @@ class _SellScreenState extends State<SellScreen> {
     }
   }
 
-  void _sendToKitchen() {
+  Future<void> _sendToKitchen() async {
     if (!s.hasLines) return;
-    widget.onSendToKitchen?.call();
+    final fire = widget.onSendToKitchen;
+    if (fire == null) return;
+    // Nothing on screen is blocked while the printer is tried: the order is already
+    // saved and the cashier can keep ringing. What waits is only the message, because
+    // "Sent to kitchen" before the printer has answered is the lie this fixes.
+    final result = await fire();
+    if (!mounted) return;
     setState(() {});
-    if (mounted) {
-      showToast(context, tr(context, 'Sent to kitchen.'),
-          kind: ToastKind.success,
-          key: const Key('sent-kitchen'),
-          duration: const Duration(seconds: 2));
-    }
+    _tellKitchenOutcome(result, key: const Key('sent-kitchen'));
+  }
+
+  /// Say what actually happened to the ticket. Green only when a printer took it;
+  /// amber when it is held and will print itself; red when the kitchen has nothing
+  /// and someone has to walk the order over.
+  void _tellKitchenOutcome(KitchenFireResult result, {required Key key}) {
+    final (message, kind) = switch (result) {
+      KitchenFireResult.sent => (tr(context, 'Sent to kitchen.'), ToastKind.success),
+      KitchenFireResult.spooled => (
+          tr(context, 'Ticket held, printer offline. It will print automatically.'),
+          ToastKind.warning
+        ),
+      KitchenFireResult.lost => (
+          tr(context, 'Ticket did not print. Tell the kitchen and try again.'),
+          ToastKind.error
+        ),
+    };
+    showToast(context, message,
+        kind: kind,
+        key: key,
+        duration: Duration(seconds: result == KitchenFireResult.sent ? 2 : 4));
   }
 
   Future<void> _resendToKitchen() async {
@@ -1062,12 +1250,11 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (ok != true) return;
-    widget.onResendToKitchen?.call();
+    final resend = widget.onResendToKitchen;
+    if (resend == null) return;
+    final result = await resend();
     if (!mounted) return;
-    showToast(context, tr(context, 'Sent to kitchen.'),
-        kind: ToastKind.success,
-        key: const Key('resent-kitchen'),
-        duration: const Duration(seconds: 2));
+    _tellKitchenOutcome(result, key: const Key('resent-kitchen'));
   }
 
   void _pay() {
@@ -1642,6 +1829,7 @@ class _SellScreenState extends State<SellScreen> {
     final online = widget.online;
     Widget badge(bool isOnline) {
       final pending = widget.pendingToSync?.call() ?? 0;
+      final held = widget.spooledJobs?.call() ?? 0;
       final color = isOnline ? Colors.green : Colors.grey;
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -1661,6 +1849,20 @@ class _SellScreenState extends State<SellScreen> {
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   label: Text('$pending ${tr(context, 'to sync')}', style: const TextStyle(fontSize: 11)),
+                ),
+              ),
+            // Paper waiting on a printer, which is a different problem from sales
+            // waiting on the server and needs its own badge.
+            if (held > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Chip(
+                  key: const Key('spool-count'),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  avatar: Icon(Icons.print_disabled, size: 14, color: AppColors.warning),
+                  label: Text('$held ${tr(context, 'to print')}',
+                      style: const TextStyle(fontSize: 11)),
                 ),
               ),
           ],
@@ -1858,8 +2060,8 @@ class _SellScreenState extends State<SellScreen> {
   Widget _contextBar() {
     final o = s.current;
     return Column(children: [
-      // Only delivery needs a customer (a name to call and an address to send to);
-      // a dine-in or takeaway sale has no "walk-in" to capture.
+      // Delivery gets the full block, because it needs an address and a charge as
+      // well as a name; every other type gets the customer chip below.
       if (o.type == OrderType.delivery)
         ListTile(
           dense: true,
@@ -1894,6 +2096,17 @@ class _SellScreenState extends State<SellScreen> {
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Wrap(spacing: 8, runSpacing: 4, children: [
+          // A named customer is not a delivery-only idea: a takeaway regular and a
+          // dine-in booking are both worth booking against the partner rather than
+          // as an anonymous sale. First in the row, where delivery puts its own
+          // customer block, so the till reads the same whatever the order type.
+          if (o.type != OrderType.delivery)
+            ActionChip(
+              key: const Key('customer-chip'),
+              avatar: const Icon(Icons.person_outline, size: 16),
+              label: Text(o.customerName ?? tr(context, 'Customer')),
+              onPressed: _chooseCustomer,
+            ),
           if (o.type == OrderType.dineIn) ...[
             if (o.tableLabel != null)
               ActionChip(

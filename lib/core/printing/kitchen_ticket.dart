@@ -3,6 +3,23 @@ import 'dart:typed_data';
 import '../../domain/order.dart';
 import 'escpos.dart';
 
+/// What became of a kitchen ticket.
+///
+/// The cashier has to be told the truth: [sent] means a printer took it and the food
+/// is being cooked, [spooled] means it is held and will print when the printer is
+/// back, and [lost] means nothing anywhere has it and the kitchen must be told by
+/// hand. Telling a rush "Sent to kitchen" for all three is how food never arrives.
+enum KitchenFireResult {
+  sent,
+  spooled,
+  lost;
+
+  /// The worse of two outcomes, for a ticket that went to several stations: one lost
+  /// copy makes the whole fire lost, because part of the order is not being cooked.
+  KitchenFireResult worst(KitchenFireResult other) =>
+      other.index > index ? other : this;
+}
+
 /// Formats an order as a kitchen ticket (KOT), which is a different document from
 /// the customer receipt: no prices, big product names the line cook reads at a
 /// glance, and the modifiers and notes that actually change how a dish is made.
@@ -37,7 +54,7 @@ class KitchenTicketBuilder {
     p.size(doubleHeight: true).bold(true).line(order.type.label.toUpperCase())..bold(false)..size();
     if (order.tableLabel != null) p.line('Table: ${order.tableLabel}');
     if (order.guestCount != null) p.line('Guests: ${order.guestCount}');
-    p.line('${_stamp(order.createdAt)}  #${_shortRef(order)}');
+    p.line('${_stamp(order.createdAt)}  #${order.displayNo}');
     p.line('By: ${order.cashierId}');
     p.rule();
 
@@ -76,7 +93,7 @@ class KitchenTicketBuilder {
       ..size();
     p.align(EscPosAlign.left).rule();
     if (order.tableLabel != null) p.line('Table: ${order.tableLabel}');
-    p.line('#${_shortRef(order)}  ${_stamp(DateTime.now().toUtc())}');
+    p.line('#${order.displayNo}  ${_stamp(DateTime.now().toUtc())}');
     p.rule();
     p.size(doubleHeight: true).bold(true)
       ..line('CANCEL: ${_qty(line.quantity)} x ${line.name}')
@@ -86,9 +103,6 @@ class KitchenTicketBuilder {
     p.line('By: ${order.cashierId}');
     return (p..feed(3)..cut()).build();
   }
-
-  String _shortRef(Order o) =>
-      o.uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
 
   String _qty(double q) =>
       q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toStringAsFixed(3);
