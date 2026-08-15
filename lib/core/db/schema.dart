@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 16;
+  static const int version = 17;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -414,6 +414,43 @@ class Schema {
     [
       'ALTER TABLE modifier_groups ADD COLUMN auto_add INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE modifiers ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0',
+    ],
+
+    // v16 -> v17: what a delivery shop keeps on the till.
+    //
+    // Zones price the drive, channels say which app the order arrived through, and
+    // drivers are who carries it. Three lists a manager edits and a cashier picks
+    // from, all local: none of them is on the wire, and every one of them works
+    // with the line down. Empty tables mean the delivery dialog looks exactly as it
+    // did before these existed.
+    [
+      '''
+      CREATE TABLE delivery_zones (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        fee        REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      )
+      ''',
+      '''
+      CREATE TABLE delivery_channels (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        partner_id INTEGER,
+        created_at TEXT NOT NULL
+      )
+      ''',
+      // A driver who leaves is deactivated rather than deleted: orders they already
+      // carried still name them, and a name on a printed slip must stay resolvable.
+      '''
+      CREATE TABLE drivers (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        phone      TEXT,
+        active     INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+      )
+      ''',
     ],
   ];
 }
