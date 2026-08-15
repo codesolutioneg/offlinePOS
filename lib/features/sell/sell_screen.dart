@@ -211,6 +211,9 @@ class _SellScreenState extends State<SellScreen> {
   String _scanBuffer = '';
   DateTime _lastScanKey = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// The search box, so a keyboard can jump to it without reaching for the screen.
+  final FocusNode _searchFocus = FocusNode();
+
   PosSession get s => widget.session;
 
   // Keeps the course-fire countdown badges ticking down while the cart is open.
@@ -230,7 +233,34 @@ class _SellScreenState extends State<SellScreen> {
     widget.catalogueChanged?.removeListener(_onCatalogueChanged);
     _fireTick?.cancel();
     _scanFocus.dispose();
+    _searchFocus.dispose();
     super.dispose();
+  }
+
+  /// Every key the screen sees: the shortcuts a till with a keyboard expects, then
+  /// the barcode scanner, which is a keyboard too. Shortcuts are taken first and
+  /// swallowed, so a shortcut can never end up half-typed into the scan buffer.
+  void _onKey(KeyEvent e) {
+    if (e is KeyDownEvent && _shortcut(e)) return;
+    _onScanKey(e);
+  }
+
+  /// F12 takes the money and Ctrl+K jumps to the search box, which is what the
+  /// people who ring hundreds of orders a day use instead of the screen. Returns
+  /// whether the key was one of them.
+  bool _shortcut(KeyDownEvent e) {
+    if (e.logicalKey == LogicalKeyboardKey.f12) {
+      // Same door as the Pay button, so nothing about the sale differs: an empty
+      // order simply does nothing.
+      _pay();
+      return true;
+    }
+    if (e.logicalKey == LogicalKeyboardKey.keyK &&
+        HardwareKeyboard.instance.isControlPressed) {
+      _searchFocus.requestFocus();
+      return true;
+    }
+    return false;
   }
 
   void _onScanKey(KeyEvent e) {
@@ -1865,7 +1895,7 @@ class _SellScreenState extends State<SellScreen> {
       body: KeyboardListener(
         focusNode: _scanFocus,
         autofocus: true,
-        onKeyEvent: _onScanKey,
+        onKeyEvent: _onKey,
         child: SafeArea(
         child: Column(
           children: [
@@ -1973,6 +2003,7 @@ class _SellScreenState extends State<SellScreen> {
             padding: const EdgeInsets.all(8),
             child: TextField(
               key: const Key('search'),
+              focusNode: _searchFocus,
               decoration: InputDecoration(
                 prefixIcon: const Icon(Icons.search),
                 hintText: tr(context, 'Search or scan'),
