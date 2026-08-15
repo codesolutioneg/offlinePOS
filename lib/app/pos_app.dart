@@ -1373,6 +1373,7 @@ class _PosAppState extends State<PosApp> {
         // room out.
         settings: widget.settings,
         onTransferTables: () => unawaited(_transferTables(floorContext)),
+        authorize: () => _authorize(Permission.openSettings, floorContext),
         // The book, so a table with guests due shortly says so on the plan.
         reservations: widget.reservations,
         // The two table-less ways to start an order, straight from the floor home.

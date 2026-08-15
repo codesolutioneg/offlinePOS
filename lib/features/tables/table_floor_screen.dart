@@ -32,6 +32,7 @@ class TableFloorScreen extends StatefulWidget {
     this.onDelivery,
     this.settings,
     this.onTransferTables,
+    this.authorize,
     this.reservations,
     this.nowFn = DateTime.now,
     this.dayNotice,
@@ -62,6 +63,11 @@ class TableFloorScreen extends StatefulWidget {
   /// Move every tab one cashier is holding to another one, for the manager whose
   /// waiter went home mid-service. Null hides the action.
   final VoidCallback? onTransferTables;
+
+  /// Clears the shell's permission gate before a floor rule is changed. Null (the
+  /// picker, and the suites that only draw the plan) asks nobody, because nothing
+  /// there can change a rule.
+  final Future<bool> Function()? authorize;
 
   /// Start a takeaway or delivery order straight from the floor home, the two ways
   /// an order begins without a table. Null hides the button (e.g. in pick mode).
@@ -590,6 +596,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       icon: const Icon(Icons.more_vert),
       onSelected: (value) async {
         if (value == 'security' && settings != null) {
+          // Behind the same gate as any other setting: a cashier who could switch
+          // this off could then open anybody's tab, which is the one thing it
+          // exists to stop.
+          if (!(await widget.authorize?.call() ?? true)) return;
+          if (!mounted) return;
           setState(() => settings.tableSecurity = !settings.tableSecurity);
         } else if (value == 'transfer') {
           widget.onTransferTables?.call();

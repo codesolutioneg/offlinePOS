@@ -211,6 +211,25 @@ void main() {
     expect(orders.byUuid(tab.uuid)!.state, OrderState.draft);
   });
 
+  testWidgets('a cashier cannot switch the rule off to get at a tab', (t) async {
+    settings.tableSecurity = true;
+    anasTab();
+
+    await t.pumpWidget(app());
+    await signIn(t, 'sara', '1234');
+    await t.tap(find.byKey(const Key('floor-menu')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('floor-table-security')));
+    await t.pumpAndSettle();
+
+    // The manager gate, not the switch: otherwise the lock has its own key taped
+    // to it.
+    expect(find.byKey(const Key('manager-pin')), findsOneWidget);
+    await t.tap(find.text('Cancel'));
+    await t.pumpAndSettle();
+    expect(settings.tableSecurity, isTrue);
+  });
+
   testWidgets('a manager moves a waiter\'s tables to whoever is on now', (t) async {
     settings.tableSecurity = true;
     final tab = anasTab();
