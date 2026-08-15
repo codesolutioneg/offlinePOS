@@ -278,7 +278,7 @@ void main() {
 
   group('table colours', () {
     testWidgets('the floor is drawn in the colours the shop picked', (t) async {
-      settings.setTableColor(free: Colors.indigo.toARGB32());
+      settings.setTableColorFree(Colors.indigo.toARGB32());
       seedMenu();
 
       await boot(t);

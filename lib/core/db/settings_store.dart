@@ -736,13 +736,14 @@ class SettingsStore {
   int? get tableColorOccupied =>
       int.tryParse(getString('table_color_occupied') ?? '');
 
-  void setTableColor({int? free, int? occupied, bool clear = false}) {
-    if (clear) {
-      setString('table_color_free', null);
-      setString('table_color_occupied', null);
-    }
-    if (free != null) setString('table_color_free', '$free');
-    if (occupied != null) setString('table_color_occupied', '$occupied');
+  /// Set one floor colour, or hand it back to the default with null.
+  void setTableColorFree(int? argb) => _setTableColor('table_color_free', argb);
+
+  void setTableColorOccupied(int? argb) =>
+      _setTableColor('table_color_occupied', argb);
+
+  void _setTableColor(String key, int? argb) {
+    setString(key, argb?.toString());
     publishTablePalette();
   }
 

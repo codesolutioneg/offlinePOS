@@ -122,18 +122,12 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
     final result = await _pickSwatch(
         free ? tr(context, 'Free tables') : tr(context, 'Occupied tables'), current);
     if (result == null) return;
+    final argb = result is Color ? result.toARGB32() : null;
     setState(() {
-      if (result is _ClearSwatch) {
-        s.setTableColor(
-          free: free ? null : s.tableColorFree,
-          occupied: free ? s.tableColorOccupied : null,
-          clear: true,
-        );
-      } else if (result is Color) {
-        s.setTableColor(
-          free: free ? result.toARGB32() : null,
-          occupied: free ? null : result.toARGB32(),
-        );
+      if (free) {
+        s.setTableColorFree(argb);
+      } else {
+        s.setTableColorOccupied(argb);
       }
     });
     widget.onChanged();
