@@ -704,4 +704,9 @@ const Map<String, String> _ar = {
   'Business day starts at': 'يبدأ يوم العمل الساعة',
   'Sales before this hour count as the previous trading day':
       'المبيعات قبل هذه الساعة تُحسب على يوم العمل السابق',
+  'No shift is open. Open one with a float?':
+      'لا توجد وردية مفتوحة. هل تفتح واحدة برصيد ابتدائي؟',
+  'A shift is open from an earlier day. Close it first.':
+      'هناك وردية مفتوحة من يوم سابق. أغلقها أولاً.',
+  'Not now': 'ليس الآن',
 };

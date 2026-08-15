@@ -34,7 +34,9 @@ import '../core/sync/odoo_endpoint.dart';
 import '../core/sync/odoo_wiring.dart';
 import '../core/sync/outbox.dart';
 import '../core/sync/sync_service.dart';
+import '../core/theme/app_colors.dart';
 import '../core/updates/update_service.dart';
+import '../domain/business_day.dart';
 import '../domain/order.dart';
 import '../features/admin/attendance_screen.dart';
 import '../features/admin/roles_permissions_screen.dart';
@@ -161,6 +163,11 @@ class PosApp extends StatefulWidget {
   State<PosApp> createState() => _PosAppState();
 }
 
+/// What the till has to say about the drawer when a cashier signs in: nobody
+/// opened a shift, or one is still open from an earlier trading day. Neither stops
+/// anyone selling; both are how a day ends up with a Z that makes no sense.
+enum ShiftNudge { noShift, staleShift }
+
 /// What a cashier is shown the first time they ring something up.
 const _firstSaleSteps = [
   WizardStep(
@@ -188,6 +195,10 @@ class _PosAppState extends State<PosApp> {
   bool _firstSaleHelp = false;
   String? _printError;
   Timer? _background;
+
+  /// What the cashier who just signed in needs telling about the drawer, or null
+  /// when the shift is in order. Cleared when they act on it or wave it away.
+  ShiftNudge? _nudge;
 
   /// The lines a paid sale carried when it was reopened for correction, by order
   /// uuid. Kept only until that sale is tendered again, so the second payment can
@@ -333,20 +344,91 @@ class _PosAppState extends State<PosApp> {
     // Support asks who is on the till before anything else.
     widget.sync.cashierId = cashier.id;
     _publishActivity();
-    // Land on the floor home once signed in, unless a draft order was restored
-    // (crash recovery): the table plan is the base screen an order starts from.
     final session = _session;
-    if (session != null &&
-        session.current.lines.isEmpty &&
-        session.current.tableLabel == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Through the navigator's own context, not this shell's: this state is the
-        // parent of MaterialApp, so Navigator.of would look upwards and find
-        // nothing.
-        final below = _navigator.currentContext;
-        if (mounted && below != null) _openFloor(below, session);
-      });
-    }
+    if (session == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Through the navigator's own context, not this shell's: this state is the
+      // parent of MaterialApp, so Navigator.of would look upwards and find
+      // nothing.
+      final below = _navigator.currentContext;
+      if (!mounted || below == null) return;
+      // Land on the floor home once signed in, unless a draft order was restored
+      // (crash recovery): the table plan is the base screen an order starts from.
+      if (session.current.lines.isEmpty && session.current.tableLabel == null) {
+        _openFloor(below, session);
+      }
+    });
+    _nudgeShift();
+  }
+
+  /// Work out whether the cashier signing in needs telling about the drawer: no
+  /// shift open at all, or one still open from an earlier trading day quietly
+  /// absorbing today's sales.
+  void _nudgeShift() {
+    final shift = widget.shifts.currentOpenShift();
+    // One trading day, the shop's own: a shift opened last night is not stale at
+    // 02:00 under a 04:00 cutover, because that is still the same service.
+    final stale = shift != null &&
+        BusinessDay.of(shift.openedAt) != BusinessDay.of(DateTime.now().toUtc());
+    final nudge = switch ((shift, stale)) {
+      (null, _) => ShiftNudge.noShift,
+      (_, true) => ShiftNudge.staleShift,
+      _ => null,
+    };
+    if (nudge != _nudge) setState(() => _nudge = nudge);
+  }
+
+  /// The strip that carries [_nudge], above every screen in the app.
+  ///
+  /// A strip and not a dialog, deliberately. Selling is never gated on this: a queue
+  /// at the counter outranks the paperwork, and a modal at sign-in is a modal that
+  /// gets dismissed without being read. It sits above the navigator rather than on
+  /// one screen, so it is read on the floor the cashier lands on as well as on the
+  /// sell screen, and it takes its own space instead of covering the till.
+  Widget _shiftNudgeBar(BuildContext context, ShiftNudge nudge) {
+    final stale = nudge == ShiftNudge.staleShift;
+    return Material(
+      key: const Key('shift-nudge'),
+      color: AppColors.error,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Row(children: [
+            Icon(stale ? Icons.history_toggle_off : Icons.point_of_sale,
+                size: 20, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                tr(
+                    context,
+                    stale
+                        ? 'A shift is open from an earlier day. Close it first.'
+                        : 'No shift is open. Open one with a float?'),
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+            TextButton(
+              key: const Key('shift-nudge-open'),
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              onPressed: () {
+                setState(() => _nudge = null);
+                final session = _session;
+                final below = _navigator.currentContext;
+                if (session != null && below != null) _openShift(below, session);
+              },
+              child: Text(tr(context, stale ? 'Close shift' : 'Open shift')),
+            ),
+            TextButton(
+              key: const Key('shift-nudge-dismiss'),
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              onPressed: () => setState(() => _nudge = null),
+              child: Text(tr(context, 'Not now')),
+            ),
+          ]),
+        ),
+      ),
+    );
   }
 
   /// Ends the shift without ending the process.
@@ -360,6 +442,9 @@ class _PosAppState extends State<PosApp> {
     setState(() {
       _session = null;
       _firstSaleHelp = false;
+      // The nudge belongs to the cashier who was told it, not to the sign-in screen
+      // the next one is looking at.
+      _nudge = null;
     });
     _publishActivity();
   }
@@ -574,6 +659,19 @@ class _PosAppState extends State<PosApp> {
               padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
           listTileTheme: const ListTileThemeData(minVerticalPadding: 10),
         ),
+        // Above the navigator, so the shift nudge is read on whatever screen the
+        // cashier is on and takes its own strip of the till rather than covering
+        // one. Nothing else belongs here: this is the app's only chrome.
+        builder: (context, navigator) {
+          final nudge = _nudge;
+          if (nudge == null || navigator == null) {
+            return navigator ?? const SizedBox.shrink();
+          }
+          return Column(children: [
+            _shiftNudgeBar(context, nudge),
+            Expanded(child: navigator),
+          ]);
+        },
         locale: locale,
         supportedLocales: kSupportedLocales,
         localizationsDelegates: const [
