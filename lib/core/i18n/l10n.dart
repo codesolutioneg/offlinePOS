@@ -857,4 +857,12 @@ const Map<String, String> _ar = {
   'Ask for the guest count': 'السؤال عن عدد الضيوف',
   'When a table is seated from the floor': 'عند إجلاس طاولة من المخطط',
   'How many guests?': 'كم عدد الضيوف؟',
+  'Hours worked': 'ساعات العمل',
+  'No hours': 'لا توجد ساعات',
+  'Nobody clocked in during this range.': 'لم يسجل أحد حضوره في هذه الفترة.',
+  'Per staff member': 'لكل موظف',
+  'Day by day': 'يومًا بيوم',
+  'shift': 'وردية',
+  'shifts': 'ورديات',
+  'still on the clock': 'ما زال على رأس العمل',
 };

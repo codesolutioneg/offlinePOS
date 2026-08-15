@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/audit/audit_log.dart';
+import '../../core/db/attendance_store.dart';
 import '../../core/db/shift_store.dart';
 import '../../core/export/data_export.dart';
 import '../../core/export/pdf_export.dart';
@@ -9,6 +10,7 @@ import '../../core/theme/app_colors.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
 import 'activity_report_screen.dart';
+import 'attendance_report_screen.dart';
 import 'cashier_report_screen.dart';
 import 'category_report_screen.dart';
 import 'discounts_report_screen.dart';
@@ -47,6 +49,8 @@ class ReportsHubScreen extends StatefulWidget {
     required this.formatAmount,
     required this.audit,
     this.shifts,
+    this.attendance,
+    this.staffNames = const {},
     this.openTables,
     this.onPrint,
   });
@@ -62,6 +66,13 @@ class ReportsHubScreen extends StatefulWidget {
   /// The shifts, read across the chosen range for the expenses report. Null hides
   /// that tile, for a caller that has no drawer to report on.
   final ShiftStore? shifts;
+
+  /// Staff clock-ins, read across the chosen range for the hours report. Null
+  /// hides that tile, the way a missing shift store hides expenses.
+  final AttendanceStore? attendance;
+
+  /// Staff id to name, so the hours report reads as people rather than as ids.
+  final Map<String, String> staffNames;
 
   /// Tables with an order parked on them right now, for the glance card.
   final int? openTables;
@@ -175,6 +186,16 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
         from: _windowFrom,
         to: _windowTo,
         cashierId: _cashier,
+      ) ??
+      const [];
+
+  /// The clock-ins inside the chosen window, for the hours report. Local read,
+  /// filtered by the same cashier picker as everything else here.
+  List<AttendanceEntry> get _attendance =>
+      widget.attendance?.between(
+        from: _windowFrom,
+        to: _windowTo,
+        staffId: _cashier,
       ) ??
       const [];
 
@@ -478,6 +499,11 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                       (_) => ExpensesReportScreen(
                           movements: _movements,
                           formatAmount: widget.formatAmount)),
+                if (widget.attendance != null)
+                  _tile(tr(context, 'Hours worked'), Icons.schedule,
+                      'rep-attendance', const Color(0xFF6366F1),
+                      (_) => AttendanceReportScreen(
+                          entries: _attendance, staffNames: widget.staffNames)),
               ],
             ),
           ),

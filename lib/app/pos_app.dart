@@ -1226,6 +1226,9 @@ class _PosAppState extends State<PosApp> {
         audit: widget.audit,
         // Paid-outs live inside shifts, so the expenses report reads them itself.
         shifts: widget.shifts,
+        // Clock-ins, and who the ids belong to, for the hours report.
+        attendance: widget.attendance,
+        staffNames: {for (final u in widget.users.all()) u.id: u.name},
         openTables: widget.orders
             .heldAnywhere()
             .where((o) => o.tableLabel != null)
