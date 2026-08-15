@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:offline_pos/core/audit/audit_log.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
+import 'package:offline_pos/core/db/reservation_store.dart';
 import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
@@ -64,11 +65,16 @@ class TestTill {
     );
     settings = SettingsStore(db)
       ..publish = (kind, uuid, payload) => fabric.publish(kind, uuid, payload);
+    reservations = ReservationStore(
+      db,
+      publish: (kind, uuid, payload) => fabric.publish(kind, uuid, payload),
+    );
     applier = LanApplier(
       deviceId: deviceId,
       orders: orders,
       tables: tables,
       settings: settings,
+      reservations: reservations,
       log: log,
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
@@ -115,6 +121,7 @@ class TestTill {
   late final OrderStore orders;
   late final TableStore tables;
   late final SettingsStore settings;
+  late final ReservationStore reservations;
   late final LanApplier applier;
   late final LanClaimDesk claims;
   late final LanProtocol protocol;

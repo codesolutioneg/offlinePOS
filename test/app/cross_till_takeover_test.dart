@@ -13,6 +13,7 @@ import 'package:offline_pos/core/db/catalogue_store.dart';
 import 'package:offline_pos/core/db/customer_store.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
+import 'package:offline_pos/core/db/reservation_store.dart';
 import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/shift_store.dart';
@@ -152,6 +153,7 @@ void main() {
         orders: peerOrders,
         tables: TableStore(peerDb),
         settings: peerSettings,
+        reservations: ReservationStore(peerDb),
         log: LanEventLog(peerDb, deviceId: 'till-2'),
       ),
       credential: LanCredential('the-shop-key'),
@@ -200,6 +202,7 @@ void main() {
       orders: orders,
       tables: TableStore(db),
       settings: settings,
+      reservations: ReservationStore(db),
       audit: audit,
       port: 0,
       beaconPort: 0,

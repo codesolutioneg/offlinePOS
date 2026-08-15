@@ -23,6 +23,7 @@ import 'core/db/order_store.dart';
 import 'core/db/settings_store.dart';
 import 'core/db/table_store.dart';
 import 'core/db/print_job_store.dart';
+import 'core/db/reservation_store.dart';
 import 'core/db/printer_store.dart';
 import 'core/db/shift_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
@@ -101,6 +102,12 @@ Future<void> main() async {
         audit.record('system', 'lan.publish.failed', detail: '$uuid: $error'),
   );
   final tables = TableStore(
+    db,
+    publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+  );
+  // Bookings, shared for the same reason the floor plan is: one taken at the
+  // counter has to reach the handheld the waiter is holding.
+  final reservations = ReservationStore(
     db,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
   );
@@ -233,6 +240,7 @@ Future<void> main() async {
       orders: orders,
       tables: tables,
       settings: settings,
+      reservations: reservations,
       audit: audit,
       port: config.lanPort,
       beaconPort: config.lanBeaconPort,
@@ -267,6 +275,7 @@ Future<void> main() async {
     settings: settings,
     customers: CustomerStore(db),
     attendance: AttendanceStore(db),
+    reservations: reservations,
     lan: lan,
   ));
 }

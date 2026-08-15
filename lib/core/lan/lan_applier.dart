@@ -1,5 +1,6 @@
 import '../../domain/order.dart';
 import '../db/order_store.dart';
+import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
 import '../db/table_store.dart';
 import 'lan_event.dart';
@@ -29,11 +30,13 @@ class LanApplier {
     required OrderStore orders,
     required TableStore tables,
     required SettingsStore settings,
+    required ReservationStore reservations,
     required LanEventLog log,
     LanLog? onRefused,
   })  : _orders = orders,
         _tables = tables,
         _settings = settings,
+        _reservations = reservations,
         _log = log,
         _onRefused = onRefused;
 
@@ -43,6 +46,7 @@ class LanApplier {
   final OrderStore _orders;
   final TableStore _tables;
   final SettingsStore _settings;
+  final ReservationStore _reservations;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -140,6 +144,7 @@ class LanApplier {
         LanEventKind.tableUpsert => _applyTable(event),
         LanEventKind.productAvailability => _applyAvailability(event),
         LanEventKind.orderClaim => _applyClaim(event),
+        LanEventKind.reservationUpsert => _applyReservation(event),
       };
       if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
@@ -208,6 +213,15 @@ class LanApplier {
     final id = event.payload['product_id'];
     if (id is! int) throw FormatException('availability for ${event.recordUuid}');
     _settings.applyProductAvailable(id, event.payload['available'] == true);
+    return true;
+  }
+
+  bool _applyReservation(LanEvent event) {
+    if (event.payload['deleted'] == true) {
+      _reservations.remove(event.recordUuid, announce: false);
+      return true;
+    }
+    _reservations.save(Reservation.fromMap(event.payload), announce: false);
     return true;
   }
 

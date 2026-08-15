@@ -5,6 +5,7 @@ import '../../domain/order.dart';
 import '../audit/audit_log.dart';
 import '../db/database.dart';
 import '../db/order_store.dart';
+import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
 import '../db/table_store.dart';
 import 'lan_applier.dart';
@@ -70,6 +71,7 @@ class LanNode {
     required OrderStore orders,
     required TableStore tables,
     required SettingsStore settings,
+    required ReservationStore reservations,
     required AuditLog audit,
     required int port,
     required int beaconPort,
@@ -97,6 +99,7 @@ class LanNode {
       orders: orders,
       tables: tables,
       settings: settings,
+      reservations: reservations,
       log: eventLog,
       onRefused: log,
     );

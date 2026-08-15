@@ -6,6 +6,7 @@ import 'package:offline_pos/core/audit/audit_log.dart';
 import 'package:offline_pos/core/config/till_config.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
+import 'package:offline_pos/core/db/reservation_store.dart';
 import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
@@ -117,6 +118,7 @@ void main() {
         orders: OrderStore(db, ownDeviceId: 'till-a'),
         tables: TableStore(db),
         settings: SettingsStore(db),
+        reservations: ReservationStore(db),
         audit: AuditLog(db),
         port: 0,
         beaconPort: 0,

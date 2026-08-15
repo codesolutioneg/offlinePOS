@@ -32,7 +32,12 @@ enum LanEventKind {
   /// owner ever sends it, and it sends it as part of letting go, so a tab still has
   /// exactly one owner at every instant: the single-writer rule survives the
   /// handover instead of being suspended for it.
-  orderClaim('order.claim');
+  orderClaim('order.claim'),
+
+  /// A table booked ahead, changed or called off. Shared for the same reason the
+  /// floor plan is: a booking taken at the counter has to reach the handheld the
+  /// waiter is holding, or two people promise one table.
+  reservationUpsert('reservation.upsert');
 
   const LanEventKind(this.wire);
 

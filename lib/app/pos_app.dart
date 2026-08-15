@@ -15,6 +15,7 @@ import '../core/db/catalogue_store.dart';
 import '../core/db/attendance_store.dart';
 import '../core/db/customer_store.dart';
 import '../core/db/order_store.dart';
+import '../core/db/reservation_store.dart';
 import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
@@ -106,7 +107,12 @@ class PosApp extends StatefulWidget {
     this.provisioningPin,
     this.updates,
     this.lan,
+    this.reservations,
   });
+
+  /// Tables booked ahead. Null on a shop that does not take bookings and in the
+  /// suites that predate them, and then the floor reads exactly as it did.
+  final ReservationStore? reservations;
 
   final AuthService auth;
   final UserStore users;
@@ -1323,6 +1329,8 @@ class _PosAppState extends State<PosApp> {
         // room out.
         settings: widget.settings,
         onTransferTables: () => unawaited(_transferTables(floorContext)),
+        // The book, so a table with guests due shortly says so on the plan.
+        reservations: widget.reservations,
         // The two table-less ways to start an order, straight from the floor home.
         // Each starts a fresh order of that type and drops to the order screen.
         onTakeaway: () {

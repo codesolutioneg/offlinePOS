@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 16;
+  static const int version = 17;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -414,6 +414,33 @@ class Schema {
     [
       'ALTER TABLE modifier_groups ADD COLUMN auto_add INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE modifiers ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0',
+    ],
+
+    // v16 -> v17: tables booked ahead.
+    //
+    // A reservation is not an order and deliberately not stored as one: nothing is
+    // sold, nothing is owed, and a booking that never turns up must not leave a
+    // draft sale behind. It is keyed on a uuid rather than on a table and a time so
+    // it can be moved and replicated like every other shared record, and it carries
+    // its own state rather than being deleted when the guests sit down, because
+    // "they came" and "they never came" are different facts a shop wants to see.
+    [
+      '''
+      CREATE TABLE reservations (
+        uuid        TEXT PRIMARY KEY,
+        table_label TEXT,
+        name        TEXT NOT NULL,
+        phone       TEXT,
+        at          TEXT NOT NULL,
+        covers      INTEGER NOT NULL DEFAULT 2,
+        state       TEXT NOT NULL DEFAULT 'booked',
+        note        TEXT,
+        updated_at  TEXT NOT NULL
+      )
+      ''',
+      // The floor asks "what is due in the next hour" on every rebuild, which is a
+      // read by time, and the book asks for a day at a time.
+      'CREATE INDEX idx_reservations_at ON reservations(at)',
     ],
   ];
 }

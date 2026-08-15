@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/db/reservation_store.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/db/table_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import 'reservations_screen.dart';
 
 /// The floor plan: tables drawn where the shop placed them, tapped to start or
 /// recall a dine-in order. In edit mode a manager lays the floor out by dragging
@@ -29,7 +31,15 @@ class TableFloorScreen extends StatefulWidget {
     this.onDelivery,
     this.settings,
     this.onTransferTables,
+    this.reservations,
+    this.nowFn = DateTime.now,
   });
+
+  /// The book, so a table with guests due shortly says so on the plan rather than
+  /// only in a list nobody has open. Null leaves the floor exactly as it was.
+  final ReservationStore? reservations;
+
+  final DateTime Function() nowFn;
 
   /// The on-device settings the floor itself owns (whether a tab asks before
   /// another cashier picks it up). Null hides the menu that edits them, which is
@@ -446,7 +456,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               icon: Icon(_editing ? Icons.check : Icons.edit),
               onPressed: () => setState(() => _editing = !_editing),
             ),
-            if (widget.settings != null || widget.onTransferTables != null)
+            if (widget.settings != null ||
+                widget.onTransferTables != null ||
+                widget.reservations != null)
               _floorMenu(),
           ],
         ],
@@ -528,17 +540,32 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   /// manager already opens to lay the room out rather than three menus away.
   Widget _floorMenu() {
     final settings = widget.settings;
+    final book = widget.reservations;
     return PopupMenuButton<String>(
       key: const Key('floor-menu'),
       icon: const Icon(Icons.more_vert),
-      onSelected: (value) {
+      onSelected: (value) async {
         if (value == 'security' && settings != null) {
           setState(() => settings.tableSecurity = !settings.tableSecurity);
         } else if (value == 'transfer') {
           widget.onTransferTables?.call();
+        } else if (value == 'reservations' && book != null) {
+          await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => ReservationsScreen(
+                store: book, tables: widget.store, nowFn: widget.nowFn),
+          ));
+          // The badges on the plan are read from the book, so coming back from it
+          // has to repaint them.
+          if (mounted) setState(() {});
         }
       },
       itemBuilder: (ctx) => [
+        if (book != null)
+          PopupMenuItem(
+            key: const Key('floor-reservations'),
+            value: 'reservations',
+            child: Text(tr(ctx, 'Reservations')),
+          ),
         if (settings != null)
           CheckedPopupMenuItem(
             key: const Key('floor-table-security'),
@@ -680,6 +707,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         ),
       );
 
+  /// The bookings due on each table right now, read on every build so the badge
+  /// ages with the ticker rather than freezing when the floor opened.
+  Map<String, Reservation> get _due =>
+      widget.reservations?.dueByTable(widget.nowFn().toUtc()) ?? const {};
+
   Widget _canvas(List<PosTable> tables) {
     final maxX = tables.map((t) => t.x).fold(3.0, (a, b) => a > b ? a : b);
     final maxY = tables.map((t) => t.y).fold(3.0, (a, b) => a > b ? a : b);
@@ -749,11 +781,21 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final isDivider = t.isDivider;
     final occupied = !isDivider && widget.occupiedLabels.contains(t.name);
     final info = isDivider ? null : widget.occupiedInfo[t.name];
+    final booking = isDivider ? null : _due[t.name];
     final tile = _TableTile(
       table: t,
       occupied: occupied,
       total: info == null ? null : widget.formatAmount?.call(info.total),
       ageMinutes: info == null ? null : DateTime.now().difference(info.since).inMinutes,
+      // A free table with guests due in twenty minutes is not free, and a waiter
+      // seating a walk-in on it is the mistake this badge exists to stop.
+      booking: booking == null
+          ? null
+          : (
+              at: booking.at.toLocal(),
+              name: booking.name,
+              covers: booking.covers,
+            ),
     );
     if (!_editing) {
       // A wall/divider is never tapped to open an order; it is just drawn.
@@ -844,11 +886,16 @@ class _TableTile extends StatelessWidget {
     required this.occupied,
     this.total,
     this.ageMinutes,
+    this.booking,
   });
   final PosTable table;
   final bool occupied;
   final String? total;
   final int? ageMinutes;
+
+  /// The guests due on this table shortly, in local wall-clock time. Null when
+  /// nobody is expected, which is every table in a shop that takes no bookings.
+  final ({DateTime at, String name, int covers})? booking;
 
   @override
   Widget build(BuildContext context) {
@@ -894,6 +941,23 @@ class _TableTile extends StatelessWidget {
               else
                 Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
                     style: TextStyle(fontSize: 11, color: color)),
+              if (booking case final due?)
+                Padding(
+                  key: Key('table-booked-${table.id}'),
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.schedule, size: 12, color: AppColors.warning),
+                    const SizedBox(width: 2),
+                    Text(
+                      '${due.at.hour.toString().padLeft(2, '0')}:'
+                      '${due.at.minute.toString().padLeft(2, '0')} ${due.name}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.warning,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ]),
+                ),
             ],
           ),
         ),

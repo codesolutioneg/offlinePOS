@@ -30,6 +30,7 @@ exists, and every screen keeps reading the local database.
 | `table.upsert` | A floor element added, moved, resized or deleted | Table *occupancy* is not a kind: it is derived from the parked orders, which already replicate, so a second source of truth for "table 5 is busy" cannot disagree with the bill on it |
 | `product.availability` | One product marked sold out or put back on | Running out is a fact about the shop, not about a sale. The till nobody shouted at has to refuse the same item |
 | `order.claim` | A parked tab changing hands, sent by the till giving it up | The one ownership change in the fabric. Only the current owner sends it, and it sends it as part of letting go, so the tab still has exactly one owner at every instant |
+| `reservation.upsert` | A table booked ahead, changed or called off | Shared for the same reason the floor plan is: a booking taken at the counter has to reach the handheld, or two people promise one table |
 
 Replication makes a device show more, never own more. `OrderStore` splits its reads and
 the split is load-bearing:
