@@ -716,4 +716,7 @@ const Map<String, String> _ar = {
       'لم يُسدَّد أي منها، لذا لا يظهر أي منها في تقفيل الدرج.',
   'Go back': 'رجوع',
   'Close anyway': 'الإغلاق رغم ذلك',
+  'Cashier flash': 'تقرير سريع لكل كاشير',
+  'No sales in this shift yet': 'لا توجد مبيعات في هذه الوردية بعد',
+  'Cashier flash sent to printer': 'أُرسل تقرير الكاشير إلى الطابعة',
 };

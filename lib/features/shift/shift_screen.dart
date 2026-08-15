@@ -274,12 +274,20 @@ class _ShiftScreenState extends State<ShiftScreen> {
       ]),
       const SizedBox(height: 16),
       if (widget.onPrintReport != null)
-        OutlinedButton.icon(
-          key: const Key('print-x'),
-          icon: const Icon(Icons.print),
-          label: Text(tr(context, 'Print X read')),
-          onPressed: _printX,
-        ),
+        Wrap(spacing: 8, children: [
+          OutlinedButton.icon(
+            key: const Key('print-x'),
+            icon: const Icon(Icons.print),
+            label: Text(tr(context, 'Print X read')),
+            onPressed: _printX,
+          ),
+          OutlinedButton.icon(
+            key: const Key('cashier-flash'),
+            icon: const Icon(Icons.person_outline),
+            label: Text(tr(context, 'Cashier flash')),
+            onPressed: _printCashierFlash,
+          ),
+        ]),
       const SizedBox(height: 8),
       SizedBox(
         height: 60,
@@ -442,6 +450,51 @@ class _ShiftScreenState extends State<ShiftScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(tr(context, 'X report sent to printer'))));
+    }
+  }
+
+  /// One cashier's takings inside the shift. The drawer lines are left off on
+  /// purpose: the float and the paid-ins belong to the shift, not to a person, and
+  /// printing them against a name would invite a count nobody can reconcile.
+  List<(String, String)> _cashierRows(ShiftSummary sum) => [
+        ('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
+        for (final t in sum.tenders) ('  ${t.label}', widget.formatAmount(t.amount)),
+        ('Cash sales', widget.formatAmount(sum.cashSales)),
+      ];
+
+  /// Print what one cashier took during this shift, so a till shared by two people
+  /// over a service can be settled per person without closing it twice.
+  Future<void> _printCashierFlash() async {
+    final s = _shift;
+    if (s == null || widget.onPrintReport == null) return;
+    final byCashier =
+        widget.store.summaryByCashier(s, cashMethodIds: widget.cashMethodIds);
+    if (byCashier.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr(context, 'No sales in this shift yet'))));
+      return;
+    }
+    final who = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        key: const Key('cashier-flash-pick'),
+        title: Text(tr(ctx, 'Cashier flash')),
+        children: [
+          for (final e in byCashier.entries)
+            SimpleDialogOption(
+              key: Key('flash-${e.key}'),
+              onPressed: () => Navigator.pop(ctx, e.key),
+              child: Text('${e.key}   ${widget.formatAmount(e.value.salesTotal)}'),
+            ),
+        ],
+      ),
+    );
+    if (who == null || !mounted) return;
+    await widget.onPrintReport!(
+        'Cashier flash - $who', _cashierRows(byCashier[who]!));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr(context, 'Cashier flash sent to printer'))));
     }
   }
 
