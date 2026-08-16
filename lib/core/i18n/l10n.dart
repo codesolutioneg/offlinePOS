@@ -1084,4 +1084,14 @@ const Map<String, String> _ar = {
   'Total outstanding': 'إجمالي المستحقات',
   'Sales on account': 'المبيعات على الحساب',
   'Unnamed': 'بدون اسم',
+
+  // The floor and the order types.
+  'To go': 'تيك أواي داخلي',
+  'Seat as': 'إجلاس كـ',
+  'Order types this shop offers': 'أنواع الطلبات التي يقدمها المحل',
+  'A type that is off is offered to nobody, whatever their role allows':
+      'النوع المغلق لا يظهر لأحد مهما سمح به دوره',
+  'Table sections': 'أقسام الطاولات',
+  'Beside the plan': 'بجانب المخطط',
+  'Above the plan': 'أعلى المخطط',
 };

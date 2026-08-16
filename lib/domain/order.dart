@@ -3,14 +3,31 @@ import 'identity.dart';
 
 /// Where the sale is served. Drives the sell screen, the kitchen ticket header,
 /// and whether delivery details and a delivery charge are collected.
-enum OrderType { dineIn, takeaway, delivery }
+///
+/// [toGo] is food eaten off the premises that is still rung in the room: the guests
+/// sit at a table while it is packed, so it occupies the floor like a dine-in but
+/// is bagged like a takeaway. It is its own type rather than a flag on takeaway
+/// because the shop prices it on its own line of the tax and service matrices.
+enum OrderType { dineIn, takeaway, toGo, delivery }
 
 extension OrderTypeLabel on OrderType {
   String get label => switch (this) {
         OrderType.dineIn => 'Dine-in',
         OrderType.takeaway => 'Takeaway',
+        OrderType.toGo => 'To go',
         OrderType.delivery => 'Delivery',
       };
+
+  /// Whether this kind of sale can sit at a table on the floor plan. Mandatory for
+  /// a dine-in, optional for a to-go, meaningless for the two that leave the room.
+  bool get seatsAtTable => this == OrderType.dineIn || this == OrderType.toGo;
+
+  /// What the server is told this sale was. The module books `order_type` from a
+  /// fixed vocabulary, and to-go is a distinction the shop makes on its own floor:
+  /// it goes over the wire as the takeaway it is, and the difference stays here,
+  /// on the till that prints it and reports on it.
+  String get wireName =>
+      this == OrderType.toGo ? OrderType.takeaway.name : name;
 }
 
 /// draft: being rung. held: parked on a table/tab, not yet paid. paid: tendered,
@@ -479,6 +496,9 @@ class Order {
     // The human number is the till's counter, for the people in the shop. The server
     // numbers its own documents, and the uuid is what identifies this sale there.
     m.remove('order_no');
+    // A to-go sale books as the takeaway it is. Sending a value the module has
+    // never seen would reject a sale over a label nobody there reads.
+    m['order_type'] = type.wireName;
     // How the shop runs its own deliveries: which app the order came through, that
     // app's own reference for it, and who drove it. The module books a sale, not a
     // dispatch record, so none of this has a field to land in.

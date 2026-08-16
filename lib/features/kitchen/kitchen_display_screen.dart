@@ -214,6 +214,7 @@ class _TicketCard extends StatelessWidget {
   IconData get _typeIcon => switch (order.type) {
         OrderType.dineIn => Icons.table_restaurant,
         OrderType.takeaway => Icons.shopping_bag,
+        OrderType.toGo => Icons.shopping_bag_outlined,
         OrderType.delivery => Icons.delivery_dining,
       };
 
