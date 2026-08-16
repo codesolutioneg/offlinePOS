@@ -53,7 +53,7 @@ void main() {
         ),
       );
 
-  testWidgets('the split/move chip appears once a dine-in order has lines', (t) async {
+  testWidgets('the move/merge chip appears once a dine-in order has lines', (t) async {
     await t.pumpWidget(app());
     expect(find.byKey(const Key('bill-options')), findsNothing);
     await t.tap(find.byKey(const Key('product-10')));
@@ -69,9 +69,9 @@ void main() {
     await t.pumpAndSettle();
     final line = session.current.lines.single;
 
-    await t.tap(find.byKey(const Key('bill-options')));
+    await t.tap(find.byKey(const Key('pay')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('bill-pay-selected')));
+    await t.tap(find.byKey(const Key('pay-mode-item')));
     await t.pumpAndSettle();
 
     // Including the multi-unit line reveals a quantity stepper so a subset can be
@@ -88,9 +88,9 @@ void main() {
     await t.tap(find.byKey(const Key('product-10'))); // Pizza 100
     await t.pumpAndSettle();
 
-    await t.tap(find.byKey(const Key('bill-options')));
+    await t.tap(find.byKey(const Key('pay')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('bill-split-even')));
+    await t.tap(find.byKey(const Key('pay-mode-evenly')));
     await t.pumpAndSettle();
 
     expect(find.byKey(const Key('split-ways')), findsOneWidget);
@@ -110,9 +110,9 @@ void main() {
     await t.pumpAndSettle();
     final line = session.current.lines.single;
 
-    await t.tap(find.byKey(const Key('bill-options')));
+    await t.tap(find.byKey(const Key('pay')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('bill-pay-selected')));
+    await t.tap(find.byKey(const Key('pay-mode-item')));
     await t.pumpAndSettle();
     await t.tap(find.descendant(
         of: find.widgetWithText(ListTile, 'Pizza'), matching: find.byType(Checkbox)));
@@ -131,16 +131,19 @@ void main() {
     expect(session.current.lines.single.quantity, 2);
   });
 
-  testWidgets('bill options offers split, pay-selected, move and merge', (t) async {
+  testWidgets('the table menu keeps move and merge and hands paying to the payment sheet',
+      (t) async {
     await t.pumpWidget(app());
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('bill-options')));
     await t.pumpAndSettle();
-    expect(find.byKey(const Key('bill-split-guest')), findsOneWidget);
-    expect(find.byKey(const Key('bill-pay-selected')), findsOneWidget);
     expect(find.byKey(const Key('bill-move')), findsOneWidget);
     expect(find.byKey(const Key('bill-merge')), findsOneWidget);
+    // Everything about taking money left this menu for the payment sheet.
+    expect(find.byKey(const Key('bill-split-guest')), findsNothing);
+    expect(find.byKey(const Key('bill-pay-selected')), findsNothing);
+    expect(find.byKey(const Key('bill-split-even')), findsNothing);
   });
 
   testWidgets('moving a line opens a tab on the destination table and trims here',

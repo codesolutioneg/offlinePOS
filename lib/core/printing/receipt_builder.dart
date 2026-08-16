@@ -3,6 +3,55 @@ import 'dart:typed_data';
 import '../../domain/order.dart';
 import 'escpos.dart';
 
+/// One payment that does not settle the whole bill: an even-split share, any part
+/// payment, or a guest/item check taken off a table that stays open.
+///
+/// Carries what the payment covered and what the bill still owes, which is the one
+/// thing no other slip can say: the sale receipt is not printed until the tab is
+/// settled, and the pre-bill is printed before the money moves.
+class PartialPayment {
+  const PartialPayment({
+    required this.order,
+    required this.paidNow,
+    required this.stillOwed,
+    this.title,
+    this.tenders = const [],
+    this.covered = const [],
+    this.cashReceived,
+    this.alsoReceipted = false,
+  });
+
+  /// The bill the payment was taken against, for its table, number and cashier.
+  final Order order;
+
+  /// What was settled by this payment, tip included.
+  final double paidNow;
+
+  /// What the bill still owes after it, so the next guest (or the waiter) knows
+  /// what is left to collect.
+  final double stillOwed;
+
+  /// What this payment is called on paper: a guest, a share, a check.
+  final String? title;
+
+  /// The tenders that made up this payment, so a share paid part cash part card
+  /// reads on the slip the way the sale receipt would show it.
+  final List<OrderPayment> tenders;
+
+  /// The lines this payment covered, when it paid for items rather than a share of
+  /// the money. Empty for an even split: there is nothing itemised to show.
+  final List<OrderLine> covered;
+
+  /// Cash handed over, when it was more than the amount settled, so the slip can
+  /// print the change the way a sale receipt does.
+  final double? cashReceived;
+
+  /// Whether a sale receipt prints for this payment as well. A guest's check is its
+  /// own paid sale and gets one; a share of a tab that stays open does not. The
+  /// caller uses this to keep one cash payment from kicking the drawer twice.
+  final bool alsoReceipted;
+}
+
 /// Formats an order as printer bytes.
 ///
 /// Amount formatting is injected so this stays free of locale and currency
@@ -357,6 +406,83 @@ class ReceiptBuilder {
       if (section != null && section.isNotEmpty) section,
       'Table $tableLabel',
     ];
+  }
+
+  /// The detail slip for a payment that leaves the bill part paid: what this
+  /// payment covered, how it was tendered, and what is still owed.
+  ///
+  /// Its own layout rather than the sale slip's, because the two say different
+  /// things: a sale receipt closes a bill, this one documents a payment against a
+  /// bill that stays open. It is marked as not a tax receipt for the same reason
+  /// the pre-bill is: the tax receipt is the one that prints when the tab settles.
+  /// [at] is the moment of payment (the caller's clock), [actor] who took it.
+  Uint8List buildPartialPayment(
+    PartialPayment payment, {
+    required DateTime at,
+    String? actor,
+  }) {
+    final order = payment.order;
+    final p = EscPos(columns: columns)..reset();
+    final divider = _dividerChars[dividerStyle] ?? '-';
+
+    p.align(EscPosAlign.center)
+      ..bold(true)
+      ..line(shopName)
+      ..bold(false);
+    p.size(doubleHeight: true).centred('*** PAYMENT ***').size();
+    p.centred('NOT A TAX RECEIPT');
+    p.align(EscPosAlign.left).rule(divider);
+
+    p.line('${_stamp(at)}  #${order.displayNo}');
+    if (showTable && order.type == OrderType.dineIn && order.tableLabel != null) {
+      p.line('Table ${order.tableLabel}');
+    }
+    if (showCashier && actor != null) p.line('Cashier: $actor');
+    // Whose share this was, so a table settling guest by guest can tell the slips
+    // apart on the spike at the end of the night.
+    if (payment.title != null && payment.title!.isNotEmpty) {
+      p.bold(true).line(payment.title!).bold(false);
+    }
+
+    // What the money bought, when it bought items. An even split buys a share of
+    // everything, so there is nothing to itemise and the section is skipped.
+    if (payment.covered.isNotEmpty) {
+      p.rule(divider);
+      for (final l in payment.covered) {
+        p.row('${_qty(l.quantity)} x ${l.name}',
+            showItemPrice ? formatAmount(l.total) : '');
+      }
+    }
+
+    p.rule(divider);
+    if (showPayment) {
+      for (final t in payment.tenders) {
+        p.row(paymentLabels[t.methodId] ?? t.label ?? 'Payment', formatAmount(t.amount));
+      }
+    }
+    final received = payment.cashReceived;
+    if (received != null && received - payment.paidNow > 0.001) {
+      p.row('Received', formatAmount(received));
+      p.row('Change', formatAmount(received - payment.paidNow));
+    }
+    p.size(doubleHeight: true).bold(true)
+      ..row('PAID NOW', formatAmount(payment.paidNow))
+      ..bold(false)
+      ..size();
+
+    // The point of the slip. Big, because the next guest reads this number and the
+    // waiter collects it.
+    p.rule(divider);
+    p.size(doubleHeight: true).bold(true)
+      ..row('STILL OWED', formatAmount(payment.stillOwed))
+      ..bold(false)
+      ..size();
+
+    p.feed(2);
+    // Cash taken as a part payment goes in the drawer like any other cash, so the
+    // drawer opens on this slip too when the shop has it wired that way.
+    if (openDrawer) p.openDrawer();
+    return (p..cut()).build();
   }
 
   /// [text] broken onto lines that fit the roll, at spaces where there is one. A
