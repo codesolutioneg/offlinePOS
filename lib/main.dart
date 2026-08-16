@@ -50,8 +50,15 @@ import 'core/updates/update_storage.dart';
 import 'core/updates/update_transport.dart';
 
 /// The version this build reports to support and compares update manifests
-/// against. Supplied by the build so it cannot drift from what was actually
-/// shipped: `--dart-define=APP_VERSION=$(grep version pubspec.yaml ...)`.
+/// against.
+///
+/// Supplied by the build so it cannot drift from what was actually shipped: CI
+/// reads the version out of pubspec.yaml and passes it with the CI build number as
+/// metadata (`--dart-define=APP_VERSION=1.1.0+42`), alongside the matching
+/// `--build-name` / `--build-number` that stamp the exe. The comparison ignores
+/// everything after the '+', so the build number tells two builds of one release
+/// apart without either counting as newer. The default marks a build nobody
+/// stamped, which is a local run.
 const String appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '0.0.0-dev');
 
 Future<void> main() async {

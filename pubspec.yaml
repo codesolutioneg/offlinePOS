@@ -16,7 +16,17 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+#
+# This line is the single source of truth for the version the app reports and the
+# update manifest is compared against. CI reads it out of here and appends the CI
+# build number as build metadata (1.1.0+42), which the version comparison ignores,
+# so two builds of the same release are tellable apart without either looking newer.
+#
+# 1.1.0 rather than 1.0.x: AppVeyor's default version format has already been
+# stamping 1.0.<build> onto the Windows zips that went out, so calling the source
+# 1.0.0 would collide with builds in the field. 1.1.0 is the first version the
+# source itself names and sorts clear of all of them.
+version: 1.1.0+1
 
 environment:
   sdk: ^3.11.4

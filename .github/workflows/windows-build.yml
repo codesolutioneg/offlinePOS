@@ -28,7 +28,19 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
-      - run: flutter build windows --release
+
+      # pubspec.yaml is the single source of truth for the version; CI only adds the
+      # run number as build metadata, so the app, the exe's file version and the
+      # update manifest comparison all say the same release.
+      - name: Build Windows
+        shell: pwsh
+        run: |
+          $pubspecVersion = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)').Matches[0].Groups[1].Value
+          $buildName = ($pubspecVersion -split '\+')[0]
+          $buildNumber = "$env:GITHUB_RUN_NUMBER"
+          $appVersion = "$buildName+$buildNumber"
+          "Building $appVersion"
+          flutter build windows --release --build-name=$buildName --build-number=$buildNumber --dart-define=APP_VERSION="$appVersion"
 
       - name: Package
         shell: pwsh

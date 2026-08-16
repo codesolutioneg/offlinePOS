@@ -14,6 +14,14 @@ build_script:
       if ($LASTEXITCODE -ne 0) { throw "flutter clone failed" }
       $env:PATH = "C:\fsdk\bin;$env:PATH"
       flutter --version
+      # pubspec.yaml is the single source of truth for the version. CI only adds the
+      # build number, as build metadata, so the app, the exe's file version and the
+      # manifest comparison all say the same release.
+      $pubspecVersion = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)').Matches[0].Groups[1].Value
+      $buildName = ($pubspecVersion -split '\+')[0]
+      $buildNumber = if ($env:APPVEYOR_BUILD_NUMBER) { $env:APPVEYOR_BUILD_NUMBER } else { "0" }
+      $appVersion = "$buildName+$buildNumber"
+      "Building $appVersion"
       flutter pub get;                 if ($LASTEXITCODE -ne 0) { throw "pub get failed" }
       flutter analyze;                 if ($LASTEXITCODE -ne 0) { throw "analyze failed" }
       # The image's system sqlite3.dll is too old for the schema's ON CONFLICT
@@ -24,7 +32,7 @@ build_script:
       $env:SQLITE3_DLL = (Resolve-Path .\sqlite-dll\sqlite3.dll).Path
       "Using sqlite: $env:SQLITE3_DLL"
       flutter test;                    if ($LASTEXITCODE -ne 0) { throw "tests failed" }
-      flutter build windows --release --dart-define=APP_VERSION="$env:APPVEYOR_BUILD_VERSION"; if ($LASTEXITCODE -ne 0) { throw "windows build failed" }
+      flutter build windows --release --build-name=$buildName --build-number=$buildNumber --dart-define=APP_VERSION="$appVersion"; if ($LASTEXITCODE -ne 0) { throw "windows build failed" }
       7z a offlinePOS-windows.zip .\build\windows\x64\runner\Release\*
       if ($LASTEXITCODE -ne 0) { throw "packaging failed" }
 
