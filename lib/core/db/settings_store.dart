@@ -9,6 +9,7 @@ import '../lan/lan_event.dart';
 import '../printing/escpos.dart';
 import '../printing/printer_logo.dart';
 import '../sync/odoo_puller.dart';
+import '../sync/odoo_site.dart';
 import '../theme/table_palette.dart';
 import 'database.dart';
 
@@ -24,6 +25,7 @@ class SettingsStore {
     publishBusinessDayRule();
     publishCataloguePullOptions();
     publishTablePalette();
+    publishOdooSite();
   }
 
   final Db _db;
@@ -951,6 +953,43 @@ class SettingsStore {
     );
     return config.isComplete ? config : null;
   }
+
+  // ── where this till's sales belong in Odoo ───────────────────────
+
+  /// The branch (a `res.company` in jouma), the point of sale (`pos.config`) and
+  /// the warehouse (`stock.warehouse`) this till books into. Null until a manager
+  /// sets them, and then nothing extra travels: a shop that has one of everything
+  /// does not have to name it.
+  int? get odooBranchId => _positiveId('odoo_branch_id');
+  set odooBranchId(int? v) => _setOdooId('odoo_branch_id', v);
+
+  int? get odooRestaurantId => _positiveId('odoo_restaurant_id');
+  set odooRestaurantId(int? v) => _setOdooId('odoo_restaurant_id', v);
+
+  int? get odooWarehouseId => _positiveId('odoo_warehouse_id');
+  set odooWarehouseId(int? v) => _setOdooId('odoo_warehouse_id', v);
+
+  /// An Odoo id is a positive integer. Anything else (a blank, a typo, a leftover
+  /// zero) reads as "not set" rather than travelling and pointing the sale at a
+  /// record that does not exist.
+  int? _positiveId(String key) {
+    final v = int.tryParse(getString(key) ?? '');
+    return v == null || v <= 0 ? null : v;
+  }
+
+  void _setOdooId(String key, int? v) {
+    setString(key, v == null || v <= 0 ? null : v.toString());
+    publishOdooSite();
+  }
+
+  /// Hands the sender the shop's ids. Called on open and on every change, like
+  /// [publishPrintProfile]: the sender is built before a manager ever opens
+  /// settings, and a sale pushed after the change must carry the new ids.
+  void publishOdooSite() => OdooSite.shared = OdooSite(
+        branchId: odooBranchId,
+        restaurantId: odooRestaurantId,
+        warehouseId: odooWarehouseId,
+      );
 
   // ── how the till looks and how big the paper prints ──────────────
 

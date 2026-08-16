@@ -124,8 +124,27 @@ Every order push carries these, each one for a reason that has gone wrong somewh
 | `created_at` | The moment of sale. Without it a week of offline orders all post on the day the line returned |
 | `cashier_id` | With one shared login Odoo attributes every order to the same user; this is the only record of who rang it |
 | `device_id` | Which till, for reconciliation and support |
+| `config_id` | Which point of sale ("restaurant") the sale belongs to, when the shop has named one. It is the id the module resolves first; without it the server has to match the till by its `device_id` against a point of sale that was set up to expect it, and a till nobody set up is refused |
+| `company_id` | Which branch. A branch in jouma is a company: its branch reporting filters `account.move` on `company_id` |
+| `warehouse_id` | Which warehouse the stock leaves from |
 | `lines[].product_id`, `quantity`, `unit_price` | The sale itself; a whole-order discount and the service charge are both folded into each line's `unit_price` before sending, so the module books what the customer paid without learning a new field, and the service is taxed at each item's own rate. The till keeps the percentage locally to print it as its own line; it is stripped from the payload |
 | `lines[].modifiers[].product_id` | Each modifier backed by a product becomes its own order line, so it moves stock and invoices exactly as on-site |
+
+### Where the shop is, and who decides
+
+The branch, the point of sale and the warehouse are typed on the server screen and
+kept as three ids in the settings table (no schema change: settings are key-value).
+They are **stamped when the sale is pushed, not when it is rung**, so a week of
+takings sold before a manager named the shop still books in the right place. An id
+left blank does not travel at all: an unset id must never arrive as a zero, which
+Odoo would read as a real record.
+
+Only `config_id` is known to change what the server does today: the module resolves
+the point of sale from it before falling back to matching `device_id`. `company_id`
+and `warehouse_id` ride on the sale for the module to honour; a module that does not
+read them books against the point of sale's own company and picking type as before,
+so setting them can never make a sale worse, and the day the module reads them the
+till already sends them.
 
 ## How the module answers
 
