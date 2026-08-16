@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
+import 'report_export.dart';
 
 /// One row in the reason breakdown: how many orders cited this reason and how
 /// much discount they gave away, so a manager can see whether "staff meal" or
@@ -65,6 +66,21 @@ class DiscountsReportScreen extends StatelessWidget {
     return list;
   }
 
+  /// The two totals that make up the giveaway, then what was given away under
+  /// each reason: the question a manager asks of this report is "who is
+  /// discounting what, and why".
+  ReportTable _table() => ReportTable(
+        header: const ['Section', 'Item', 'Orders', 'Amount'],
+        rows: [
+          ['Overview', 'Order discounts', '$_discountedOrderCount',
+              _totalOrderDiscount.toStringAsFixed(2)],
+          ['Overview', 'Line discounts', '', _totalLineDiscount.toStringAsFixed(2)],
+          ['Overview', 'Total given away', '', _grandTotal.toStringAsFixed(2)],
+          for (final r in _byReason())
+            ['By reason', r.reason, '${r.orderCount}', r.amount.toStringAsFixed(2)],
+        ],
+      );
+
   Widget _row(String k, String v, {bool bold = false}) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(children: [
@@ -119,7 +135,15 @@ class DiscountsReportScreen extends StatelessWidget {
     final reasons = _byReason();
 
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Discounts'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Discounts')),
+        actions: [
+          reportExportAction(context,
+              name: 'report-discounts',
+              title: tr(context, 'Discounts'),
+              table: _table),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

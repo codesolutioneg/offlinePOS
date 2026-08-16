@@ -40,8 +40,9 @@ class _NoPrinters extends PrinterDiscovery {
 /// What a cashier is told about the drawer when they sign in.
 ///
 /// Two ways a day goes wrong quietly: a Z with no float because nobody opened a
-/// shift, and yesterday's shift silently swallowing today's sales. Both are told
-/// on the screen the cashier actually lands on, and neither may stop them selling.
+/// shift, and yesterday's shift silently swallowing today's sales. Both are told on
+/// the screen the cashier actually lands on. The strip is the way to the fix from
+/// anywhere; the refusal to sell without a shift is the sell screen's own.
 void main() {
   late Db db;
   late ShiftStore shifts;
@@ -113,7 +114,8 @@ void main() {
     // On the floor, which is where sign-in lands, and readable there.
     expect(find.byType(TableFloorScreen), findsOneWidget);
     expect(find.byKey(const Key('shift-nudge')).hitTestable(), findsOneWidget);
-    expect(find.text('No shift is open. Open one with a float?'), findsOneWidget);
+    expect(find.text('No shift is open. Selling is blocked until you open one.'),
+        findsOneWidget);
 
     await t.tap(find.byKey(const Key('shift-nudge-open')));
     await t.pumpAndSettle();
@@ -154,11 +156,12 @@ void main() {
     expect(find.byKey(const Key('shift-nudge')), findsNothing);
   });
 
-  testWidgets('the nudge informs and never blocks selling', (t) async {
+  testWidgets('waving the strip away does not open the drawer', (t) async {
     await t.pumpWidget(app());
     await signIn(t);
 
-    // The floor is fully usable underneath it: start a takeaway with the banner up.
+    // The floor still navigates with the strip up, and the till behind it still
+    // refuses the order: dismissing the reminder is not a way past the gate.
     await t.tap(find.byKey(const Key('floor-takeaway')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
@@ -167,6 +170,7 @@ void main() {
     await t.tap(find.byKey(const Key('shift-nudge-dismiss')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('shift-nudge')), findsNothing);
+    expect(find.byKey(const Key('no-shift-gate')), findsOneWidget);
   });
 
   testWidgets('an Arabic till reads the nudge in Arabic', (t) async {
@@ -177,7 +181,7 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
 
-    expect(find.text('لا توجد وردية مفتوحة. هل تفتح واحدة برصيد ابتدائي؟'),
+    expect(find.text('لا توجد وردية مفتوحة. البيع متوقف حتى تفتح واحدة.'),
         findsOneWidget);
   });
 

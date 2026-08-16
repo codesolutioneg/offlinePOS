@@ -69,9 +69,7 @@ class ExpensesReportScreen extends StatelessWidget {
     return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
   }
 
-  Future<void> _csv(BuildContext context) => downloadReportCsv(
-        context,
-        name: 'report-expenses',
+  ReportTable _table() => ReportTable(
         header: const ['Date', 'Category', 'Reason', 'Cashier', 'Shift', 'Amount'],
         rows: [
           for (final m in _paidOut)
@@ -131,7 +129,10 @@ class ExpensesReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'Expenses')),
-        actions: [reportCsvAction(context, onPressed: () => _csv(context))],
+        actions: [
+          reportExportAction(context,
+              name: 'report-expenses', title: tr(context, 'Expenses'), table: _table),
+        ],
       ),
       body: paidOut.isEmpty
           ? Center(

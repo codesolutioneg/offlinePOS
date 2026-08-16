@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
+import 'report_export.dart';
 
 /// One local hour-of-day bucket: how many orders were rung and how much they
 /// were worth. Kept separate from [Order] because the report only cares
@@ -83,13 +84,32 @@ class SalesByTimeReportScreen extends StatelessWidget {
     'Sunday',
   ];
 
+  ReportTable _table() => ReportTable(
+        header: const ['Section', 'When', 'Orders', 'Total'],
+        rows: [
+          for (final h in _byHour())
+            ['Hour', _hourLabel(h.hour), '${h.count}', h.total.toStringAsFixed(2)],
+          for (final d in _byWeekday())
+            ['Weekday', _weekdayNames[d.weekday - 1], '${d.count}',
+                d.total.toStringAsFixed(2)],
+        ],
+      );
+
   @override
   Widget build(BuildContext context) {
     final hours = _byHour();
     final days = _byWeekday();
 
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Sales by hour'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Sales by hour')),
+        actions: [
+          reportExportAction(context,
+              name: 'report-sales-by-hour',
+              title: tr(context, 'Sales by hour'),
+              table: _table),
+        ],
+      ),
       body: orders.isEmpty
           ? Center(child: Text(tr(context, 'No orders')))
           : SingleChildScrollView(

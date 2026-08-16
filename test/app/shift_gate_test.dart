@@ -24,7 +24,8 @@ import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
-import 'package:offline_pos/features/tables/table_floor_screen.dart';
+import 'package:offline_pos/features/shift/shift_screen.dart';
+import 'package:offline_pos/features/support/diagnostics_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
@@ -37,36 +38,35 @@ class _NoPrinters extends PrinterDiscovery {
   Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async => const [];
 }
 
-/// Seating a table on the floor of a running app, with the covers prompt off (the
-/// one-cashier shop that must see no new taps) and on.
+/// No open shift, no sale.
+///
+/// A sale rung outside a shift belongs to no drawer and no Z. The till refuses to
+/// start an order at all until one is open, and sends the cashier to open it. What
+/// it must never refuse is the way out: the drawer, the support screens and the
+/// shift screen itself all stay reachable.
 void main() {
   late Db db;
-  late OrderStore orders;
-  late SettingsStore settings;
-  late TableStore tables;
-  late PosTable table5;
+  late ShiftStore shifts;
   late AuditLog audit;
+
+  const cash = PaymentMethod(id: 1, name: 'Cash', isCash: true);
 
   setUpAll(useSystemSqlite);
   setUp(() async {
     db = Db.open(':memory:');
-    // The till refuses to start an order with no shift open, so a test that
-    // sells opens the drawer first.
-    ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
-    orders = OrderStore(db);
-    settings = SettingsStore(db);
-    tables = TableStore(db);
+    shifts = ShiftStore(db);
     audit = AuditLog(db);
-    table5 = tables.add(name: '5', seats: 4);
+    SettingsStore(db);
     CatalogueStore(db).replaceAll(
       categories: const [Category(id: 1, name: 'Pizza')],
       products: const [Product(id: 10, name: 'Margherita', price: 250, categoryId: 1)],
       groups: const [],
       productGroupIds: const {},
+      paymentMethods: const [cash],
       refreshedAt: DateTime.now().toUtc(),
     );
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
-        .enrol(id: 'sara', name: 'Sara', pin: '1234');
+        .enrol(id: 'sara', name: 'Sara', pin: '1234', role: 'manager');
     WizardStore(db).dismiss(WizardId.firstSale, 'sara');
   });
   tearDown(() => db.close());
@@ -77,7 +77,7 @@ void main() {
       auth: AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit),
       users: UserStore(db),
       catalogue: CatalogueStore(db),
-      orders: orders,
+      orders: OrderStore(db),
       outbox: outbox,
       audit: audit,
       sync: SyncService(
@@ -90,12 +90,12 @@ void main() {
       outboxStore: SqliteOutboxStore(db),
       printers: PrinterRegistry(discovery: _NoPrinters()),
       wizards: WizardStore(db),
-      shifts: ShiftStore(db),
+      shifts: shifts,
       deviceId: 'till-1',
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
-      tables: tables,
-      settings: settings,
+      tables: TableStore(db),
+      settings: SettingsStore(db),
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       config: const TillConfig(),
@@ -117,87 +117,82 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  Future<void> seatTable(WidgetTester t) async {
-    await t.tap(find.byKey(Key('table-tile-${table5.id}')));
-    await t.pumpAndSettle();
+  /// A till-shaped window: the keypad and the drawer both want the height.
+  void tallWindow(WidgetTester t) {
+    t.view.physicalSize = const Size(1000, 2400);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
   }
 
-  /// The covers on the order the cashier is now ringing, read off the chip.
-  String guestChipLabel(WidgetTester t) => t
-      .widget<Text>(find.descendant(
-          of: find.byKey(const Key('guests')), matching: find.byType(Text)))
-      .data!;
-
-  testWidgets('off by default: seating a table is still one tap', (t) async {
+  /// Sign in and land on the till, which is where an order would be started.
+  Future<void> onTheTill(WidgetTester t) async {
+    tallWindow(t);
     await t.pumpWidget(app());
     await signIn(t);
-
-    await seatTable(t);
-
-    expect(find.byKey(const Key('guest-count-prompt')), findsNothing);
+    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
-    // Seeded from the table itself, exactly as before.
-    expect(guestChipLabel(t), '4 guests');
+  }
+
+  testWidgets('with no shift open the till refuses to start an order', (t) async {
+    await onTheTill(t);
+
+    expect(find.byKey(const Key('no-shift-gate')), findsOneWidget);
+    expect(find.text('No shift is open'), findsOneWidget);
+    // Nothing to ring up with: no grid, no cart, no Pay.
+    expect(find.text('Margherita'), findsNothing);
+    expect(find.byKey(const Key('pay')), findsNothing);
+    expect(find.byKey(const Key('search')), findsNothing);
   });
 
-  testWidgets('on: the covers are asked for and land on the order', (t) async {
-    settings.askGuestCount = true;
-    await t.pumpWidget(app());
-    await signIn(t);
+  testWidgets('the refusal opens the shift, and the till sells again', (t) async {
+    await onTheTill(t);
 
-    await seatTable(t);
-    expect(find.byKey(const Key('guest-count-prompt')), findsOneWidget);
-    await t.tap(find.byKey(const Key('guests-2')));
+    await t.tap(find.byKey(const Key('no-shift-open-shift')));
     await t.pumpAndSettle();
+    expect(find.byType(ShiftScreen), findsOneWidget);
 
-    expect(guestChipLabel(t), '2 guests');
-    // Ring something and park it: the covers travel with the bill.
-    await t.tap(find.byKey(const Key('product-10')));
+    // Open with a hundred on the float, the way a cashier starts the day.
+    await t.tap(find.byKey(const Key('open-shift')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('hold')));
+    for (final d in '100'.split('')) {
+      await t.tap(find.byKey(Key('key-$d')));
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('keypad-ok')));
     await t.pumpAndSettle();
-    expect(orders.held().single.guestCount, 2);
+    expect(shifts.currentOpenShift(), isNotNull);
+
+    // Back to the till, which is open for business without a restart.
+    await t.pageBack();
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('no-shift-gate')), findsNothing);
+
+    await t.tap(find.text('Margherita'));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('pay')), findsOneWidget);
   });
 
-  testWidgets('backing out of the prompt seats nobody', (t) async {
-    settings.askGuestCount = true;
-    await t.pumpWidget(app());
-    await signIn(t);
+  testWidgets('a closed drawer does not lock the cashier out of a reprint',
+      (t) async {
+    await onTheTill(t);
 
-    await seatTable(t);
-    await t.tap(find.byKey(const Key('guests-cancel')));
+    // The drawer is the way to everything that is not selling, and it is still
+    // there: support carries the receipt reprints.
+    await t.tap(find.byTooltip('Open navigation menu'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('nav-support')));
     await t.pumpAndSettle();
 
-    // Still on the floor, with no table taken and no order started.
-    expect(find.byType(TableFloorScreen), findsOneWidget);
-    expect(orders.held(), isEmpty);
-    expect(orders.drafts().where((o) => o.tableLabel != null), isEmpty);
+    expect(find.byType(DiagnosticsScreen), findsOneWidget);
   });
 
-  testWidgets('recalling a tab that is already open asks nothing', (t) async {
-    settings.askGuestCount = true;
-    await t.pumpWidget(app());
-    await signIn(t);
-    // Seat it, ring it, park it.
-    await seatTable(t);
-    await t.tap(find.byKey(const Key('guests-3')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('product-10')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('hold')));
-    await t.pumpAndSettle();
+  testWidgets('a till with a shift open is not gated at all', (t) async {
+    shifts.openShift(openingFloat: 100, cashierId: 'sara');
+    await onTheTill(t);
 
-    // Back to the floor and onto the same table: the covers are already known.
-    t.state<ScaffoldState>(find
-            .descendant(of: find.byType(SellScreen), matching: find.byType(Scaffold))
-            .first)
-        .openDrawer();
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('nav-tables')));
-    await t.pumpAndSettle();
-    await seatTable(t);
-
-    expect(find.byKey(const Key('guest-count-prompt')), findsNothing);
-    expect(guestChipLabel(t), '3 guests');
+    expect(find.byKey(const Key('no-shift-gate')), findsNothing);
+    expect(find.text('Margherita'), findsOneWidget);
   });
 }

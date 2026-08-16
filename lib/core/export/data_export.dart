@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import 'export_header.dart';
+
 /// Turns a table of rows into a downloadable file the user can actually open.
 ///
 /// Kept independent of any one screen so the audit log and the reports share the
@@ -23,8 +25,21 @@ String csvField(String value) {
 }
 
 /// A CSV document: the [header] row followed by one line per row in [rows].
-String buildCsv(List<String> header, List<List<String>> rows) {
-  final lines = <String>[header.map(csvField).join(',')];
+///
+/// With a [head] the document opens with the report's name and the shop/period/who
+/// block, then a blank line, then the table. Spreadsheets read that as leading
+/// one-column rows, which is exactly how a printed report reads too.
+String buildCsv(List<String> header, List<List<String>> rows,
+    {ExportHeader? head}) {
+  final lines = <String>[];
+  if (head != null) {
+    lines.add(csvField(head.title));
+    for (final (label, value) in head.lines) {
+      lines.add('${csvField(label)},${csvField(value)}');
+    }
+    lines.add('');
+  }
+  lines.add(header.map(csvField).join(','));
   for (final r in rows) {
     lines.add(r.map(csvField).join(','));
   }

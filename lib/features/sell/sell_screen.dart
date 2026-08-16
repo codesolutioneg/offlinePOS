@@ -72,6 +72,8 @@ class SellScreen extends StatefulWidget {
       OrderType.delivery,
     },
     this.payLaterMethodId,
+    this.shiftOpen,
+    this.onOpenShift,
   });
 
   final PosSession session;
@@ -227,6 +229,15 @@ class SellScreen extends StatefulWidget {
   /// unchanged.
   final int? payLaterMethodId;
 
+  /// Whether a cash-drawer shift is open right now, read on every build. When it
+  /// answers false the screen takes no order at all: a sale rung outside a shift
+  /// belongs to no drawer and no Z, which is how a day ends up unreconcilable.
+  /// Null means the caller does not run shifts and nothing is gated.
+  final bool Function()? shiftOpen;
+
+  /// Sends the cashier to the shift screen to open one, from the refusal panel.
+  final VoidCallback? onOpenShift;
+
   @override
   State<SellScreen> createState() => _SellScreenState();
 }
@@ -247,6 +258,10 @@ class _SellScreenState extends State<SellScreen> {
   final FocusNode _searchFocus = FocusNode();
 
   PosSession get s => widget.session;
+
+  /// No open shift, so no order may be started. Read fresh every time rather than
+  /// cached: the cashier opens the shift on another screen and comes straight back.
+  bool get _noShift => widget.shiftOpen != null && !widget.shiftOpen!();
 
   // Keeps the course-fire countdown badges ticking down while the cart is open.
   Timer? _fireTick;
@@ -273,6 +288,9 @@ class _SellScreenState extends State<SellScreen> {
   /// the barcode scanner, which is a keyboard too. Shortcuts are taken first and
   /// swallowed, so a shortcut can never end up half-typed into the scan buffer.
   void _onKey(KeyEvent e) {
+    // A scanner is a keyboard, and Pay is a keystroke. With no shift open neither
+    // may reach the order: the refusal panel would hide a line the scanner added.
+    if (_noShift) return;
     if (e is KeyDownEvent && _shortcut(e)) return;
     _onScanKey(e);
   }
@@ -2083,7 +2101,9 @@ class _SellScreenState extends State<SellScreen> {
         title: Text(title, key: const Key('order-context')),
         actions: [
           _statusChip(),
-          if (widget.onOpenOrders != null)
+          // Recalling a tab or starting a new order is selling, so both go with the
+          // grid while the drawer is shut.
+          if (widget.onOpenOrders != null && !_noShift)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: Badge(
@@ -2097,12 +2117,13 @@ class _SellScreenState extends State<SellScreen> {
                 ),
               ),
             ),
-          IconButton(
-            key: const Key('new-order'),
-            tooltip: tr(context, 'New order'),
-            icon: const Icon(Icons.note_add_outlined),
-            onPressed: s.hasLines ? _newOrder : null,
-          ),
+          if (!_noShift)
+            IconButton(
+              key: const Key('new-order'),
+              tooltip: tr(context, 'New order'),
+              icon: const Icon(Icons.note_add_outlined),
+              onPressed: s.hasLines ? _newOrder : null,
+            ),
         ],
       ),
       body: KeyboardListener(
@@ -2115,13 +2136,15 @@ class _SellScreenState extends State<SellScreen> {
             if (widget.staleness != null && widget.staleness!.inHours >= 24)
               _StaleBanner(age: widget.staleness!),
             Expanded(
-              child: Row(
-                children: [
-                  SizedBox(width: 360, child: _orderPanel()),
-                  const VerticalDivider(width: 1),
-                  Expanded(child: _catalogue(products)),
-                ],
-              ),
+              child: _noShift
+                  ? _noShiftGate()
+                  : Row(
+                      children: [
+                        SizedBox(width: 360, child: _orderPanel()),
+                        const VerticalDivider(width: 1),
+                        Expanded(child: _catalogue(products)),
+                      ],
+                    ),
             ),
           ],
         ),
@@ -2129,6 +2152,59 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
   }
+
+  /// What the till shows instead of the catalogue when no shift is open.
+  ///
+  /// It replaces the order panel and the grid, not the whole screen: the app bar and
+  /// the drawer stay, so reprinting an old receipt, the support screens and the shift
+  /// screen itself are all still one tap away. Only ringing up is refused.
+  Widget _noShiftGate() => SingleChildScrollView(
+        // Scrollable, because a short till in landscape has very little height left
+        // under the app bar and the nudge strip.
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: Column(
+            key: const Key('no-shift-gate'),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.point_of_sale, size: 56, color: AppColors.error),
+              const SizedBox(height: 16),
+              Text(
+                tr(context, 'No shift is open'),
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                tr(context,
+                    'Open a shift with a float before you take an order. Reprints and support still work.'),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              if (widget.onOpenShift != null)
+                SizedBox(
+                  height: 52,
+                  child: FilledButton.icon(
+                    key: const Key('no-shift-open-shift'),
+                    icon: const Icon(Icons.play_arrow),
+                    label: Text(tr(context, 'Open shift')),
+                    onPressed: widget.onOpenShift,
+                  ),
+                ),
+              // The way off the till goes with the grid, so it is offered here too:
+              // a cashier who is not the one opening the drawer must still be able
+              // to hand the till back.
+              if (widget.onSignOut != null)
+                TextButton.icon(
+                  key: const Key('sign-out'),
+                  icon: const Icon(Icons.logout),
+                  label: Text(tr(context, 'End shift')),
+                  onPressed: widget.onSignOut,
+                ),
+            ],
+          ),
+        ),
+      );
 
   /// Online/offline badge plus how many sales are waiting for the close-of-shift
   /// batch. This is the honest status a cashier needs: selling works either way,

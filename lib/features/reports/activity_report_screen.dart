@@ -4,6 +4,7 @@ import '../../core/audit/audit_log.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart';
+import 'report_export.dart';
 
 /// A parsed 'line.voided' audit row. The raw detail is
 /// 'orderUuid|name xqty|reason'; only the item text and the reason are shown.
@@ -96,6 +97,28 @@ class ActivityReportScreen extends StatelessWidget {
     return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
 
+  /// Every giveback in the window as one list, so a manager reading a spreadsheet
+  /// sees a refund, a voided line and a discarded tab in the same column of time
+  /// rather than in three separate files.
+  ReportTable _table() => ReportTable(
+        header: const ['Kind', 'What', 'Reason', 'Who', 'When', 'Amount'],
+        rows: [
+          for (final o in _refunds)
+            [
+              'Refund',
+              _shortRef(o.uuid),
+              o.note?.trim() ?? '',
+              o.cashierId,
+              _time(o.createdAt),
+              o.total.abs().toStringAsFixed(2),
+            ],
+          for (final v in _voidedLines)
+            ['Voided line', v.item, v.reason, v.actor, _time(v.at), ''],
+          for (final c in _cancelledOrders)
+            ['Cancelled order', _shortRef(c.orderUuid), '', c.actor, _time(c.at), ''],
+        ],
+      );
+
   Widget _row(String k, String v, {bool bold = false}) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(children: [
@@ -146,7 +169,15 @@ class ActivityReportScreen extends StatelessWidget {
     final cancelled = _cancelledOrders;
 
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Cancelled, voided & refunded'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Cancelled, voided & refunded')),
+        actions: [
+          reportExportAction(context,
+              name: 'report-activity',
+              title: tr(context, 'Cancelled, voided & refunded'),
+              table: _table),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

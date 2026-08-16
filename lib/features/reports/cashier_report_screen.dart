@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart';
+import 'report_export.dart';
 
 /// One row in the cashier table: a cashier's order count and revenue
 /// aggregated across every order passed to the screen.
@@ -44,6 +45,19 @@ class CashierReportScreen extends StatelessWidget {
     return list;
   }
 
+  ReportTable _table() => ReportTable(
+        header: const ['Cashier', 'Orders', 'Total', 'Average'],
+        rows: [
+          for (final c in _byCashier())
+            [
+              c.cashierId,
+              '${c.orderCount}',
+              c.total.toStringAsFixed(2),
+              c.average.toStringAsFixed(2),
+            ],
+        ],
+      );
+
   Widget _headerCell(String text) => Expanded(
         child: Text(
           text,
@@ -66,7 +80,15 @@ class CashierReportScreen extends StatelessWidget {
     final overallAverage = totalOrders == 0 ? 0.0 : totalSales / totalOrders;
 
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Cashier performance'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Cashier performance')),
+        actions: [
+          reportExportAction(context,
+              name: 'report-cashier',
+              title: tr(context, 'Cashier performance'),
+              table: _table),
+        ],
+      ),
       body: cashiers.isEmpty
           ? EmptyState(
               icon: Icons.bar_chart_outlined,

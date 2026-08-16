@@ -63,10 +63,7 @@ class ModifierReportScreen extends StatelessWidget {
   static String _qty(double q) =>
       q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toStringAsFixed(2);
 
-  Future<void> _csv(BuildContext context, List<_ModifierAggregate> rows) =>
-      downloadReportCsv(
-        context,
-        name: 'report-modifiers',
+  ReportTable _table(List<_ModifierAggregate> rows) => ReportTable(
         header: const ['Modifier', 'Id', 'Lines', 'Quantity', 'Revenue'],
         rows: [
           for (final m in rows)
@@ -88,7 +85,10 @@ class ModifierReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'Modifiers')),
-        actions: [reportCsvAction(context, onPressed: () => _csv(context, rows))],
+        actions: [
+          reportExportAction(context,
+              name: 'report-modifiers', title: tr(context, 'Modifiers'), table: () => _table(rows)),
+        ],
       ),
       body: rows.isEmpty
           ? Center(

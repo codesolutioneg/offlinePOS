@@ -1125,4 +1125,18 @@ class SettingsStore {
     final both = orderTypesFor(role).intersection(shop);
     return both.isEmpty ? shop : both;
   }
+  // ── closing the drawer ───────────────────────────────────────────
+
+  /// How far a counted drawer may sit from the expected drawer and still close the
+  /// shift. Zero, the default, means the count has to match to the cent. A shop that
+  /// rounds its change sets a small allowance here; there is no override above it.
+  double get cashVarianceTolerance {
+    final v = double.tryParse(getString('cash_variance_tolerance') ?? '') ?? 0;
+    // A negative allowance would close nothing at all, which is a setting nobody
+    // means to save.
+    return v <= 0 ? 0 : v;
+  }
+
+  set cashVarianceTolerance(double v) => setString(
+      'cash_variance_tolerance', v <= 0 ? null : v.toStringAsFixed(2));
 }
