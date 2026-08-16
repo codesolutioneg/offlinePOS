@@ -1220,4 +1220,11 @@ const Map<String, String> _ar = {
   // has been opened yet, on the screen a cashier now lands on.
   'No shift is open. Open one before you start an order.':
       'لا توجد وردية مفتوحة. افتح وردية قبل بدء أي طلب.',
+  // Floor polish: the parked-bill confirmation the floor now carries above the
+  // plan, the shift gate on the open-orders list, and the prices-as-of fact on the
+  // counter.
+  'Order parked on table': 'تم حفظ الطلب على الطاولة',
+  'No shift is open. Open one before you pick a tab back up.':
+      'لا توجد وردية مفتوحة. افتح وردية قبل استرجاع أي طلب.',
+  'Prices': 'الأسعار',
 };
