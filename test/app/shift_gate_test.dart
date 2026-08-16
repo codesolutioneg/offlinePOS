@@ -23,9 +23,11 @@ import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
+import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/shift/shift_screen.dart';
 import 'package:offline_pos/features/support/diagnostics_screen.dart';
+import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
@@ -40,14 +42,16 @@ class _NoPrinters extends PrinterDiscovery {
 
 /// No open shift, no sale.
 ///
-/// A sale rung outside a shift belongs to no drawer and no Z. The till refuses to
-/// start an order at all until one is open, and sends the cashier to open it. What
-/// it must never refuse is the way out: the drawer, the support screens and the
-/// shift screen itself all stay reachable.
+/// A sale rung outside a shift belongs to no drawer and no Z. The refusal is met on
+/// the floor home, which is where an order is started, and the counter keeps its own
+/// gate for the one way past the floor: a draft restored after a crash. Either way
+/// the cashier is sent to open a shift, and what is never refused is the way out:
+/// the drawer, the support screens and the shift screen itself all stay reachable.
 void main() {
   late Db db;
   late ShiftStore shifts;
   late AuditLog audit;
+  late OrderStore orders;
 
   const cash = PaymentMethod(id: 1, name: 'Cash', isCash: true);
 
@@ -56,6 +60,7 @@ void main() {
     db = Db.open(':memory:');
     shifts = ShiftStore(db);
     audit = AuditLog(db);
+    orders = OrderStore(db);
     SettingsStore(db);
     CatalogueStore(db).replaceAll(
       categories: const [Category(id: 1, name: 'Pizza')],
@@ -77,7 +82,7 @@ void main() {
       auth: AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit),
       users: UserStore(db),
       catalogue: CatalogueStore(db),
-      orders: OrderStore(db),
+      orders: orders,
       outbox: outbox,
       audit: audit,
       sync: SyncService(
@@ -112,9 +117,20 @@ void main() {
     await t.tap(find.byKey(const Key('pin-ok')));
     for (var i = 0; i < 20; i++) {
       await t.pump(const Duration(milliseconds: 50));
-      if (find.byType(SellScreen).evaluate().isNotEmpty) break;
+      if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
+  }
+
+  /// A draft left on the till by a crash, which is the one thing that lands a
+  /// cashier on the counter without going past the floor.
+  void draftOnTheTill() {
+    orders.save(
+      Order(deviceId: 'till-1', cashierId: 'sara')
+        ..lines.add(
+            OrderLine(productId: 10, name: 'Margherita', quantity: 1, unitPrice: 250)),
+      announce: false,
+    );
   }
 
   /// A till-shaped window: the keypad and the drawer both want the height.
@@ -125,31 +141,32 @@ void main() {
     addTearDown(t.view.resetDevicePixelRatio);
   }
 
-  /// Sign in and land on the till, which is where an order would be started.
-  Future<void> onTheTill(WidgetTester t) async {
+  /// Sign in and land on the floor home, which is where an order is started.
+  Future<void> onTheFloor(WidgetTester t) async {
     tallWindow(t);
     await t.pumpWidget(app());
     await signIn(t);
-    await t.tap(find.byKey(const Key('floor-takeaway')));
-    await t.pumpAndSettle();
-    expect(find.byType(SellScreen), findsOneWidget);
+    expect(find.byType(TableFloorScreen), findsOneWidget);
   }
 
-  testWidgets('with no shift open the till refuses to start an order', (t) async {
-    await onTheTill(t);
+  testWidgets('with no shift open the floor refuses to start an order', (t) async {
+    await onTheFloor(t);
 
-    expect(find.byKey(const Key('no-shift-gate')), findsOneWidget);
-    expect(find.text('No shift is open'), findsOneWidget);
-    // Nothing to ring up with: no grid, no cart, no Pay.
-    expect(find.text('Margherita'), findsNothing);
-    expect(find.byKey(const Key('pay')), findsNothing);
-    expect(find.byKey(const Key('search')), findsNothing);
+    expect(find.byKey(const Key('floor-no-shift')), findsOneWidget);
+    expect(find.textContaining('No shift is open'), findsWidgets);
+
+    // The takeaway button is there and says no rather than opening a bill.
+    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.pumpAndSettle();
+    expect(find.byType(SellScreen), findsNothing,
+        reason: 'a till with no drawer open must not reach the counter');
+    expect(find.byType(TableFloorScreen), findsOneWidget);
   });
 
   testWidgets('the refusal opens the shift, and the till sells again', (t) async {
-    await onTheTill(t);
+    await onTheFloor(t);
 
-    await t.tap(find.byKey(const Key('no-shift-open-shift')));
+    await t.tap(find.byKey(const Key('floor-open-shift')));
     await t.pumpAndSettle();
     expect(find.byType(ShiftScreen), findsOneWidget);
 
@@ -164,11 +181,13 @@ void main() {
     await t.pumpAndSettle();
     expect(shifts.currentOpenShift(), isNotNull);
 
-    // Back to the till, which is open for business without a restart.
+    // Back to the floor, which is open for business without a restart.
     await t.pageBack();
     await t.pumpAndSettle();
-    expect(find.byKey(const Key('no-shift-gate')), findsNothing);
+    expect(find.byKey(const Key('floor-no-shift')), findsNothing);
 
+    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.pumpAndSettle();
     await t.tap(find.text('Margherita'));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('pay')), findsOneWidget);
@@ -176,10 +195,10 @@ void main() {
 
   testWidgets('a closed drawer does not lock the cashier out of a reprint',
       (t) async {
-    await onTheTill(t);
+    await onTheFloor(t);
 
-    // The drawer is the way to everything that is not selling, and it is still
-    // there: support carries the receipt reprints.
+    // The drawer is the way to everything that is not selling, and the floor
+    // carries it: support holds the receipt reprints.
     await t.tap(find.byTooltip('Open navigation menu'));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-support')));
@@ -190,9 +209,35 @@ void main() {
 
   testWidgets('a till with a shift open is not gated at all', (t) async {
     shifts.openShift(openingFloat: 100, cashierId: 'sara');
-    await onTheTill(t);
+    await onTheFloor(t);
 
+    expect(find.byKey(const Key('floor-no-shift')), findsNothing);
+    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.pumpAndSettle();
     expect(find.byKey(const Key('no-shift-gate')), findsNothing);
     expect(find.text('Margherita'), findsOneWidget);
+  });
+
+  testWidgets('a draft restored past the floor is refused on the counter',
+      (t) async {
+    // Crash recovery puts the cashier straight on the counter, which is the one
+    // route that never passes the floor's refusal, so the counter keeps its own.
+    draftOnTheTill();
+    tallWindow(t);
+    await t.pumpWidget(app());
+    await signIn(t);
+
+    expect(find.byType(SellScreen), findsOneWidget);
+    expect(find.byKey(const Key('no-shift-gate')), findsOneWidget);
+    expect(find.text('No shift is open'), findsOneWidget);
+    // Nothing to ring up with: no grid, no cart, no Pay.
+    expect(find.text('Margherita'), findsNothing);
+    expect(find.byKey(const Key('pay')), findsNothing);
+    expect(find.byKey(const Key('search')), findsNothing);
+
+    // And the way out of it is the same one the floor offers.
+    await t.tap(find.byKey(const Key('no-shift-open-shift')));
+    await t.pumpAndSettle();
+    expect(find.byType(ShiftScreen), findsOneWidget);
   });
 }

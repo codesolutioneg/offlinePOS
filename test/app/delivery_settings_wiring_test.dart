@@ -24,7 +24,6 @@ import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
-import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/settings/delivery_settings_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
@@ -112,13 +111,13 @@ void main() {
     await t.tap(find.byKey(const Key('pin-ok')));
     for (var i = 0; i < 20; i++) {
       await t.pump(const Duration(milliseconds: 50));
-      if (find.byType(SellScreen).evaluate().isNotEmpty) break;
+      if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
-    if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
-      await t.pageBack();
-      await t.pumpAndSettle();
-    }
+    // Signing in lands on the floor home, which carries the same drawer the
+    // counter does, so the settings hub is reached from here without opening an
+    // order first.
+    expect(find.byType(TableFloorScreen), findsOneWidget);
   }
 
   Future<void> openDeliverySettings(WidgetTester t) async {

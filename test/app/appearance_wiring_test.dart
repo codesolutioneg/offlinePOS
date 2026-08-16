@@ -134,11 +134,13 @@ void main() {
     await t.tap(find.byKey(const Key('pin-ok')));
     for (var i = 0; i < 20; i++) {
       await t.pump(const Duration(milliseconds: 50));
-      if (find.byType(SellScreen).evaluate().isNotEmpty) break;
+      if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
+    // Signing in lands on the floor home. Most of these are about the grid, so
+    // walk to the counter the way a cashier does; a takeaway needs no table drawn.
     if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
-      await t.pageBack();
+      await t.tap(find.byKey(const Key('floor-takeaway')));
       await t.pumpAndSettle();
     }
   }

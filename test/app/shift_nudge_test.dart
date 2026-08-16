@@ -101,7 +101,7 @@ void main() {
     await t.tap(find.byKey(const Key('pin-ok')));
     for (var i = 0; i < 20; i++) {
       await t.pump(const Duration(milliseconds: 50));
-      if (find.byType(SellScreen).evaluate().isNotEmpty) break;
+      if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
   }
@@ -160,17 +160,24 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
 
-    // The floor still navigates with the strip up, and the till behind it still
-    // refuses the order: dismissing the reminder is not a way past the gate.
+    // The floor refuses the order with the strip up, and goes on refusing it once
+    // the reminder is gone: dismissing it is not a way past the gate.
     await t.tap(find.byKey(const Key('floor-takeaway')));
     await t.pumpAndSettle();
-    expect(find.byType(SellScreen), findsOneWidget);
+    expect(find.byType(SellScreen), findsNothing);
     expect(find.byKey(const Key('shift-nudge')).hitTestable(), findsOneWidget);
 
     await t.tap(find.byKey(const Key('shift-nudge-dismiss')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('shift-nudge')), findsNothing);
-    expect(find.byKey(const Key('no-shift-gate')), findsOneWidget);
+    expect(find.byKey(const Key('floor-no-shift')), findsOneWidget);
+
+    // Let the refusal toast clear the button it is sitting over, then try again.
+    await t.pump(const Duration(seconds: 4));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.pumpAndSettle();
+    expect(find.byType(SellScreen), findsNothing);
   });
 
   testWidgets('an Arabic till reads the nudge in Arabic', (t) async {
@@ -191,10 +198,9 @@ void main() {
     await signIn(t);
     expect(find.byKey(const Key('shift-nudge')).hitTestable(), findsOneWidget);
 
-    // Off the floor and out: the next cashier's PIN screen is not the place to be
-    // told about the last one's drawer.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
-    await t.pumpAndSettle();
+    // Out from the floor, which is where a cashier who cannot sell stands: the
+    // next one's PIN screen is not the place to be told about the last one's
+    // drawer.
     await t.tap(find.byKey(const Key('sign-out')));
     await t.pumpAndSettle();
 

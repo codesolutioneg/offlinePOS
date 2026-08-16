@@ -112,7 +112,7 @@ void main() {
     await t.tap(find.byKey(const Key('pin-ok')));
     for (var i = 0; i < 20; i++) {
       await t.pump(const Duration(milliseconds: 50));
-      if (find.byType(SellScreen).evaluate().isNotEmpty) break;
+      if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
   }
@@ -187,14 +187,12 @@ void main() {
     await t.tap(find.byKey(const Key('hold')));
     await t.pumpAndSettle();
 
-    // Back to the floor and onto the same table: the covers are already known.
-    t.state<ScaffoldState>(find
-            .descendant(of: find.byType(SellScreen), matching: find.byType(Scaffold))
-            .first)
-        .openDrawer();
+    // Parking put the till back on the floor by itself. Onto the same table
+    // again: the covers are already known. The "order parked" toast has to expire
+    // before the plan is tappable.
+    await t.pump(const Duration(seconds: 3));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('nav-tables')));
-    await t.pumpAndSettle();
+    expect(find.byType(TableFloorScreen), findsOneWidget);
     await seatTable(t);
 
     expect(find.byKey(const Key('guest-count-prompt')), findsNothing);

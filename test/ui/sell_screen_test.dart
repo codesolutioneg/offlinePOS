@@ -252,9 +252,9 @@ void main() {
 
     await t.tap(find.byKey(const Key('new-order')));
     await t.pumpAndSettle();
-    // The shell is asked to show the floor home; the current order is left intact
-    // (it is started fresh only once a table/takeaway/delivery is chosen there), so
-    // backing out of the floor loses nothing.
+    // The shell is asked to show the floor home and decides what happens to the
+    // order on the way out (it parks it). This screen touches nothing itself, so
+    // the cart is exactly as it was when the callback fired.
     expect(wentHome, isTrue);
     expect(session.hasLines, isTrue);
   });

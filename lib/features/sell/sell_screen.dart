@@ -1509,9 +1509,9 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   void _newOrder() {
-    // Do not reset here: the floor home starts the next order (via startFresh) when
-    // a table or the takeaway/delivery button is chosen, so backing out of the floor
-    // leaves the current order untouched and no empty draft is created.
+    // Do not touch the order here: the shell owns what happens to it on the way out
+    // (it parks it, so the floor and the open-orders list can both find it again).
+    // Without a floor home there is nowhere to go, so the session parks it instead.
     if (widget.onNewOrder != null) {
       widget.onNewOrder!();
     } else {
@@ -2167,7 +2167,19 @@ class _SellScreenState extends State<SellScreen> {
                 ),
               ),
             ),
-          if (!_noShift)
+          // The way back to the floor home, where the next order is started. Offered
+          // even with no shift open and on an empty order: a cashier who opened the
+          // counter by mistake, or who cannot sell yet, must still be able to leave
+          // it. Without a floor home this is the plain "park it and start another",
+          // which is a no-op on nothing and stays disabled.
+          if (widget.onNewOrder != null)
+            IconButton(
+              key: const Key('new-order'),
+              tooltip: tr(context, 'Tables'),
+              icon: const Icon(Icons.table_bar),
+              onPressed: _newOrder,
+            )
+          else if (!_noShift)
             IconButton(
               key: const Key('new-order'),
               tooltip: tr(context, 'New order'),
