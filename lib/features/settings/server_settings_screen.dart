@@ -47,6 +47,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   late final TextEditingController _restaurant;
   late final TextEditingController _warehouse;
   late final TextEditingController _discountProduct;
+  late final TextEditingController _localProduct;
   String? _message;
   bool _checking = false;
 
@@ -64,6 +65,8 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     _warehouse = TextEditingController(text: s?.odooWarehouseId?.toString() ?? '');
     _discountProduct =
         TextEditingController(text: s?.odooDiscountProductId?.toString() ?? '');
+    _localProduct =
+        TextEditingController(text: s?.odooLocalProductId?.toString() ?? '');
   }
 
   @override
@@ -76,6 +79,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     _restaurant.dispose();
     _warehouse.dispose();
     _discountProduct.dispose();
+    _localProduct.dispose();
     super.dispose();
   }
 
@@ -99,6 +103,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       s.odooRestaurantId = int.tryParse(_restaurant.text.trim());
       s.odooWarehouseId = int.tryParse(_warehouse.text.trim());
       s.odooDiscountProductId = int.tryParse(_discountProduct.text.trim());
+      s.odooLocalProductId = int.tryParse(_localProduct.text.trim());
     }
     widget.onSaved(e);
     setState(() => _message = tr(context, 'Saved. Queued sales will sync on the next attempt.'));
@@ -194,6 +199,22 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
                     'With a product here, a discounted sale reaches Odoo at full '
                     'menu prices plus one discount line, so it can be reported on '
                     'there. Empty keeps the discount inside the prices.'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            _field(
+                _localProduct,
+                tr(context, 'Stand-in product id for unlinked items (a service product)'),
+                '',
+                'local-product',
+                numeric: true),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                tr(context,
+                    'An item created on the till and not yet linked to an Odoo '
+                    'product books against this one, under its own name. Empty '
+                    'means such a sale is held back for someone to sort out.'),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),

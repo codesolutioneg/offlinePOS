@@ -99,6 +99,9 @@ class PosSession {
       {List<ChosenModifier> chosen = const [], double qty = 1}) {
     final line = OrderLine(
       productId: product.id,
+      // Captured now, like the price: what this line books against in Odoo must not
+      // change because somebody relinked the product afterwards.
+      odooProductId: product.odooId,
       name: product.name,
       quantity: qty,
       unitPrice: product.price,
@@ -502,6 +505,7 @@ class PosSession {
       line.quantity -= 1;
       current.lines.add(OrderLine(
         productId: line.productId,
+        odooProductId: line.odooProductId,
         name: line.name,
         quantity: 1,
         unitPrice: line.unitPrice,
@@ -548,6 +552,7 @@ class PosSession {
     line.quantity -= qty;
     final peeled = OrderLine(
       productId: line.productId,
+      odooProductId: line.odooProductId,
       name: line.name,
       quantity: qty,
       unitPrice: line.unitPrice,
@@ -590,6 +595,7 @@ class PosSession {
         idx + i,
         OrderLine(
           productId: line.productId,
+          odooProductId: line.odooProductId,
           name: line.name,
           quantity: 1,
           unitPrice: line.unitPrice,

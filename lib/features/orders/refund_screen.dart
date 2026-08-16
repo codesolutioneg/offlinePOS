@@ -80,6 +80,9 @@ class _RefundScreenState extends State<RefundScreen> {
       if (q <= 0) continue;
       lines.add(OrderLine(
         productId: l.productId,
+        // A refund has to reverse the same Odoo product the sale booked, whatever
+        // the menu has been relinked to since.
+        odooProductId: l.odooProductId,
         name: l.name,
         quantity: -q.toDouble(), // negative: this reverses the sale
         unitPrice: l.unitPrice,

@@ -77,6 +77,32 @@ class DiscountBooking {
   static int? productId;
 }
 
+/// What a product created on the till books against in Odoo.
+///
+/// The server contract books lines against real `product.product` ids and is fixed,
+/// so a dish somebody typed here has to name one of three things, and which of the
+/// three is a decision the shop makes rather than an accident:
+///
+/// 1. **It is linked.** The manager pointed it at an Odoo product in the menu
+///    editor, and that id travels. Captured onto the line when the sale is rung, so
+///    relinking afterwards cannot rewrite what was already booked.
+/// 2. **It is not linked and the shop named a stand-in product here.** The sale
+///    books against the stand-in and carries its own name on the line, so the Odoo
+///    document reads as what was actually sold and the money lands in the books.
+///    Same shape as [DiscountBooking], and it must be a **service** product for the
+///    same reason: an unlinked dish is not something to move stock for.
+/// 3. **Neither.** The negative local id travels, Odoo cannot resolve it, and the
+///    module answers `rejected`. The till already parks a rejected sale and shows it
+///    to a human rather than dropping it. That is deliberate and it is the honest
+///    end of the three: nothing at the till is ever blocked, the sale is never lost,
+///    and the shop is told rather than having the money quietly booked against some
+///    other product. The menu editor warns about it at the point the product is
+///    created, which is where it can still be fixed cheaply.
+class LocalProductBooking {
+  /// The Odoo service product an unlinked local product books against, or null.
+  static int? productId;
+}
+
 /// A modifier applied to a line, priced at the moment of sale.
 ///
 /// The price is captured here rather than looked up later: a receipt must never
@@ -130,6 +156,7 @@ class OrderLine {
     this.note,
     this.discountPercent = 0,
     this.categoryId,
+    this.odooProductId,
     double taxRate = 0,
     double? baseTaxRate,
     this.printedToKitchen = false,
@@ -148,7 +175,16 @@ class OrderLine {
         firedStations = firedStations ?? [];
 
   final String uuid;
+
+  /// The catalogue row this line was rung from. Negative for a product created on
+  /// the till, which is why it is not what the server is handed.
   final int productId;
+
+  /// The Odoo product this line books against, captured from the catalogue at the
+  /// moment of sale for the same reason the price is: what was sold must not change
+  /// because somebody edited the menu afterwards. Null on a line rung from a product
+  /// nobody has linked; see [LocalProductBooking] for what happens then.
+  final int? odooProductId;
   final String name;
   double quantity;
 
@@ -217,6 +253,7 @@ class OrderLine {
   Map<String, dynamic> toMap() => {
         'uuid': uuid,
         'product_id': productId,
+        'odoo_product_id': odooProductId,
         'name': name,
         'quantity': quantity,
         'unit_price': unitPrice,
@@ -235,6 +272,10 @@ class OrderLine {
   factory OrderLine.fromMap(Map<String, dynamic> m) => OrderLine(
         uuid: m['uuid'] as String,
         productId: m['product_id'] as int,
+        // Absent on a draft written before the till could hold unlinked products,
+        // where the product id was the Odoo id, so that is what it falls back to.
+        odooProductId: (m['odoo_product_id'] as int?) ??
+            ((m['product_id'] as int) > 0 ? m['product_id'] as int : null),
         name: m['name'] as String,
         quantity: (m['quantity'] as num).toDouble(),
         unitPrice: (m['unit_price'] as num).toDouble(),
@@ -566,6 +607,16 @@ class Order {
       // line of its own; without one it is folded in here as it always was.
       final lf = discountProduct == null ? l.lineDiscountFactor * f * s : s;
       final lm = l.toMap();
+      // What this line books against, stated rather than assumed. See
+      // [LocalProductBooking]: the link the product had when it was rung, then the
+      // shop's stand-in product, and failing both the local id, which the server
+      // rejects and the till parks in front of a human. The line's own name travels
+      // either way, so a stand-in still reads as the dish that was sold.
+      lm['product_id'] =
+          l.odooProductId ?? LocalProductBooking.productId ?? l.productId;
+      // Local bookkeeping. The server is handed one product id per line and would
+      // have no field to put a second one in.
+      lm.remove('odoo_product_id');
       lm['unit_price'] = l.unitPrice * lf;
       lm['discount_percent'] = 0;
       lm['modifiers'] = l.modifiers.map((mod) {
