@@ -36,10 +36,14 @@ class PaymentMethodsScreen extends StatefulWidget {
 class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
   final Map<int, TextEditingController> _labels = {};
 
+  /// The method an on-account sale books against, or null for off.
+  int? _payLater;
+
   @override
   void initState() {
     super.initState();
     final saved = widget.settings.paymentMethodLabels;
+    _payLater = widget.settings.payLaterMethodId;
     for (final m in widget.methods) {
       _labels[m.id] = TextEditingController(text: saved[m.id] ?? '');
     }
@@ -57,6 +61,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
     for (final m in widget.methods) {
       widget.settings.setPaymentMethodLabel(m.id, _labels[m.id]?.text);
     }
+    widget.settings.payLaterMethodId = _payLater;
     widget.onChanged();
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
@@ -85,6 +90,31 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
                   tr(context,
                       'Only the wording on the receipt changes. Sales and reports keep the method as it is.'),
                   style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                // Which tender carries a sale a customer settles later. Only
+                // non-cash methods are offered: booking a tab as cash would count
+                // the drawer short by the amount nobody handed over.
+                DropdownButtonFormField<int?>(
+                  key: const Key('pay-later-method'),
+                  initialValue: _payLater,
+                  decoration: InputDecoration(
+                    labelText: tr(context, 'Pay later books against'),
+                    helperText: tr(context,
+                        'An on-account sale needs a customer, and shows in the receivables report'),
+                    helperMaxLines: 3,
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  items: [
+                    DropdownMenuItem<int?>(
+                      value: null,
+                      child: Text(tr(context, 'Off')),
+                    ),
+                    for (final m in widget.methods.where((m) => !m.isCash))
+                      DropdownMenuItem<int?>(value: m.id, child: Text(m.name)),
+                  ],
+                  onChanged: (v) => setState(() => _payLater = v),
                 ),
                 const SizedBox(height: 12),
                 for (final m in widget.methods)

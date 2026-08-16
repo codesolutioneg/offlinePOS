@@ -4,6 +4,7 @@ import '../../core/auth/permissions.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../domain/order.dart' show OrderType, OrderTypeLabel;
 
 /// Configure what each role may do on its own.
 ///
@@ -87,14 +88,50 @@ class _RolesPermissionsScreenState extends State<RolesPermissionsScreen> {
           ),
           const SizedBox(height: 16),
           _roleHeader(context, tr(context, 'Cashier')),
+          _orderTypesCard('cashier'),
+          const SizedBox(height: 12),
           _permissionCard('cashier'),
           for (final role in custom) ...[
             const SizedBox(height: 16),
             _roleHeader(context, role, editable: role),
+            _orderTypesCard(role),
+            const SizedBox(height: 12),
             _permissionCard(role),
           ],
         ],
       ),
+    );
+  }
+
+
+  /// Which sales a role may open. Not a permission: there is no manager PIN that
+  /// makes a delivery desk into a dining room, so a type that is off is simply not
+  /// offered rather than asked for. Per role, because a shop that invented a runner
+  /// wants to answer this for the runner too.
+  Widget _orderTypesCard(String role) {
+    final held = widget.settings.orderTypesFor(role);
+    return Card(
+      child: Column(children: [
+        ListTile(
+          dense: true,
+          title: Text(tr(context, 'Order types this role may open')),
+          subtitle: Text(
+              tr(context, 'A tab already open on a table can always be settled.')),
+        ),
+        for (final t in OrderType.values)
+          SwitchListTile(
+            key: Key(role == 'cashier'
+                ? 'order-type-allowed-${t.name}'
+                : 'order-type-allowed-$role-${t.name}'),
+            value: held.contains(t),
+            title: Text(tr(context, t.label)),
+            onChanged: (v) {
+              widget.settings.setRoleOrderType(role, t, v);
+              widget.onChanged();
+              setState(() {});
+            },
+          ),
+      ]),
     );
   }
 

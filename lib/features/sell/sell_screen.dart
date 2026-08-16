@@ -65,6 +65,12 @@ class SellScreen extends StatefulWidget {
     this.onNewOrder,
     this.onResendToKitchen,
     this.onPrintBill,
+    this.allowedOrderTypes = const {
+      OrderType.dineIn,
+      OrderType.takeaway,
+      OrderType.delivery,
+    },
+    this.payLaterMethodId,
   });
 
   final PosSession session;
@@ -210,6 +216,16 @@ class SellScreen extends StatefulWidget {
   /// takeaway/delivery buttons). Wired by the shell, which owns the floor screen.
   final VoidCallback? onNewOrder;
 
+  /// The kinds of sale the signed-in role may open. Everything by default; a shop
+  /// that runs a delivery desk or a counter-only till narrows it per role, and the
+  /// chips for the rest are simply not offered.
+  final Set<OrderType> allowedOrderTypes;
+
+  /// The payment method an on-account ("pay later") sale books against. Null, the
+  /// default, means the shop does not run accounts and the payment sheet is
+  /// unchanged.
+  final int? payLaterMethodId;
+
   @override
   State<SellScreen> createState() => _SellScreenState();
 }
@@ -225,6 +241,9 @@ class _SellScreenState extends State<SellScreen> {
   final FocusNode _scanFocus = FocusNode();
   String _scanBuffer = '';
   DateTime _lastScanKey = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// The search box, so a keyboard can jump to it without reaching for the screen.
+  final FocusNode _searchFocus = FocusNode();
 
   PosSession get s => widget.session;
 
@@ -245,7 +264,34 @@ class _SellScreenState extends State<SellScreen> {
     widget.catalogueChanged?.removeListener(_onCatalogueChanged);
     _fireTick?.cancel();
     _scanFocus.dispose();
+    _searchFocus.dispose();
     super.dispose();
+  }
+
+  /// Every key the screen sees: the shortcuts a till with a keyboard expects, then
+  /// the barcode scanner, which is a keyboard too. Shortcuts are taken first and
+  /// swallowed, so a shortcut can never end up half-typed into the scan buffer.
+  void _onKey(KeyEvent e) {
+    if (e is KeyDownEvent && _shortcut(e)) return;
+    _onScanKey(e);
+  }
+
+  /// F12 takes the money and Ctrl+K jumps to the search box, which is what the
+  /// people who ring hundreds of orders a day use instead of the screen. Returns
+  /// whether the key was one of them.
+  bool _shortcut(KeyDownEvent e) {
+    if (e.logicalKey == LogicalKeyboardKey.f12) {
+      // Same door as the Pay button, so nothing about the sale differs: an empty
+      // order simply does nothing.
+      _pay();
+      return true;
+    }
+    if (e.logicalKey == LogicalKeyboardKey.keyK &&
+        HardwareKeyboard.instance.isControlPressed) {
+      _searchFocus.requestFocus();
+      return true;
+    }
+    return false;
   }
 
   void _onScanKey(KeyEvent e) {
@@ -330,7 +376,13 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (action == null) return;
-    if (widget.authorize != null && !await widget.authorize!(Permission.priceOverride)) return;
+    // 86 and favourites are what this menu changes, so that is the permission it
+    // asks for. It used to ask for the price-override grant, which is a different
+    // decision entirely and now gates the price itself.
+    if (widget.authorize != null &&
+        !await widget.authorize!(Permission.itemAvailability)) {
+      return;
+    }
     if (action == 'avail') {
       widget.onToggleAvailable?.call(product.id, soldOut);
     } else if (action == 'fave') {
@@ -651,14 +703,24 @@ class _SellScreenState extends State<SellScreen> {
   Future<void> _lineActions(OrderLine line) async {
     final action = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Scrollable so the menu never overflows a short sheet as options grow.
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
           ListTile(
             key: const Key('line-note'),
             leading: const Icon(Icons.sticky_note_2_outlined),
             title: Text(tr(ctx, 'Note for kitchen')),
             subtitle: line.note != null ? Text(line.note!) : null,
             onTap: () => Navigator.pop(ctx, 'note'),
+          ),
+          ListTile(
+            key: const Key('line-price'),
+            leading: const Icon(Icons.sell_outlined),
+            title: Text(tr(ctx, 'Change the price')),
+            subtitle: Text('${tr(ctx, 'Now')} ${widget.formatAmount(line.unitPrice)}'),
+            onTap: () => Navigator.pop(ctx, 'price'),
           ),
           ListTile(
             key: const Key('line-discount'),
@@ -704,9 +766,11 @@ class _SellScreenState extends State<SellScreen> {
             onTap: () => Navigator.pop(ctx, 'void'),
           ),
         ]),
+        ),
       ),
     );
     if (action == 'note') await _lineNote(line);
+    if (action == 'price') await _linePrice(line);
     if (action == 'discount') await _lineDiscount(line);
     if (action == 'seat') await _assignSeat(line);
     if (action == 'split-units') _changed(() => s.splitLineToUnits(line.uuid));
@@ -821,6 +885,43 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (note != null) _changed(() => s.setLineNote(line.uuid, note));
+  }
+
+  /// Sell this line at another price. Gated, and the session records what it was:
+  /// a price typed at the counter has to be as traceable as a discount is.
+  Future<void> _linePrice(OrderLine line) async {
+    if (widget.authorize != null &&
+        !await widget.authorize!(Permission.priceOverride)) {
+      return;
+    }
+    if (!mounted) return;
+    final ctrl = TextEditingController(text: line.unitPrice.toStringAsFixed(2));
+    final price = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${tr(ctx, 'Price')} ${line.name}'),
+        content: TextField(
+          key: const Key('line-price-value'),
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(
+              labelText: tr(ctx, 'Price for one'),
+              helperText: tr(ctx, 'Anything added to the item keeps its own price'),
+              border: const OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('apply-line-price'),
+            onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())),
+            child: Text(tr(ctx, 'Apply')),
+          ),
+        ],
+      ),
+    );
+    if (price == null || price < 0) return;
+    _changed(() => s.setLinePrice(line.uuid, price));
   }
 
   Future<void> _lineDiscount(OrderLine line) async {
@@ -1446,6 +1547,18 @@ class _SellScreenState extends State<SellScreen> {
     _tellKitchenOutcome(result, key: const Key('resent-kitchen'));
   }
 
+  /// The tender an on-account sale books against, or null when the shop has not
+  /// nominated one (or the catalogue no longer carries it, after a method was
+  /// removed in Odoo: the option disappears rather than booking against nothing).
+  PaymentMethod? _onAccountMethod() {
+    final id = widget.payLaterMethodId;
+    if (id == null) return null;
+    for (final m in s.catalogue.paymentMethods()) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
+
   void _pay() {
     if (!s.hasLines) return;
     // If shares were already taken (even split), the main Pay settles what is left,
@@ -1459,6 +1572,11 @@ class _SellScreenState extends State<SellScreen> {
         total: partPaid ? s.current.balance : s.total,
         format: widget.formatAmount,
         methods: s.catalogue.paymentMethods(),
+        // Only on the whole bill: a share left on account is a part-paid tab and a
+        // receivable at once, which is more bookkeeping than a till should invent.
+        onAccountMethod: partPaid ? null : _onAccountMethod(),
+        hasCustomer: s.current.partnerId != null ||
+            (s.current.customerName ?? '').isNotEmpty,
         onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
           if (partPaid) {
@@ -1989,7 +2107,7 @@ class _SellScreenState extends State<SellScreen> {
       body: KeyboardListener(
         focusNode: _scanFocus,
         autofocus: true,
-        onKeyEvent: _onScanKey,
+        onKeyEvent: _onKey,
         child: SafeArea(
         child: Column(
           children: [
@@ -2097,6 +2215,7 @@ class _SellScreenState extends State<SellScreen> {
             padding: const EdgeInsets.all(8),
             child: TextField(
               key: const Key('search'),
+              focusNode: _searchFocus,
               decoration: InputDecoration(
                 prefixIcon: const Icon(Icons.search),
                 hintText: tr(context, 'Search or scan'),
@@ -2261,7 +2380,11 @@ class _SellScreenState extends State<SellScreen> {
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             children: [
-              for (final t in OrderType.values) ...[
+              // Only the types this role rings, plus whatever the order in hand
+              // already is: a tab handed over from another till has to stay
+              // settleable even when this cashier could not have opened it.
+              for (final t in OrderType.values)
+                if (widget.allowedOrderTypes.contains(t) || s.current.type == t) ...[
                 ChoiceChip(
                   key: Key('order-type-${t.name.toLowerCase()}'),
                   label: Text(tr(context, t.label)),
@@ -2945,6 +3068,8 @@ class _PaymentSheet extends StatefulWidget {
     required this.format,
     required this.methods,
     required this.onConfirm,
+    this.onAccountMethod,
+    this.hasCustomer = false,
   });
 
   final double total;
@@ -2952,6 +3077,14 @@ class _PaymentSheet extends StatefulWidget {
   final List<PaymentMethod> methods;
   final void Function(
       List<OrderPayment> payments, String label, double tip, double? cashReceived) onConfirm;
+
+  /// The method an on-account sale books against, when the shop runs accounts.
+  /// Null leaves the sheet exactly as it was.
+  final PaymentMethod? onAccountMethod;
+
+  /// Whether the order names the customer whose tab this would go on. Without one
+  /// there is nobody to bill, so the action is offered but refused.
+  final bool hasCustomer;
 
   @override
   State<_PaymentSheet> createState() => _PaymentSheetState();
@@ -3044,6 +3177,27 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       payments = <OrderPayment>[];
     }
     widget.onConfirm(payments, label, _tipAmount, cashReceived);
+  }
+
+  /// Put the whole bill on the customer's tab. One tender, the full amount, under
+  /// its own label, so the sale books and reports like any other sale while the
+  /// receivables list can still pick it out. Refused without a customer: an unnamed
+  /// debt is money written off.
+  void _confirmOnAccount() {
+    final method = widget.onAccountMethod;
+    if (method == null) return;
+    if (!widget.hasCustomer) {
+      showToast(
+          context, tr(context, 'Add a customer to the order before billing it.'),
+          kind: ToastKind.error, key: const Key('on-account-refused'));
+      return;
+    }
+    widget.onConfirm(
+      [OrderPayment(methodId: method.id, amount: _grand, label: kOnAccountLabel)],
+      kOnAccountLabel,
+      _tipAmount,
+      null,
+    );
   }
 
   List<double> _quickAmounts() {
@@ -3216,6 +3370,20 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 label: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
               ),
             ),
+            if (widget.onAccountMethod != null) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 52,
+                child: OutlinedButton.icon(
+                  key: const Key('pay-later'),
+                  onPressed: _confirmOnAccount,
+                  icon: const Icon(Icons.account_balance_wallet_outlined),
+                  label: Text(widget.hasCustomer
+                      ? tr(context, 'Put it on the account')
+                      : tr(context, 'On account (needs a customer)')),
+                ),
+              ),
+            ],
             const SizedBox(height: 4),
             TextButton(
               onPressed: () => Navigator.pop(context),

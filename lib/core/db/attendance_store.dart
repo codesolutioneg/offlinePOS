@@ -81,6 +81,35 @@ class AttendanceStore {
         .toList();
   }
 
+  /// The clock-ins that started inside a window, oldest first, for the hours
+  /// report. Both ends are optional, so "everything" is a call with neither.
+  ///
+  /// Windowed on when the shift started, not on overlap: a night that ran past
+  /// midnight belongs to the day the person clocked on, which is how a shop reads
+  /// its own rota and how the report adds up to what it paid for that shift.
+  /// A row still open is included, and counted up to [now] by the caller.
+  List<AttendanceEntry> between({DateTime? from, DateTime? to, String? staffId}) {
+    final where = <String>[];
+    final args = <Object?>[];
+    if (from != null) {
+      where.add('clock_in >= ?');
+      args.add(from.toUtc().toIso8601String());
+    }
+    if (to != null) {
+      where.add('clock_in < ?');
+      args.add(to.toUtc().toIso8601String());
+    }
+    if (staffId != null) {
+      where.add('staff_id = ?');
+      args.add(staffId);
+    }
+    final clause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')} ';
+    return _db.raw
+        .select('SELECT * FROM attendance ${clause}ORDER BY clock_in', args)
+        .map(_fromRow)
+        .toList();
+  }
+
   AttendanceEntry _fromRow(Map<String, Object?> r) => AttendanceEntry(
         id: r['id'] as int,
         staffId: r['staff_id'] as String,

@@ -131,4 +131,59 @@ void main() {
     // A plain cashier stays fully editable.
     expect(find.byKey(const Key('staff-menu-sara')), findsOneWidget);
   });
+
+  testWidgets('a manager can enrol an authenticator and take it off again',
+      (t) async {
+    await auth.enrol(id: 'boss', name: 'Boss', pin: '9999', role: 'manager');
+    await t.pumpWidget(app());
+
+    await t.tap(find.byKey(const Key('staff-menu-boss')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('totp-boss')));
+    await t.pumpAndSettle();
+
+    // A half-typed secret cannot be saved, and says why rather than failing later
+    // when a manager cannot approve a void.
+    await t.enterText(find.byKey(const Key('totp-secret')), 'GEZD');
+    await t.pumpAndSettle();
+    expect(t.widget<FilledButton>(find.byKey(const Key('totp-save'))).onPressed,
+        isNull);
+
+    await t.enterText(find.byKey(const Key('totp-secret')),
+        'gezd gnbv gy3t qojq gezd gnbv gy3t qojq');
+    await t.pumpAndSettle();
+    // The code is echoed back so the phone and the till can be proven to agree.
+    expect(find.byKey(const Key('totp-preview')), findsOneWidget);
+    await t.tap(find.byKey(const Key('totp-save')));
+    await t.pumpAndSettle();
+
+    expect(users.byId('boss')!.totpSecret, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+    expect(find.textContaining('authenticator on'), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('staff-menu-boss')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('totp-boss')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('totp-off')));
+    await t.pumpAndSettle();
+
+    expect(users.byId('boss')!.totpSecret, isNull);
+  });
+
+  testWidgets('a name change keeps the authenticator that guards the account',
+      (t) async {
+    await auth.enrol(id: 'boss', name: 'Boss', pin: '9999', role: 'manager');
+    users.setTotpSecret('boss', 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+    await t.pumpWidget(app());
+
+    await t.tap(find.byKey(const Key('staff-menu-boss')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('edit-boss')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('staff-name')), 'Boss Lady');
+    await t.tap(find.byKey(const Key('staff-form-save')));
+    await t.pumpAndSettle();
+
+    expect(users.byId('boss')!.hasSecondFactor, isTrue);
+  });
 }

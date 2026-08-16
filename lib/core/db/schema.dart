@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 20;
+  static const int version = 21;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -513,6 +513,16 @@ class Schema {
     [
       'ALTER TABLE products ADD COLUMN cost REAL NOT NULL DEFAULT 0',
       'ALTER TABLE products ADD COLUMN image BLOB',
+    ],
+    // v20 -> v21: a second factor for the people who approve things.
+    //
+    // The shared base32 secret of a time-based one-time code, per user. Null for
+    // everyone until a manager enrols one, so a till that upgrades asks for exactly
+    // what it asked for before. It is a secret, and it lives here because this
+    // database is encrypted at rest; it is never sent anywhere, since the codes are
+    // derived from the clock and checked on the device.
+    [
+      'ALTER TABLE users ADD COLUMN totp_secret TEXT',
     ],
   ];
 }

@@ -50,4 +50,47 @@ void main() {
     attendance.clockIn('omar');
     expect(attendance.onNow().map((e) => e.staffId).toSet(), {'sara', 'omar'});
   });
+
+  group('reading the hours back', () {
+    /// One finished shift for [who], starting [at] and lasting [hours].
+    void shift(String who, DateTime at, double hours) {
+      clock = at;
+      attendance.clockIn(who);
+      clock = at.add(Duration(minutes: (hours * 60).round()));
+      attendance.clockOut(who);
+    }
+
+    test('a window takes the shifts that started inside it, oldest first', () {
+      shift('sara', DateTime.utc(2026, 8, 10, 9), 4);
+      shift('omar', DateTime.utc(2026, 8, 11, 9), 5);
+      shift('sara', DateTime.utc(2026, 8, 12, 9), 6);
+
+      final week = attendance.between(
+          from: DateTime.utc(2026, 8, 11), to: DateTime.utc(2026, 8, 13));
+      expect(week.map((e) => e.staffId).toList(), ['omar', 'sara']);
+      // The end is exclusive, so a day range cannot pick up tomorrow's opener.
+      expect(
+          attendance.between(
+              from: DateTime.utc(2026, 8, 11), to: DateTime.utc(2026, 8, 12)),
+          hasLength(1));
+    });
+
+    test('an unbounded read is everything, and one staff member can be picked out',
+        () {
+      shift('sara', DateTime.utc(2026, 8, 10, 9), 4);
+      shift('omar', DateTime.utc(2026, 8, 11, 9), 5);
+
+      expect(attendance.between(), hasLength(2));
+      expect(attendance.between(staffId: 'sara').single.worked(clock),
+          const Duration(hours: 4));
+    });
+
+    test('a shift still running is read back, and counts up to now', () {
+      clock = DateTime.utc(2026, 8, 12, 9);
+      attendance.clockIn('sara');
+      final open = attendance.between().single;
+      expect(open.isOpen, isTrue);
+      expect(open.worked(DateTime.utc(2026, 8, 12, 12)), const Duration(hours: 3));
+    });
+  });
 }

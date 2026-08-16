@@ -212,6 +212,25 @@ class PosSession {
     orders.save(current);
   }
 
+  /// Sell one line at a price the catalogue does not carry (damaged goods, a
+  /// promise made at the door, a manager's call). Gated at the call site and
+  /// recorded here with what it was and what it became: a price nobody can trace
+  /// back is how a till leaks money.
+  ///
+  /// Modifiers keep the price they were captured at, because the override is a
+  /// decision about the item, not about what was added to it. A negative price is
+  /// refused: money is given back through a refund, which is reversible and books.
+  void setLinePrice(String lineUuid, double price) {
+    if (price < 0) return;
+    final line = current.lines.firstWhere((l) => l.uuid == lineUuid);
+    final was = line.unitPrice;
+    if (was == price) return;
+    line.unitPrice = price;
+    orders.save(current);
+    audit.record(cashierId, 'line.price_override',
+        detail: '${current.uuid}|${line.name}|$was|$price');
+  }
+
   void setLineNote(String lineUuid, String? note) {
     current.lines.firstWhere((l) => l.uuid == lineUuid).note =
         (note == null || note.trim().isEmpty) ? null : note.trim();

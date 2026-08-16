@@ -1029,4 +1029,59 @@ const Map<String, String> _ar = {
       'مربحة لكن لا أحد يطلبها. روّج لها أو قدّمها في القائمة.',
   'Neither popular nor profitable. Consider dropping them.':
       'ليست رائجة ولا مربحة. فكّر في حذفها.',
+  // flow and access: the manager's second factor, who may ring what, the price
+  // override, paying on account, hours worked, the guest prompt and the shortcuts
+  'Authenticator': 'تطبيق المصادقة',
+  'Authenticator code': 'رمز المصادقة',
+  'Only if this manager set one up': 'فقط إذا كان هذا المدير قد فعّله',
+  'authenticator on': 'المصادقة مفعّلة',
+  'This manager is asked for a code when they approve.':
+      'يُطلب من هذا المدير رمز عند الاعتماد.',
+  'This manager approves with their PIN alone.':
+      'يعتمد هذا المدير برمزه السري وحده.',
+  'Secret from the authenticator app': 'المفتاح من تطبيق المصادقة',
+  'Letters A-Z and digits 2-7': 'حروف A-Z وأرقام 2-7',
+  'That is not a usable secret yet.': 'هذا المفتاح غير صالح بعد.',
+  'Code right now': 'الرمز الآن',
+  'Turn off': 'إيقاف',
+  'Change the price of a line on the order': 'تغيير سعر صنف في الطلب',
+  'Item availability': 'توفر الصنف',
+  'Mark an item sold out, or pin it as a favourite':
+      'تحديد صنف كمنتهٍ، أو تثبيته في المفضلة',
+  'Change the price': 'تغيير السعر',
+  'Now': 'الآن',
+  'Price': 'السعر',
+  'Price for one': 'سعر الوحدة',
+  'Anything added to the item keeps its own price':
+      'الإضافات على الصنف تحتفظ بأسعارها',
+  'Order types this role may open': 'أنواع الطلبات المسموحة لهذا الدور',
+  'A tab already open on a table can always be settled.':
+      'الطلب المفتوح على طاولة يمكن دائمًا تحصيله.',
+  'This role does not open dine-in orders.':
+      'هذا الدور لا يفتح طلبات تناول في المحل.',
+  'Ask for the guest count': 'السؤال عن عدد الضيوف',
+  'When a table is seated from the floor': 'عند إجلاس طاولة من المخطط',
+  'How many guests?': 'كم عدد الضيوف؟',
+  'Hours worked': 'ساعات العمل',
+  'No hours': 'لا توجد ساعات',
+  'Nobody clocked in during this range.': 'لم يسجل أحد حضوره في هذه الفترة.',
+  'Per staff member': 'لكل موظف',
+  'Day by day': 'يومًا بيوم',
+  'shift': 'وردية',
+  'shifts': 'ورديات',
+  'still on the clock': 'ما زال على رأس العمل',
+  'Pay later books against': 'الدفع الآجل يُسجَّل على',
+  'An on-account sale needs a customer, and shows in the receivables report':
+      'البيع على الحساب يتطلب عميلًا، ويظهر في تقرير المستحقات',
+  'Put it on the account': 'تسجيله على الحساب',
+  'On account (needs a customer)': 'على الحساب (يتطلب عميلًا)',
+  'Add a customer to the order before billing it.':
+      'أضف عميلًا إلى الطلب قبل تسجيله على الحساب.',
+  'On account': 'على الحساب',
+  'Nothing on account': 'لا شيء على الحساب',
+  'Every sale in this range was settled.': 'كل المبيعات في هذه الفترة مسدَّدة.',
+  'Owed by customer': 'المستحق على كل عميل',
+  'Total outstanding': 'إجمالي المستحقات',
+  'Sales on account': 'المبيعات على الحساب',
+  'Unnamed': 'بدون اسم',
 };

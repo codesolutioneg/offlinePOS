@@ -69,4 +69,28 @@ void main() {
     expect(find.byKey(const Key('no-payment-methods')), findsOneWidget);
     expect(find.byKey(const Key('save-payment-labels')), findsNothing);
   });
+
+  testWidgets('pay later is off until a method is nominated, and never cash',
+      (t) async {
+    await t.pumpWidget(app());
+    expect(settings.payLaterMethodId, isNull);
+
+    // What the two names look like on the screen behind the closed picker.
+    final cashBefore = t.widgetList(find.text('Cash')).length;
+    final bankBefore = t.widgetList(find.text('Bank')).length;
+
+    await t.tap(find.byKey(const Key('pay-later-method')));
+    await t.pumpAndSettle();
+    // The menu offers Bank and not Cash: a tab booked as cash counts the drawer
+    // short by money nobody handed over.
+    expect(t.widgetList(find.text('Bank')).length, bankBefore + 1);
+    expect(t.widgetList(find.text('Cash')).length, cashBefore);
+
+    await t.tap(find.text('Bank').last);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('save-payment-labels')));
+    await t.pumpAndSettle();
+
+    expect(settings.payLaterMethodId, 2);
+  });
 }

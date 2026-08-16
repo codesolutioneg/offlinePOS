@@ -8,6 +8,7 @@ class Cashier {
     required this.pinHash,
     this.role = 'cashier',
     this.active = true,
+    this.totpSecret,
   });
 
   final String id;
@@ -17,7 +18,15 @@ class Cashier {
   final String role;
   final bool active;
 
+  /// The base32 secret of this person's authenticator app, or null when they have
+  /// no second factor. Only ever used to check a code they type; nothing derived
+  /// from it leaves the device.
+  final String? totpSecret;
+
   bool get isManager => role == 'manager';
+
+  /// Whether approving with this account also takes a code from their phone.
+  bool get hasSecondFactor => (totpSecret ?? '').isNotEmpty;
 }
 
 /// Cashiers as held on the till, so a shift change works with no network.
@@ -27,11 +36,19 @@ class UserStore {
   final Db _db;
 
   void upsert(Cashier c) => _db.raw.execute(
-        'INSERT INTO users (id, name, pin_salt, pin_hash, role, active) VALUES (?,?,?,?,?,?) '
+        'INSERT INTO users (id, name, pin_salt, pin_hash, role, active, totp_secret) '
+        'VALUES (?,?,?,?,?,?,?) '
         'ON CONFLICT(id) DO UPDATE SET name=excluded.name, pin_salt=excluded.pin_salt, '
-        'pin_hash=excluded.pin_hash, role=excluded.role, active=excluded.active',
-        [c.id, c.name, c.pinSalt, c.pinHash, c.role, c.active ? 1 : 0],
+        'pin_hash=excluded.pin_hash, role=excluded.role, active=excluded.active, '
+        'totp_secret=excluded.totp_secret',
+        [c.id, c.name, c.pinSalt, c.pinHash, c.role, c.active ? 1 : 0, c.totpSecret],
       );
+
+  /// Turn a second factor on or off for one person without touching their PIN, so
+  /// enrolling an authenticator is not a password reset.
+  void setTotpSecret(String id, String? secret) => _db.raw.execute(
+      'UPDATE users SET totp_secret = ? WHERE id = ?',
+      [(secret ?? '').isEmpty ? null : secret, id]);
 
   /// Replaces the roster in one transaction, so a partial sync cannot leave the
   /// till with nobody able to sign in.
@@ -75,5 +92,6 @@ class UserStore {
         pinHash: r['pin_hash'] as String,
         role: r['role'] as String,
         active: (r['active'] as int) == 1,
+        totpSecret: r['totp_secret'] as String?,
       );
 }

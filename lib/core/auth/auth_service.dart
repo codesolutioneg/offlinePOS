@@ -1,6 +1,7 @@
 import '../audit/audit_log.dart';
 import 'pin_hasher.dart';
 import 'pin_policy.dart';
+import 'totp.dart';
 import 'user_store.dart';
 
 sealed class AuthResult {
@@ -105,13 +106,25 @@ class AuthService {
   /// Authorise a privileged action (discount, void, refund, drawer) with a manager
   /// PIN. Returns true if the PIN matches any active manager. A separate check from
   /// [unlock] because the signed-in cashier need not sign out to get approval.
-  Future<bool> authorizeManager(String pin) async {
+  ///
+  /// A manager who has enrolled an authenticator must also give its current [code].
+  /// The second factor is checked only after their PIN has matched, so it adds a
+  /// step and takes none away: a manager with no authenticator approves exactly as
+  /// before, and a wrong code is a refusal rather than a fallback to the PIN alone.
+  /// Every part of this is offline: the code comes from the clock, not a server.
+  Future<bool> authorizeManager(String pin, {String? code}) async {
     if (!_policy.isWellFormed(pin)) return false;
     for (final m in _users.active().where((u) => u.isManager)) {
-      if (await _hasher.verify(pin, m.pinSalt, m.pinHash)) {
-        _audit.record(m.id, 'manager.authorized');
-        return true;
+      if (!await _hasher.verify(pin, m.pinSalt, m.pinHash)) continue;
+      if (m.hasSecondFactor && !Totp.verify(m.totpSecret!, code ?? '')) {
+        // Named apart from a wrong PIN in the trail: the difference between a
+        // stolen PIN being tried and a manager fumbling their phone is the whole
+        // reason for the second factor.
+        _audit.record(m.id, 'manager.totp_rejected');
+        return false;
       }
+      _audit.record(m.id, 'manager.authorized');
+      return true;
     }
     _audit.record('unknown', 'manager.authorization_failed');
     return false;
@@ -146,6 +159,11 @@ class AuthService {
     _audit.record(cashierId, 'cashier.authorized');
     return true;
   }
+  /// Whether anyone who could approve an action on this till has a second factor,
+  /// so the approval dialog knows whether to ask for a code at all. A shop that has
+  /// enrolled none never sees the field.
+  bool get managersUseSecondFactor =>
+      _users.active().any((u) => u.isManager && u.hasSecondFactor);
 
   Future<Cashier> enrol({
     required String id,
@@ -157,6 +175,9 @@ class AuthService {
     final cashier = Cashier(
       id: id, name: name, role: role,
       pinSalt: salt, pinHash: await _hasher.hash(pin, salt),
+      // Re-enrolling is how a PIN is reset, and a PIN reset must not quietly take
+      // the second factor off the account it protects.
+      totpSecret: _users.byId(id)?.totpSecret,
     );
     _users.upsert(cashier);
     return cashier;

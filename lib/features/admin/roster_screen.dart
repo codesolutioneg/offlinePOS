@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/auth/auth_service.dart';
+import '../../core/auth/totp.dart';
 import '../../core/auth/user_store.dart';
 import '../../core/i18n/l10n.dart';
 
@@ -88,6 +91,9 @@ class _RosterScreenState extends State<RosterScreen> {
         pinSalt: cashier.pinSalt,
         pinHash: cashier.pinHash,
         active: cashier.active,
+        // Carried through every rewrite of the row: fixing a typo in a name must
+        // not take a manager's second factor off.
+        totpSecret: cashier.totpSecret,
       ));
     } else {
       // A new PIN was entered: re-enrol under the same id so it re-hashes.
@@ -114,8 +120,25 @@ class _RosterScreenState extends State<RosterScreen> {
       pinSalt: cashier.pinSalt,
       pinHash: cashier.pinHash,
       active: false,
+      totpSecret: cashier.totpSecret,
     ));
     widget.onChanged();
+    setState(() {});
+  }
+
+  /// Turn a manager's authenticator on (by taking the secret their app shows) or
+  /// off. Kept out of the staff form so a PIN reset and a second factor stay two
+  /// separate decisions.
+  Future<void> _openTotpDialog(Cashier cashier) async {
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (_) => _TotpDialog(cashier: cashier),
+    );
+    // Null is a cancelled dialog; an empty string is "turn it off".
+    if (result == null) return;
+    widget.users.setTotpSecret(cashier.id, result.isEmpty ? null : result);
+    widget.onChanged();
+    if (!mounted) return;
     setState(() {});
   }
 
@@ -131,6 +154,7 @@ class _RosterScreenState extends State<RosterScreen> {
       pinSalt: cashier.pinSalt,
       pinHash: cashier.pinHash,
       active: true,
+      totpSecret: cashier.totpSecret,
     ));
     widget.onChanged();
     setState(() {});
@@ -169,9 +193,11 @@ class _RosterScreenState extends State<RosterScreen> {
                 return ListTile(
                   key: Key('staff-${c.id}'),
                   title: Text(c.name, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(c.active
-                      ? roleLabel(context, c.role)
-                      : '${roleLabel(context, c.role)} · ${tr(context, 'inactive')}'),
+                  subtitle: Text([
+                    roleLabel(context, c.role),
+                    if (!c.active) tr(context, 'inactive'),
+                    if (c.hasSecondFactor) tr(context, 'authenticator on'),
+                  ].join(' · ')),
                   // Actions live in an overflow menu so a long name can never push
                   // buttons off the row.
                   trailing: locked
@@ -180,12 +206,20 @@ class _RosterScreenState extends State<RosterScreen> {
                           key: Key('staff-menu-${c.id}'),
                           onSelected: (v) {
                             if (v == 'edit') _openEditDialog(c);
+                            if (v == 'totp') _openTotpDialog(c);
                             if (v == 'deactivate') _deactivate(c);
                             if (v == 'reactivate') _reactivate(c);
                           },
                           itemBuilder: (_) => [
                             PopupMenuItem(
                                 key: Key('edit-${c.id}'), value: 'edit', child: Text(tr(context, 'Edit'))),
+                            // Only managers approve things, so only a manager's
+                            // second factor is ever asked for.
+                            if (c.isManager)
+                              PopupMenuItem(
+                                  key: Key('totp-${c.id}'),
+                                  value: 'totp',
+                                  child: Text(tr(context, 'Authenticator'))),
                             if (c.active)
                               PopupMenuItem(
                                   key: Key('deactivate-${c.id}'),
@@ -219,6 +253,105 @@ String roleLabel(BuildContext context, String role) => switch (role) {
       'cashier' => tr(context, 'Cashier'),
       _ => role,
     };
+/// Enrol (or drop) a manager's authenticator.
+///
+/// The secret is typed in from whatever the app on their phone shows; the current
+/// code is echoed back live so the two sides can be proven to agree before the
+/// dialog is saved, which is the only way to find a mistyped secret before it locks
+/// somebody out of approving a void mid-service. Nothing here goes near a network:
+/// the code is the clock and the secret, both on this device.
+///
+/// Pops null when nothing should change, an empty string to turn the factor off,
+/// and the normalised secret to turn it on.
+class _TotpDialog extends StatefulWidget {
+  const _TotpDialog({required this.cashier});
+
+  final Cashier cashier;
+
+  @override
+  State<_TotpDialog> createState() => _TotpDialogState();
+}
+
+class _TotpDialogState extends State<_TotpDialog> {
+  final TextEditingController _secret = TextEditingController();
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // Keeps the echoed code honest as the 30-second window rolls over.
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    _secret.dispose();
+    super.dispose();
+  }
+
+  /// The typed secret in stored form, or null while it is not usable yet.
+  String? get _normalised => Totp.normaliseSecret(_secret.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final ready = _normalised;
+    return AlertDialog(
+      title: Text(tr(context, 'Authenticator')),
+      content: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(
+            widget.cashier.hasSecondFactor
+                ? tr(context, 'This manager is asked for a code when they approve.')
+                : tr(context, 'This manager approves with their PIN alone.'),
+            key: const Key('totp-state'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('totp-secret'),
+            controller: _secret,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: tr(context, 'Secret from the authenticator app'),
+              helperText: tr(context, 'Letters A-Z and digits 2-7'),
+              border: const OutlineInputBorder(),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 10),
+          if (_secret.text.trim().isNotEmpty)
+            Text(
+              ready == null
+                  ? tr(context, 'That is not a usable secret yet.')
+                  : '${tr(context, 'Code right now')}: ${Totp.codeAt(ready, DateTime.now())}',
+              key: const Key('totp-preview'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+        ]),
+      ),
+      actions: [
+        TextButton(
+          key: const Key('totp-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(tr(context, 'Cancel')),
+        ),
+        if (widget.cashier.hasSecondFactor)
+          TextButton(
+            key: const Key('totp-off'),
+            onPressed: () => Navigator.of(context).pop(''),
+            child: Text(tr(context, 'Turn off')),
+          ),
+        FilledButton(
+          key: const Key('totp-save'),
+          onPressed: ready == null ? null : () => Navigator.of(context).pop(ready),
+          child: Text(tr(context, 'Save')),
+        ),
+      ],
+    );
+  }
+}
 
 class _StaffFormResult {
   const _StaffFormResult({required this.name, required this.role, required this.pin});

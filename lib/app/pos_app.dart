@@ -987,6 +987,12 @@ class _PosAppState extends State<PosApp> {
               drivers: widget.delivery == null
                   ? null
                   : () => widget.delivery!.drivers(activeOnly: true),
+              // What this cashier's role may open. Read per build, so a manager
+              // narrowing it takes effect on the next order rather than at restart.
+              allowedOrderTypes: _allowedOrderTypes,
+              // The tender an on-account sale books against, when the shop runs
+              // accounts. Absent, the payment sheet offers no such thing.
+              payLaterMethodId: widget.settings.payLaterMethodId,
               // Dividers are floor decoration, never a table an order sits at.
               tables: () => widget.tables
                   .all()
@@ -1412,6 +1418,9 @@ class _PosAppState extends State<PosApp> {
         costs: widget.catalogue.costsById(),
         // Paid-outs live inside shifts, so the expenses report reads them itself.
         shifts: widget.shifts,
+        // Clock-ins, and who the ids belong to, for the hours report.
+        attendance: widget.attendance,
+        staffNames: {for (final u in widget.users.all()) u.id: u.name},
         openTables: widget.orders
             .heldAnywhere()
             .where((o) => o.tableLabel != null)
@@ -1528,10 +1537,15 @@ class _PosAppState extends State<PosApp> {
           ]),
         ),
       ).then((v) => v ?? 'cancel');
+  /// The kinds of sale the signed-in role may open. Unrestricted until a manager
+  /// says otherwise, and a manager themselves is never restricted.
+  Set<OrderType> get _allowedOrderTypes =>
+      widget.settings.orderTypesFor(widget.auth.signedIn?.role ?? 'cashier');
 
   void _openFloor(BuildContext context, PosSession session) {
     final occ = _floorOccupancy(session);
     final occupied = occ.occupied;
+    final allowed = _allowedOrderTypes;
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (floorContext) => TableFloorScreen(
         // Read as the floor is built, so a close that arrives over the fabric shows
@@ -1550,34 +1564,40 @@ class _PosAppState extends State<PosApp> {
         // The book, so a table with guests due shortly says so on the plan.
         reservations: widget.reservations,
         // The two table-less ways to start an order, straight from the floor home.
-        // Each starts a fresh order of that type and drops to the order screen.
-        onTakeaway: () {
-          setState(() => session.startFresh(OrderType.takeaway));
-          Navigator.of(floorContext).pop();
-        },
-        onDelivery: () async {
-          // A delivery has no table to tap, so a parked one is only reachable
-          // through Open orders: a cashier taking the next call has no way of
-          // knowing they are about to start a second order for a bag already
-          // waiting. Ask, but only when there is something to resume.
-          final parked = widget.orders
-              .held()
-              .where((o) => o.type == OrderType.delivery)
-              .toList();
-          final resume = parked.isEmpty
-              ? null
-              : await _pickParkedDelivery(floorContext, parked);
-          if (resume == 'cancel') return;
-          setState(() {
-            if (resume is Order) {
-              session.recall(resume.uuid);
-            } else {
-              session.startFresh(OrderType.delivery);
-            }
-          });
-          if (floorContext.mounted) Navigator.of(floorContext).pop();
-        },
-        onOpenTable: (t) {
+        // Each starts a fresh order of that type and drops to the order screen. A
+        // type this role may not ring has no button rather than a button that
+        // refuses.
+        onTakeaway: !allowed.contains(OrderType.takeaway)
+            ? null
+            : () {
+                setState(() => session.startFresh(OrderType.takeaway));
+                Navigator.of(floorContext).pop();
+              },
+        onDelivery: !allowed.contains(OrderType.delivery)
+            ? null
+            : () async {
+                // A delivery has no table to tap, so a parked one is only reachable
+                // through Open orders: a cashier taking the next call has no way of
+                // knowing they are about to start a second order for a bag already
+                // waiting. Ask, but only when there is something to resume.
+                final parked = widget.orders
+                    .held()
+                    .where((o) => o.type == OrderType.delivery)
+                    .toList();
+                final resume = parked.isEmpty
+                    ? null
+                    : await _pickParkedDelivery(floorContext, parked);
+                if (resume == 'cancel') return;
+                setState(() {
+                  if (resume is Order) {
+                    session.recall(resume.uuid);
+                  } else {
+                    session.startFresh(OrderType.delivery);
+                  }
+                });
+                if (floorContext.mounted) Navigator.of(floorContext).pop();
+              },
+        onOpenTable: (t) async {
           // Tapping the table the current order is already seated at just returns
           // to it rather than parking it and starting a duplicate.
           if (session.current.tableLabel == t.name &&
@@ -1608,19 +1628,44 @@ class _PosAppState extends State<PosApp> {
               ));
               return;
             }
+            // Seating a table opens a dine-in, so a role that does not ring them is
+            // told plainly instead of landing on a sale it may not have started.
+            // Recalling a tab that is already open is untouched by this: settling
+            // somebody else's table is not opening one.
+            if (!allowed.contains(OrderType.dineIn)) {
+              ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
+                content: Text(
+                    tr(floorContext, 'This role does not open dine-in orders.')),
+              ));
+              return;
+            }
           }
+          // How many are sitting down, when the shop asks. Before the order is
+          // started, so backing out of the prompt leaves no half-seated table
+          // behind, and only when a table is actually being seated: recalling a
+          // tab already has its covers.
           if (held.isNotEmpty) {
             // Whose tab it is may need answering first; the rest of the tap waits
-            // for that answer rather than opening the bill behind it.
+            // for that answer rather than opening the bill behind it. Before the
+            // guest prompt, so resuming never sits behind an await it does not need.
             unawaited(_resumeTab(floorContext, session, held.first));
             return;
+          }
+          int? covers;
+          if (widget.settings.askGuestCount) {
+            covers = await _askGuestCount(floorContext, t.seats);
+            if (covers == null) return;
           }
           setState(() {
             session.startFresh(OrderType.dineIn);
             session.setTable(t.name);
-            if (t.seats > 0) session.setGuestCount(t.seats);
+            // The prompt's answer when there was one, otherwise the table's own
+            // seat count, which is what the floor has always seeded. A tab that was
+            // already open never reaches here: the resume path above took it.
+            final seated = covers ?? t.seats;
+            if (seated > 0) session.setGuestCount(seated);
           });
-          Navigator.of(floorContext).pop();
+          if (floorContext.mounted) Navigator.of(floorContext).pop();
         },
       ),
     ));
@@ -1850,6 +1895,39 @@ class _PosAppState extends State<PosApp> {
     setState(() => session.recall(tab.uuid));
     _publishActivity();
     Navigator.of(context).pop();
+  }
+
+  /// How many are sitting at the table just tapped, offered as quick counts with
+  /// the table's own seats first. Returns null when the waiter backs out, which
+  /// aborts the seating rather than opening a tab nobody asked for.
+  Future<int?> _askGuestCount(BuildContext context, int seats) {
+    final counts = <int>{if (seats > 0) seats, 1, 2, 3, 4, 6, 8}.toList()..sort();
+    return showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('guest-count-prompt'),
+        title: Text(tr(ctx, 'How many guests?')),
+        content: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final n in counts)
+              ActionChip(
+                key: Key('guests-$n'),
+                label: Text('$n'),
+                onPressed: () => Navigator.pop(ctx, n),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            key: const Key('guests-cancel'),
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+        ],
+      ),
+    );
   }
 
   /// The settings hub: one door onto everything a manager configures on the device.
@@ -2240,31 +2318,50 @@ class _PosAppState extends State<PosApp> {
   Future<bool> _authorizeManager(BuildContext context) async {
     if (widget.auth.signedIn?.isManager ?? false) return true;
     final ctrl = TextEditingController();
-    final pin = await showDialog<String>(
+    final codeCtrl = TextEditingController();
+    // Only a shop that has enrolled an authenticator is shown the second field, so
+    // nothing changes for a till that does not use one.
+    final second = widget.auth.managersUseSecondFactor;
+    final entered = await showDialog<(String, String)>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(tr(ctx, 'Manager approval')),
-        content: TextField(
-          key: const Key('manager-pin'),
-          controller: ctrl,
-          autofocus: true,
-          obscureText: true,
-          keyboardType: TextInputType.number,
-          decoration: InputDecoration(
-              labelText: tr(ctx, 'Manager PIN'), border: const OutlineInputBorder()),
-        ),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            key: const Key('manager-pin'),
+            controller: ctrl,
+            autofocus: true,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+                labelText: tr(ctx, 'Manager PIN'), border: const OutlineInputBorder()),
+          ),
+          if (second) ...[
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('manager-code'),
+              controller: codeCtrl,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                  labelText: tr(ctx, 'Authenticator code'),
+                  helperText: tr(ctx, 'Only if this manager set one up'),
+                  border: const OutlineInputBorder()),
+            ),
+          ],
+        ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
             key: const Key('manager-ok'),
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            onPressed: () =>
+                Navigator.pop(ctx, (ctrl.text.trim(), codeCtrl.text.trim())),
             child: Text(tr(ctx, 'Approve')),
           ),
         ],
       ),
     );
-    if (pin == null || pin.isEmpty) return false;
-    final ok = await widget.auth.authorizeManager(pin);
+    if (entered == null || entered.$1.isEmpty) return false;
+    final ok = await widget.auth.authorizeManager(entered.$1, code: entered.$2);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(tr(context, 'Manager approval failed'))));

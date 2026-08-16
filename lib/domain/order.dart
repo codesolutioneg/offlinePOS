@@ -115,7 +115,12 @@ class OrderLine {
   final int productId;
   final String name;
   double quantity;
-  final double unitPrice;
+
+  /// What one of these costs, captured from the catalogue when the line was rung.
+  // Mutable only so a manager-gated, audited price override can restate it on the
+  // line; nothing else writes it, and the captured value is still what a later
+  // catalogue change can never touch.
+  double unitPrice;
   final List<OrderModifier> modifiers;
 
   /// A free-text kitchen note for this line ("no onions", "well done").
@@ -543,6 +548,15 @@ class Order {
         ..cashReceived = (m['cash_received'] as num?)?.toDouble()
         ..amended = (m['amended'] as bool?) ?? false;
 }
+
+/// The label an on-account tender carries, and the one thing that says a sale was
+/// left on a customer's tab rather than settled at the counter.
+///
+/// A label rather than a field on the order: the money is a tender like any other,
+/// it books through the payment method the shop nominated, and reports that read
+/// tenders (the payment mix, the receivables list) all see it without a second
+/// concept travelling through the payload.
+const String kOnAccountLabel = 'On account';
 
 /// One tender against a sale: which Odoo payment method, how much, and any tip
 /// taken on that tender. Several of these on one order is a split payment.

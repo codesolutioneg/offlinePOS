@@ -27,6 +27,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late final TextEditingController _taxId;
   late final TextEditingController _receiptFooter;
   late bool _showTax;
+  late bool _askGuests;
   late int _cutoverHour;
 
   @override
@@ -36,6 +37,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _taxId = TextEditingController(text: widget.settings.taxId ?? '');
     _receiptFooter = TextEditingController(text: widget.settings.receiptFooter ?? '');
     _showTax = widget.settings.receiptShowTax;
+    _askGuests = widget.settings.askGuestCount;
     _cutoverHour = widget.settings.businessDayCutoverHour;
   }
 
@@ -52,6 +54,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.taxId = _taxId.text.trim();
     widget.settings.receiptFooter = _receiptFooter.text.trim();
     widget.settings.receiptShowTax = _showTax;
+    widget.settings.askGuestCount = _askGuests;
     widget.settings.businessDayCutoverHour = _cutoverHour;
     widget.onChanged();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
@@ -98,6 +101,13 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             title: Text(tr(context, 'Show tax on receipt')),
             value: _showTax,
             onChanged: (v) => setState(() => _showTax = v),
+          ),
+          SwitchListTile(
+            key: const Key('ask-guest-count'),
+            title: Text(tr(context, 'Ask for the guest count')),
+            subtitle: Text(tr(context, 'When a table is seated from the floor')),
+            value: _askGuests,
+            onChanged: (v) => setState(() => _askGuests = v),
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(

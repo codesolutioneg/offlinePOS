@@ -69,6 +69,7 @@ class SettingsStore {
   static const _smtpFrom = 'smtp_from';
   static const _zReportRecipients = 'z_report_recipients';
   static const _emailZReport = 'email_z_report';
+  static const _roleOrderTypes = 'role_order_types';
   static const _codePage = 'receipt_code_page';
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
@@ -537,6 +538,13 @@ class SettingsStore {
     return tail.padLeft(3, 'X');
   }
 
+  /// Ask how many are sitting down when a table is seated. Off by default: a shop
+  /// where one cashier serves the room gains nothing from a dialog between tapping
+  /// a table and ringing the first drink, and the covers can still be set from the
+  /// Guests chip whenever they matter.
+  bool get askGuestCount => getBool('ask_guest_count');
+  set askGuestCount(bool v) => setBool('ask_guest_count', v);
+
   /// Product-grid density: tiles per row. 0 = auto (fit by width).
   int get gridColumns => int.tryParse(getString(_gridColumns) ?? '') ?? 0;
   set gridColumns(int n) => setString(_gridColumns, n <= 0 ? null : '$n');
@@ -659,6 +667,21 @@ class SettingsStore {
     }
     paymentMethodLabels = map;
   }
+
+  // ── letting a customer settle later ──────────────────────────────
+
+  /// The payment method an on-account sale books against, or null when the shop
+  /// does not run accounts. Off by default, and deliberately a nomination rather
+  /// than an invented tender: the wire contract books real methods, so a shop that
+  /// wants "pay later" points it at the method their accounts already use for a
+  /// customer balance (never the cash one, or the drawer would be counted short).
+  int? get payLaterMethodId {
+    final id = int.tryParse(getString('pay_later_method_id') ?? '');
+    return (id == null || id <= 0) ? null : id;
+  }
+
+  set payLaterMethodId(int? v) =>
+      setString('pay_later_method_id', (v == null || v <= 0) ? null : '$v');
 
   // ── the shop's mark on the paper ─────────────────────────────────
 
@@ -987,5 +1010,59 @@ class SettingsStore {
   set receiptFontProfile(String v) {
     setString('receipt_font_profile', v);
     publishPrintProfile();
+  }
+
+  // ── which sales a role may open ──────────────────────────────────
+  // A delivery desk that cannot seat a table, or a counter that does not take
+  // delivery orders, is a shop decision rather than a permission: there is no
+  // manager PIN that makes sense as an override, so a type a role may not ring
+  // simply is not offered.
+
+  /// The order types [role] may start. Everything, until a manager narrows it: a
+  /// till that has never seen this screen behaves exactly as it did before.
+  /// A manager is never restricted, in line with every other role rule here.
+  Set<OrderType> orderTypesFor(String role) {
+    if (role == 'manager') return OrderType.values.toSet();
+    final raw = getString(_roleOrderTypes);
+    if (raw == null) return OrderType.values.toSet();
+    try {
+      final map = jsonDecode(raw) as Map;
+      if (!map.containsKey(role)) return OrderType.values.toSet();
+      final names = (map[role] as List).map((e) => e.toString()).toSet();
+      final allowed = OrderType.values.where((t) => names.contains(t.name)).toSet();
+      // A role that may ring nothing could take no money at all, so an empty set
+      // reads as unrestricted rather than as a till nobody can sell on.
+      return allowed.isEmpty ? OrderType.values.toSet() : allowed;
+    } catch (_) {
+      return OrderType.values.toSet();
+    }
+  }
+
+  bool roleCanRing(String role, OrderType type) =>
+      orderTypesFor(role).contains(type);
+
+  /// Allow or refuse one order type for [role]. A no-op for 'manager', and for
+  /// taking away the last type a role has left.
+  void setRoleOrderType(String role, OrderType type, bool allowed) {
+    if (role == 'manager') return;
+    final current = orderTypesFor(role).toSet();
+    if (allowed) {
+      current.add(type);
+    } else {
+      if (current.length <= 1) return;
+      current.remove(type);
+    }
+    final map = <String, List<String>>{};
+    final raw = getString(_roleOrderTypes);
+    if (raw != null) {
+      try {
+        (jsonDecode(raw) as Map).forEach((k, v) =>
+            map[k as String] = (v as List).map((e) => e.toString()).toList());
+      } catch (_) {
+        // Unreadable saved value: replaced by what is being set now.
+      }
+    }
+    map[role] = current.map((t) => t.name).toList();
+    setString(_roleOrderTypes, jsonEncode(map));
   }
 }
