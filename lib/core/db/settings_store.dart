@@ -996,6 +996,17 @@ class SettingsStore {
   int? get odooLocalProductId => _positiveId('odoo_local_product_id');
   set odooLocalProductId(int? v) => _setOdooId('odoo_local_product_id', v);
 
+  /// Send a shift's sales as one merged sales order instead of one per ticket.
+  ///
+  /// Off, and it has to stay off until jouma's booking method is changed to accept
+  /// a batch: the patch it needs is written out in docs/ODOO_SYNC.md. The till side
+  /// is built and tested so that change is a switch to throw rather than a release
+  /// to write, but turning it on against today's module books the night as one
+  /// document with no per-ticket record and no per-ticket idempotency.
+  bool get mergeBatchIntoOneSaleOrder => getBool('merge_batch_one_sale_order');
+  set mergeBatchIntoOneSaleOrder(bool v) =>
+      setBool('merge_batch_one_sale_order', v);
+
   /// An Odoo id is a positive integer. Anything else (a blank, a typo, a leftover
   /// zero) reads as "not set" rather than travelling and pointing the sale at a
   /// record that does not exist.

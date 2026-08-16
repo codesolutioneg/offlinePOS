@@ -50,6 +50,7 @@ class SyncService {
     AuditLog? audit,
     Future<bool> Function()? probe,
     this.reconcile,
+    this.mergeBatch,
     this.catalogueMaxAge = const Duration(hours: 6),
     this.retryWindow = const Duration(hours: 12),
     this.retryInterval = const Duration(minutes: 5),
@@ -98,6 +99,17 @@ class SyncService {
   /// dedupes on uuid, so re-queuing an already-queued or already-booked order is a
   /// no-op rather than a double sale.
   final Future<void> Function()? reconcile;
+
+  /// Sends the queued sales as one merged sales order and returns true when it
+  /// did, leaving nothing for the drain behind it. Null on a build that cannot
+  /// merge, and it answers false whenever the shop has not asked for merging or
+  /// the batch is not one that can be merged safely, which is the normal case.
+  ///
+  /// Injected rather than built here for the same reason [reconcile] is: this
+  /// class stays free of order and settings types. It runs on a batch push (a
+  /// shift close, a manual sync) and on the retry that finishes one, never on the
+  /// read-only timer pass.
+  final Future<bool> Function()? mergeBatch;
 
   /// Whether the server is currently reachable. Drives the online/offline badge on
   /// the sell screen. Starts false: a till has not proven it can reach anything
@@ -304,6 +316,11 @@ class SyncService {
       // record of who actually did what and it has to reach the server too.
       await _queueAudit();
       await _queueHeartbeat();
+      // Before the ordinary drain, because merging is about how these same sales
+      // reach the server, not about sending them twice. When it delivers, the
+      // sales are already marked and the drain below only carries the audit trail
+      // and the heartbeat.
+      await _mergeBatchIfAsked();
       sentThisRun = await _outbox.drain();
       if (sentThisRun > 0) {
         // Acknowledged entries are kept a while so a duplicate push is still
@@ -414,6 +431,11 @@ class SyncService {
       // Same sweep the batch push does, in case the sale that was lost from the
       // outbox is the reason the close came up short.
       await reconcilePending();
+      // A close that merged and then failed has to be finished the same way. Left
+      // to the drain, the same sales would go out one at a time under their own
+      // uuids, and a batch the server had already committed but never
+      // acknowledged would then be booked a second time as individual sales.
+      await _mergeBatchIfAsked();
       sentThisRun = await _outbox.drain(maxBatches: _retryMaxBatches);
       if (sentThisRun > 0) {
         _outboxStore.pruneSent();
@@ -434,6 +456,11 @@ class SyncService {
       _state = SyncState.offline;
       online.value = false;
     }
+  }
+
+  Future<void> _mergeBatchIfAsked() async {
+    final merge = mergeBatch;
+    if (merge != null) await merge();
   }
 
   /// Re-queue paid orders that are not yet on the wire. Exposed so a caller can run

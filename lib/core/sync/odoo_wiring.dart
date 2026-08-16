@@ -60,7 +60,30 @@ class OdooWiring {
     _outbox.unregister('device.status');
   }
 
+  /// Deliver one payload that is not an outbox row of its own: the merged shift
+  /// batch. Same transport, same authentication, same shop ids and the same
+  /// reading of the server's answer as a single sale, so the merged path cannot
+  /// drift from the one it stands in for.
+  ///
+  /// No booked/rejected callback: a batch stands for many sales and the caller is
+  /// the one that knows which, so marking them is its job.
+  Future<void> pushPayload(String uuid, Map<String, dynamic> payload) =>
+      _deliver(OutboxEntry(
+          id: -1, kind: 'order.push', payloadUuid: uuid, payload: payload));
+
   Future<void> _orderSender(OutboxEntry entry) async {
+    try {
+      await _deliver(entry);
+      // Only order.push is routed here (audit and heartbeat have their own local
+      // sinks), so a clean return means the server booked this sale.
+      onOrderBooked?.call(entry.payloadUuid);
+    } on PermanentlyRejected catch (e) {
+      onOrderRejected?.call(entry.payloadUuid, e.toString());
+      rethrow;
+    }
+  }
+
+  Future<void> _deliver(OutboxEntry entry) async {
     final sender = _sender;
     final endpoint = _endpoint;
     if (sender == null || endpoint == null) {
@@ -72,15 +95,7 @@ class OdooWiring {
       // transient (server down / wrong-for-now), so the sale is kept and retried.
       await sender.authenticate(endpoint.login, endpoint.password ?? '');
     }
-    try {
-      await sender.orderSender(entry);
-      // Only order.push is routed here (audit and heartbeat have their own local
-      // sinks), so a clean return means the server booked this sale.
-      onOrderBooked?.call(entry.payloadUuid);
-    } on PermanentlyRejected catch (e) {
-      onOrderRejected?.call(entry.payloadUuid, e.toString());
-      rethrow;
-    }
+    await sender.orderSender(entry);
   }
 
   /// A `call` for the catalogue [OdooPuller]: authenticates on demand against the
