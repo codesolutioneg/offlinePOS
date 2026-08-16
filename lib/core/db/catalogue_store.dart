@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../../domain/catalogue.dart';
 import 'database.dart';
@@ -27,6 +28,7 @@ class CatalogueStore {
     required Map<int, List<int>> productGroupIds,
     List<PaymentMethod> paymentMethods = const [],
     List<Customer> customers = const [],
+    Map<int, Uint8List> productImages = const {},
     DateTime? refreshedAt,
   }) {
     _db.raw.execute('BEGIN');
@@ -41,10 +43,10 @@ class CatalogueStore {
       }
       for (final p in products) {
         _db.raw.execute(
-            'INSERT INTO products (id, name, price, category_id, barcode, active, sold_by_weight, tax_rate) '
-            'VALUES (?,?,?,?,?,?,?,?)',
+            'INSERT INTO products (id, name, price, category_id, barcode, active, sold_by_weight, tax_rate, cost, image) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?)',
             [p.id, p.name, p.price, p.categoryId, p.barcode, p.active ? 1 : 0,
-             p.soldByWeight ? 1 : 0, p.taxRate]);
+             p.soldByWeight ? 1 : 0, p.taxRate, p.cost, productImages[p.id]]);
       }
       for (final g in groups) {
         _db.raw.execute(
@@ -80,6 +82,9 @@ class CatalogueStore {
           "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
           [jsonEncode(customers.map((c) => c.toMap()).toList())]);
       _db.raw.execute('COMMIT');
+      // The products are gone, so whatever pictures were held in memory describe a
+      // menu that no longer exists.
+      _images = null;
     } catch (_) {
       _db.raw.execute('ROLLBACK');
       rethrow;
@@ -157,6 +162,36 @@ class CatalogueStore {
         [jsonEncode(byId.values.map((c) => c.toMap()).toList())]);
   }
 
+  /// Every product's cost, by product id, for the margin reports. One read of a
+  /// column the selling queries never touch; a product the server gave no cost for
+  /// is absent rather than present as zero, so a report can tell "free" from
+  /// "nobody said".
+  Map<int, double> costsById() => {
+        for (final r in _db.raw
+            .select('SELECT id, cost FROM products WHERE cost > 0'))
+          r['id'] as int: (r['cost'] as num).toDouble(),
+      };
+
+  /// The product pictures held on this till, by product id.
+  ///
+  /// Read once and kept, because the grid asks for them on every rebuild and a
+  /// query per tile per frame is how a menu with photos would start costing a
+  /// cashier taps. Dropped when the catalogue is replaced, and re-read when another
+  /// instance of this store did the replacing, which is what the stamp is for.
+  Map<int, Uint8List> images() {
+    final stamp = refreshedAt;
+    if (_images != null && _imagesStamp == stamp) return _images!;
+    _imagesStamp = stamp;
+    return _images = {
+      for (final r in _db.raw
+          .select('SELECT id, image FROM products WHERE image IS NOT NULL'))
+        r['id'] as int: r['image'] as Uint8List,
+    };
+  }
+
+  Map<int, Uint8List>? _images;
+  DateTime? _imagesStamp;
+
   List<Category> categories() => _db.raw
       .select('SELECT * FROM categories ORDER BY sequence, name')
       .map((r) => Category(
@@ -180,22 +215,30 @@ class CatalogueStore {
     }
     args.add(limit);
     return _db.raw
-        .select('SELECT * FROM products WHERE ${where.join(' AND ')} '
+        .select('SELECT $_productColumns FROM products WHERE ${where.join(' AND ')} '
                 'ORDER BY name LIMIT ?', args)
         .map(_product)
         .toList();
   }
 
   Product? byBarcode(String barcode) {
-    final rows = _db.raw
-        .select('SELECT * FROM products WHERE barcode = ? AND active = 1 LIMIT 1', [barcode]);
+    final rows = _db.raw.select(
+        'SELECT $_productColumns FROM products WHERE barcode = ? AND active = 1 LIMIT 1',
+        [barcode]);
     return rows.isEmpty ? null : _product(rows.first);
   }
 
   Product? byId(int id) {
-    final rows = _db.raw.select('SELECT * FROM products WHERE id = ?', [id]);
+    final rows = _db.raw
+        .select('SELECT $_productColumns FROM products WHERE id = ?', [id]);
     return rows.isEmpty ? null : _product(rows.first);
   }
+
+  /// Named rather than `*`: the picture column is kilobytes a product, and every
+  /// query here answers a tap on the selling screen. Pictures are fetched on their
+  /// own, once, by [images].
+  static const _productColumns =
+      'id, name, price, category_id, barcode, active, sold_by_weight, tax_rate, cost';
 
   /// Modifier groups for a product, each with its options, ordered for display.
   ///
@@ -252,5 +295,6 @@ class CatalogueStore {
         active: (r['active'] as int) == 1,
         soldByWeight: (r['sold_by_weight'] as int) == 1,
         taxRate: (r['tax_rate'] as num).toDouble(),
+        cost: (r['cost'] as num?)?.toDouble() ?? 0,
       );
 }

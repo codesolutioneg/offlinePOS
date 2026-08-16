@@ -61,12 +61,14 @@ class LineRasteriser {
 
   Future<RasterBand?> _draw(RasterRequest r) async {
     if (r.dots < 8 || r.dots % 8 != 0) return null;
-    // Double width is a horizontal stretch on the printer, so it is laid out in half
-    // the room and drawn twice as wide rather than set in a wider font.
-    final stretch = r.doubleWidth ? 2 : 1;
+    // Width is a horizontal stretch on the printer, so the line is laid out in a
+    // fraction of the room and drawn that many times wider rather than set in a
+    // wider font. The document's base size and the line's own emphasis multiply,
+    // exactly as they do in the bytes.
+    final stretch = r.totalWidthScale;
     final usable = r.dots / stretch;
     final style = TextStyle(
-      fontSize: fontSize * (r.doubleHeight ? 2 : 1),
+      fontSize: fontSize * r.totalHeightScale,
       height: 1.0,
       fontWeight: r.bold ? FontWeight.w700 : FontWeight.w400,
       color: const Color(0xFF000000),
@@ -88,7 +90,7 @@ class LineRasteriser {
 
     final height = math.max(
       math.max(left.height, right?.height ?? 0).ceil(),
-      minHeight * (r.doubleHeight ? 2 : 1),
+      minHeight * r.totalHeightScale,
     );
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder);

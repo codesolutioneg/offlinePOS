@@ -19,6 +19,7 @@ class Product {
     this.active = true,
     this.soldByWeight = false,
     this.taxRate = 0,
+    this.cost = 0,
   });
 
   final int id;
@@ -29,6 +30,11 @@ class Product {
   final bool active;
   final bool soldByWeight;
   final double taxRate;
+
+  /// What the dish costs the shop, as the server last stated it. Zero means the
+  /// server never said, which the margin reports read as unknown rather than free.
+  /// Never shown to a customer and never printed: this is a manager's number.
+  final double cost;
 }
 
 enum ModifierPriceType { fixed, percentage, free }

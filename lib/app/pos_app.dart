@@ -46,6 +46,7 @@ import '../core/sync/outbox.dart';
 import '../core/sync/server_probe.dart';
 import '../core/sync/sync_service.dart';
 import '../core/theme/app_colors.dart';
+import '../core/theme/app_theme.dart';
 import '../core/updates/update_service.dart';
 import '../domain/business_day.dart';
 import '../domain/catalogue.dart';
@@ -800,19 +801,12 @@ class _PosAppState extends State<PosApp> {
         // screen, and did nothing at all until this key existed.
         navigatorKey: _navigator,
         // Tuned for a touch screen: comfortable spacing and buttons/inputs tall
-        // enough to tap reliably with a finger.
-        theme: ThemeData(
-          colorSchemeSeed: Colors.teal,
-          useMaterial3: true,
-          visualDensity: VisualDensity.comfortable,
-          filledButtonTheme: FilledButtonThemeData(
-              style: FilledButton.styleFrom(minimumSize: const Size(0, 48))),
-          outlinedButtonTheme: OutlinedButtonThemeData(
-              style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48))),
-          chipTheme: const ChipThemeData(
-              padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
-          listTileTheme: const ListTileThemeData(minVerticalPadding: 10),
-        ),
+        // enough to tap reliably with a finger. Dark is the same theme with the
+        // lights off, for a shop whose counter faces a window at night; the choice
+        // is read here on every rebuild, so the settings toggle takes effect at once.
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
+        themeMode: AppTheme.modeOf(widget.settings.themeMode),
         // Above the navigator, so the shift nudge is read on whatever screen the
         // cashier is on and takes its own strip of the till rather than covering
         // one. Nothing else belongs here: this is the app's only chrome.
@@ -952,6 +946,11 @@ class _PosAppState extends State<PosApp> {
               // but until they do the kitchen has not seen them.
               spooledJobs: () => _receiptPrinter.spooledCount,
               categoryColors: widget.settings.categoryColors,
+              // Read only when the shop shows them, and answered from a map the
+              // catalogue holds: no picture is fetched while a tile is being built.
+              productImages: widget.settings.showProductImages
+                  ? widget.catalogue.images()
+                  : const {},
               quickComments: widget.settings.quickComments,
               discountReasons: widget.settings.discountReasons,
               discountPercents: widget.settings.discountPercents,
@@ -1408,6 +1407,9 @@ class _PosAppState extends State<PosApp> {
         categories: widget.catalogue.categories(),
         formatAmount: PosApp.money,
         audit: widget.audit,
+        // One read of a column no selling query touches, so the margin reports have
+        // something to compare the takings against.
+        costs: widget.catalogue.costsById(),
         // Paid-outs live inside shifts, so the expenses report reads them itself.
         shifts: widget.shifts,
         openTables: widget.orders
@@ -1941,7 +1943,8 @@ class _PosAppState extends State<PosApp> {
             })),
       ),
       SettingsEntry(
-        title: 'Category colours',
+        title: 'Appearance',
+        subtitle: 'Theme, pictures, category and table colours',
         icon: Icons.palette,
         keyValue: 'set-appearance',
         group: 'Shop',

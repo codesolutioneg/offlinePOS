@@ -982,4 +982,51 @@ const Map<String, String> _ar = {
   'Show which till': 'أي كاشير يُعرض',
   'Whichever is busiest': 'الأكثر نشاطًا',
   'Welcome': 'أهلًا بك',
+  // appearance, product pictures, table colours, receipt text size, cost reports
+  'Appearance': 'المظهر',
+  'Theme': 'السمة',
+  'Automatic': 'تلقائي',
+  'Light': 'فاتح',
+  'Dark': 'داكن',
+  'Product grid': 'شبكة المنتجات',
+  'Show product pictures': 'إظهار صور المنتجات',
+  'Pictures come down with the menu on the next sync. A product without one keeps its colour.':
+      'تصل الصور مع قائمة الأصناف في المزامنة القادمة. المنتج بلا صورة يبقى بلونه.',
+  'Table colours': 'ألوان الطاولات',
+  'Free tables': 'الطاولات الفارغة',
+  'Occupied tables': 'الطاولات المشغولة',
+  'Colour for': 'لون',
+  'Default': 'الافتراضي',
+  'Text size': 'حجم الخط',
+  'Normal': 'عادي',
+  'Tall': 'مرتفع',
+  'Large': 'كبير',
+  'Bigger text prints fewer characters on a line, so the layout follows the choice.':
+      'الخط الأكبر يطبع حروفًا أقل في السطر، والتنسيق يتبع الاختيار.',
+  'Cost vs sales': 'التكلفة مقابل المبيعات',
+  'Menu engineering': 'هندسة القائمة',
+  'Revenue': 'الإيرادات',
+  'Cost': 'التكلفة',
+  'Margin': 'هامش الربح',
+  'Margin %': 'نسبة الهامش',
+  'Units': 'الكمية',
+  'Costed items': 'الأصناف المسعّرة',
+  'Not costed': 'بلا تكلفة',
+  'No costs yet': 'لا توجد تكاليف بعد',
+  'Costs come down with the menu. Set a cost on the products in Odoo and sync.':
+      'تصل التكاليف مع قائمة الأصناف. حدّد تكلفة المنتجات في أودو ثم زامن.',
+  'Products with no cost are left out of the totals, so nothing is counted as free.':
+      'المنتجات بلا تكلفة تُستثنى من الإجماليات، فلا يُحتسب شيء على أنه مجاني.',
+  'Stars': 'النجوم',
+  'Plowhorses': 'أحصنة العمل',
+  'Puzzles': 'الألغاز',
+  'Dogs': 'الخاسرة',
+  'Popular and profitable. Keep them where the eye lands first.':
+      'رائجة ومربحة. ضعها حيث تقع العين أولًا.',
+  'Popular but thin. Raise the price a little or cut the cost.':
+      'رائجة لكن هامشها ضعيف. ارفع السعر قليلًا أو اخفض التكلفة.',
+  'Profitable but nobody orders them. Push them or move them up the menu.':
+      'مربحة لكن لا أحد يطلبها. روّج لها أو قدّمها في القائمة.',
+  'Neither popular nor profitable. Consider dropping them.':
+      'ليست رائجة ولا مربحة. فكّر في حذفها.',
 };
