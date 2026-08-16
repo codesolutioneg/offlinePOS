@@ -93,14 +93,20 @@ void main() {
     expect(booked, closeTo(o.total, 0.0001));
   });
 
-  test('modifier prices carry the charge too, so a line still reconciles', () {
+  test('a modifier the server can book carries the charge on its own line', () {
     final o = Order(
       deviceId: 'till-1',
       cashierId: 'sara',
       serviceChargePercent: 10,
       lines: [
         OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100, modifiers: [
-          OrderModifier(modifierId: 1, name: 'Cheese', quantity: 1, unitPrice: 20),
+          // Backed by a product, so the server makes it a line and moves stock.
+          OrderModifier(
+              modifierId: 1,
+              productId: 55,
+              name: 'Cheese',
+              quantity: 1,
+              unitPrice: 20),
         ]),
       ],
     );
@@ -109,6 +115,26 @@ void main() {
     expect(line['unit_price'], closeTo(110, 0.0001));
     expect(mod, closeTo(22, 0.0001));
     expect(110 + 22, closeTo(o.total, 0.0001));
+  });
+
+  test('a modifier the server cannot book carries it inside its parent', () {
+    final o = Order(
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      serviceChargePercent: 10,
+      lines: [
+        OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100, modifiers: [
+          // No product behind it, so the server has no line to make: the money
+          // has to be in the parent or it is charged and never booked.
+          OrderModifier(modifierId: 1, name: 'Extra spicy', quantity: 1, unitPrice: 20),
+        ]),
+      ],
+    );
+    final line = (o.toServerPayload()['lines'] as List).single as Map;
+    final mod = ((line['modifiers'] as List).single as Map)['unit_price'] as num;
+    expect(line['unit_price'], closeTo(132, 0.0001));
+    expect(mod, 0);
+    expect(132, closeTo(o.total, 0.0001));
   });
 
   test('the tax shown covers the service the server will tax', () {

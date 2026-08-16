@@ -250,6 +250,21 @@ class OrderLine {
   /// What the customer actually pays for this line, after its own discount.
   double get total => gross * lineDiscountFactor;
 
+  /// What one of these is worth on the wire, before any discount or service is
+  /// scaled into it.
+  ///
+  /// A modifier that names a product books as its own line on the server, so it
+  /// stays out of this. One that names no product has nowhere there to land: the
+  /// module treats it as already priced into its parent, and folding it in here is
+  /// what makes that true. Without this, the money on a priced label ("extra
+  /// spicy", a size upcharge) is tendered at the till and declared nowhere in the
+  /// sale the server books.
+  double get wireUnitPrice =>
+      unitPrice +
+      modifiers
+          .where((m) => m.productId == null)
+          .fold(0.0, (s, m) => s + m.total);
+
   Map<String, dynamic> toMap() => {
         'uuid': uuid,
         'product_id': productId,
@@ -617,11 +632,14 @@ class Order {
       // Local bookkeeping. The server is handed one product id per line and would
       // have no field to put a second one in.
       lm.remove('odoo_product_id');
-      lm['unit_price'] = l.unitPrice * lf;
+      lm['unit_price'] = l.wireUnitPrice * lf;
       lm['discount_percent'] = 0;
       lm['modifiers'] = l.modifiers.map((mod) {
         final mm = mod.toMap();
-        mm['unit_price'] = mod.unitPrice * lf;
+        // A choice with no product of its own is now inside the parent's price, so
+        // it travels at zero: its name still reaches the document, and a module
+        // that decided to price it could only ever add nothing.
+        mm['unit_price'] = mod.productId == null ? 0.0 : mod.unitPrice * lf;
         return mm;
       }).toList();
       return lm;
@@ -639,6 +657,11 @@ class Order {
         'modifiers': const [],
       });
     }
+    // What the till charged, stated so the server can hold its own arithmetic to
+    // it. The module totals the sale from the lines and settles it from the
+    // payments; if either drifts from this the sale books for the wrong money, and
+    // a stated figure is what turns that from silent into visible.
+    m['amount_total'] = total;
     return m;
   }
 
