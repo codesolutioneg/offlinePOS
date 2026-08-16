@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../domain/payload_balance.dart';
 import 'odoo_site.dart';
 import 'outbox.dart';
 
@@ -126,6 +127,13 @@ class OdooSender {
           // here rather than when the sale was rung so it is the shop's current
           // answer, not the one in force during the outage.
           payload.addAll(_site().payloadFields);
+          // The server totals the sale from the lines and settles it from the
+          // payments. A payload where those two disagree either fails to book or
+          // books for the wrong money, so it is stopped here and put in front of a
+          // human rather than sent and hoped for. The sale itself is not lost: a
+          // parked entry keeps its payload and shows on the diagnostics screen.
+          final imbalance = payloadImbalanceReason(payload);
+          if (imbalance != null) throw _park(imbalance);
           final reply = await _call('/web/dataset/call_kw', {
             'model': model,
             'method': method,
