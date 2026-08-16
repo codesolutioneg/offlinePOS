@@ -1216,4 +1216,8 @@ const Map<String, String> _ar = {
           'means such a sale is held back for someone to sort out.':
       'الصنف الذي أُنشئ على الكاشير ولم يُربط بصنف في أودو يُسجَّل على هذا الصنف '
           'باسمه هو. وتركها فارغة يعني حجز الفاتورة حتى يعالجها أحد.',
+  // The floor plan as the till's home screen: what the room says when no shift
+  // has been opened yet, on the screen a cashier now lands on.
+  'No shift is open. Open one before you start an order.':
+      'لا توجد وردية مفتوحة. افتح وردية قبل بدء أي طلب.',
 };

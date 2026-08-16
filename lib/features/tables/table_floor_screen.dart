@@ -42,7 +42,31 @@ class TableFloorScreen extends StatefulWidget {
     this.nowFn = DateTime.now,
     this.dayNotice,
     this.blockNewOrders = false,
+    this.drawer,
+    this.shiftOpen,
+    this.onOpenShift,
+    this.onSignOut,
   });
+
+  /// The app shell's navigation drawer. The floor is the till's home screen, so it
+  /// carries the same drawer the counter does: support, reprints, reports and the
+  /// shift screen are all one tap away from the room. Null on the picker and in the
+  /// suites that only draw the plan, which have nowhere to navigate to.
+  final Widget? drawer;
+
+  /// Whether a cash-drawer shift is open, read on every build so opening one and
+  /// coming straight back lifts the block with no restart. Null (the picker) gates
+  /// nothing.
+  final bool Function()? shiftOpen;
+
+  /// Opens the shift screen from the floor's own refusal strip. Null hides the
+  /// button rather than showing one that goes nowhere.
+  final VoidCallback? onOpenShift;
+
+  /// Hands the till back. Unconditional because the counter is always parked
+  /// before the floor is shown, so there is never a half-rung sale to lose; the
+  /// floor is home, so without this a cashier who cannot sell could not leave.
+  final VoidCallback? onSignOut;
 
   /// What another till has said about the trading day, shown as a strip above the
   /// plan. Null on a one-till shop and whenever nothing has been said, which is the
@@ -146,6 +170,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   OrderType get _seatType => widget.seatTypes.contains(_seatAs)
       ? _seatAs!
       : (widget.seatTypes.firstOrNull ?? OrderType.dineIn);
+
+  /// No shift, no orders. Read per build, exactly as the counter reads it.
+  bool get _noShift => widget.shiftOpen != null && !widget.shiftOpen!();
 
   // The grid cell the dragged table is currently hovering over, so the drop
   // target is visible before the manager lets go.
@@ -489,6 +516,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         .where((t) => widget.exclude == null || t.name != widget.exclude)
         .toList();
     return Scaffold(
+      drawer: widget.drawer,
       appBar: AppBar(
         title: Text(tr(context, widget.pickMode ? 'Choose a table' : 'Tables')),
         actions: [
@@ -510,6 +538,13 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                 widget.onTransferTables != null ||
                 widget.reservations != null)
               _floorMenu(),
+            if (widget.onSignOut != null)
+              TextButton.icon(
+                key: const Key('sign-out'),
+                onPressed: widget.onSignOut,
+                icon: const Icon(Icons.logout),
+                label: Text(tr(context, 'End shift')),
+              ),
           ],
         ],
       ),
@@ -538,6 +573,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           : null,
       body: Column(
         children: [
+          // Above the day notice: with no drawer open nothing can be rung at all,
+          // which outranks anything another till has to say about the day.
+          if (_noShift) _noShiftStrip(),
           if (widget.dayNotice case final notice?) _dayNoticeStrip(notice),
           // The sections moved to the side, so the room above the plan is where the
           // waiter now says what they are seating.
@@ -588,6 +626,57 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         ),
       );
 
+  /// What the floor says when no shift has been opened yet.
+  ///
+  /// A strip and not a dialog, and not a screen that replaces the plan: the room
+  /// still has to be readable while somebody goes and opens the drawer. Nothing on
+  /// this screen is locked away by it except starting or picking up an order, which
+  /// is the one thing a till with no shift must not do.
+  Widget _noShiftStrip() => Material(
+        key: const Key('floor-no-shift'),
+        color: AppColors.error,
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(children: [
+              const Icon(Icons.point_of_sale, size: 18, color: Colors.white),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(_noShiftMessage,
+                    style: const TextStyle(color: Colors.white)),
+              ),
+              if (widget.onOpenShift != null)
+                FilledButton(
+                  key: const Key('floor-open-shift'),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: AppColors.error),
+                  onPressed: widget.onOpenShift,
+                  child: Text(tr(context, 'Open shift')),
+                ),
+            ]),
+          ),
+        ),
+      );
+
+  String get _noShiftMessage => tr(context,
+      'No shift is open. Open one before you start an order.');
+
+  /// Whether opening an order is refused right now, saying why when it is.
+  ///
+  /// The shift comes first and covers every tile, free or occupied: with no drawer
+  /// open the counter refuses to ring OR settle anything, so letting a tab through
+  /// here would only land the waiter on a screen that says no. The day-close hold is
+  /// narrower and only stops new work, which is why it is asked second.
+  bool _orderingHeld({required bool newWork}) {
+    if (_noShift) {
+      showToast(context, _noShiftMessage, kind: ToastKind.error);
+      return true;
+    }
+    return newWork && _newWorkHeld();
+  }
+
   /// The ways an order starts with no table: packed at the counter and carried out.
   /// A shop that offers none of them (a pure dine-in room) gets no row at all.
   Widget _tablelessRow() {
@@ -635,7 +724,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       FilledButton.icon(
         key: Key(key),
         onPressed: () {
-          if (!_newWorkHeld()) onPressed();
+          if (!_orderingHeld(newWork: true)) onPressed();
         },
         icon: Icon(icon),
         // Three buttons on a narrow till is a tight row, so the label shrinks
@@ -1016,10 +1105,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       if (isDivider) return tile;
       return InkWell(
         key: Key('table-tile-${t.id}'),
-        // A free table is new work and can be held; an occupied one is a bill
-        // somebody is waiting to pay and never is.
+        // A free table is new work and can be held by the day-close policy; an
+        // occupied one is a bill somebody is waiting to pay and never is. The
+        // shift gate is above both and stops either.
         onTap: () {
-          if (!occupied && _newWorkHeld()) return;
+          if (_orderingHeld(newWork: !occupied)) return;
           widget.onOpenTable(t, _seatType);
         },
         child: tile,
