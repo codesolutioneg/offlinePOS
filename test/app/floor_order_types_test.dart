@@ -120,13 +120,10 @@ void main() {
   }
 
   /// Parking a bill puts the till back on the floor by itself, so there is nothing
-  /// to navigate. The "order parked" toast sits over the bottom of the plan until
-  /// it expires, which is what this waits out.
-  Future<void> backOnTheFloor(WidgetTester t) async {
-    await t.pump(const Duration(seconds: 3));
-    await t.pumpAndSettle();
-    expect(find.byType(TableFloorScreen), findsOneWidget);
-  }
+  /// to navigate and nothing to wait out: the confirmation is a strip above the
+  /// plan rather than a toast over the buttons along the bottom.
+  void backOnTheFloor(WidgetTester t) =>
+      expect(find.byType(TableFloorScreen), findsOneWidget);
 
   Future<void> tapTable(WidgetTester t) async {
     await t.tap(find.byKey(Key('table-tile-${table5.id}')));
@@ -258,7 +255,7 @@ void main() {
       final parked = orders.held().single;
       expect(find.byKey(Key('line-${parked.lines.single.uuid}')), findsNothing);
 
-      await backOnTheFloor(t);
+      backOnTheFloor(t);
       // The table reads as busy, and the tap opens what is on it.
       expect(find.text('Free'), findsNothing);
       await tapTable(t);
@@ -282,7 +279,7 @@ void main() {
       await t.pumpAndSettle();
       final parked = orders.held().single;
 
-      await backOnTheFloor(t);
+      backOnTheFloor(t);
       await tapTable(t);
 
       expect(find.byKey(Key('line-${parked.lines.single.uuid}')), findsOneWidget);
@@ -306,7 +303,7 @@ void main() {
       await t.pumpAndSettle();
       final parked = orders.held().single;
 
-      await backOnTheFloor(t);
+      backOnTheFloor(t);
       await tapTable(t);
 
       expect(find.byKey(const Key('guest-count-prompt')), findsNothing);

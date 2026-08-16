@@ -188,10 +188,8 @@ void main() {
     await t.pumpAndSettle();
 
     // Parking put the till back on the floor by itself. Onto the same table
-    // again: the covers are already known. The "order parked" toast has to expire
-    // before the plan is tappable.
-    await t.pump(const Duration(seconds: 3));
-    await t.pumpAndSettle();
+    // again: the covers are already known. Nothing to wait out either, because the
+    // parked confirmation is a strip above the plan rather than a toast over it.
     expect(find.byType(TableFloorScreen), findsOneWidget);
     await seatTable(t);
 

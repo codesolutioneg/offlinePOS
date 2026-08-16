@@ -1500,7 +1500,11 @@ class _SellScreenState extends State<SellScreen> {
     if (!s.hasLines) return;
     widget.onHold?.call();
     setState(() {});
-    if (mounted) {
+    // With a floor home the shell has already put the cashier on the plan and says
+    // it there, above the room. A toast would land at the bottom of that screen, on
+    // top of the To go / Takeaway / Delivery row the cashier taps next, so this is
+    // only for the till that has no floor to go back to.
+    if (mounted && widget.onNewOrder == null) {
       showToast(context, tr(context, 'Order parked. Recall it from Open orders.'),
           kind: ToastKind.success,
           key: const Key('held'),

@@ -180,4 +180,54 @@ void main() {
       expect(chip.selected, isTrue);
     });
   });
+
+  group('parking a bill', () {
+    /// Seat table 5, ring one item and park it, which is the move the
+    /// confirmation belongs to.
+    Future<void> parkATab(WidgetTester t) async {
+      await t.tap(find.byKey(Key('table-tile-${mainTable.id}')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('product-10')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('hold')));
+      await t.pumpAndSettle();
+    }
+
+    testWidgets('is confirmed above the plan, not over the button row',
+        (t) async {
+      await t.pumpWidget(app());
+      await signIn(t);
+      await parkATab(t);
+
+      expect(find.byType(TableFloorScreen), findsOneWidget);
+      expect(find.byKey(const Key('floor-parked-notice')), findsOneWidget);
+      expect(find.text('Order parked on table 5'), findsOneWidget);
+      // The old confirmation was a toast, which lands at the bottom of the screen
+      // on top of the To go / Takeaway / Delivery row.
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('leaves the next order one tap away', (t) async {
+      await t.pumpWidget(app());
+      await signIn(t);
+      await parkATab(t);
+
+      // No waiting anything out: the button row is live the moment the floor is up.
+      await t.tap(find.byKey(const Key('floor-to-go')));
+      await t.pumpAndSettle();
+      expect(find.byType(SellScreen), findsOneWidget);
+    });
+
+    testWidgets('and the line goes away on its own', (t) async {
+      await t.pumpWidget(app());
+      await signIn(t);
+      await parkATab(t);
+
+      await t.pump(const Duration(seconds: 5));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('floor-parked-notice')), findsNothing);
+      // The tile turning occupied is the lasting record, not the line.
+      expect(orders.held().single.tableLabel, '5');
+    });
+  });
 }

@@ -152,10 +152,8 @@ void main() {
     await t.tap(find.byKey(const Key('hold')));
     await t.pumpAndSettle();
     // Parking put the till back on the floor home, so the second order of the
-    // service starts there, the way the next one always does. The "order parked"
-    // toast sits over the takeaway button until it expires.
-    await t.pump(const Duration(seconds: 3));
-    await t.pumpAndSettle();
+    // service starts there, the way the next one always does. Nothing to wait out:
+    // the parked confirmation is a strip above the plan, clear of this button.
     await t.tap(find.byKey(const Key('floor-takeaway')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('product-11')));

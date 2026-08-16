@@ -41,6 +41,7 @@ class TableFloorScreen extends StatefulWidget {
     this.reservations,
     this.nowFn = DateTime.now,
     this.dayNotice,
+    this.parkedNotice,
     this.blockNewOrders = false,
     this.drawer,
     this.shiftOpen,
@@ -93,6 +94,12 @@ class TableFloorScreen extends StatefulWidget {
   /// plan. Null on a one-till shop and whenever nothing has been said, which is the
   /// ordinary case.
   final String? dayNotice;
+
+  /// The confirmation for a bill that was just parked, shown as a strip above the
+  /// plan. Above and not a toast: a toast sits at the bottom of the screen, which
+  /// here is the To go / Takeaway / Delivery row, so it covered the button a cashier
+  /// taps next. Null the rest of the time, and the shell takes it away on its own.
+  final String? parkedNotice;
 
   /// Whether starting NEW work is held while [dayNotice] stands. Never stops a tab
   /// that is already open from being opened and settled: food that has been ordered
@@ -621,6 +628,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           // which outranks anything another till has to say about the day.
           if (_noShift) _noShiftStrip(),
           if (widget.dayNotice case final notice?) _dayNoticeStrip(notice),
+          if (widget.parkedNotice case final parked?) _parkedStrip(parked),
           // The sections moved to the side, so the room above the plan is where the
           // waiter now says what they are seating.
           if (widget.seatTypes.length > 1) _seatTypeStrip(),
@@ -653,6 +661,22 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       ),
     );
   }
+
+  /// The bill that was just parked, said at the top of the plan where the tile it
+  /// landed on is about to read as occupied, and clear of the button row.
+  Widget _parkedStrip(String notice) => Material(
+        key: const Key('floor-parked-notice'),
+        color: AppColors.success,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(children: [
+            const Icon(Icons.check_circle, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text(notice, style: const TextStyle(color: Colors.white))),
+          ]),
+        ),
+      );
 
   /// The day closed somewhere else in the shop, said on the screen where new work
   /// starts rather than in a dialog that gets dismissed unread.

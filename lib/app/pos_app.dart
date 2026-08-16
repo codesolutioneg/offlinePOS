@@ -273,6 +273,16 @@ class _PosAppState extends State<PosApp> {
   /// when the shift is in order. Cleared when they act on it or wave it away.
   ShiftNudge? _nudge;
 
+  /// The bill that was just parked, for the line the floor says about it, or null
+  /// when there is nothing to say. The table is null on a bill that was never
+  /// seated.
+  ///
+  /// A strip above the plan and not a toast: a toast lands at the bottom of the
+  /// screen, which on the floor is the To go / Takeaway / Delivery row, so the
+  /// confirmation sat on top of the button the cashier taps next.
+  ({String? table})? _justParked;
+  Timer? _justParkedClear;
+
   /// The lines a paid sale carried when it was reopened for correction, by order
   /// uuid. Kept only until that sale is tendered again, so the second payment can
   /// print one slip for everything that came off a bill the customer had already
@@ -324,6 +334,7 @@ class _PosAppState extends State<PosApp> {
   @override
   void dispose() {
     _background?.cancel();
+    _justParkedClear?.cancel();
     unawaited(widget.lan?.dispose());
     super.dispose();
   }
@@ -463,10 +474,29 @@ class _PosAppState extends State<PosApp> {
   ///
   /// A no-op on an empty counter and on one that was just paid or parked, because
   /// [PosSession.hold] does nothing to an order with no lines.
-  void _toFloor() {
-    _session?.hold();
+  ///
+  /// [confirmPark] is set by the Park button alone, which is the one way out that a
+  /// cashier expects to be told about; the floor says so above the plan.
+  void _toFloor({bool confirmPark = false}) {
+    final session = _session;
+    // Read before the hold: holding starts a fresh blank order, so afterwards there
+    // is no longer anything to name.
+    final parked = confirmPark && (session?.hasLines ?? false);
+    final table = session?.current.tableLabel;
+    session?.hold();
     _publishActivity();
     if (!mounted) return;
+    // Cleared on every way onto the floor, so a line about one service's parked tab
+    // cannot still be up when the cashier walks back on for the next.
+    _justParkedClear?.cancel();
+    _justParked = parked ? (table: table) : null;
+    if (parked) {
+      // Long enough to read on the way past, then gone: the table tile turning
+      // occupied is the lasting record, not this.
+      _justParkedClear = Timer(const Duration(seconds: 4), () {
+        if (mounted) setState(() => _justParked = null);
+      });
+    }
     setState(() => _onCounter = false);
   }
 
@@ -1166,8 +1196,10 @@ class _PosAppState extends State<PosApp> {
           // was parked on now reads as occupied. It does NOT fire the kitchen:
           // food reaches the kitchen only via the explicit Send to kitchen
           // button, so a cashier can park a tab that is still being built
-          // without the line cooking it.
-          onHold: _toFloor,
+          // without the line cooking it. The floor says it was parked, so the
+          // confirmation is on the screen the cashier lands on rather than over
+          // the row of buttons they tap next.
+          onHold: () => _toFloor(confirmPark: true),
           // Fire the kitchen ticket but keep the order on the counter. The
           // result is handed back so the screen can say what really happened.
           onSendToKitchen: () => _fireKitchen(session.current),
@@ -1685,6 +1717,19 @@ class _PosAppState extends State<PosApp> {
   Set<OrderType> get _allowedOrderTypes => widget.settings
       .availableOrderTypesFor(widget.auth.signedIn?.role ?? 'cashier');
 
+  /// What the floor says about the bill that was just parked, or null when there is
+  /// nothing to say. Names the table when there was one, because "on table 5" is
+  /// what a waiter checks the tile against.
+  String? _parkedNotice(BuildContext context) {
+    final parked = _justParked;
+    if (parked == null) return null;
+    final table = parked.table;
+    if (table == null || table.isEmpty) {
+      return tr(context, 'Order parked. Recall it from Open orders.');
+    }
+    return '${tr(context, 'Order parked on table')} $table';
+  }
+
   /// The till's home screen: the room, drawn as the manager laid it out.
   ///
   /// A restaurant works off its floor, so this is what a cashier lands on and what
@@ -1709,6 +1754,9 @@ class _PosAppState extends State<PosApp> {
             // it needs no guard, because whatever was on the counter was parked on
             // the way to this screen.
             onSignOut: _signOut,
+            // The confirmation for the bill that was just parked, said up here where
+            // it cannot cover the button row along the bottom.
+            parkedNotice: _parkedNotice(floorContext),
             // Read as the floor is built, so a close that arrives over the fabric shows
             // the next time a waiter looks at the plan rather than at the next restart.
             dayNotice: _dayCloseNotice(floorContext)?.text,

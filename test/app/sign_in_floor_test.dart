@@ -134,13 +134,6 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  /// Toasts sit over the bottom of the floor, which is where the table-less
-  /// buttons are, so let one expire before reaching for the plan again.
-  Future<void> letTheToastGo(WidgetTester t) async {
-    await t.pump(const Duration(seconds: 4));
-    await t.pumpAndSettle();
-  }
-
   testWidgets('signing in with nothing on the till lands on the floor', (t) async {
     await boot(t);
 
@@ -229,8 +222,8 @@ void main() {
     expect(find.text('Free'), findsNothing);
     expect(find.text('250.00'), findsOneWidget);
 
-    // And tapping it again brings the same bill back to the counter.
-    await letTheToastGo(t);
+    // And tapping it again brings the same bill back to the counter, with nothing
+    // sitting over the plan to wait out first.
     await t.tap(find.byKey(Key('table-tile-${table5.id}')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
