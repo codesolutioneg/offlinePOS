@@ -145,6 +145,18 @@ class TableStore {
     return rows.isEmpty ? null : _map(rows.first);
   }
 
+  /// Which part of the floor the table called [name] sits in, or null when the shop
+  /// has no floor plan or rang the sale against a name it never laid out. Answered
+  /// by name because that is all an order keeps of the table it was sat at, and
+  /// names are unique across the floor (see [uniqueName]). A scan of a floor plan,
+  /// which is tens of rows on disk, so the receipt path can ask on its way to the
+  /// printer without a sale ever waiting on it.
+  String? sectionFor(String name) {
+    final rows = _db.raw
+        .select('SELECT section FROM pos_tables WHERE name = ? LIMIT 1', [name]);
+    return rows.isEmpty ? null : rows.first['section'] as String?;
+  }
+
   bool get isEmpty =>
       (_db.raw.select('SELECT COUNT(*) c FROM pos_tables').first['c'] as int) == 0;
 

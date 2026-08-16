@@ -29,9 +29,14 @@ enum KitchenFireResult {
 /// the receipt (which is what the app did before) means the kitchen never sees the
 /// order at all.
 class KitchenTicketBuilder {
-  KitchenTicketBuilder({this.columns = 42});
+  KitchenTicketBuilder({this.columns = 42, this.sectionOf});
 
   final int columns;
+
+  /// Which part of the floor a table sits in, by table name, or null on a shop with
+  /// no floor plan. The runner carrying the plate needs this more than the guest
+  /// does: two parts of a floor can each have a "5".
+  final String? Function(String tableLabel)? sectionOf;
 
   /// Build a ticket for [order]. When [only] is given, prints just those lines,
   /// which is how a re-fire adds newly rung items without reprinting the whole
@@ -52,7 +57,9 @@ class KitchenTicketBuilder {
     // The kitchen needs the where/who/how-many before the what: a dine-in for 4 at
     // table 12 is cooked and plated differently from a takeaway.
     p.size(doubleHeight: true).bold(true).line(order.type.label.toUpperCase())..bold(false)..size();
-    if (order.tableLabel != null) p.line('Table: ${order.tableLabel}');
+    if (order.tableLabel != null) {
+      _seating(p, order.tableLabel!);
+    }
     if (order.guestCount != null) p.line('Guests: ${order.guestCount}');
     // The pass is where a delivery is bagged and handed over, so the ticket carries
     // enough to match bag to rider: who it is for, which app sent it and its number
@@ -108,7 +115,9 @@ class KitchenTicketBuilder {
       ..bold(false)
       ..size();
     p.align(EscPosAlign.left).rule();
-    if (order.tableLabel != null) p.line('Table: ${order.tableLabel}');
+    if (order.tableLabel != null) {
+      _seating(p, order.tableLabel!);
+    }
     p.line('#${order.displayNo}  ${_stamp(DateTime.now().toUtc())}');
     p.rule();
     p.size(doubleHeight: true).bold(true)
@@ -118,6 +127,15 @@ class KitchenTicketBuilder {
     p.line('Reason: $reason');
     p.line('By: ${order.cashierId}');
     return (p..feed(3)..cut()).build();
+  }
+
+  /// Where to carry the plate. The section goes on its own line above the table
+  /// rather than beside it, because this is the part of the ticket a runner reads at
+  /// arm's length. A shop with no floor plan prints the table alone, as before.
+  void _seating(EscPos p, String tableLabel) {
+    final section = sectionOf?.call(tableLabel);
+    if (section != null && section.isNotEmpty) p.line('Section: $section');
+    p.line('Table: $tableLabel');
   }
 
   String _qty(double q) =>

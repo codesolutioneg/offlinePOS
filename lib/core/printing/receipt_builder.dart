@@ -29,6 +29,7 @@ class ReceiptBuilder {
     this.openDrawer = false,
     this.logo,
     this.paymentLabels = const {},
+    this.sectionOf,
   });
 
   final String shopName;
@@ -70,6 +71,15 @@ class ReceiptBuilder {
   /// something other than the name that came down from the server. Print-time only:
   /// the tender itself keeps the id and the label it was rung with.
   final Map<int, String> paymentLabels;
+
+  /// Which part of the floor a table sits in, by table name, or null on a shop with
+  /// no floor plan. Injected rather than read here for the same reason the money
+  /// format is: this class stays free of the database.
+  ///
+  /// The order carries the table it was rung on and not the section, so this answers
+  /// from today's plan. A table moved between sections after the sale reprints under
+  /// where it stands now, which is the answer a waiter holding the slip wants.
+  final String? Function(String tableLabel)? sectionOf;
 
   /// The printer command that puts the shop's mark above the name, or null for the
   /// text-only slip this always printed. Composed by the caller (see PrinterLogo)
@@ -121,11 +131,13 @@ class ReceiptBuilder {
     // Where the sale was served, so a delivery or table sale reads differently
     // from a counter one on the same roll.
     if (showOrderType) p.line(order.type.label);
-    // Table and covers, only for a dine-in that actually carries them: a counter
-    // sale must never print "Table null".
+    // Section, table and covers, only for a dine-in that actually carries them: a
+    // counter sale must never print "Table null". The section leads because a floor
+    // with a terrace and a first floor can have a "5" on each, and the runner
+    // reading the slip needs to know which building he is walking to.
     if (showTable && order.type == OrderType.dineIn) {
       final seating = [
-        if (order.tableLabel != null) 'Table ${order.tableLabel}',
+        if (order.tableLabel != null) ..._seating(order.tableLabel!),
         if (order.guestCount != null) '${order.guestCount} guests',
       ].join(' - ');
       if (seating.isNotEmpty) p.line(seating);
@@ -334,6 +346,17 @@ class ReceiptBuilder {
     // Never kick the drawer on a deletion slip: removing an item does not open the
     // till.
     return (p..cut()).build();
+  }
+
+  /// Where the sale was sat: the section when the floor has one, then the table.
+  /// A shop with no floor plan, or one table nobody filed, prints the table alone
+  /// exactly as it always did.
+  List<String> _seating(String tableLabel) {
+    final section = sectionOf?.call(tableLabel);
+    return [
+      if (section != null && section.isNotEmpty) section,
+      'Table $tableLabel',
+    ];
   }
 
   /// [text] broken onto lines that fit the roll, at spaces where there is one. A
