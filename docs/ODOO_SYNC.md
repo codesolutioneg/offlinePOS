@@ -230,6 +230,72 @@ One thing was added ahead of that decision: a shift now carries a `uuid` of its 
 decision is ever revisited, a shift is already replay-safe on a key and the change is a
 sender plus a module entry point rather than a migration in the same release.
 
+## One sales order for the whole batch: the verdict
+
+The ask is that a sync sends the day's sales to Odoo as **one** sales order rather
+than one per ticket, on the understanding that Dishflow already works that way and
+so no jouma change is needed. Half of that is right, and the half that is wrong is
+the half that matters.
+
+**What Dishflow actually does.** It does consolidate, and it is worth reading before
+deciding anything:
+
+- It is a per-shop switch, **off by default**
+  (`Dishflow-pos/lib/services/odoo_sync_settings_service.dart`, `_consolidatedInvoice
+  = false`), and the app warns on the way out when it is off
+  (`lib/features/pos/presentation/home_screen.dart`).
+- With it on, session close merges every ticket's lines into one list (aggregated by
+  product), sums the payments by journal, sums the discounts into one figure, and
+  posts a single order with a note naming how many tickets it holds
+  (`lib/features/reports/presentation/session_close_screen.dart`).
+- It refuses to consolidate unless a **default partner** is configured: one merged
+  order can only have one customer.
+- **Credit (on-account) sales are pulled out of the merge** and still sent one by
+  one, because an unpaid ticket cannot share a settlement with paid ones.
+- It goes through **Dishflow's own REST addon** (`POST /api/.../orders/create`), not
+  through standard Odoo. That endpoint takes a flat order with `payments[]`,
+  `discount_amount`, `delivery_fee`, an order date and a session PDF, and does the
+  booking itself.
+- The consolidated call **deliberately drops its idempotency key**: the code strips
+  `clientOrderRef` and, when the call times out, hunts for the order by matching an
+  expected total against the last confirmed orders of that date
+  (`_recoverSaleOrderByClientRef`, `findSessionCloseOrderOnOdoo`).
+
+So "Dishflow works the same way" is true about the *behaviour* and not about the
+*contract*: it can merge because the endpoint is theirs to shape, and it paid for it
+with the one guarantee this till is built on.
+
+**Can we do it against `create_from_offline_pos` as it stands?** Shaping alone: yes,
+technically. The method takes a list of payloads and reads each one with `.get()`, so
+a single payload holding every ticket's lines and a merged `payments` list would be
+accepted and would produce one document. Nothing on the server has to change for the
+call to succeed. What it costs is not the call, it is these:
+
+| What breaks | Why |
+|---|---|
+| **Idempotency** | The `uuid` is the anti-double-booking key and it belongs to the payload. A batch's key can only come from the set of tickets in it, so any re-cut of that set (one sale parked, one added, a drain interrupted half way) is a different key and books the overlap a second time. This is precisely the wall Dishflow hit, and its answer was to stop keying and start guessing by total and date |
+| **The trading day** | One order carries one `date_order` and one `business_date`. A batch that spans the 04:00 cutover, or a week of outage, posts on a single day, and every per-day sales report the module preserves goes with it |
+| **Who rang it** | `cashier_id` and `device_id` are per ticket, and with one shared Odoo login they are the only record of who sold what. Merged, they are gone |
+| **Rejection isolation** | Today a deleted product parks one sale and the rest book. In one merged order the same product raises inside the one savepoint, and the whole day is rejected together |
+| **Refunds and tabs** | A credit cannot be a line on somebody else's sale, and an unpaid on-account ticket cannot settle in a merged payment. Dishflow excludes them, so a merged batch is never actually the whole batch |
+
+Payments are the one part that merges cleanly: the module already takes a list of
+`{method_id, amount}`, so per-tender totals survive.
+
+**Verdict: shaping the payload is possible, but doing it properly needs a module
+change, so it is not built here.** What that change would need to accept, whenever
+the shop decides it wants it: the constituent ticket uuids alongside the merged
+lines, so the server can stay idempotent per ticket, refuse per ticket, and keep the
+per-ticket detail behind one document. That is a deliberate decision with a
+deployment attached, not something to slip into a till release.
+
+Worth weighing first: **the shop may already have what it is asking for.** The
+grievance behind "one sales order" is usually one document in the books per day
+rather than three hundred. Odoo's own answer to that is the close, not the write: the
+module books a batch into a single rescue session per point of sale, and closing that
+session posts one accounting entry for all of it. Ask the shop whether it wants one
+row in the sales list or one entry in the books before anybody changes the contract.
+
 ## Catch-up after a long outage
 
 A week is roughly 1,400 to 3,500 orders. They push as one batch at the next shift
