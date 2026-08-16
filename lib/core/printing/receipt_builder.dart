@@ -191,7 +191,7 @@ class ReceiptBuilder {
         p.row('   + ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}', amount);
       }
       if (l.discountPercent > 0) {
-        p.row('   line discount ${_pct(l.discountPercent)}%',
+        p.row(_discountLabel('   line discount', l.discountPercent),
             '-${formatAmount(l.gross * l.discountPercent / 100)}');
       }
       if (l.note != null && l.note!.isNotEmpty) p.line('   ${l.note}');
@@ -208,10 +208,10 @@ class ReceiptBuilder {
     if (hasBreakdown) {
       p.row('Subtotal', formatAmount(order.subtotal));
       if (order.discountPercent > 0) {
-        final label = order.discountReason == null
-            ? 'Discount ${_pct(order.discountPercent)}%'
-            : 'Discount ${_pct(order.discountPercent)}% (${order.discountReason})';
-        p.row(label, '-${formatAmount(order.subtotal * order.discountPercent / 100)}');
+        final label = _discountLabel('Discount', order.discountPercent);
+        p.row(
+            order.discountReason == null ? label : '$label (${order.discountReason})',
+            '-${formatAmount(order.subtotal * order.discountPercent / 100)}');
       }
       // After the discount, because that is what it is charged on, and on its own line:
       // a guest is entitled to see the service they are paying rather than find it
@@ -327,7 +327,7 @@ class ReceiptBuilder {
       p.row('Subtotal', formatAmount(removed));
     }
     if (order.discountPercent > 0) {
-      p.row('Order discount ${_pct(order.discountPercent)}%',
+      p.row(_discountLabel('Order discount', order.discountPercent),
           '-${formatAmount(removed * order.discountPercent / 100)}');
     }
     if (order.serviceChargePercent > 0) {
@@ -385,6 +385,20 @@ class ReceiptBuilder {
   /// A percentage printed without trailing zeros: 12.5 stays 12.5, 10.0 shows 10.
   String _pct(double p) =>
       p == p.roundToDouble() ? p.toStringAsFixed(0) : p.toStringAsFixed(1);
+
+  /// A discount headed by what it is, and by its rate only when the rate printed is
+  /// exactly the rate charged.
+  ///
+  /// A discount is stored as a percentage even when the cashier typed money: "50 off"
+  /// on a 1050 bill is 4.7619%, which rounds to 4.8 on paper, and 4.8% of 1050 is
+  /// 50.40. Printing both put two numbers on the slip that do not multiply out, and a
+  /// customer checking the arithmetic is right to say the receipt is wrong. The money
+  /// is always exact and always prints; the rate is a courtesy that stands down when
+  /// it cannot be stated honestly.
+  String _discountLabel(String head, double percent) {
+    final shown = _pct(percent);
+    return double.parse(shown) == percent ? '$head $shown%' : head;
+  }
 
   String _stamp(DateTime utc) {
     final d = utc.toLocal();
