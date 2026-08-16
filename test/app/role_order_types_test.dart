@@ -118,6 +118,7 @@ void main() {
   void deliveryDeskOnly() {
     settings.setRoleOrderType('cashier', OrderType.dineIn, false);
     settings.setRoleOrderType('cashier', OrderType.takeaway, false);
+    settings.setRoleOrderType('cashier', OrderType.toGo, false);
   }
 
   testWidgets('an unconfigured till offers every order type, as it always did',
@@ -127,7 +128,12 @@ void main() {
     await signIn(t);
 
     for (final type in OrderType.values) {
-      expect(find.byKey(Key('order-type-${type.name.toLowerCase()}')), findsOneWidget);
+      final chip = find.byKey(Key('order-type-${type.name.toLowerCase()}'));
+      // The strip scrolls: more kinds of sale than fit a narrow till panel is
+      // exactly why it does.
+      await t.dragUntilVisible(
+          chip, find.byKey(const Key('order-type-strip')), const Offset(-60, 0));
+      expect(chip, findsOneWidget);
     }
   });
 
@@ -140,6 +146,7 @@ void main() {
     expect(find.byKey(const Key('order-type-delivery')), findsOneWidget);
     expect(find.byKey(const Key('order-type-dinein')), findsNothing);
     expect(find.byKey(const Key('order-type-takeaway')), findsNothing);
+    expect(find.byKey(const Key('order-type-togo')), findsNothing);
   });
 
   testWidgets('the sale already in hand keeps its own chip, whatever the role',

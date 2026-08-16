@@ -68,6 +68,7 @@ class SellScreen extends StatefulWidget {
     this.allowedOrderTypes = const {
       OrderType.dineIn,
       OrderType.takeaway,
+      OrderType.toGo,
       OrderType.delivery,
     },
     this.payLaterMethodId,
@@ -2374,9 +2375,10 @@ class _SellScreenState extends State<SellScreen> {
         color: Colors.grey.shade100,
         child: SizedBox(
           height: 48,
-          // Scrolls rather than overflows: three chips do not fit a narrow till
+          // Scrolls rather than overflows: the chips do not all fit a narrow till
           // panel, and a clipped selector is worse than a scrollable one.
           child: ListView(
+            key: const Key('order-type-strip'),
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             children: [
@@ -2452,6 +2454,19 @@ class _SellScreenState extends State<SellScreen> {
               avatar: const Icon(Icons.person_outline, size: 16),
               label: Text(o.customerName ?? tr(context, 'Customer')),
               onPressed: _chooseCustomer,
+            ),
+          // A to-go can sit at a table while it is packed, so it carries the same
+          // table chip. Optional, unlike a dine-in: the chip offers a table rather
+          // than nagging for one, and covers and splitting stay with the bills that
+          // are actually eaten and shared in the room.
+          if (o.type == OrderType.toGo)
+            ActionChip(
+              key: const Key('table'),
+              avatar: const Icon(Icons.table_bar, size: 16),
+              label: Text(o.tableLabel == null
+                  ? tr(context, 'Table')
+                  : '${tr(context, 'Table')} ${o.tableLabel}'),
+              onPressed: _setTable,
             ),
           if (o.type == OrderType.dineIn) ...[
             if (o.tableLabel != null)

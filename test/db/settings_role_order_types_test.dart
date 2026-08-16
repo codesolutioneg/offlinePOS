@@ -30,6 +30,7 @@ void main() {
   test('a narrowed role keeps only what it was left', () {
     settings.setRoleOrderType('cashier', OrderType.dineIn, false);
     settings.setRoleOrderType('cashier', OrderType.takeaway, false);
+    settings.setRoleOrderType('cashier', OrderType.toGo, false);
 
     expect(settings.orderTypesFor('cashier'), {OrderType.delivery});
     expect(settings.roleCanRing('cashier', OrderType.dineIn), isFalse);

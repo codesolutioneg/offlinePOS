@@ -31,11 +31,17 @@ class TaxSettingsScreen extends StatefulWidget {
 }
 
 class _TaxSettingsScreenState extends State<TaxSettingsScreen> {
-  static const _types = [OrderType.dineIn, OrderType.takeaway, OrderType.delivery];
+  static const _types = [
+    OrderType.dineIn,
+    OrderType.takeaway,
+    OrderType.toGo,
+    OrderType.delivery,
+  ];
 
   String _typeLabel(BuildContext context, OrderType t) => switch (t) {
         OrderType.dineIn => tr(context, 'Dine-in'),
         OrderType.takeaway => tr(context, 'Takeaway'),
+        OrderType.toGo => tr(context, 'To go'),
         OrderType.delivery => tr(context, 'Delivery'),
       };
 

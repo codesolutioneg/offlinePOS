@@ -28,7 +28,9 @@ void main() {
     // The list is longer than a short screen, so scroll to the switch the way a
     // manager would rather than tapping at a coordinate off the bottom.
     final discount = find.byKey(Key('perm-${Permission.applyDiscount.key}'));
-    await t.ensureVisible(discount);
+    // Far enough down the list that it is not built yet, so scroll it into being
+    // rather than asking for an element that does not exist.
+    await t.scrollUntilVisible(discount, 200);
     await t.pumpAndSettle();
     await t.tap(discount);
     await t.pump();

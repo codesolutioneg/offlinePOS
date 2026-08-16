@@ -8,6 +8,7 @@ import '../../core/db/table_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
+import '../../domain/order.dart' show OrderType, OrderTypeLabel;
 import 'reservations_screen.dart';
 import '../../core/theme/table_palette.dart';
 
@@ -31,6 +32,9 @@ class TableFloorScreen extends StatefulWidget {
     this.exclude,
     this.onTakeaway,
     this.onDelivery,
+    this.onToGo,
+    this.seatTypes = const [OrderType.dineIn],
+    this.sectionsAtSide = true,
     this.settings,
     this.onTransferTables,
     this.authorize,
@@ -70,10 +74,22 @@ class TableFloorScreen extends StatefulWidget {
   /// there can change a rule.
   final Future<bool> Function()? authorize;
 
-  /// Start a takeaway or delivery order straight from the floor home, the two ways
-  /// an order begins without a table. Null hides the button (e.g. in pick mode).
+  /// Start a takeaway, to-go or delivery order straight from the floor home, the
+  /// ways an order begins without a table. Null hides the button (e.g. in pick
+  /// mode). A to-go may also be seated, through [seatTypes]; this is the button for
+  /// the one that is packed at the counter and carried straight out.
   final VoidCallback? onTakeaway;
   final VoidCallback? onDelivery;
+  final VoidCallback? onToGo;
+
+  /// The kinds of order a table tap may open, in offer order. One entry (the usual
+  /// dine-in-only shop) draws no selector and every tap opens that type; two draw
+  /// the seating selector above the plan, because a to-go that sits at a table is
+  /// still a to-go and the waiter has to be able to say so before seating it.
+  final List<OrderType> seatTypes;
+
+  /// Draw the sections as a rail down the side rather than a strip along the top.
+  final bool sectionsAtSide;
 
   final TableStore store;
 
@@ -95,9 +111,12 @@ class TableFloorScreen extends StatefulWidget {
   final Map<String, ({double total, DateTime since})> occupiedInfo;
   final String Function(double)? formatAmount;
 
-  /// Start a new dine-in order on a free table, or recall the order parked on an
-  /// occupied one. The shell decides which; this screen just reports the tap.
-  final void Function(PosTable table) onOpenTable;
+  /// Start a new order on a free table, or recall the order parked on an occupied
+  /// one. The shell decides which; this screen reports the tap and, with it, the
+  /// kind of order the waiter chose to seat (the first of [seatTypes] until they
+  /// pick another). Recalling ignores it: a parked bill keeps the type it was rung
+  /// under whatever the selector says.
+  final void Function(PosTable table, OrderType seatAs) onOpenTable;
 
   @override
   State<TableFloorScreen> createState() => _TableFloorScreenState();
@@ -116,6 +135,17 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   bool _editing = false;
   String? _section;
   Timer? _tick;
+
+  /// The kind of order the next free-table tap opens. Held here rather than in the
+  /// shell because the selector redraws with the plan, and the shell cannot repaint
+  /// a pushed route.
+  OrderType? _seatAs;
+
+  /// A shop that seats nobody still reports dine-in on a tap; the shell refuses the
+  /// seating either way, and an occupied table is recalled without reading this.
+  OrderType get _seatType => widget.seatTypes.contains(_seatAs)
+      ? _seatAs!
+      : (widget.seatTypes.firstOrNull ?? OrderType.dineIn);
 
   // The grid cell the dragged table is currently hovering over, so the drop
   // target is visible before the manager lets go.
@@ -449,7 +479,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     // can clear a table assigned by mistake (setTable('')). A tile tap and this
     // share the one callback; the shell pops the picker with the name.
     if (!mounted || label == null) return;
-    widget.onOpenTable(PosTable(id: 'custom', name: label));
+    widget.onOpenTable(PosTable(id: 'custom', name: label), _seatType);
   }
 
   @override
@@ -509,53 +539,34 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       body: Column(
         children: [
           if (widget.dayNotice case final notice?) _dayNoticeStrip(notice),
-          _sectionStrip(),
+          // The sections moved to the side, so the room above the plan is where the
+          // waiter now says what they are seating.
+          if (widget.seatTypes.length > 1) _seatTypeStrip(),
+          if (!widget.sectionsAtSide) _sectionStrip(),
           if (widget.pickMode) _legend(),
           const Divider(height: 1),
           Expanded(
-            child: tables.isEmpty
-                ? _emptyFloor()
-                : InteractiveViewer(
-                    constrained: false,
-                    minScale: 0.5,
-                    maxScale: 2.5,
-                    child: _canvas(tables),
-                  ),
-          ),
-          // The two ways to start an order without a table, on the floor home.
-          if (!widget.pickMode && !_editing && (widget.onTakeaway != null || widget.onDelivery != null))
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-                child: Row(children: [
-                  if (widget.onTakeaway != null)
-                    Expanded(
-                      child: FilledButton.icon(
-                        key: const Key('floor-takeaway'),
-                        onPressed: () {
-                          if (!_newWorkHeld()) widget.onTakeaway!();
-                        },
-                        icon: const Icon(Icons.takeout_dining),
-                        label: Text(tr(context, 'Takeaway')),
-                      ),
-                    ),
-                  if (widget.onTakeaway != null && widget.onDelivery != null)
-                    const SizedBox(width: 10),
-                  if (widget.onDelivery != null)
-                    Expanded(
-                      child: FilledButton.icon(
-                        key: const Key('floor-delivery'),
-                        onPressed: () {
-                          if (!_newWorkHeld()) widget.onDelivery!();
-                        },
-                        icon: const Icon(Icons.delivery_dining),
-                        label: Text(tr(context, 'Delivery')),
-                      ),
-                    ),
-                ]),
-              ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (widget.sectionsAtSide) ...[
+                  _sectionRail(),
+                  const VerticalDivider(width: 1),
+                ],
+                Expanded(
+                  child: tables.isEmpty
+                      ? _emptyFloor()
+                      : InteractiveViewer(
+                          constrained: false,
+                          minScale: 0.5,
+                          maxScale: 2.5,
+                          child: _canvas(tables),
+                        ),
+                ),
+              ],
             ),
+          ),
+          if (!widget.pickMode && !_editing) _tablelessRow(),
         ],
       ),
     );
@@ -573,6 +584,87 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             const SizedBox(width: 8),
             Expanded(
                 child: Text(notice, style: const TextStyle(color: Colors.white))),
+          ]),
+        ),
+      );
+
+  /// The ways an order starts with no table: packed at the counter and carried out.
+  /// A shop that offers none of them (a pure dine-in room) gets no row at all.
+  Widget _tablelessRow() {
+    final buttons = <Widget>[
+      if (widget.onToGo != null)
+        _tablelessButton(
+            key: 'floor-to-go',
+            icon: Icons.shopping_bag_outlined,
+            label: tr(context, 'To go'),
+            onPressed: widget.onToGo!),
+      if (widget.onTakeaway != null)
+        _tablelessButton(
+            key: 'floor-takeaway',
+            icon: Icons.takeout_dining,
+            label: tr(context, 'Takeaway'),
+            onPressed: widget.onTakeaway!),
+      if (widget.onDelivery != null)
+        _tablelessButton(
+            key: 'floor-delivery',
+            icon: Icons.delivery_dining,
+            label: tr(context, 'Delivery'),
+            onPressed: widget.onDelivery!),
+    ];
+    if (buttons.isEmpty) return const SizedBox.shrink();
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+        child: Row(children: [
+          for (var i = 0; i < buttons.length; i++) ...[
+            if (i > 0) const SizedBox(width: 10),
+            Expanded(child: buttons[i]),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  Widget _tablelessButton({
+    required String key,
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) =>
+      FilledButton.icon(
+        key: Key(key),
+        onPressed: () {
+          if (!_newWorkHeld()) onPressed();
+        },
+        icon: Icon(icon),
+        // Three buttons on a narrow till is a tight row, so the label shrinks
+        // rather than wrapping into an ellipsis nobody can read.
+        label: FittedBox(fit: BoxFit.scaleDown, child: Text(label)),
+      );
+
+  /// What the next free table opens. Only drawn when the shop seats more than one
+  /// kind of order: a to-go that sits down while it is packed occupies the floor
+  /// exactly like a dine-in, and the only thing that says which it is is this.
+  Widget _seatTypeStrip() => Material(
+        color: Colors.grey.shade100,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+          child: Row(children: [
+            Text(tr(context, 'Seat as'),
+                style: Theme.of(context).textTheme.labelMedium),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Wrap(spacing: 8, children: [
+                for (final t in widget.seatTypes)
+                  ChoiceChip(
+                    key: Key('seat-as-${t.name.toLowerCase()}'),
+                    label: Text(tr(context, t.label)),
+                    selected: _seatType == t,
+                    onSelected: (_) => setState(() => _seatAs = t),
+                  ),
+              ]),
+            ),
           ]),
         ),
       );
@@ -733,6 +825,72 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         Text(label, style: const TextStyle(fontSize: 12)),
       ]);
 
+  /// The sections down the side of the plan, which is where the shop asked for
+  /// them: a room list reads as a list, and a strip along the top pushed the far
+  /// sections off the edge on a till that is wider than it is tall.
+  ///
+  /// Each room says how many tables it holds and how many of those are busy, so a
+  /// waiter picks the room they are needed in without opening it first.
+  Widget _sectionRail() => SizedBox(
+        width: 108,
+        child: ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          children: [
+            for (final s in _sections) ...[
+              _sectionRailTile(s),
+              const SizedBox(height: 8),
+            ],
+            if (_editing)
+              ActionChip(
+                key: const Key('add-section'),
+                avatar: const Icon(Icons.add, size: 16),
+                label: Text(tr(context, 'Section')),
+                onPressed: _addSection,
+              ),
+          ],
+        ),
+      );
+
+  Widget _sectionRailTile(String s) {
+    final selected = _activeSection == s;
+    final inSection = widget.store.inSection(s).where((t) => !t.isDivider);
+    final busy = inSection.where((t) => widget.occupiedLabels.contains(t.name)).length;
+    final color = selected ? AppColors.primary : Colors.black26;
+    return InkWell(
+      // The same key the top strip uses, so a shop that moves the sections back to
+      // the top does not change how the floor is driven.
+      key: Key('section-${s.toLowerCase()}'),
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => setState(() => _section = s),
+      // In edit mode a long-press renames or deletes the whole section, exactly as
+      // it does on the top strip.
+      onLongPress: _editing ? () => _sectionMenu(s) : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary.withValues(alpha: 0.12) : null,
+          border: Border.all(color: color, width: selected ? 2 : 1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(children: [
+          Text(
+            s,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+              color: selected ? AppColors.primary : null,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text('$busy/${inSection.length}',
+              style: const TextStyle(fontSize: 11, color: Colors.black54)),
+        ]),
+      ),
+    );
+  }
+
   Widget _sectionStrip() => SizedBox(
         height: 48,
         child: ListView(
@@ -862,7 +1020,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         // somebody is waiting to pay and never is.
         onTap: () {
           if (!occupied && _newWorkHeld()) return;
-          widget.onOpenTable(t);
+          widget.onOpenTable(t, _seatType);
         },
         child: tile,
       );

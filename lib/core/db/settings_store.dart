@@ -70,6 +70,7 @@ class SettingsStore {
   static const _zReportRecipients = 'z_report_recipients';
   static const _emailZReport = 'email_z_report';
   static const _roleOrderTypes = 'role_order_types';
+  static const _shopOrderTypes = 'shop_order_types';
   static const _codePage = 'receipt_code_page';
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
@@ -544,6 +545,13 @@ class SettingsStore {
   /// Guests chip whenever they matter.
   bool get askGuestCount => getBool('ask_guest_count');
   set askGuestCount(bool v) => setBool('ask_guest_count', v);
+
+  /// Draw the floor's sections down the side of the plan rather than as a strip
+  /// above it. On by default: a waiter reads a short vertical list of rooms faster
+  /// than a horizontal one that scrolls off the edge, and the width it costs is
+  /// width the plan pans through anyway. A narrow till can put them back on top.
+  bool get floorSectionsSide => getBool('floor_sections_side', fallback: true);
+  set floorSectionsSide(bool v) => setBool('floor_sections_side', v);
 
   /// Product-grid density: tiles per row. 0 = auto (fit by width).
   int get gridColumns => int.tryParse(getString(_gridColumns) ?? '') ?? 0;
@@ -1064,5 +1072,57 @@ class SettingsStore {
     }
     map[role] = current.map((t) => t.name).toList();
     setString(_roleOrderTypes, jsonEncode(map));
+  }
+
+  // ── which sales the shop takes at all ────────────────────────────
+  // Distinct from the role rule above and one level over it: a shop that does not
+  // deliver has nobody who may ring a delivery, whatever any role says. Kept as its
+  // own key so narrowing a role never quietly reopens a type the shop closed.
+
+  /// The order types this shop offers. Everything until a manager narrows it.
+  Set<OrderType> get shopOrderTypes {
+    final raw = getString(_shopOrderTypes);
+    if (raw == null) return OrderType.values.toSet();
+    try {
+      final names = (jsonDecode(raw) as List).map((e) => e.toString()).toSet();
+      final offered = OrderType.values.where((t) => names.contains(t.name)).toSet();
+      // A shop that offers nothing could take no money at all, so an empty saved
+      // value reads as "everything" rather than as a till nobody can sell on.
+      return offered.isEmpty ? OrderType.values.toSet() : offered;
+    } catch (_) {
+      return OrderType.values.toSet();
+    }
+  }
+
+  set shopOrderTypes(Set<OrderType> v) {
+    final offered = v.isEmpty ? OrderType.values.toSet() : v;
+    setString(_shopOrderTypes, jsonEncode(offered.map((t) => t.name).toList()));
+  }
+
+  /// Offer or withdraw one order type shop-wide. Withdrawing the last one is a
+  /// no-op, for the same reason the role rule refuses it.
+  void setShopOrderType(OrderType type, bool offered) {
+    final current = shopOrderTypes.toSet();
+    if (offered) {
+      current.add(type);
+    } else {
+      if (current.length <= 1) return;
+      current.remove(type);
+    }
+    shopOrderTypes = current;
+  }
+
+  /// What [role] may actually ring on this till: the types the shop offers, narrowed
+  /// by the types the role may open. The two compose rather than override, so a
+  /// delivery the shop does not do cannot be reopened by a role rule, and a role
+  /// kept off deliveries in a shop that does deliver still is.
+  ///
+  /// If the two have nothing in common (a delivery-only role in a shop that stopped
+  /// delivering) the shop's word stands: a cashier standing at a till has to be able
+  /// to sell something.
+  Set<OrderType> availableOrderTypesFor(String role) {
+    final shop = shopOrderTypes;
+    final both = orderTypesFor(role).intersection(shop);
+    return both.isEmpty ? shop : both;
   }
 }

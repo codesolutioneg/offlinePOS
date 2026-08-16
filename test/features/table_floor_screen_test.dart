@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/table_store.dart';
+import 'package:offline_pos/domain/order.dart' show OrderType;
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -17,7 +18,7 @@ void main() {
 
   Widget app({
     Set<String> occupied = const {},
-    void Function(PosTable)? onOpenTable,
+    void Function(PosTable, OrderType)? onOpenTable,
     bool pickMode = false,
     String? exclude,
   }) =>
@@ -25,7 +26,7 @@ void main() {
         home: TableFloorScreen(
           store: tables,
           occupiedLabels: occupied,
-          onOpenTable: onOpenTable ?? (_) {},
+          onOpenTable: onOpenTable ?? (_, _) {},
           pickMode: pickMode,
           exclude: exclude,
         ),
@@ -34,7 +35,7 @@ void main() {
   testWidgets('a table renders on the floor and tapping it opens it', (t) async {
     final table = tables.add(name: 'T1');
     PosTable? opened;
-    await t.pumpWidget(app(onOpenTable: (tap) => opened = tap));
+    await t.pumpWidget(app(onOpenTable: (tap, _) => opened = tap));
 
     expect(find.byKey(Key('table-tile-${table.id}')), findsOneWidget);
     expect(find.text('T1'), findsOneWidget);
@@ -48,7 +49,7 @@ void main() {
   testWidgets('pick mode is the same drawn plan: taps report the table, no edit tools', (t) async {
     final table = tables.add(name: 'T1');
     PosTable? picked;
-    await t.pumpWidget(app(pickMode: true, onOpenTable: (tap) => picked = tap));
+    await t.pumpWidget(app(pickMode: true, onOpenTable: (tap, _) => picked = tap));
 
     // Titled as a chooser, with the occupancy legend, and no floor-edit affordance.
     expect(find.text('Choose a table'), findsOneWidget);
@@ -72,7 +73,7 @@ void main() {
   testWidgets('pick mode Other reports a free-text table not on the floor', (t) async {
     tables.add(name: 'T1');
     String? picked;
-    await t.pumpWidget(app(pickMode: true, onOpenTable: (tap) => picked = tap.name));
+    await t.pumpWidget(app(pickMode: true, onOpenTable: (tap, _) => picked = tap.name));
 
     await t.tap(find.byKey(const Key('pick-other')));
     await t.pumpAndSettle();
@@ -87,7 +88,7 @@ void main() {
     tables.add(name: 'T1');
     String? picked;
     var reported = false;
-    await t.pumpWidget(app(pickMode: true, onOpenTable: (tap) {
+    await t.pumpWidget(app(pickMode: true, onOpenTable: (tap, _) {
       picked = tap.name;
       reported = true;
     }));
@@ -130,7 +131,7 @@ void main() {
       home: TableFloorScreen(
         store: tables,
         occupiedLabels: const {},
-        onOpenTable: (_) {},
+        onOpenTable: (_, _) {},
         onTakeaway: () => takeaway = true,
         onDelivery: () => delivery = true,
       ),
@@ -154,7 +155,7 @@ void main() {
   testWidgets('a divider is drawn but never tapped to open an order', (t) async {
     final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
     bool tapped = false;
-    await t.pumpWidget(app(onOpenTable: (_) => tapped = true));
+    await t.pumpWidget(app(onOpenTable: (_, _) => tapped = true));
 
     // Only a seatable table gets the tappable service-view key.
     expect(find.byKey(Key('table-tile-${wall.id}')), findsNothing);
@@ -166,7 +167,7 @@ void main() {
     final wall = tables.add(name: 'Wall', seats: 0, shape: TableShape.divider);
     tables.upsert(wall.copyWith(vertical: true, span: 200));
     bool tapped = false;
-    await t.pumpWidget(app(onOpenTable: (_) => tapped = true));
+    await t.pumpWidget(app(onOpenTable: (_, _) => tapped = true));
 
     // A vertical wall draws its label rotated, and never gets the tappable key.
     expect(find.byType(RotatedBox), findsOneWidget);
