@@ -2628,6 +2628,9 @@ class _PosAppState extends State<PosApp> {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => ServerSettingsScreen(
         store: widget.endpoints,
+        // Where the branch, point of sale and warehouse ids are kept, so the same
+        // screen that points the till at a server also says which shop it is.
+        settings: widget.settings,
         // Rewire the live sender the moment settings are saved, so a till just
         // pointed at a server drains its queue without a restart.
         onSaved: widget.odoo.configure,

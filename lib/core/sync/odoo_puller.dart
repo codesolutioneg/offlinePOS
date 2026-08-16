@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../../domain/catalogue.dart';
+import 'odoo_site.dart';
 
 /// What a pull is allowed to ask for beyond the menu itself.
 ///
@@ -94,12 +95,19 @@ class OdooPuller {
     }
 
     // Payment methods for the tender screen. Optional: an Odoo that does not
-    // expose them just leaves the till on its cash default.
+    // expose them just leaves the till on its cash default. Whether the read
+    // happened at all is carried separately, because a server that refused the
+    // question ("the integration user is not a Point of Sale user") and a shop that
+    // genuinely has no method look identical from here, and only one of them is a
+    // reason to forget the tenders this till already had.
     List<Map<String, dynamic>> methods = const [];
+    var methodsRead = false;
     try {
       methods = await _searchRead('pos.payment.method', ['id', 'name', 'is_cash_count'], [
         ['active', '=', true]
       ]);
+      methodsRead = true;
+      methods = await _onlyThisPointOfSale(methods);
     } catch (_) {
       methods = const [];
     }
@@ -206,6 +214,7 @@ class OdooPuller {
                 isCash: m['is_cash_count'] == true,
               ))
           .toList(),
+      paymentMethodsRead: methodsRead,
       customers: partners
           .map((c) => Customer(
                 id: c['id'] as int,
@@ -216,6 +225,31 @@ class OdooPuller {
               ))
           .toList(),
     );
+  }
+
+  /// Narrow the tenders to the point of sale this till sells through.
+  ///
+  /// A method that is not on the shop's own `pos.config` cannot settle a sale there:
+  /// the booking module matches each tender against that config's methods and
+  /// quietly falls back to cash for anything else, so offering the rest of the
+  /// company's methods puts a tender in the payment mix that Odoo never books.
+  /// Only asked when the shop named its point of sale, and never allowed to answer
+  /// "none": a till with no tender at all is worse than an over-long list.
+  Future<List<Map<String, dynamic>>> _onlyThisPointOfSale(
+      List<Map<String, dynamic>> methods) async {
+    final configId = OdooSite.shared.restaurantId;
+    if (configId == null || methods.isEmpty) return methods;
+    try {
+      final configs = await _searchRead('pos.config', ['id', 'payment_method_ids'], [
+        ['id', '=', configId]
+      ]);
+      if (configs.isEmpty) return methods;
+      final allowed = _ids(configs.first['payment_method_ids']).toSet();
+      final mine = methods.where((m) => allowed.contains(m['id'])).toList();
+      return mine.isEmpty ? methods : mine;
+    } catch (_) {
+      return methods;
+    }
   }
 
   /// Partners matching [term] by name or phone, straight from the server.
@@ -343,6 +377,7 @@ class CataloguePull {
     required this.groups,
     required this.productGroupIds,
     this.paymentMethods = const [],
+    this.paymentMethodsRead = false,
     this.customers = const [],
     this.productImages = const {},
   });
@@ -352,6 +387,11 @@ class CataloguePull {
   final List<ModifierGroup> groups;
   final Map<int, List<int>> productGroupIds;
   final List<PaymentMethod> paymentMethods;
+
+  /// Whether the server actually answered the tender question. False means it
+  /// refused or was not asked, and an empty [paymentMethods] then says nothing
+  /// about the shop: the till keeps the tenders it already had.
+  final bool paymentMethodsRead;
   final List<Customer> customers;
 
   /// The picture bytes for the products that have one, by product id. Empty when

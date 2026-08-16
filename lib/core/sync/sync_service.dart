@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../audit/audit_log.dart';
+import '../../domain/catalogue.dart';
 import '../db/catalogue_store.dart';
 import '../db/sqlite_outbox_store.dart';
 import 'device_status.dart';
@@ -232,6 +233,16 @@ class SyncService {
     await _outbox.enqueue('device.status', deviceId, status().toMap());
   }
 
+  /// The tenders to write with a fresh catalogue.
+  ///
+  /// A refresh replaces everything at once, which is right for the menu and wrong
+  /// for the payment methods: the tender read is optional and a server that refuses
+  /// it (the integration user missing the Point of Sale group is the usual reason)
+  /// would otherwise wipe the methods the till was already selling with, leaving
+  /// every sale to book as cash. So an unanswered question keeps the old answer.
+  List<PaymentMethod> _tendersFrom(CataloguePull pull) =>
+      pull.paymentMethodsRead ? pull.paymentMethods : _catalogue.paymentMethods();
+
   /// A read-only pass: check reachability and refresh the catalogue if it is stale.
   /// Never drains the outbox, so it never pushes an order. This is what the timer
   /// runs, keeping the badge and prices current without booking anything.
@@ -260,7 +271,7 @@ class SyncService {
           products: pull.products,
           groups: pull.groups,
           productGroupIds: pull.productGroupIds,
-          paymentMethods: pull.paymentMethods,
+          paymentMethods: _tendersFrom(pull),
           customers: pull.customers,
           productImages: pull.productImages,
           refreshedAt: _now().toUtc(),
@@ -308,7 +319,7 @@ class SyncService {
             products: pull.products,
             groups: pull.groups,
             productGroupIds: pull.productGroupIds,
-            paymentMethods: pull.paymentMethods,
+            paymentMethods: _tendersFrom(pull),
             customers: pull.customers,
             productImages: pull.productImages,
             refreshedAt: _now().toUtc(),

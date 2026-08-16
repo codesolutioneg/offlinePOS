@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'odoo_site.dart';
 import 'outbox.dart';
 
 /// Thrown when the server is unreachable or replies with a transport-level error.
@@ -60,7 +61,15 @@ class OdooSender {
     this.model = 'sale.order',
     this.method = 'create_from_offline_pos',
     this.tillId = kOfflineTillId,
-  });
+    OdooSite Function()? site,
+  }) : _site = site ?? _publishedSite;
+
+  /// The shop's ids, read at push time. A function rather than a value because the
+  /// sender outlives any one setting: a manager can name the branch after the till
+  /// has been selling offline for a week, and those queued sales must still carry it.
+  final OdooSite Function() _site;
+
+  static OdooSite _publishedSite() => OdooSite.shared;
 
   final Uri baseUrl;
   final String db;
@@ -109,10 +118,14 @@ class OdooSender {
         }
         try {
           // Route this order to the right pos.config: the server matches the
-          // payload's device_id against each config's offline till id.
-          final payload = tillId.isEmpty
-              ? entry.payload
-              : (Map<String, dynamic>.from(entry.payload)..['device_id'] = tillId);
+          // payload's device_id against each config's offline till id, unless the
+          // shop named the point of sale outright below.
+          final payload = Map<String, dynamic>.from(entry.payload);
+          if (tillId.isNotEmpty) payload['device_id'] = tillId;
+          // Which branch, point of sale and warehouse this sale belongs to. Stamped
+          // here rather than when the sale was rung so it is the shop's current
+          // answer, not the one in force during the outage.
+          payload.addAll(_site().payloadFields);
           final reply = await _call('/web/dataset/call_kw', {
             'model': model,
             'method': method,

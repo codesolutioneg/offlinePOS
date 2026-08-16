@@ -58,6 +58,25 @@ double discountPercentForAmount(double amount, double base) {
   return (amount / base * 100).clamp(0, 100).toDouble();
 }
 
+/// How a discount is written on the sale the server is handed.
+///
+/// Published from settings the way the trading-day rule is, because every order,
+/// wherever it was built (a sale, a split check, a refund), has to write it the
+/// same way.
+class DiscountBooking {
+  /// The Odoo product a discount is booked against, or null.
+  ///
+  /// Null keeps the discount inside the line prices: the money and the tax are
+  /// right, but Odoo is handed a cheaper item rather than a discount, so nothing
+  /// there can report on it. Naming a product instead sends the full menu prices
+  /// and one negative line, which is how Odoo writes a discount itself and the only
+  /// way it shows as one without the module learning a new field.
+  ///
+  /// It must be a **service** product: a negative line on a storable one would put
+  /// stock back on the shelf.
+  static int? productId;
+}
+
 /// A modifier applied to a line, priced at the moment of sale.
 ///
 /// The price is captured here rather than looked up later: a receipt must never
@@ -468,10 +487,34 @@ class Order {
         'payments': payments.map((p) => p.toMap()).toList(),
       };
 
+  /// The money this sale was discounted by, per-line discounts and the whole-order
+  /// one together, on the same scale as the prices that go on the wire.
+  ///
+  /// Negative on a refund, where the lines are negative and the discount is being
+  /// handed back rather than given.
+  double get discountMoney {
+    final s = serviceChargeFactor;
+    final f = discountFactor;
+    var off = 0.0;
+    // What each line was worth less what it is worth now, rather than a percentage
+    // of the whole: subtracting the two figures the lines are actually sent at is
+    // what keeps the discount line exact to the cent instead of a rounding away.
+    for (final l in lines) {
+      final gross = l.gross * s;
+      off += gross - gross * l.lineDiscountFactor * f;
+    }
+    return off;
+  }
+
   /// The payload sent to the server: like [toMap] but with the per-line discount, the
   /// whole-order discount and the service charge folded into each line price, so Odoo
   /// (which totals from the line prices) books what the customer actually paid.
   /// [toMap] itself stays raw, so a draft restored from disk is not adjusted twice.
+  ///
+  /// When the shop has named a discount product the discount comes back out of the
+  /// prices and travels as its own negative line instead, so Odoo shows the menu
+  /// price on every item and the discount as a discount. The sale totals the same
+  /// either way; only how it reads on the Odoo document changes.
   Map<String, dynamic> toServerPayload() {
     final f = discountFactor;
     // The service charge is a percentage of the discounted food, so scaling every line
@@ -480,10 +523,19 @@ class Order {
     // module books lines, and the wire contract is fixed.
     final s = serviceChargeFactor;
     final m = toMap();
+    // Which of the two ways this sale states its discount. Null is the old one, and
+    // the only one a shop that has named no product can have.
+    final discountProduct = DiscountBooking.productId;
     // The discount is now baked into the prices below, so the percentage fields are
     // zeroed on the wire. Leaving them set would let a server that also reads them
     // discount an already-discounted price a second time.
     m['discount_percent'] = 0;
+    // What was taken off, in money, and whether the prices already have it. Without
+    // these the payload says nothing about a discount at all: the prices are simply
+    // lower, so nothing on the Odoo side can report on one. Stated rather than
+    // re-applied, and the flag is what makes double-applying impossible.
+    m['discount_amount'] = discountMoney;
+    m['prices_include_discount'] = discountProduct == null;
     // Local-only, and for the same reason: the charge is already inside the prices, and
     // a field the module does not read could only ever be billed twice.
     m.remove('service_charge_percent');
@@ -510,7 +562,9 @@ class Order {
     // phone still travel so the server can match or create the partner itself.
     if (partnerId != null && partnerId! < 0) m['partner_id'] = null;
     m['lines'] = lines.map((l) {
-      final lf = l.lineDiscountFactor * f * s;
+      // With a discount product the prices stay whole and the discount leaves as a
+      // line of its own; without one it is folded in here as it always was.
+      final lf = discountProduct == null ? l.lineDiscountFactor * f * s : s;
       final lm = l.toMap();
       lm['unit_price'] = l.unitPrice * lf;
       lm['discount_percent'] = 0;
@@ -521,6 +575,19 @@ class Order {
       }).toList();
       return lm;
     }).toList();
+    // One line for every discount on the bill, so the sale still totals what the
+    // customer paid. Skipped when nothing was given away, and never rounded to
+    // nothing: a fraction of a piastre is not a discount.
+    if (discountProduct != null && discountMoney.abs() > 0.005) {
+      (m['lines'] as List).add({
+        'product_id': discountProduct,
+        'name': 'Discount',
+        'quantity': 1,
+        'unit_price': -discountMoney,
+        'discount_percent': 0,
+        'modifiers': const [],
+      });
+    }
     return m;
   }
 
