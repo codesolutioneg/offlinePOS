@@ -69,6 +69,19 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  # The receipt renderer names this family explicitly (see LineRasteriser). A till
+  # is a locked-down Windows box whose system font fallback for Arabic cannot be
+  # relied on, and a shaped line drawn in a font with no Arabic glyphs comes out of
+  # the printer as empty boxes. Carrying the font is the only way the paper is the
+  # same on every machine. Licence in assets/fonts/Cairo-OFL.txt.
+  fonts:
+    - family: Cairo
+      fonts:
+        - asset: assets/fonts/Cairo-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Cairo-Bold.ttf
+          weight: 700
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
