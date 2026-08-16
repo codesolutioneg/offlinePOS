@@ -60,6 +60,7 @@ import '../features/auth/login_screen.dart';
 import '../features/customers/customer_management_screen.dart';
 import '../features/display/customer_display_screen.dart';
 import '../features/kitchen/kitchen_display_screen.dart';
+import '../features/menu/menu_editor_screen.dart';
 import '../features/onboarding/setup_checklist_card.dart';
 import '../features/onboarding/wizard_overlay.dart';
 import '../features/orders/open_orders_screen.dart';
@@ -707,6 +708,7 @@ class _PosAppState extends State<PosApp> {
   /// REMOVED total is what the customer is owed back for them.
   static OrderLine _unitsOff(OrderLine line, double quantity) => OrderLine(
         productId: line.productId,
+        odooProductId: line.odooProductId,
         name: line.name,
         quantity: quantity,
         unitPrice: line.unitPrice,
@@ -966,6 +968,18 @@ class _PosAppState extends State<PosApp> {
       return const [];
     }
   }
+
+  /// What the menu editor can link a local item or category to.
+  ///
+  /// Deliberately allowed to throw: the picker turns the failure into "the server
+  /// did not answer, type the id instead", which is the truth and leaves the manager
+  /// a way through. Swallowing it into an empty list would read as "your Odoo has no
+  /// products", which is a different and much more alarming statement.
+  Future<List<OdooRef>> _searchOdooProducts(String term) =>
+      OdooPuller(call: widget.odoo.catalogueCall).searchProducts(term);
+
+  Future<List<OdooRef>> _searchOdooCategories(String term) =>
+      OdooPuller(call: widget.odoo.catalogueCall).searchCategories(term);
 
   Widget _selling(PosSession session) => Stack(
         fit: StackFit.expand,
@@ -2220,6 +2234,28 @@ class _PosAppState extends State<PosApp> {
                   emailer: widget.emailer,
                   onChanged: refresh)),
         ),
+      SettingsEntry(
+        title: 'Menu',
+        subtitle: 'Items, categories and the choices a cashier is asked',
+        icon: Icons.restaurant_menu,
+        keyValue: 'set-menu',
+        group: 'Shop',
+        // The menu is what the shop sells, so it sits behind the same gate as the
+        // rest of the shop's configuration. Everything it writes is local and works
+        // with the line down; only the "find it in Odoo" pick list needs a server,
+        // and that degrades to typing the id.
+        onTap: () => pushGated(
+            Permission.openSettings,
+            MenuEditorScreen(
+              catalogue: widget.catalogue,
+              onChanged: refresh,
+              categoryColors: widget.settings.categoryColors,
+              onSetCategoryColor: widget.settings.setCategoryColor,
+              searchOdooProducts: _searchOdooProducts,
+              searchOdooCategories: _searchOdooCategories,
+              localProductBookingId: widget.settings.odooLocalProductId,
+            )),
+      ),
       SettingsEntry(
         title: 'Refresh menu',
         subtitle: _menuAgeLabel(context),
