@@ -2733,14 +2733,21 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
-  /// A throwaway order for the receipt-designer test print. Never saved or synced.
+  /// A throwaway order for the receipt-designer and printers-screen test print.
+  /// Never saved or synced.
+  ///
+  /// Carries an Arabic line as well as a Latin one, because whether Arabic comes out
+  /// legible depends on the printer and on which character table the shop picked, and
+  /// nobody can answer that from this screen. A test print that was Latin only said
+  /// the printer worked while the receipts it printed were unreadable.
   Order _sampleOrder() => Order(
         deviceId: widget.deviceId,
         cashierId: _session?.cashierId ?? 'sample',
         lines: [
           OrderLine(productId: 0, name: 'Sample item', quantity: 1, unitPrice: 10),
+          OrderLine(productId: 0, name: 'صنف تجريبي', quantity: 1, unitPrice: 10),
         ],
-      )..payments = [const OrderPayment(methodId: 0, amount: 10, label: 'Cash')];
+      )..payments = [const OrderPayment(methodId: 0, amount: 20, label: 'Cash')];
 
   void _openDiagnostics(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
