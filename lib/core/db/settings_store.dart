@@ -752,10 +752,15 @@ class SettingsStore {
     publishPrintProfile();
   }
 
-  /// Render a line the table cannot carry as an image instead of printing question
-  /// marks. Defaults to on for an Arabic till, which is the shop that needs it.
-  bool get receiptArabicRaster =>
-      getBool(_arabicRaster, fallback: language == 'ar');
+  /// Render a line the table cannot carry as an image instead of printing nonsense.
+  ///
+  /// On by default for every till, not just an Arabic-speaking one. The trigger is
+  /// the CONTENT of a line, never the language of the screens: a shop that runs the
+  /// till in English and names its dishes in Arabic is the ordinary case here, and
+  /// keying this to the UI language left exactly that shop printing garbage. It
+  /// costs nothing when it is not needed, because a line the table can spell is
+  /// never rasterised in the first place.
+  bool get receiptArabicRaster => getBool(_arabicRaster, fallback: true);
   set receiptArabicRaster(bool v) {
     setBool(_arabicRaster, v);
     publishPrintProfile();

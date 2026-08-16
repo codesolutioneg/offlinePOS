@@ -259,15 +259,20 @@ void main() {
     setUp(() => db = Db.open(':memory:'));
     tearDown(() => db.close());
 
-    test('an Arabic till renders by default, an English one does not', () {
+    test('every till renders by default, whatever language the screens are in', () {
+      // The shop that broke was an English-language till with an Arabic menu, which
+      // is the ordinary case here. Keying this to the UI language meant that shop
+      // printed nonsense and nothing on screen said why.
       final settings = SettingsStore(db);
-      expect(EscPosPrintProfile.shared.rasterUnmappable, isFalse);
+      expect(EscPosPrintProfile.shared.rasterUnmappable, isTrue);
       settings.language = 'ar';
+      expect(EscPosPrintProfile.shared.rasterUnmappable, isTrue);
+      settings.language = 'en';
       expect(EscPosPrintProfile.shared.rasterUnmappable, isTrue,
-          reason: 'switching the till to Arabic fixes the paper too');
+          reason: 'an English screen does not mean a Latin menu');
     });
 
-    test('a manager can overrule the language default either way', () {
+    test('a manager can overrule the default either way', () {
       final settings = SettingsStore(db)..language = 'ar';
       settings.receiptArabicRaster = false;
       expect(EscPosPrintProfile.shared.rasterUnmappable, isFalse);
