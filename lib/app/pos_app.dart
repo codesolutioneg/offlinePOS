@@ -248,6 +248,19 @@ class _PosAppState extends State<PosApp> {
   /// the floor is home, and an order has to be started or recalled to leave it.
   bool _onCounter = false;
 
+  /// The room the waiter has open on the floor, and what the next table tap seats.
+  ///
+  /// Held up here because home swaps the floor out for the counter on every order
+  /// and takes the floor's own state with it: a waiter working the Terrace was
+  /// landing back on the first section after every single order.
+  ///
+  /// Deliberately NOT persisted across a restart. It is where one waiter is standing
+  /// this minute, not a rule about the shop: a till reopened in the morning should
+  /// show the room the shop starts in rather than wherever last night's closer
+  /// happened to be, and it is cleared at sign-out for the same reason.
+  String? _floorSection;
+  OrderType? _floorSeatAs;
+
   bool _firstSaleHelp = false;
 
   /// Whether the walkthrough for the provisioning account is up. Only that account
@@ -549,6 +562,10 @@ class _PosAppState extends State<PosApp> {
       _firstSaleHelp = false;
       // The next cashier starts where a service starts, on the floor.
       _onCounter = false;
+      // The room and the seating belong to the waiter who was on the till, not to
+      // whoever picks it up next.
+      _floorSection = null;
+      _floorSeatAs = null;
       // The nudge belongs to the cashier who was told it, not to the sign-in screen
       // the next one is looking at.
       _nudge = null;
@@ -1709,6 +1726,12 @@ class _PosAppState extends State<PosApp> {
             reservations: widget.reservations,
             // The rooms down the side, where the shop reads them fastest.
             sectionsAtSide: widget.settings.floorSectionsSide,
+            // Kept in the shell, so a round trip to the counter comes back to the
+            // room the waiter was working and the seating they had chosen.
+            section: _floorSection,
+            onSectionChanged: (s) => _floorSection = s,
+            seatAs: _floorSeatAs,
+            onSeatAsChanged: (t) => _floorSeatAs = t,
             // What a table tap may open. A to-go is seated like a dine-in when the
             // shop takes them, and the waiter says which before tapping the table.
             seatTypes: [

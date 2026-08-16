@@ -46,7 +46,28 @@ class TableFloorScreen extends StatefulWidget {
     this.shiftOpen,
     this.onOpenShift,
     this.onSignOut,
+    this.section,
+    this.onSectionChanged,
+    this.seatAs,
+    this.onSeatAsChanged,
   });
+
+  /// The room to open on, and the way back up to whoever remembers it.
+  ///
+  /// The floor is home, and home swaps this whole screen out for the counter on
+  /// every order, so anything held here alone is gone by the time the waiter is
+  /// back. A waiter working the Terrace was being dropped onto the first section
+  /// after every single order because of it. Null (the picker, and the suites that
+  /// only draw the plan) keeps the old behaviour: first section, remembered by
+  /// nobody.
+  final String? section;
+  final void Function(String? section)? onSectionChanged;
+
+  /// What the next free-table tap seats, and the way back up to whoever remembers
+  /// it. Lifted for the same reason [section] is: the chip a waiter set before
+  /// walking to the counter has to still be set when they come back.
+  final OrderType? seatAs;
+  final void Function(OrderType seatAs)? onSeatAsChanged;
 
   /// The app shell's navigation drawer. The floor is the till's home screen, so it
   /// carries the same drawer the counter does: support, reprints, reports and the
@@ -181,6 +202,12 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   @override
   void initState() {
     super.initState();
+    // Seeded from the shell, which is what carried them across the trip to the
+    // counter. Edit mode is deliberately NOT among them: it is a manager laying the
+    // room out, and resuming it silently after a sale would put drag handles under
+    // a waiter's fingers.
+    _section = widget.section;
+    _seatAs = widget.seatAs;
     // Re-render every 30s so the "sitting for N minutes" ages on occupied tables
     // keep counting up while the floor is open instead of freezing.
     if (widget.occupiedInfo.isNotEmpty) {
@@ -203,11 +230,28 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   String get _activeSection => _section ?? _sections.first;
 
-  void _reload() => setState(() {
-        // Deleting the last table in a section makes that section vanish, so drop
-        // back to a section that still exists rather than showing a blank floor.
-        if (_section != null && !_sections.contains(_section)) _section = null;
-      });
+  void _reload() {
+    // Deleting the last table in a section makes that section vanish, so drop
+    // back to a section that still exists rather than showing a blank floor.
+    if (_section != null && !_sections.contains(_section)) {
+      _setSection(null);
+      return;
+    }
+    setState(() {});
+  }
+
+  /// Open [name] and tell the shell, which is what remembers it while the counter
+  /// is up. Null means "whichever section is first", the resting state.
+  void _setSection(String? name) {
+    setState(() => _section = name);
+    widget.onSectionChanged?.call(name);
+  }
+
+  /// Set what the next table tap seats, and tell the shell for the same reason.
+  void _setSeatAs(OrderType type) {
+    setState(() => _seatAs = type);
+    widget.onSeatAsChanged?.call(type);
+  }
 
   Future<void> _addTable() async {
     final result = await _tableDialog(title: tr(context, 'Add table'));
@@ -308,7 +352,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     if (name == null || name.isEmpty) return;
     // A section exists once it has a table, so seed it with one.
     widget.store.add(name: 'T1', section: name, seats: 4);
-    setState(() => _section = name);
+    _setSection(name);
   }
 
   String _shapeLabel(BuildContext context, TableShape s) {
@@ -750,7 +794,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                     key: Key('seat-as-${t.name.toLowerCase()}'),
                     label: Text(tr(context, t.label)),
                     selected: _seatType == t,
-                    onSelected: (_) => setState(() => _seatAs = t),
+                    onSelected: (_) => _setSeatAs(t),
                   ),
               ]),
             ),
@@ -863,7 +907,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       if (!mounted) return;
       if (name != null && name.isNotEmpty && name != section) {
         widget.store.renameSection(section, name);
-        setState(() => _section = name);
+        _setSection(name);
       }
     } else if (action == 'delete') {
       final confirmed = await _confirmDeleteSection(section);
@@ -950,7 +994,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       // the top does not change how the floor is driven.
       key: Key('section-${s.toLowerCase()}'),
       borderRadius: BorderRadius.circular(12),
-      onTap: () => setState(() => _section = s),
+      onTap: () => _setSection(s),
       // In edit mode a long-press renames or deletes the whole section, exactly as
       // it does on the top strip.
       onLongPress: _editing ? () => _sectionMenu(s) : null,
@@ -994,7 +1038,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                   key: Key('section-${s.toLowerCase()}'),
                   label: Text(s),
                   selected: _activeSection == s,
-                  onSelected: (_) => setState(() => _section = s),
+                  onSelected: (_) => _setSection(s),
                 ),
               ),
               const SizedBox(width: 6),
