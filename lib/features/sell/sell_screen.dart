@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../../app/pos_session.dart';
 import '../../core/auth/permissions.dart';
+import '../../core/db/catalogue_store.dart' show ModifierMark;
 import '../../core/i18n/l10n.dart';
 import '../../core/printing/kitchen_ticket.dart' show KitchenFireResult;
 import '../../core/printing/receipt_builder.dart' show PartialPayment;
@@ -2320,7 +2321,17 @@ class _SellScreenState extends State<SellScreen> {
     return argb != null ? Color(argb) : AppColors.categoryColor(categoryId);
   }
 
-  Widget _catalogue(List<Product> products) => Column(
+  /// A colour set on the item itself beats its category's, so a manager can pull one
+  /// dish out of the block its category is drawn in.
+  Color? _tileColorFor(Product p) =>
+      p.color != null ? Color(p.color!) : _colorFor(p.categoryId);
+
+  Widget _catalogue(List<Product> products) {
+    // One grouped read for the whole grid, not one per tile: which items carry
+    // choices is a question about the whole menu, and the answer has to be current
+    // because a manager can add a group in the editor and come straight back here.
+    final marks = s.catalogue.modifierMarks();
+    return Column(
         children: [
           if (widget.onSignOut != null)
             Align(
@@ -2378,7 +2389,8 @@ class _SellScreenState extends State<SellScreen> {
                     itemBuilder: (_, i) => _ProductTile(
                       product: products[i],
                       price: widget.formatAmount(products[i].price),
-                      color: _colorFor(products[i].categoryId),
+                      color: _tileColorFor(products[i]),
+                      modifiers: marks[products[i].id],
                       image: widget.productImages[products[i].id],
                       unavailable: widget.unavailableProducts.contains(products[i].id),
                       favourite: widget.favourites.contains(products[i].id),
@@ -2391,6 +2403,7 @@ class _SellScreenState extends State<SellScreen> {
           ),
         ],
       );
+  }
 
   Widget _categoryStrip() {
     final cats = s.catalogue.categories();
@@ -2833,6 +2846,7 @@ class _ProductTile extends StatelessWidget {
     required this.onTap,
     this.color,
     this.image,
+    this.modifiers,
     this.unavailable = false,
     this.favourite = false,
     this.onLongPress,
@@ -2841,6 +2855,11 @@ class _ProductTile extends StatelessWidget {
   final String price;
   final VoidCallback onTap;
   final Color? color;
+
+  /// The choices this item carries, or null when it has none. The shop owner could
+  /// not tell which items would ask him something and which would not; this is the
+  /// mark that answers it without a tap.
+  final ModifierMark? modifiers;
 
   /// The product's picture, when the shop shows pictures and this product has one.
   /// Null is the normal case and leaves the tile exactly as it has always been.
@@ -2938,6 +2957,37 @@ class _ProductTile extends StatelessWidget {
                 top: 2,
                 right: 2,
                 child: Icon(Icons.star, size: 14, color: Colors.amber),
+              ),
+            // The bottom leading corner, so it clears the favourite star at the top
+            // and follows the text direction into Arabic. A required group is drawn
+            // in the attention colour and an optional one in the neutral: the
+            // cashier's question is not "does this have extras" but "will this stop
+            // me", and the badge answers that before the tile is tapped.
+            if (modifiers != null && !unavailable)
+              PositionedDirectional(
+                bottom: 2,
+                start: 2,
+                child: Container(
+                  key: Key('product-mods-${product.id}'),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: modifiers!.required
+                        ? AppColors.warning
+                        : Colors.black.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.tune, size: 11, color: Colors.white),
+                    if (modifiers!.groups > 1) ...[
+                      const SizedBox(width: 2),
+                      Text('${modifiers!.groups}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold)),
+                    ],
+                  ]),
+                ),
               ),
           ],
         ),
