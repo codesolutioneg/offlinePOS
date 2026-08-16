@@ -1084,4 +1084,26 @@ const Map<String, String> _ar = {
   'Total outstanding': 'إجمالي المستحقات',
   'Sales on account': 'المبيعات على الحساب',
   'Unnamed': 'بدون اسم',
+
+  // Shop identity and how sales reach Odoo.
+  'Where this till books in Odoo': 'أين تُسجَّل مبيعات هذه الكاشير في أودو',
+  'Odoo record numbers, taken from the address bar of each record. '
+          'Leave a box empty to let Odoo decide. Every sale this till sends '
+          'carries them.':
+      'أرقام السجلات في أودو، تُؤخذ من شريط العنوان لكل سجل. اترك الخانة فارغة '
+          'ليقرر أودو بنفسه. كل عملية بيع ترسلها الكاشير تحمل هذه الأرقام.',
+  'Branch id (company)': 'رقم الفرع (الشركة)',
+  'Restaurant id (point of sale)': 'رقم المطعم (نقطة البيع)',
+  'Warehouse id': 'رقم المخزن',
+  'Discount product id (a service product)': 'رقم صنف الخصم (صنف خدمي)',
+  'With a product here, a discounted sale reaches Odoo at full '
+          'menu prices plus one discount line, so it can be reported on '
+          'there. Empty keeps the discount inside the prices.':
+      'عند تحديد صنف هنا، تصل الفاتورة المخصومة إلى أودو بأسعار القائمة كاملة مع '
+          'سطر خصم مستقل، فيمكن إظهاره في تقارير أودو. وتركها فارغة يُبقي الخصم '
+          'داخل الأسعار.',
+  'No payment methods have come from Odoo yet, so this sale books '
+          'as cash. Set the server in Settings, then refresh the menu.':
+      'لم تصل أي طرق دفع من أودو بعد، لذلك تُسجَّل هذه الفاتورة نقدًا. اضبط الخادم '
+          'من الإعدادات ثم حدِّث القائمة.',
 };
