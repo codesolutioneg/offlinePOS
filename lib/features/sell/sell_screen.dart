@@ -3477,160 +3477,170 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     return Padding(
       padding: EdgeInsets.fromLTRB(
           20, 4, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(children: [
-              Text(tr(context, 'Payment'),
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const Spacer(),
-              // One bill paid part cash, part card. Named for the methods, not for
-              // splitting the bill: that is what the mode row answers.
-              FilterChip(
-                key: const Key('split-toggle'),
-                label: Text(tr(context, 'Mixed methods')),
-                selected: _split,
-                onSelected: (v) => setState(() {
-                  _split = v;
-                  _tenders.clear();
-                }),
-              ),
-            ]),
-            const SizedBox(height: 8),
-            _amountOwed(context),
-            if (widget.modes.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              _modeRow(context),
-            ],
-            const SizedBox(height: 12),
-            // The tender comes before the tip and the cash, because picking it is
-            // what the cashier does first and what the rest of the sheet reacts to.
-            if (_methods.isNotEmpty)
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (final m in _methods) _methodButton(context, m),
-                ],
-              )
-            else
-              Text(tr(context, 'Cash'), style: const TextStyle(color: Colors.black54)),
-            const SizedBox(height: 12),
-            TextField(
-              key: const Key('tip'),
-              controller: _tip,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                labelText: tr(context, 'Tip (optional)'), border: const OutlineInputBorder(), isDense: true),
-              onChanged: (_) => setState(() {
-                // Keep the cash received in step with the tip so Charge stays
-                // enabled, unless the cashier has already set a received amount.
-                if (!_receivedEdited && _isCash && !_split) {
-                  _received.text = _grand.toStringAsFixed(2);
-                }
+      // The header is outside the scroll view so what is owed stays on screen while
+      // the cashier works down the sheet, keyboard up and all.
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(children: [
+            Text(tr(context, 'Payment'),
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Spacer(),
+            // One bill paid part cash, part card. Named for the methods, not for
+            // splitting the bill: that is what the mode row answers.
+            FilterChip(
+              key: const Key('split-toggle'),
+              label: Text(tr(context, 'Mixed methods')),
+              selected: _split,
+              onSelected: (v) => setState(() {
+                _split = v;
+                _tenders.clear();
               }),
             ),
-            if (_split) ...[
-              const SizedBox(height: 12),
-              for (final t in _tenders)
-                ListTile(
-                  dense: true,
-                  title: Text(t.label ?? tr(context, 'Payment')),
-                  trailing: Text(widget.format(t.amount)),
+          ]),
+          const SizedBox(height: 8),
+          _amountOwed(context),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                if (widget.modes.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  _modeRow(context),
+                ],
+                const SizedBox(height: 12),
+                // The tender comes before the tip and the cash, because picking it is
+                // what the cashier does first and what the rest of the sheet reacts to.
+                if (_methods.isNotEmpty)
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final m in _methods) _methodButton(context, m),
+                    ],
+                  )
+                else
+                  Text(tr(context, 'Cash'), style: const TextStyle(color: Colors.black54)),
+                const SizedBox(height: 12),
+                TextField(
+                  key: const Key('tip'),
+                  controller: _tip,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: tr(context, 'Tip (optional)'), border: const OutlineInputBorder(), isDense: true),
+                  onChanged: (_) => setState(() {
+                    // Keep the cash received in step with the tip so Charge stays
+                    // enabled, unless the cashier has already set a received amount.
+                    if (!_receivedEdited && _isCash && !_split) {
+                      _received.text = _grand.toStringAsFixed(2);
+                    }
+                  }),
                 ),
-              Text(
-                  '${tr(context, 'Remaining')} ${widget.format(_remaining < 0 ? 0 : _remaining)}',
-                  key: const Key('remaining'),
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
-              Row(children: [
-                Expanded(
-                  child: TextField(
-                    key: const Key('tender-amount'),
-                    controller: _tenderAmount,
+                if (_split) ...[
+                  const SizedBox(height: 12),
+                  for (final t in _tenders)
+                    ListTile(
+                      dense: true,
+                      title: Text(t.label ?? tr(context, 'Payment')),
+                      trailing: Text(widget.format(t.amount)),
+                    ),
+                  Text(
+                      '${tr(context, 'Remaining')} ${widget.format(_remaining < 0 ? 0 : _remaining)}',
+                      key: const Key('remaining'),
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        key: const Key('tender-amount'),
+                        controller: _tenderAmount,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: InputDecoration(
+                          labelText: '${tr(context, 'Amount')} (${_method?.name ?? ''})',
+                          hintText: tr(context, 'Rest of balance'),
+                          border: const OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.tonalIcon(
+                      key: const Key('add-tender'),
+                      onPressed: _remaining > 0.001 ? _addTender : null,
+                      icon: const Icon(Icons.add),
+                      label: Text(tr(context, 'Add')),
+                    ),
+                  ]),
+                ] else if (_isCash) ...[
+                  const SizedBox(height: 16),
+                  TextField(
+                    key: const Key('received'),
+                    controller: _received,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     decoration: InputDecoration(
-                      labelText: '${tr(context, 'Amount')} (${_method?.name ?? ''})',
-                      hintText: tr(context, 'Rest of balance'),
+                      labelText: tr(context, 'Amount received'),
                       border: const OutlineInputBorder(),
                       isDense: true,
                     ),
+                    onChanged: (_) => setState(() => _receivedEdited = true),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final a in _quickAmounts())
+                        ActionChip(
+                          labelPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          labelStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          label: Text(widget.format(a)),
+                          onPressed: () =>
+                              setState(() => _received.text = a.toStringAsFixed(2)),
+                        ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 10),
+                _changeBanner(context),
+                const SizedBox(height: 14),
+                SizedBox(
+                  height: 64,
+                  child: FilledButton.icon(
+                    key: const Key('confirm-payment'),
+                    style: FilledButton.styleFrom(
+                        textStyle: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+                    onPressed: _covered ? _confirm : null,
+                    icon: const Icon(Icons.check_circle, size: 24),
+                    label: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
                   ),
                 ),
-                const SizedBox(width: 8),
-                FilledButton.tonalIcon(
-                  key: const Key('add-tender'),
-                  onPressed: _remaining > 0.001 ? _addTender : null,
-                  icon: const Icon(Icons.add),
-                  label: Text(tr(context, 'Add')),
-                ),
-              ]),
-            ] else if (_isCash) ...[
-              const SizedBox(height: 16),
-              TextField(
-                key: const Key('received'),
-                controller: _received,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(
-                  labelText: tr(context, 'Amount received'),
-                  border: const OutlineInputBorder(),
-                  isDense: true,
-                ),
-                onChanged: (_) => setState(() => _receivedEdited = true),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (final a in _quickAmounts())
-                    ActionChip(
-                      labelPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      labelStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      label: Text(widget.format(a)),
-                      onPressed: () =>
-                          setState(() => _received.text = a.toStringAsFixed(2)),
+                if (widget.onAccountMethod != null) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 52,
+                    child: OutlinedButton.icon(
+                      key: const Key('pay-later'),
+                      onPressed: _confirmOnAccount,
+                      icon: const Icon(Icons.account_balance_wallet_outlined),
+                      label: Text(widget.hasCustomer
+                          ? tr(context, 'Put it on the account')
+                          : tr(context, 'On account (needs a customer)')),
                     ),
+                  ),
+                ],
+                const SizedBox(height: 4),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(tr(context, 'Cancel')),
+                ),
                 ],
               ),
-            ],
-            const SizedBox(height: 10),
-            _changeBanner(context),
-            const SizedBox(height: 14),
-            SizedBox(
-              height: 64,
-              child: FilledButton.icon(
-                key: const Key('confirm-payment'),
-                style: FilledButton.styleFrom(
-                    textStyle: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
-                onPressed: _covered ? _confirm : null,
-                icon: const Icon(Icons.check_circle, size: 24),
-                label: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
-              ),
             ),
-            if (widget.onAccountMethod != null) ...[
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 52,
-                child: OutlinedButton.icon(
-                  key: const Key('pay-later'),
-                  onPressed: _confirmOnAccount,
-                  icon: const Icon(Icons.account_balance_wallet_outlined),
-                  label: Text(widget.hasCustomer
-                      ? tr(context, 'Put it on the account')
-                      : tr(context, 'On account (needs a customer)')),
-                ),
-              ),
-            ],
-            const SizedBox(height: 4),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(tr(context, 'Cancel')),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
