@@ -25,6 +25,7 @@ import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
+import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
@@ -210,9 +211,11 @@ void main() {
     await t.tap(find.byKey(const Key('pay-later')));
     await t.pumpAndSettle();
 
-    // Straight to the reports the manager reads at the end of the day.
+    // Straight to the reports the manager reads at the end of the day. The paid
+    // sale put the till back on the floor home, which carries the same drawer.
     t.state<ScaffoldState>(find
-            .descendant(of: find.byType(SellScreen), matching: find.byType(Scaffold))
+            .descendant(
+                of: find.byType(TableFloorScreen), matching: find.byType(Scaffold))
             .first)
         .openDrawer();
     await t.pumpAndSettle();
@@ -235,8 +238,10 @@ void main() {
     await t.tap(find.byKey(const Key('confirm-payment')));
     await t.pumpAndSettle();
 
+    // Paying returned the till to the floor home, which carries the same drawer.
     t.state<ScaffoldState>(find
-            .descendant(of: find.byType(SellScreen), matching: find.byType(Scaffold))
+            .descendant(
+                of: find.byType(TableFloorScreen), matching: find.byType(Scaffold))
             .first)
         .openDrawer();
     await t.pumpAndSettle();

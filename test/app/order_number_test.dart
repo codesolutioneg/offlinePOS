@@ -111,9 +111,12 @@ void main() {
     await t.tap(find.byKey(const Key('pin-ok')));
     for (var i = 0; i < 20; i++) {
       await t.pump(const Duration(milliseconds: 50));
-      if (find.byType(SellScreen).evaluate().isNotEmpty) break;
+      if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
+    // Every test here seeds a draft, so the restored order puts the cashier
+    // straight on the counter rather than on the floor home.
+    expect(find.byType(SellScreen), findsOneWidget);
   }
 
   testWidgets('an order parked on the app is given a number a human can say',
@@ -148,6 +151,13 @@ void main() {
     await signIn(t);
     await t.tap(find.byKey(const Key('hold')));
     await t.pumpAndSettle();
+    // Parking put the till back on the floor home, so the second order of the
+    // service starts there, the way the next one always does. The "order parked"
+    // toast sits over the takeaway button until it expires.
+    await t.pump(const Duration(seconds: 3));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('product-11')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('hold')));
@@ -169,8 +179,11 @@ void main() {
     final parked = orders.held().single;
 
     // Recalled and settled: the guests and the kitchen already have this number, so
-    // it must not change under them.
-    await t.tap(find.byKey(const Key('open-orders')));
+    // it must not change under them. Parking landed on the floor home, where the
+    // parked tab is picked up through the drawer.
+    await t.tap(find.byType(DrawerButton));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('nav-open-orders')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(Key('open-order-${parked.uuid}')));
     await t.pumpAndSettle();

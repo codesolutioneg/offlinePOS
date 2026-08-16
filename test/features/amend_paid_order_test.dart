@@ -164,20 +164,18 @@ void main() {
     // time rather than trusting one settle.
     for (var i = 0; i < 20; i++) {
       await t.pump(const Duration(milliseconds: 50));
-      if (find.byType(SellScreen).evaluate().isNotEmpty) break;
+      if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
-    // Nothing is parked on this till (the sale under test is already paid), so
-    // signing in lands on the floor. These tests are about the counter, so come
-    // back to it the way a cashier would.
-    if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
-      await t.pageBack();
-      await t.pumpAndSettle();
-    }
-    // The first-sale walkthrough covers the counter on a fresh till. Skipped, so
-    // these tests exercise the till a cashier actually works on.
+    // The first-sale walkthrough covers whichever screen is home on a fresh till.
+    // Skipped, so these tests exercise the till a cashier actually works on.
     await t.tap(find.byKey(const Key('wizard-skip')));
     await t.pumpAndSettle();
+    // Nothing is parked on this till (the sale under test is already paid), so
+    // signing in lands on the floor home. These tests reach the counter through
+    // the history screen, which the floor's own drawer opens, so there is nothing
+    // to walk back from here.
+    expect(find.byType(TableFloorScreen), findsOneWidget);
   }
 
   /// Boot the till on a screen the size of a real one, so the cart is not cut off

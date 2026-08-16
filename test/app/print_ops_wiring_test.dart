@@ -26,7 +26,6 @@ import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
-import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -218,15 +217,17 @@ void main() {
     await t.tap(find.byKey(const Key('pin-ok')));
     for (var i = 0; i < 20; i++) {
       await t.pump(const Duration(milliseconds: 50));
-      if (find.byType(SellScreen).evaluate().isNotEmpty) break;
+      if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
-    if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
-      await t.pageBack();
-      await t.pumpAndSettle();
-    }
     await t.tap(find.byKey(const Key('wizard-skip')));
     await t.pumpAndSettle();
+    // Signing in lands on the floor home. These tests ring a sale up, so walk to
+    // the counter the way a cashier does; a takeaway needs no table on the plan.
+    if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
+      await t.tap(find.byKey(const Key('floor-takeaway')));
+      await t.pumpAndSettle();
+    }
   }
 
   /// One pizza, tendered on the card, exactly as a cashier rings it.
