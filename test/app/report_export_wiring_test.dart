@@ -76,7 +76,19 @@ void main() {
   });
   tearDown(() async {
     db.close();
-    if (downloads.existsSync()) await downloads.delete(recursive: true);
+    // Windows will not delete a directory while anything still holds a handle in
+    // it, and the PDF writer's handle is released a moment after the write
+    // returns. The export itself is already asserted above, so a temp directory
+    // the OS is still finishing with is the OS's business, not a test failure.
+    for (var attempt = 0; attempt < 5; attempt++) {
+      if (!downloads.existsSync()) return;
+      try {
+        await downloads.delete(recursive: true);
+        return;
+      } on FileSystemException {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+    }
   });
 
   Widget app() {
