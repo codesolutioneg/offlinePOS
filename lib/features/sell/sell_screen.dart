@@ -1632,10 +1632,11 @@ class _SellScreenState extends State<SellScreen> {
 
   // ── dine-in bill: split by guest, pay selected, move, merge ──────
 
-  /// The charge for a subset of the current order's lines, with the whole-order
-  /// discount applied (it is a percentage, so it applies to each check's lines).
-  double _linesTotal(Iterable<OrderLine> lines) =>
-      lines.fold(0.0, (a, l) => a + l.total) * s.current.discountFactor;
+  /// The charge for a subset of the current order's lines: the session's own figure,
+  /// which is exactly what payCheck books. Deriving it here instead once quoted the
+  /// food without the service, and a guest paying their share left the table eating
+  /// the difference.
+  double _linesTotal(Iterable<OrderLine> lines) => s.checkTotal(lines);
 
   /// Take payment for a subset of the current order as its own check, leaving the
   /// rest of the table open. Reuses the payment sheet and the normal post-payment
@@ -1943,7 +1944,9 @@ class _SellScreenState extends State<SellScreen> {
       final whole = l.quantity == l.quantity.roundToDouble();
       sum += whole ? (l.total / l.quantity) * q : l.total;
     });
-    return sum * s.current.discountFactor;
+    // Discount and service exactly as payCheck applies them, so the sheet asks for
+    // the figure the check is about to book.
+    return sum * s.current.discountFactor * s.current.serviceChargeFactor;
   }
 
   Future<void> _pickLines({
