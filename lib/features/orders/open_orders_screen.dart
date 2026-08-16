@@ -18,7 +18,23 @@ class OpenOrdersScreen extends StatefulWidget {
     required this.onRecall,
     this.onCancel,
     this.onPrintBill,
+    this.shiftOpen,
+    this.onOpenShift,
   });
+
+  /// Whether a cash-drawer shift is open, read on every build exactly as the floor
+  /// and the counter read it. Null (the suites that only draw the list) gates
+  /// nothing.
+  ///
+  /// Only picking a tab back up is gated, never looking: a recall used to land on
+  /// the counter's refusal screen with no way forward, but a cashier with no shift
+  /// still has every right to see what is parked.
+  final bool Function()? shiftOpen;
+
+  /// Opens the shift screen from this list's own refusal strip, and answers when the
+  /// cashier comes back so the strip can go. Null hides the button rather than
+  /// showing one that goes nowhere.
+  final Future<void> Function()? onOpenShift;
 
   final List<Order> orders;
   final String Function(double) formatAmount;
@@ -41,6 +57,46 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
   /// tabs first, and a shop that does no delivery never sees the filter at all.
   bool _deliveryOnly = false;
 
+  /// No shift, no recall. Read per build, exactly as the floor and the counter read
+  /// it, so opening one and coming straight back lifts the block with no restart.
+  bool get _noShift => widget.shiftOpen != null && !widget.shiftOpen!();
+
+  String get _noShiftMessage => tr(context,
+      'No shift is open. Open one before you pick a tab back up.');
+
+  /// Why a parked tab cannot be picked up right now, said on the list instead of on
+  /// the counter the recall used to land on. The list underneath stays readable and
+  /// the bill can still be printed: neither is selling.
+  Widget _noShiftStrip() => Material(
+        key: const Key('open-orders-no-shift'),
+        color: AppColors.error,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Row(children: [
+            const Icon(Icons.point_of_sale, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+              child:
+                  Text(_noShiftMessage, style: const TextStyle(color: Colors.white)),
+            ),
+            if (widget.onOpenShift != null)
+              FilledButton(
+                key: const Key('open-orders-open-shift'),
+                style: FilledButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: AppColors.error),
+                onPressed: () async {
+                  await widget.onOpenShift!();
+                  // The shift screen sits on top of this list, so coming back has to
+                  // re-read the drawer or the strip would stand over an open shift.
+                  if (mounted) setState(() {});
+                },
+                child: Text(tr(context, 'Open shift')),
+              ),
+          ]),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     // Deliveries are the orders with nowhere to be tapped on the floor plan, so
@@ -58,6 +114,7 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Open orders'))),
       body: Column(children: [
+        if (_noShift) _noShiftStrip(),
         if (anyDelivery)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -97,6 +154,13 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
                                 kind: ToastKind.success, key: const Key('bill-printed'));
                           },
                     onTap: () {
+                      // Refused here, where the strip above says how to fix it,
+                      // rather than by landing on a counter that can neither ring
+                      // nor settle and offers nothing.
+                      if (_noShift) {
+                        showToast(context, _noShiftMessage, kind: ToastKind.error);
+                        return;
+                      }
                       widget.onRecall(shown[i]);
                       Navigator.of(context).pop();
                     },

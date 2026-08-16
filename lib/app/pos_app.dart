@@ -1421,6 +1421,12 @@ class _PosAppState extends State<PosApp> {
       builder: (sheetContext) => OpenOrdersScreen(
         orders: widget.orders.held(),
         formatAmount: PosApp.money,
+        // The same gate the floor puts on a table tap. Reachable from the floor
+        // drawer with no shift open, a recall from here used to land on the counter's
+        // refusal with no way forward; the list itself stays readable, because
+        // looking at what is parked is not selling.
+        shiftOpen: () => widget.shifts.currentOpenShift() != null,
+        onOpenShift: () => _openShift(sheetContext, session),
         // Through the same door as the floor, so table security cannot be walked
         // around by resuming the tab from the list instead of the plan. The list
         // closes itself on the tap, so the question about whose tab it is is asked
@@ -2820,7 +2826,10 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
-  void _openShift(BuildContext context, PosSession session) {
+  /// Opens the shift screen, and answers when the cashier comes back off it, so a
+  /// caller whose own gate depends on the drawer can re-read it. Most callers just
+  /// send them there and have nothing to wait for.
+  Future<void> _openShift(BuildContext context, PosSession session) {
     // Which tenders count as drawer cash, read from the synced catalogue so the
     // X/Z drawer total reconciles cash and leaves card sales out.
     final cashMethodIds = widget.catalogue
@@ -2828,7 +2837,7 @@ class _PosAppState extends State<PosApp> {
         .where((m) => m.isCash)
         .map((m) => m.id)
         .toSet();
-    Navigator.of(context).push(MaterialPageRoute<void>(
+    return Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => ShiftScreen(
         store: widget.shifts,
         cashierId: session.cashierId,
