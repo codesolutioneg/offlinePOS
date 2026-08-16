@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
+import 'report_export.dart';
 
 /// One row in the item-sales table: a product's aggregated quantity and
 /// revenue across every order passed to the screen.
@@ -83,6 +84,29 @@ class SalesReportScreen extends StatelessWidget {
     return list;
   }
 
+  /// The report as one flat table, which is what a spreadsheet and a printed page
+  /// both want: the overview lines, the split by order type, the payment mix and
+  /// every item sold, each tagged with the section it came from.
+  ReportTable _table(BuildContext context) => ReportTable(
+        header: const ['Section', 'Item', 'Quantity', 'Amount'],
+        rows: [
+          ['Overview', 'Orders', '${orders.length}', ''],
+          ['Overview', 'Gross sales', '', _grossSales.toStringAsFixed(2)],
+          ['Overview', 'Discounts given', '', _totalDiscounts.toStringAsFixed(2)],
+          ['Overview', 'Delivery income', '', _deliveryIncome.toStringAsFixed(2)],
+          ['Overview', 'Tips', '', _totalTips.toStringAsFixed(2)],
+          for (final e in _byType.entries)
+            ['Order type', e.key.label, '${e.value.count}', e.value.total.toStringAsFixed(2)],
+          for (final e in _paymentMix(context).entries)
+            ['Payment mix', e.key, '', e.value.toStringAsFixed(2)],
+          for (final i in _itemSales())
+            ['Item sales', i.name, _qty(i.quantity), i.revenue.toStringAsFixed(2)],
+        ],
+      );
+
+  static String _qty(double q) =>
+      q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toString();
+
   Widget _row(String k, String v, {bool bold = false}) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(children: [
@@ -111,7 +135,15 @@ class SalesReportScreen extends StatelessWidget {
     final itemSales = _itemSales();
 
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Sales report'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Sales report')),
+        actions: [
+          reportExportAction(context,
+              name: 'report-sales-summary',
+              title: tr(context, 'Sales summary'),
+              table: () => _table(context)),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -161,9 +193,7 @@ class SalesReportScreen extends StatelessWidget {
                       itemCount: itemSales.length,
                       itemBuilder: (context, i) {
                         final item = itemSales[i];
-                        final qty = item.quantity == item.quantity.roundToDouble()
-                            ? item.quantity.toStringAsFixed(0)
-                            : item.quantity.toString();
+                        final qty = _qty(item.quantity);
                         return ListTile(
                           dense: true,
                           title: Text('$qty x ${item.name}'),

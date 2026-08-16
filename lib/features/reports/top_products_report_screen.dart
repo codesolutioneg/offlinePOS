@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
+import 'report_export.dart';
 
 /// One product's tally across every order in the report window: how many
 /// units moved and how much revenue they booked. Aggregated by name rather
@@ -46,6 +47,23 @@ class TopProductsReportScreen extends StatelessWidget {
     ];
   }
 
+  static String _qty(double q) =>
+      q.toStringAsFixed(q.truncateToDouble() == q ? 0 : 2);
+
+  /// Ranked by revenue, the order a manager reads first, with the units beside it
+  /// so the quantity ranking is recoverable from the same sheet.
+  ReportTable _table() {
+    final products = _aggregate()
+      ..sort((a, b) => b.revenue.compareTo(a.revenue));
+    return ReportTable(
+      header: const ['Product', 'Units', 'Revenue'],
+      rows: [
+        for (final p in products)
+          [p.name, _qty(p.quantity), p.revenue.toStringAsFixed(2)],
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final products = _aggregate();
@@ -53,7 +71,15 @@ class TopProductsReportScreen extends StatelessWidget {
     final byQuantity = [...products]..sort((a, b) => b.quantity.compareTo(a.quantity));
 
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Top products'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Top products')),
+        actions: [
+          reportExportAction(context,
+              name: 'report-top-products',
+              title: tr(context, 'Top products'),
+              table: _table),
+        ],
+      ),
       body: orders.isEmpty || products.isEmpty
           ? Center(child: Text(tr(context, 'No orders')))
           : SingleChildScrollView(
@@ -116,7 +142,7 @@ class TopProductsReportScreen extends StatelessWidget {
           SizedBox(
             width: 48,
             child: Text(
-              p.quantity.toStringAsFixed(p.quantity.truncateToDouble() == p.quantity ? 0 : 2),
+              _qty(p.quantity),
               textAlign: TextAlign.right,
             ),
           ),

@@ -29,10 +29,7 @@ class CostSalesReportScreen extends StatelessWidget {
 
   List<ProductMargin> get _rows => productMargins(orders, costs);
 
-  Future<void> _csv(BuildContext context, List<ProductMargin> rows) =>
-      downloadReportCsv(
-        context,
-        name: 'report-cost-vs-sales',
+  ReportTable _table(List<ProductMargin> rows) => ReportTable(
         header: const ['Product', 'Units', 'Revenue', 'Cost', 'Margin', 'Margin %'],
         rows: [
           for (final r in rows)
@@ -62,7 +59,10 @@ class CostSalesReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'Cost vs sales')),
-        actions: [reportCsvAction(context, onPressed: () => _csv(context, rows))],
+        actions: [
+          reportExportAction(context,
+              name: 'report-cost-vs-sales', title: tr(context, 'Cost vs sales'), table: () => _table(rows)),
+        ],
       ),
       body: costed.isEmpty
           ? Center(

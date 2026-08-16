@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
+import 'report_export.dart';
 
 /// One payment method's tally across the report window: how many tenders
 /// landed on it and how much money moved through it.
@@ -54,13 +55,38 @@ class PaymentAnalysisReportScreen extends StatelessWidget {
     ];
   }
 
+  ReportTable _table() {
+    final methods = _aggregate()..sort((a, b) => b.amount.compareTo(a.amount));
+    final total = methods.fold(0.0, (s, m) => s + m.amount);
+    return ReportTable(
+      header: const ['Method', 'Payments', 'Amount', 'Share %'],
+      rows: [
+        for (final m in methods)
+          [
+            m.label,
+            '${m.count}',
+            m.amount.toStringAsFixed(2),
+            total == 0 ? '0.0' : (m.amount / total * 100).toStringAsFixed(1),
+          ],
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final methods = _aggregate()..sort((a, b) => b.amount.compareTo(a.amount));
     final grandTotal = methods.fold(0.0, (s, m) => s + m.amount);
 
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Payment analysis'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Payment analysis')),
+        actions: [
+          reportExportAction(context,
+              name: 'report-payment-analysis',
+              title: tr(context, 'Payment analysis'),
+              table: _table),
+        ],
+      ),
       body: orders.isEmpty || methods.isEmpty
           ? Center(child: Text(tr(context, 'No orders')))
           : SingleChildScrollView(

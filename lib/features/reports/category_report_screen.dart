@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
+import 'report_export.dart';
 
 /// Label shown for a line with no category, or one whose category was deleted
 /// from the catalogue after the sale. Grouping these under one bucket rather
@@ -59,13 +60,38 @@ class CategoryReportScreen extends StatelessWidget {
     ];
   }
 
+  ReportTable _table() {
+    final rows = _aggregate()..sort((a, b) => b.revenue.compareTo(a.revenue));
+    final total = rows.fold(0.0, (s, c) => s + c.revenue);
+    return ReportTable(
+      header: const ['Category', 'Units', 'Revenue', 'Share %'],
+      rows: [
+        for (final c in rows)
+          [
+            c.name,
+            c.quantity.toStringAsFixed(c.quantity == c.quantity.roundToDouble() ? 0 : 2),
+            c.revenue.toStringAsFixed(2),
+            total == 0 ? '0.0' : (c.revenue / total * 100).toStringAsFixed(1),
+          ],
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final categoriesData = _aggregate()..sort((a, b) => b.revenue.compareTo(a.revenue));
     final totalRevenue = categoriesData.fold(0.0, (s, c) => s + c.revenue);
 
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Category performance'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Category performance')),
+        actions: [
+          reportExportAction(context,
+              name: 'report-category',
+              title: tr(context, 'Category performance'),
+              table: _table),
+        ],
+      ),
       body: orders.isEmpty || categoriesData.isEmpty
           ? Center(child: Text(tr(context, 'No orders')))
           : ListView.builder(

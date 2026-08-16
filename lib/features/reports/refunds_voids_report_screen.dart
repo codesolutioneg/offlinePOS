@@ -145,9 +145,7 @@ class RefundsVoidsReportScreen extends StatelessWidget {
       });
   }
 
-  Future<void> _csv(BuildContext context) => downloadReportCsv(
-        context,
-        name: 'report-refunds-voids',
+  ReportTable _table() => ReportTable(
         header: const ['Date', 'Kind', 'What', 'Reason', 'Cashier', 'Amount'],
         rows: [
           for (final e in _all)
@@ -211,7 +209,10 @@ class RefundsVoidsReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'Refunds & voids')),
-        actions: [reportCsvAction(context, onPressed: () => _csv(context))],
+        actions: [
+          reportExportAction(context,
+              name: 'report-refunds-voids', title: tr(context, 'Refunds & voids'), table: _table),
+        ],
       ),
       body: all.isEmpty
           ? Center(

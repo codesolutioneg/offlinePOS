@@ -57,9 +57,7 @@ class ReceivablesReportScreen extends StatelessWidget {
     return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
   }
 
-  Future<void> _csv(BuildContext context) => downloadReportCsv(
-        context,
-        name: 'report-receivables',
+  ReportTable _table() => ReportTable(
         header: const ['Date', 'Order', 'Customer', 'Cashier', 'Amount'],
         rows: [
           for (final o in _onAccount)
@@ -93,7 +91,10 @@ class ReceivablesReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'On account')),
-        actions: [reportCsvAction(context, onPressed: () => _csv(context))],
+        actions: [
+          reportExportAction(context,
+              name: 'report-receivables', title: tr(context, 'On account'), table: _table),
+        ],
       ),
       body: rows.isEmpty
           ? Center(

@@ -64,9 +64,7 @@ class PeriodComparisonReportScreen extends StatelessWidget {
   String _value(_Kpi k, double v) =>
       k.money ? formatAmount(v) : v.toStringAsFixed(0);
 
-  Future<void> _csv(BuildContext context) => downloadReportCsv(
-        context,
-        name: 'report-period-comparison',
+  ReportTable _table() => ReportTable(
         header: const ['Measure', 'Current', 'Previous', 'Change', 'Change %'],
         rows: [
           for (final k in _kpis)
@@ -86,7 +84,10 @@ class PeriodComparisonReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'Period comparison')),
-        actions: [reportCsvAction(context, onPressed: () => _csv(context))],
+        actions: [
+          reportExportAction(context,
+              name: 'report-period-comparison', title: tr(context, 'Period comparison'), table: _table),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),

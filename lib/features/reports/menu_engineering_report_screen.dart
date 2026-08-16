@@ -33,9 +33,7 @@ class MenuEngineeringReportScreen extends StatelessWidget {
       .where((r) => r.costed && r.units > 0)
       .toList();
 
-  Future<void> _csv(BuildContext context, List<_Placed> rows) => downloadReportCsv(
-        context,
-        name: 'report-menu-engineering',
+  ReportTable _table(List<_Placed> rows) => ReportTable(
         header: const ['Product', 'Quadrant', 'Units', 'Margin', 'Margin %'],
         rows: [
           for (final p in rows)
@@ -81,7 +79,10 @@ class MenuEngineeringReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'Menu engineering')),
-        actions: [reportCsvAction(context, onPressed: () => _csv(context, placed))],
+        actions: [
+          reportExportAction(context,
+              name: 'report-menu-engineering', title: tr(context, 'Menu engineering'), table: () => _table(placed)),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),

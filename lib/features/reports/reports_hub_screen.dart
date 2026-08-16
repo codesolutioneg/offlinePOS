@@ -3,8 +3,6 @@ import 'package:flutter/material.dart';
 import '../../core/audit/audit_log.dart';
 import '../../core/db/attendance_store.dart';
 import '../../core/db/shift_store.dart';
-import '../../core/export/data_export.dart';
-import '../../core/export/pdf_export.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/catalogue.dart';
@@ -20,6 +18,7 @@ import 'menu_engineering_report_screen.dart';
 import 'modifier_report_screen.dart';
 import 'payment_analysis_report_screen.dart';
 import 'period_comparison_report_screen.dart';
+import 'report_export.dart';
 import 'receivables_report_screen.dart';
 import 'refunds_voids_report_screen.dart';
 import 'sales_by_time_report_screen.dart';
@@ -33,10 +32,12 @@ import 'top_products_report_screen.dart';
 /// Reports used to be locked to the last 500 orders with no way to say "yesterday"
 /// or "this month". The range is chosen here once and threaded into each report, so
 /// a manager sees the period they actually care about.
-enum ReportRange { today, yesterday, last7, all }
+enum ReportRange { openShift, today, yesterday, last7, all }
 
 extension _RangeLabel on ReportRange {
   String label(BuildContext context) => switch (this) {
+        // Not 'Open shift', which is the button that starts one.
+        ReportRange.openShift => tr(context, 'Current shift'),
         ReportRange.today => tr(context, 'Today'),
         ReportRange.yesterday => tr(context, 'Yesterday'),
         ReportRange.last7 => tr(context, 'Last 7 days'),
@@ -57,7 +58,14 @@ class ReportsHubScreen extends StatefulWidget {
     this.staffNames = const {},
     this.openTables,
     this.onPrint,
+    this.shopName = '',
+    this.ranBy = '',
   });
+
+  /// The shop the exported reports are headed with, and the cashier who ran them.
+  /// Empty simply leaves that line off the header.
+  final String shopName;
+  final String ranBy;
 
   /// The recent completed orders; this screen filters them by the chosen range.
   final List<Order> allOrders;
@@ -94,7 +102,16 @@ class ReportsHubScreen extends StatefulWidget {
 }
 
 class _ReportsHubScreenState extends State<ReportsHubScreen> {
-  ReportRange _range = ReportRange.today;
+  /// The chip the manager picked.
+  ReportRange _chosen = ReportRange.today;
+
+  /// The range actually applied. The open-shift range only exists while a shift is
+  /// open, so a shift closed with that chip selected falls back to today rather than
+  /// leaving every report blank.
+  ReportRange get _range =>
+      _chosen == ReportRange.openShift && _shiftOpenedAt == null
+          ? ReportRange.today
+          : _chosen;
 
   /// A manager-picked from/to range; when set it overrides the preset chips so a
   /// report can cover any period, not just today/yesterday/7-day.
@@ -105,6 +122,12 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   /// manager actually picks a value.
   String? _cashier;
   OrderType? _type;
+
+  /// When the drawer currently open was opened, in local time, or null when there is
+  /// no open shift (or no shift store at all). Read live rather than captured on
+  /// entry, so a shift opened or closed while this screen is up is reflected.
+  DateTime? get _shiftOpenedAt =>
+      widget.shifts?.currentOpenShift()?.openedAt.toLocal();
 
   /// Orders whose local sale date falls inside the chosen range and match the
   /// cashier/order-type filters.
@@ -118,6 +141,9 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
         return !at.isBefore(_custom!.start) && at.isBefore(end);
       }
       return switch (_range) {
+        // Everything since the drawer was opened, so a manager can read the shift
+        // they are standing in rather than a calendar day that spans two of them.
+        ReportRange.openShift => _shiftOpenedAt != null && !at.isBefore(_shiftOpenedAt!),
         ReportRange.today => !at.isBefore(startOfToday),
         ReportRange.yesterday => !at.isBefore(startOfToday.subtract(const Duration(days: 1))) &&
             at.isBefore(startOfToday),
@@ -144,6 +170,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     final now = DateTime.now();
     final startOfToday = DateTime(now.year, now.month, now.day);
     return switch (_range) {
+      ReportRange.openShift => _shiftOpenedAt,
       ReportRange.today => startOfToday,
       ReportRange.yesterday => startOfToday.subtract(const Duration(days: 1)),
       ReportRange.last7 => startOfToday.subtract(const Duration(days: 6)),
@@ -225,10 +252,22 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     if (picked != null) setState(() => _custom = picked);
   }
 
+  /// Pushes a report, wrapped in the scope its download reads the header off.
+  ///
+  /// Wrapped here rather than threaded through every report's constructor: the
+  /// shop, the period and who is looking are hub facts, and a report has no
+  /// business taking three more arguments to put them on a file.
   void _open(Widget Function(List<Order>) build) {
-    Navigator.of(context)
-        .push(MaterialPageRoute<void>(builder: (_) => build(_filtered)));
+    final scope = _scope(build(_filtered));
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => scope));
   }
+
+  ReportScope _scope(Widget child) => ReportScope(
+        shopName: widget.shopName,
+        periodLabel: _rangeLabel(context),
+        ranBy: widget.ranBy,
+        child: child,
+      );
 
   /// Print the sales summary for the current range to the receipt printer.
   Future<void> _printSummary() async {
@@ -270,7 +309,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   /// The windowed, filtered orders as one row each, the shape both the CSV and
   /// the PDF export share. Columns are the order-level facts a manager needs off
   /// the till: reference, when, who, type, item count and total.
-  (List<String>, List<List<String>>) _ordersTable() {
+  ReportTable _ordersTable() {
     String ref(String uuid) =>
         uuid.length <= 6 ? uuid : uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
     String at(DateTime d) {
@@ -279,71 +318,36 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
     }
 
-    const header = ['Ref', 'Date', 'Cashier', 'Type', 'Items', 'Total'];
-    final rows = [
-      for (final o in _filtered)
-        [
-          ref(o.uuid),
-          at(o.createdAt),
-          o.cashierId,
-          o.type.label,
-          '${o.lines.length}',
-          o.total.toStringAsFixed(2),
-        ],
-    ];
-    return (header, rows);
-  }
-
-  Future<void> _downloadCsv() async {
-    final (header, rows) = _ordersTable();
-    final name = exportFileName('report-sales', DateTime.now(), 'csv');
-    await _save(() => writeTextExport(name, buildCsv(header, rows)));
-  }
-
-  Future<void> _downloadPdf() async {
-    final (header, rows) = _ordersTable();
-    final name = exportFileName('report-sales', DateTime.now(), 'pdf');
-    await _save(() async => writeBytesExport(
-          name,
-          await buildPdfTable(tr(context, 'Sales report'), header, rows),
-        ));
-  }
-
-  /// Runs a file-writing action and tells the user where it landed, or that it
-  /// could not be saved, rather than failing silently.
-  Future<void> _save(Future<String> Function() write) async {
-    try {
-      final path = await write();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${tr(context, 'Saved to')}: $path')),
-      );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(tr(context, 'Could not save file'))),
-      );
-    }
+    return ReportTable(
+      header: const ['Ref', 'Date', 'Cashier', 'Type', 'Items', 'Total'],
+      rows: [
+        for (final o in _filtered)
+          [
+            ref(o.uuid),
+            at(o.createdAt),
+            o.cashierId,
+            o.type.label,
+            '${o.lines.length}',
+            o.total.toStringAsFixed(2),
+          ],
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final count = _filtered.length;
-    return Scaffold(
+    return _scope(Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'Reports')),
+        // Built under the scope, so the hub's own download carries the same
+        // header as the reports it opens.
         actions: [
-          IconButton(
-            key: const Key('report-download-csv'),
-            tooltip: tr(context, 'Download CSV'),
-            icon: const Icon(Icons.download),
-            onPressed: _downloadCsv,
-          ),
-          IconButton(
-            key: const Key('report-download-pdf'),
-            tooltip: tr(context, 'Download PDF'),
-            icon: const Icon(Icons.picture_as_pdf_outlined),
-            onPressed: _downloadPdf,
+          Builder(
+            builder: (ctx) => reportExportAction(ctx,
+                name: 'report-orders',
+                title: tr(ctx, 'Orders'),
+                table: _ordersTable),
           ),
         ],
       ),
@@ -368,15 +372,18 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
               spacing: 8,
               children: [
                 for (final r in ReportRange.values)
-                  ChoiceChip(
-                    key: Key('range-${r.name}'),
-                    label: Text(r.label(context)),
-                    selected: _custom == null && _range == r,
-                    onSelected: (_) => setState(() {
-                      _range = r;
-                      _custom = null;
-                    }),
-                  ),
+                  // The open-shift chip is only offered while there is one to
+                  // report on; the other ranges are always meaningful.
+                  if (r != ReportRange.openShift || _shiftOpenedAt != null)
+                    ChoiceChip(
+                      key: Key('range-${r.name}'),
+                      label: Text(r.label(context)),
+                      selected: _custom == null && _chosen == r,
+                      onSelected: (_) => setState(() {
+                        _chosen = r;
+                        _custom = null;
+                      }),
+                    ),
                 ChoiceChip(
                   key: const Key('range-custom'),
                   avatar: const Icon(Icons.date_range, size: 16),
@@ -534,7 +541,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   /// A rounded, bordered card with a coloured icon badge, tinted per report

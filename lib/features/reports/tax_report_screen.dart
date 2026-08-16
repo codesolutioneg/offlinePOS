@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
+import 'report_export.dart';
 
 /// A tax report: net, tax and gross grouped by tax rate. Prices are tax-inclusive,
 /// so the tax shown is the portion already contained in what customers paid.
@@ -11,9 +12,9 @@ class TaxReportScreen extends StatelessWidget {
   final List<Order> orders;
   final String Function(double) formatAmount;
 
-  @override
-  Widget build(BuildContext context) {
-    // rate% -> [gross, tax]
+  /// Gross and tax per rate, keyed by the rate itself. One pass, shared by the
+  /// screen and the download so the exported file cannot drift from the page.
+  Map<double, List<double>> _byRate() {
     final byRate = <double, List<double>>{};
     for (final o in orders) {
       // The service charge travels inside the line prices, so the server taxes it at
@@ -29,12 +30,44 @@ class TaxReportScreen extends StatelessWidget {
         acc[1] += tax;
       }
     }
+    return byRate;
+  }
+
+  static String _rate(double r) =>
+      '${r.toStringAsFixed(r == r.roundToDouble() ? 0 : 1)}%';
+
+  ReportTable _table() {
+    final byRate = _byRate();
+    final rates = byRate.keys.toList()..sort();
+    return ReportTable(
+      header: const ['Rate', 'Net', 'Tax', 'Gross'],
+      rows: [
+        for (final r in rates)
+          [
+            _rate(r),
+            (byRate[r]![0] - byRate[r]![1]).toStringAsFixed(2),
+            byRate[r]![1].toStringAsFixed(2),
+            byRate[r]![0].toStringAsFixed(2),
+          ],
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final byRate = _byRate();
     final rates = byRate.keys.toList()..sort();
     final totalTax = byRate.values.fold(0.0, (s, v) => s + v[1]);
     final totalGross = byRate.values.fold(0.0, (s, v) => s + v[0]);
 
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Tax report'))),
+      appBar: AppBar(
+        title: Text(tr(context, 'Tax report')),
+        actions: [
+          reportExportAction(context,
+              name: 'report-tax', title: tr(context, 'Tax'), table: _table),
+        ],
+      ),
       body: rates.isEmpty
           ? Center(child: Text(tr(context, 'No tax recorded (prices carry no tax rate)')))
           : ListView(
@@ -53,7 +86,7 @@ class TaxReportScreen extends StatelessWidget {
                     key: Key('tax-rate-${r.toStringAsFixed(0)}'),
                     padding: const EdgeInsets.symmetric(vertical: 6),
                     child: Row(children: [
-                      Expanded(flex: 2, child: Text('${r.toStringAsFixed(r == r.roundToDouble() ? 0 : 1)}%')),
+                      Expanded(flex: 2, child: Text(_rate(r))),
                       Expanded(flex: 3, child: Text(formatAmount(byRate[r]![0] - byRate[r]![1]), textAlign: TextAlign.right)),
                       Expanded(flex: 3, child: Text(formatAmount(byRate[r]![1]), textAlign: TextAlign.right)),
                       Expanded(flex: 3, child: Text(formatAmount(byRate[r]![0]), textAlign: TextAlign.right)),

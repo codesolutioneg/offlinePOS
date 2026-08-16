@@ -108,9 +108,7 @@ class AttendanceReportScreen extends StatelessWidget {
   Duration get _grandTotal =>
       entries.fold(Duration.zero, (s, e) => s + e.worked(_now));
 
-  Future<void> _csv(BuildContext context) => downloadReportCsv(
-        context,
-        name: 'report-attendance',
+  ReportTable _table() => ReportTable(
         header: const ['Staff', 'Date', 'In', 'Out', 'Hours'],
         rows: [
           for (final e in entries)
@@ -143,7 +141,10 @@ class AttendanceReportScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'Hours worked')),
-        actions: [reportCsvAction(context, onPressed: () => _csv(context))],
+        actions: [
+          reportExportAction(context,
+              name: 'report-attendance', title: tr(context, 'Hours worked'), table: _table),
+        ],
       ),
       body: entries.isEmpty
           ? Center(
