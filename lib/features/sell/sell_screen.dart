@@ -3268,6 +3268,11 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   void initState() {
     super.initState();
     if (_methods.isNotEmpty) _method = _methods.first;
+    // Seeded with what is owed, because the common cash sale is exact and Charge
+    // is gated on the received amount covering the bill. Without this the cashier
+    // has to type the total back in before the button will even light up. Anything
+    // typed over it still gives change, and the tip keeps it in step from here.
+    _received.text = _grand.toStringAsFixed(2);
   }
 
   @override
@@ -3713,42 +3718,46 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                     ],
                   ),
                 ],
-                const SizedBox(height: 10),
-                _changeBanner(context),
-                const SizedBox(height: 14),
-                SizedBox(
-                  height: 64,
-                  child: FilledButton.icon(
-                    key: const Key('confirm-payment'),
-                    style: FilledButton.styleFrom(
-                        textStyle: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
-                    onPressed: _covered ? _confirm : null,
-                    icon: const Icon(Icons.check_circle, size: 24),
-                    label: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
-                  ),
-                ),
-                if (widget.onAccountMethod != null) ...[
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 52,
-                    child: OutlinedButton.icon(
-                      key: const Key('pay-later'),
-                      onPressed: _confirmOnAccount,
-                      icon: const Icon(Icons.account_balance_wallet_outlined),
-                      label: Text(widget.hasCustomer
-                          ? tr(context, 'Put it on the account')
-                          : tr(context, 'On account (needs a customer)')),
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 4),
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text(tr(context, 'Cancel')),
-                ),
                 ],
               ),
             ),
+          ),
+          // Outside the scroll view on purpose. Charge is the whole point of the
+          // sheet, and on a short till it was scrolling off the bottom where a
+          // cashier could not reach it. The fields above scroll; the money button
+          // does not move.
+          const SizedBox(height: 10),
+          _changeBanner(context),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: 64,
+            child: FilledButton.icon(
+              key: const Key('confirm-payment'),
+              style: FilledButton.styleFrom(
+                  textStyle: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+              onPressed: _covered ? _confirm : null,
+              icon: const Icon(Icons.check_circle, size: 24),
+              label: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
+            ),
+          ),
+          if (widget.onAccountMethod != null) ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 52,
+              child: OutlinedButton.icon(
+                key: const Key('pay-later'),
+                onPressed: _confirmOnAccount,
+                icon: const Icon(Icons.account_balance_wallet_outlined),
+                label: Text(widget.hasCustomer
+                    ? tr(context, 'Put it on the account')
+                    : tr(context, 'On account (needs a customer)')),
+              ),
+            ),
+          ],
+          const SizedBox(height: 4),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(tr(context, 'Cancel')),
           ),
         ],
       ),
