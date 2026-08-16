@@ -129,6 +129,7 @@ Every order push carries these, each one for a reason that has gone wrong somewh
 | `warehouse_id` | Which warehouse the stock leaves from |
 | `lines[].product_id`, `quantity`, `unit_price` | The sale itself; a whole-order discount and the service charge are both folded into each line's `unit_price` before sending, so the module books what the customer paid without learning a new field, and the service is taxed at each item's own rate. The till keeps the percentage locally to print it as its own line; it is stripped from the payload |
 | `lines[].modifiers[].product_id` | Each modifier backed by a product becomes its own order line, so it moves stock and invoices exactly as on-site |
+| `discount_amount`, `prices_include_discount` | What was taken off, in money, and whether the prices already have it. See below |
 
 ### Where the shop is, and who decides
 
@@ -145,6 +146,41 @@ and `warehouse_id` ride on the sale for the module to honour; a module that does
 read them books against the point of sale's own company and picking type as before,
 so setting them can never make a sale worse, and the day the module reads them the
 till already sends them.
+
+### Why a discount could not be found in Odoo
+
+The money was always right. A staging run proves it: a 25% order discount books an
+`amount_untaxed` of exactly the discounted total
+(test/staging/staging_discount_test.dart). What was missing is that **nothing in the
+payload said a discount had happened**. The percentages are folded into the line
+prices and then zeroed on the wire, so Odoo was handed a cheaper item, not a
+discounted one: no discount column, no discount line, nothing for a discount report
+there to count, and an invoice quoting a price that is not the menu price.
+
+Two things fix that, and they are independent:
+
+1. **The payload states it.** `discount_amount` is the money given away (per-line
+   discounts and the whole-order one together, on the same scale as the prices sent),
+   and `prices_include_discount` says whether the prices already have it. Stating it
+   rather than re-applying it is what makes double-discounting impossible. This
+   always travels. It is inert until the module reads it, but it is the datum a
+   module needs and it can never be wrong.
+2. **The shop names a discount product** (server settings, a **service** product; a
+   negative line on a storable one would put stock back). Then the lines go at full
+   menu price and the discount travels as one negative line on that product, which is
+   how Odoo writes a discount itself and the only way it appears as one without the
+   module learning a new field. Nothing else changes: both ways total to the same
+   money, and the sale's per-line service charge stays inside the prices.
+
+The trade in option 2, stated plainly: the discount then carries the discount
+product's own tax rather than reducing each item's tax in proportion. For a shop on
+one VAT rate the tax total is identical; for a menu with mixed rates it is not, which
+is why it is opt-in and off until someone chooses it.
+
+Dishflow sends `discount_amount` / `discount_type` / `discount_value` as top-level
+fields and lets its own REST addon decide what to do with them. It can do that
+because that addon is theirs to change. Ours is the same information without the
+assumption: the amount travels, and the shop chooses whether it also becomes a line.
 
 ## How the module answers
 

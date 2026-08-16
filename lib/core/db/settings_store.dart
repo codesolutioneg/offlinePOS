@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../../domain/business_day.dart';
-import '../../domain/order.dart' show OrderType;
+import '../../domain/order.dart' show DiscountBooking, OrderType;
 import '../auth/permissions.dart';
 import '../email/smtp_config.dart';
 import '../lan/lan_event.dart';
@@ -969,6 +969,13 @@ class SettingsStore {
   int? get odooWarehouseId => _positiveId('odoo_warehouse_id');
   set odooWarehouseId(int? v) => _setOdooId('odoo_warehouse_id', v);
 
+  /// The Odoo service product a discount is booked against, or null while the shop
+  /// has not named one and the discount stays inside the line prices. See
+  /// [DiscountBooking].
+  int? get odooDiscountProductId => _positiveId('odoo_discount_product_id');
+  set odooDiscountProductId(int? v) =>
+      _setOdooId('odoo_discount_product_id', v);
+
   /// An Odoo id is a positive integer. Anything else (a blank, a typo, a leftover
   /// zero) reads as "not set" rather than travelling and pointing the sale at a
   /// record that does not exist.
@@ -985,11 +992,16 @@ class SettingsStore {
   /// Hands the sender the shop's ids. Called on open and on every change, like
   /// [publishPrintProfile]: the sender is built before a manager ever opens
   /// settings, and a sale pushed after the change must carry the new ids.
-  void publishOdooSite() => OdooSite.shared = OdooSite(
-        branchId: odooBranchId,
-        restaurantId: odooRestaurantId,
-        warehouseId: odooWarehouseId,
-      );
+  void publishOdooSite() {
+    OdooSite.shared = OdooSite(
+      branchId: odooBranchId,
+      restaurantId: odooRestaurantId,
+      warehouseId: odooWarehouseId,
+    );
+    // Read when a sale is turned into a payload, so it belongs beside the ids that
+    // are read at the same moment.
+    DiscountBooking.productId = odooDiscountProductId;
+  }
 
   // ── how the till looks and how big the paper prints ──────────────
 

@@ -22,9 +22,9 @@ class ServerSettingsScreen extends StatefulWidget {
 
   final OdooEndpointStore store;
 
-  /// Where the shop's branch, point of sale and warehouse ids live. Optional, and
-  /// the three fields are simply absent without it: a build that cannot store them
-  /// is better off not offering boxes that forget what is typed in them.
+  /// Where the ids that say which shop this till is live. Optional, and those
+  /// fields are simply absent without it: a build that cannot store them is better
+  /// off not offering boxes that forget what is typed in them.
   final SettingsStore? settings;
 
   /// Called with the saved endpoint so the app can (re)wire the sender live.
@@ -46,6 +46,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   late final TextEditingController _branch;
   late final TextEditingController _restaurant;
   late final TextEditingController _warehouse;
+  late final TextEditingController _discountProduct;
   String? _message;
   bool _checking = false;
 
@@ -61,6 +62,8 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     _branch = TextEditingController(text: s?.odooBranchId?.toString() ?? '');
     _restaurant = TextEditingController(text: s?.odooRestaurantId?.toString() ?? '');
     _warehouse = TextEditingController(text: s?.odooWarehouseId?.toString() ?? '');
+    _discountProduct =
+        TextEditingController(text: s?.odooDiscountProductId?.toString() ?? '');
   }
 
   @override
@@ -72,6 +75,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     _branch.dispose();
     _restaurant.dispose();
     _warehouse.dispose();
+    _discountProduct.dispose();
     super.dispose();
   }
 
@@ -94,6 +98,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       s.odooBranchId = int.tryParse(_branch.text.trim());
       s.odooRestaurantId = int.tryParse(_restaurant.text.trim());
       s.odooWarehouseId = int.tryParse(_warehouse.text.trim());
+      s.odooDiscountProductId = int.tryParse(_discountProduct.text.trim());
     }
     widget.onSaved(e);
     setState(() => _message = tr(context, 'Saved. Queued sales will sync on the next attempt.'));
@@ -176,6 +181,22 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
                 numeric: true),
             _field(_warehouse, tr(context, 'Warehouse id'), '1', 'warehouse',
                 numeric: true),
+            _field(
+                _discountProduct,
+                tr(context, 'Discount product id (a service product)'),
+                '',
+                'discount-product',
+                numeric: true),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                tr(context,
+                    'With a product here, a discounted sale reaches Odoo at full '
+                    'menu prices plus one discount line, so it can be reported on '
+                    'there. Empty keeps the discount inside the prices.'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
           ],
           const SizedBox(height: 16),
           if (_message != null)
