@@ -497,6 +497,12 @@ class EscPos {
   }) {
     final start = _out.length;
     _out.add(codePage.encode(printed, fallback: unmappable));
+    // The deferred range stops here, BEFORE the line end. A band swapped in over the
+    // range replaces the characters and nothing else, so the line end that follows
+    // still reaches the printer. Swallowing it left `GS v 0` with no terminator, and
+    // a printer that does not return to the start of the line by itself then drew
+    // the next line of text into the side of the picture.
+    final end = _out.length;
     _out.addByte(_lf);
     if (!rasterUnmappable) return this;
     final left = rasterText ?? printed;
@@ -506,7 +512,7 @@ class EscPos {
     }
     _deferred.add(EscPosDeferredLine(
       start: start,
-      end: _out.length,
+      end: end,
       request: RasterRequest(
         text: left,
         right: rasterRight,

@@ -116,7 +116,12 @@ String documentShape(List<int> bytes) {
     final band = _bandAt(bytes, i);
     if (band != null) {
       flush();
-      out.writeln('[band ${band.widthDots}x${band.heightDots}]');
+      // Written without a line end of its own. The band replaces the characters of a
+      // line and not its terminator, so the line end that follows in the document is
+      // what puts the next line on the next line. A golden that ended the marker
+      // itself would read the same whether that byte was there or not, and it not
+      // being there is what printed the next line into the side of the picture.
+      out.write('[band ${band.widthDots}x${band.heightDots}]');
       i += band.length;
       continue;
     }
