@@ -48,6 +48,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   late final TextEditingController _warehouse;
   late final TextEditingController _discountProduct;
   late final TextEditingController _localProduct;
+  late bool _mergeBatch;
   String? _message;
   bool _checking = false;
 
@@ -67,6 +68,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
         TextEditingController(text: s?.odooDiscountProductId?.toString() ?? '');
     _localProduct =
         TextEditingController(text: s?.odooLocalProductId?.toString() ?? '');
+    _mergeBatch = s?.mergeBatchIntoOneSaleOrder ?? false;
   }
 
   @override
@@ -104,6 +106,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       s.odooWarehouseId = int.tryParse(_warehouse.text.trim());
       s.odooDiscountProductId = int.tryParse(_discountProduct.text.trim());
       s.odooLocalProductId = int.tryParse(_localProduct.text.trim());
+      s.mergeBatchIntoOneSaleOrder = _mergeBatch;
     }
     widget.onSaved(e);
     setState(() => _message = tr(context, 'Saved. Queued sales will sync on the next attempt.'));
@@ -216,6 +219,31 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
                     'product books against this one, under its own name. Empty '
                     'means such a sale is held back for someone to sort out.'),
                 style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            const Divider(height: 24),
+            SwitchListTile(
+              key: const Key('merge-batch'),
+              contentPadding: EdgeInsets.zero,
+              value: _mergeBatch,
+              onChanged: (v) => setState(() => _mergeBatch = v),
+              title: Text(tr(context, 'Send a shift as one sales order')),
+              subtitle: Text(tr(context,
+                  'Needs a change in Odoo first. Leave off until it is deployed.')),
+            ),
+            Container(
+              key: const Key('merge-batch-warning'),
+              color: Colors.amber.shade100,
+              padding: const EdgeInsets.all(12),
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                tr(context,
+                    'Turned on, a shift close sends the whole night as one sales '
+                    'order carrying the branch, restaurant and warehouse. Odoo '
+                    'has to be changed to accept it. Until that change is live, '
+                    'the night books as one document with no record of which sale '
+                    'was which and no protection against a retry booking it '
+                    'twice. Ask whoever looks after Odoo before turning this on.'),
               ),
             ),
           ],

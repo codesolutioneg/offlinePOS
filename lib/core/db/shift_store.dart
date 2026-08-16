@@ -39,6 +39,17 @@ class ShiftStore {
     return rows.isEmpty ? null : _row(rows.first);
   }
 
+  /// The shift the till is on, open or the one it has just closed.
+  ///
+  /// A shift close pushes the day's sales after the drawer is counted and the
+  /// shift is already closed, so a caller that needs the batch it belongs to
+  /// cannot ask for the open one.
+  Shift? latestShift() {
+    final rows = _db.raw
+        .select('SELECT * FROM shifts ORDER BY opened_at DESC, id DESC LIMIT 1');
+    return rows.isEmpty ? null : _row(rows.first);
+  }
+
   /// Open a shift. Refuses if one is already open, because two open drawers make
   /// the cash count meaningless.
   Shift openShift({

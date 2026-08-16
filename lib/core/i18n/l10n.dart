@@ -1227,4 +1227,19 @@ const Map<String, String> _ar = {
   'No shift is open. Open one before you pick a tab back up.':
       'لا توجد وردية مفتوحة. افتح وردية قبل استرجاع أي طلب.',
   'Prices': 'الأسعار',
+  // What reaches Odoo: sending a whole shift as one sales order, and the warning
+  // that says Odoo has to be changed before anyone turns it on.
+  'Send a shift as one sales order': 'إرسال الوردية كأمر بيع واحد',
+  'Needs a change in Odoo first. Leave off until it is deployed.':
+      'يحتاج تعديلاً في أودو أولاً. اتركه مغلقاً حتى يتم نشر التعديل.',
+  'Turned on, a shift close sends the whole night as one sales '
+          'order carrying the branch, restaurant and warehouse. Odoo '
+          'has to be changed to accept it. Until that change is live, '
+          'the night books as one document with no record of which sale '
+          'was which and no protection against a retry booking it '
+          'twice. Ask whoever looks after Odoo before turning this on.':
+      'عند تشغيله، يُرسل إقفال الوردية مبيعات الليلة كلها في أمر بيع واحد يحمل '
+          'الفرع والمطعم والمخزن. ويجب تعديل أودو ليقبله. وقبل نشر هذا التعديل '
+          'تُسجَّل الليلة في مستند واحد بلا بيان لكل فاتورة على حدة وبلا حماية من '
+          'تكرار التسجيل عند إعادة المحاولة. راجع المسؤول عن أودو قبل تشغيله.',
 };

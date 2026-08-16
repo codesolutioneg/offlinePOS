@@ -37,6 +37,7 @@ import 'core/lan/lan_wiring.dart';
 import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
 import 'core/printing/printer_registry.dart';
+import 'core/sync/batch_push.dart';
 import 'core/sync/http_post.dart';
 import 'core/sync/outbox.dart';
 import 'core/sync/odoo_endpoint.dart';
@@ -198,6 +199,18 @@ Future<void> main() async {
         await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
       }
     },
+    // The shop's option to have its night arrive as one sales order. Answers
+    // false and costs nothing while the switch is off, which is where it stays
+    // until jouma can take a batch: see docs/ODOO_SYNC.md.
+    mergeBatch: BatchPush(
+      outboxStore: outboxStore,
+      send: odoo.pushPayload,
+      enabled: () => settings.mergeBatchIntoOneSaleOrder,
+      // The shift is the batch, and it already carries a uuid of its own. Read
+      // after the close, so it is the shift that was just counted.
+      batchUuid: () => ShiftStore(db).latestShift()?.uuid,
+      onOrderBooked: orders.markSynced,
+    ).run,
   )..start();
 
   // Printers are resolved by name at print time, so a DHCP lease that moves
