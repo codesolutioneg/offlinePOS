@@ -37,11 +37,13 @@ class _NoPrinters extends PrinterDiscovery {
   Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async => const [];
 }
 
-/// Closing the day over work that is not finished.
+/// Closing the day over work that is not finished, or over a drawer that does not
+/// add up.
 ///
 /// A Z is irreversible and it is when the day's sales are pushed. A tab still on a
-/// table, or a course still waiting on its timer, has to be named on screen before
-/// that happens, and closing over it takes a manager.
+/// table, a course still waiting on its timer, or a cash count that misses the
+/// expected drawer all stop it outright: they are named on screen, and there is no
+/// button and no manager PIN that closes over them.
 void main() {
   late Db db;
   late OrderStore orders;
@@ -120,7 +122,16 @@ void main() {
     orders.save(order);
   }
 
+  /// A till-shaped window: the keypad and the drawer both want the height.
+  void tallWindow(WidgetTester t) {
+    t.view.physicalSize = const Size(1000, 2400);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+  }
+
   Future<void> signIn(WidgetTester t) async {
+    tallWindow(t);
     await t.tap(find.byKey(const Key('user-sara')));
     await t.pumpAndSettle();
     for (final d in '1234'.split('')) {
@@ -132,6 +143,19 @@ void main() {
       await t.pump(const Duration(milliseconds: 50));
       if (find.byType(SellScreen).evaluate().isNotEmpty) break;
     }
+    await t.pumpAndSettle();
+  }
+
+  /// Press Close and key the counted cash into the pad, which is as far as a cashier
+  /// gets before the guards have their say.
+  Future<void> countTheDrawer(WidgetTester t, String amount) async {
+    await t.tap(find.byKey(const Key('close-shift')));
+    await t.pumpAndSettle();
+    for (final d in amount.split('')) {
+      await t.tap(find.byKey(Key('key-$d')));
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('keypad-ok')));
     await t.pumpAndSettle();
   }
 
@@ -147,11 +171,14 @@ void main() {
     expect(find.byType(ShiftScreen), findsOneWidget);
   }
 
-  testWidgets('a Z over a parked tab names it and takes a manager', (t) async {
+  testWidgets('a Z over a parked tab is refused outright', (t) async {
     parkedTab();
     await t.pumpWidget(app(await cashierOnTheTill()));
     await signIn(t);
     await openShiftScreen(t);
+
+    // Said on the screen beside the button, before it is even pressed.
+    expect(find.text('Cannot close: still open on this till (1)'), findsOneWidget);
 
     await t.tap(find.byKey(const Key('close-shift')));
     await t.pumpAndSettle();
@@ -159,11 +186,14 @@ void main() {
     expect(find.byKey(const Key('open-work')), findsOneWidget);
     expect(find.text('Still open on this till (1)'), findsOneWidget);
     expect(find.text('7 - 250.00'), findsOneWidget);
-    // Backing out leaves the shift exactly as it was, with no cash count asked for.
-    await t.tap(find.text('Go back'));
+    // No way through it: the only action is back to the floor to settle the tab.
+    expect(find.byKey(const Key('close-over-open-work')), findsNothing);
+
+    await t.tap(find.byKey(const Key('open-work-back')));
     await t.pumpAndSettle();
     expect(shifts.currentOpenShift(), isNotNull);
-    expect(find.byKey(const Key('confirm-close-shift')), findsNothing);
+    expect(find.text('Counted cash'), findsNothing);
+    expect(audit.recent(event: 'shift.close.blocked.open_work'), isNotEmpty);
   });
 
   testWidgets('a course still waiting to fire is named too', (t) async {
@@ -208,30 +238,7 @@ void main() {
     expect(find.textContaining('Lamb'), findsOneWidget);
   });
 
-  testWidgets('a cashier who cannot get a manager cannot close over open work',
-      (t) async {
-    parkedTab();
-    await t.pumpWidget(app(await cashierOnTheTill()));
-    await signIn(t);
-    await openShiftScreen(t);
-
-    await t.tap(find.byKey(const Key('close-shift')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('close-over-open-work')));
-    await t.pumpAndSettle();
-
-    // The manager PIN dialog, not the cash count: the override is the gate.
-    expect(find.byKey(const Key('manager-pin')), findsOneWidget);
-    await t.tap(find.text('Cancel'));
-    await t.pumpAndSettle();
-
-    expect(shifts.currentOpenShift(), isNotNull);
-    expect(find.byKey(const Key('confirm-close-shift')), findsNothing);
-    expect(audit.recent(event: 'shift.close.blocked'), isNotEmpty);
-  });
-
-  testWidgets('a manager sees the list, overrides it, and reaches the count',
-      (t) async {
+  testWidgets('not even a manager can close over a parked tab', (t) async {
     parkedTab();
     await t.pumpWidget(app(await cashierOnTheTill(manager: true)));
     await signIn(t);
@@ -239,12 +246,58 @@ void main() {
 
     await t.tap(find.byKey(const Key('close-shift')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('close-over-open-work')));
-    await t.pumpAndSettle();
 
-    // A manager is already approved, so the next thing asked for is the drawer.
-    expect(find.text('Counted cash'), findsOneWidget);
-    expect(audit.recent(event: 'shift.close.override'), isNotEmpty);
+    // The role that overrides everything else on this till gets the same answer.
+    expect(find.byKey(const Key('open-work')), findsOneWidget);
+    expect(find.byKey(const Key('close-over-open-work')), findsNothing);
+    expect(find.text('Counted cash'), findsNothing);
+  });
+
+  testWidgets('a count that misses the expected drawer will not close', (t) async {
+    await t.pumpWidget(app(await cashierOnTheTill(manager: true)));
+    await signIn(t);
+    await openShiftScreen(t);
+
+    // The float is a hundred and nothing was sold, so a hundred is the only count
+    // that adds up. Ninety is nine short and the Z does not happen.
+    await countTheDrawer(t, '90');
+
+    expect(find.byKey(const Key('cash-variance-block')), findsOneWidget);
+    expect(find.text('Expected in drawer: 100.00'), findsOneWidget);
+    expect(find.text('Counted: 90.00'), findsOneWidget);
+    expect(find.text('Variance: -10.00'), findsOneWidget);
+    expect(find.text('Allowed difference: 0.00'), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('cash-variance-back')));
+    await t.pumpAndSettle();
+    expect(shifts.currentOpenShift(), isNotNull);
+    expect(find.byKey(const Key('confirm-close-shift')), findsNothing);
+    expect(audit.recent(event: 'shift.close.blocked.cash_variance'), isNotEmpty);
+  });
+
+  testWidgets('a drawer that matches to the cent reaches the confirmation',
+      (t) async {
+    await t.pumpWidget(app(await cashierOnTheTill(manager: true)));
+    await signIn(t);
+    await openShiftScreen(t);
+
+    await countTheDrawer(t, '100');
+
+    expect(find.byKey(const Key('cash-variance-block')), findsNothing);
+    expect(find.byKey(const Key('confirm-close-shift')), findsOneWidget);
+  });
+
+  testWidgets('a shop that allows a small difference closes inside it', (t) async {
+    SettingsStore(db).cashVarianceTolerance = 5;
+    await t.pumpWidget(app(await cashierOnTheTill(manager: true)));
+    await signIn(t);
+    await openShiftScreen(t);
+
+    // Two short, on a five allowance: within what the shop tolerates.
+    await countTheDrawer(t, '98');
+
+    expect(find.byKey(const Key('cash-variance-block')), findsNothing);
+    expect(find.byKey(const Key('confirm-close-shift')), findsOneWidget);
   });
 
   testWidgets('a clean till closes without a word about open work', (t) async {
@@ -252,6 +305,7 @@ void main() {
     await signIn(t);
     await openShiftScreen(t);
 
+    expect(find.byKey(const Key('close-blocked-why')), findsNothing);
     await t.tap(find.byKey(const Key('close-shift')));
     await t.pumpAndSettle();
 

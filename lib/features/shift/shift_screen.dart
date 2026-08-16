@@ -19,7 +19,8 @@ class ShiftScreen extends StatefulWidget {
     this.onPrintReport,
     this.onZClosed,
     this.openWork,
-    this.authorizeOpenWork,
+    this.onCloseBlocked,
+    this.cashVarianceTolerance = 0,
     this.expenseCategories = const ['Transport', 'Food', 'Supplies', 'Maintenance', 'Other'],
   });
 
@@ -50,16 +51,20 @@ class ShiftScreen extends StatefulWidget {
   /// here so it cannot reach the cashier.
   final void Function(Shift closed, List<(String, String)> rows)? onZClosed;
 
-  /// What is still unfinished on the till, read the moment a Z is attempted. Null
-  /// means nothing is checked and the close goes straight through, which is how this
-  /// screen behaved before the guard existed.
+  /// What is still unfinished on the till, read on every build and again the moment a
+  /// Z is attempted. Null means nothing is checked and the close goes straight
+  /// through, which is how this screen behaved before the guard existed.
   final OpenWork Function()? openWork;
 
-  /// Approval for closing over open work, asked for only when there is some. This is
-  /// the manager override: a parked tab is money nobody has taken yet, so leaving it
-  /// behind is not a cashier's call. Null means the list is shown for information and
-  /// the close proceeds on the cashier's own confirmation.
-  final Future<bool> Function()? authorizeOpenWork;
+  /// A close was refused, with the reason as a short event name for the audit trail.
+  /// The shift is untouched when this fires.
+  final void Function(String reason)? onCloseBlocked;
+
+  /// How far the counted drawer may sit from the expected drawer and still close.
+  /// Zero, the default, means an exact match to the cent. A shop that rounds its
+  /// change sets a small allowance instead; there is no override above it, because
+  /// a drawer that does not add up is the one thing a Z must not paper over.
+  final double cashVarianceTolerance;
 
   /// The buckets offered when recording a paid-out (an expense), so petty cash is
   /// categorised rather than an unexplained drawer swing.
@@ -296,6 +301,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
           ),
         ]),
       const SizedBox(height: 8),
+      _whyBlocked(),
       SizedBox(
         height: 60,
         child: FilledButton.icon(
@@ -311,6 +317,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
             if (!mounted) return;
             final counted = await _promptAmount(tr(context, 'Close shift'), label: tr(context, 'Counted cash'));
             if (counted == null) return;
+            if (!mounted) return;
+            if (!await _drawerAddsUp(counted)) return;
             if (!mounted) return;
             final confirmed = await _confirmCloseShift(counted);
             if (confirmed != true || !mounted) return;
@@ -359,23 +367,26 @@ class _ShiftScreenState extends State<ShiftScreen> {
   /// Whether the Z may go ahead over whatever is still open on the till.
   ///
   /// Nothing open, or nothing being checked, and this is a no-op. Otherwise the list
-  /// is shown in full, and closing over it takes a manager.
+  /// is shown in full and the close does not happen. There is no override: a parked
+  /// tab is a bill nobody has taken money for, so closing the day over it produces a
+  /// Z that is wrong on the paper and wrong in Odoo, and no approval fixes that.
+  /// Settling or discarding the tab is the only way past.
   Future<bool> _clearOpenWork() async {
     final work = widget.openWork?.call();
     if (work == null || work.isEmpty) return true;
-    final proceed = await _confirmOpenWork(work);
-    if (proceed != true || !mounted) return false;
-    final authorize = widget.authorizeOpenWork;
-    return authorize == null || await authorize();
+    widget.onCloseBlocked?.call('shift.close.blocked.open_work');
+    await _showOpenWork(work);
+    return false;
   }
 
-  /// Everything still open, named, so nothing is left behind by accident.
-  Future<bool?> _confirmOpenWork(OpenWork work) => showDialog<bool>(
+  /// Everything still open, named, so the cashier knows exactly what to go and
+  /// finish. Informational: the only way out of it is back to the floor.
+  Future<void> _showOpenWork(OpenWork work) => showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           key: const Key('open-work'),
           // The count leads the title: whatever else is skimmed, how many things
-          // are being closed over is the number that must not be lost.
+          // are in the way is the number that matters.
           title: Text('${tr(ctx, 'Still open on this till')} (${work.count})'),
           content: SingleChildScrollView(
             child: Column(
@@ -396,24 +407,94 @@ class _ShiftScreenState extends State<ShiftScreen> {
                 ],
                 Text(
                     tr(ctx,
-                        'None of this is settled, so none of it is in the cash-up.'),
+                        'The shift cannot close until every one of these is settled or discarded.'),
                     style: const TextStyle(fontWeight: FontWeight.bold)),
               ],
             ),
           ),
           actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: Text(tr(ctx, 'Go back'))),
             FilledButton(
-              key: const Key('close-over-open-work'),
-              style: FilledButton.styleFrom(backgroundColor: AppColors.error),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(tr(ctx, 'Close anyway')),
-            ),
+                key: const Key('open-work-back'),
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(tr(ctx, 'Go back'))),
           ],
         ),
       );
+
+  /// Whether the counted drawer is close enough to the expected drawer to close on.
+  ///
+  /// "Close enough" is an exact match to the cent unless the shop has set an
+  /// allowance. Over it, the Z does not happen: the numbers are shown side by side
+  /// so the cashier can recount, or book the difference as a cash in / cash out and
+  /// have the drawer add up honestly.
+  Future<bool> _drawerAddsUp(double counted) async {
+    final s = _shift;
+    if (s == null) return false;
+    final sum = widget.store.summary(s, cashMethodIds: widget.cashMethodIds);
+    final variance = counted - sum.expectedCash;
+    // Half a cent of slack, so a tolerance of zero means "equal to the cent" rather
+    // than "equal to the last binary digit of a double".
+    if (variance.abs() <= widget.cashVarianceTolerance + 0.005) return true;
+    widget.onCloseBlocked?.call('shift.close.blocked.cash_variance');
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('cash-variance-block'),
+        title: Text(tr(ctx, 'The drawer does not add up')),
+        content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${tr(ctx, 'Expected in drawer')}: ${widget.formatAmount(sum.expectedCash)}'),
+              Text('${tr(ctx, 'Counted')}: ${widget.formatAmount(counted)}'),
+              Text('${tr(ctx, 'Variance')}: ${widget.formatAmount(variance)}',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, color: AppColors.error)),
+              Text(
+                  '${tr(ctx, 'Allowed difference')}: ${widget.formatAmount(widget.cashVarianceTolerance)}'),
+              const SizedBox(height: 12),
+              Text(
+                  tr(ctx,
+                      'Recount the drawer, or record the difference as a cash in or cash out, then close.'),
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ]),
+        actions: [
+          FilledButton(
+              key: const Key('cash-variance-back'),
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr(ctx, 'Go back'))),
+        ],
+      ),
+    );
+    return false;
+  }
+
+  /// The reason the close button is going to refuse, on the screen beside it rather
+  /// than only in the dialog it opens. A cash variance is not knowable until the
+  /// drawer has been counted, so this names the work still open and the allowance
+  /// the count will be held to.
+  Widget _whyBlocked() {
+    final work = widget.openWork?.call();
+    if (work == null || work.isEmpty) return const SizedBox.shrink();
+    return Card(
+      key: const Key('close-blocked-why'),
+      color: AppColors.error.withValues(alpha: 0.08),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(children: [
+          Icon(Icons.block, color: AppColors.error),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '${tr(context, 'Cannot close: still open on this till')} (${work.count})',
+              style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.error),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
 
   /// A last check before a Z closes the shift and pushes the day's sales: it shows
   /// the drawer numbers that are about to be locked in, so a mistap is caught

@@ -29,6 +29,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late bool _showTax;
   late bool _askGuests;
   late int _cutoverHour;
+  late final TextEditingController _cashVariance;
 
   @override
   void initState() {
@@ -39,6 +40,8 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _showTax = widget.settings.receiptShowTax;
     _askGuests = widget.settings.askGuestCount;
     _cutoverHour = widget.settings.businessDayCutoverHour;
+    _cashVariance = TextEditingController(
+        text: widget.settings.cashVarianceTolerance.toStringAsFixed(2));
   }
 
   @override
@@ -46,6 +49,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _shopName.dispose();
     _taxId.dispose();
     _receiptFooter.dispose();
+    _cashVariance.dispose();
     super.dispose();
   }
 
@@ -56,6 +60,10 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.receiptShowTax = _showTax;
     widget.settings.askGuestCount = _askGuests;
     widget.settings.businessDayCutoverHour = _cutoverHour;
+    // Unreadable or blank reads as zero, which is the strict default: the drawer
+    // has to match to the cent.
+    widget.settings.cashVarianceTolerance =
+        double.tryParse(_cashVariance.text.trim()) ?? 0;
     widget.onChanged();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
   }
@@ -128,6 +136,19 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
                 ),
             ],
             onChanged: (v) => setState(() => _cutoverHour = v ?? _cutoverHour),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('cash-variance-tolerance'),
+            controller: _cashVariance,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: tr(context, 'Allowed difference'),
+              helperText: tr(context,
+                  'How far the counted drawer may sit from the expected drawer and still close the shift'),
+              helperMaxLines: 2,
+              border: const OutlineInputBorder(),
+            ),
           ),
           const SizedBox(height: 16),
           FilledButton(
