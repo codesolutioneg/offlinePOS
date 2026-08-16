@@ -128,8 +128,55 @@ Every order push carries these, each one for a reason that has gone wrong somewh
 | `company_id` | Which branch. A branch in jouma is a company: its branch reporting filters `account.move` on `company_id` |
 | `warehouse_id` | Which warehouse the stock leaves from |
 | `lines[].product_id`, `quantity`, `unit_price` | The sale itself; a whole-order discount and the service charge are both folded into each line's `unit_price` before sending, so the module books what the customer paid without learning a new field, and the service is taxed at each item's own rate. The till keeps the percentage locally to print it as its own line; it is stripped from the payload |
-| `lines[].modifiers[].product_id` | Each modifier backed by a product becomes its own order line, so it moves stock and invoices exactly as on-site |
+| `lines[].modifiers[].product_id` | Each modifier backed by a product becomes its own order line, so it moves stock and invoices exactly as on-site. A modifier with no product is priced into its parent's `unit_price` and travels at zero, because the module has no line to create for it. See below |
+| `delivery_cost` | The charge for the drive. Not a line: the module prices it into the sale as its own service line, which is why it has to reach the server as its own figure |
+| `tip` | What was left for the staff, and the same shape as the delivery charge for the same reason |
 | `discount_amount`, `prices_include_discount` | What was taken off, in money, and whether the prices already have it. See below |
+| `amount_total` | What the till charged. The module totals the sale itself from the lines it built; this is the figure to hold that against, so a divergence is visible instead of silent |
+
+### The payload has to add up
+
+The module builds the sale from the `lines` it is handed and then settles it from
+the `payments` it is handed. A payload where those two disagree is money that
+either fails to book or books wrong, and both end the same way: takings missing
+from the books. So the arithmetic is stated rather than assumed:
+
+> **what the payload declares as tendered = what its lines come to, plus
+> `delivery_cost`, plus `tip`.**
+
+Both sides come out of the payload itself, and the till will not send one that
+does not close (`lib/domain/payload_balance.dart`, checked in the sender before
+the call). A payload that fails is **parked**, not sent: the sale keeps its
+payload, shows on the diagnostics screen and waits for a human, which is the right
+end for a sale nobody can book. The tolerance is one piastre, the same bar the
+module holds its own total to.
+
+`test/domain/payload_balance_test.dart` walks every combination of delivery
+charge, tip, service percentage, whole-order discount, per-line discount,
+discount-product mode, split tender and refund, and holds all of them to that one
+line. Adding a charge that reaches the payments and not the lines is a red test.
+
+Two things the till had wrong, both the same shape:
+
+- **A priced choice with no product behind it** ("extra spicy", a size upcharge)
+  was charged at the counter and declared nowhere. The parent line's `unit_price`
+  is the bare dish, modifiers travel as their own lines, and the module skips a
+  modifier with no product because it has no product to make a line from. That
+  money simply vanished between the two. It is now folded into the parent's
+  `unit_price` and the modifier travels at zero, which is what the module's own
+  code already assumed was happening.
+- **The delivery charge and the tip** are on the payments but not in the lines,
+  and that one is correct: the module prices both into the sale it builds, as
+  service lines of their own. They are named in the invariant above rather than
+  moved into `lines`, because a second representation of the same money is a
+  double booking waiting for a module that reads both.
+
+The thing to verify on the jouma side, and it is the one open question here: what
+the module does when the products it books the delivery and the tip against are
+not configured. If it raises, the sale is refused, the till parks it and a human
+sees it, which is fine. If it drops them, the sale books short and only the
+`amount_total` mismatch in the log says so. That is a module-side check, not
+something the till can see.
 
 ### What a line books against when the shop typed the item itself
 
@@ -300,19 +347,124 @@ call to succeed. What it costs is not the call, it is these:
 Payments are the one part that merges cleanly: the module already takes a list of
 `{method_id, amount}`, so per-tender totals survive.
 
-**Verdict: shaping the payload is possible, but doing it properly needs a module
-change, so it is not built here.** What that change would need to accept, whenever
-the shop decides it wants it: the constituent ticket uuids alongside the merged
-lines, so the server can stay idempotent per ticket, refuse per ticket, and keep the
-per-ticket detail behind one document. That is a deliberate decision with a
-deployment attached, not something to slip into a till release.
+**Verdict: shaping the payload is possible, doing it properly needs a module
+change.** The shop has asked for it anyway, so the till half is built and the
+module half is written out below for whoever changes jouma. Nothing here is turned
+on.
 
-Worth weighing first: **the shop may already have what it is asking for.** The
-grievance behind "one sales order" is usually one document in the books per day
-rather than three hundred. Odoo's own answer to that is the close, not the write: the
-module books a batch into a single rescue session per point of sale, and closing that
-session posts one accounting entry for all of it. Ask the shop whether it wants one
-row in the sales list or one entry in the books before anybody changes the contract.
+Worth weighing first, and worth asking before the module is touched: **the shop may
+already have what it is asking for.** The grievance behind "one sales order" is
+usually one document in the books per day rather than three hundred. Odoo's own
+answer to that is the close, not the write: the module books a batch into a single
+rescue session per point of sale, and closing that session posts one accounting
+entry for all of it. Ask the shop whether it wants one row in the sales list or one
+entry in the books before anybody changes the contract.
+
+### What the till does, and what it refuses to do
+
+A switch on the server settings screen, **off**, with the warning next to it that
+it needs the module change first (`merge_batch_one_sale_order` in settings; no
+schema change, settings are key-value). Turned on, a batch push (a shift close, a
+manual Sync now, the retry that finishes a failed close) folds the queued sales
+into one payload instead of sending one each. Everything else about the till is
+unchanged: selling still never waits, sales are still durable the instant they are
+paid, and the per-sale push is still what happens whenever the merge declines.
+
+The three things Dishflow traded away to get this out of its own endpoint are
+kept:
+
+| | Dishflow | Here |
+|---|---|---|
+| Idempotency | Strips `client_order_ref` on the consolidated call and recovers from a timeout by hunting the last confirmed orders for a matching total | The merged payload's `uuid` **is the shift's uuid**, which is stable across every retry of the same close, and every constituent ticket uuid rides inside it |
+| Per-ticket detail | Aggregates the merged lines by product; who rang what is gone | Every line carries `order_uuid`, and every ticket keeps its own header in `orders[]` (without repeating its lines) |
+| Arithmetic | Sums delivery and discounts into one figure and lets the addon work it out | The merged payload is held to the same invariant as a single sale, and is not sent if it fails |
+
+It declines to merge, and lets the ordinary per-sale push do it, when: there are
+fewer than two sales; a batch spans a change to how the discount is stated; the
+merged payload does not add up; there is no shift to key it on; or the queue is
+longer than 500 sales (a week of backlog is not one request). **Refunds are always
+excluded** and pushed on their own: a credit cannot be a line on somebody else's
+sale.
+
+**Recovering a partial failure.** The batch is all or nothing on the till. The
+merged payload goes out first, and only once the server has acknowledged it are the
+outbox rows marked sent and the sales marked synced. A close that fails anywhere
+before that leaves every sale queued exactly as it was, and the next attempt
+rebuilds the same payload under the same shift uuid. That repeat is the whole
+recovery: it is the only thing standing between a timeout after the server
+committed and a night booked twice. If the batch is re-cut in between, because one
+sale was parked or a late one joined, the key stays the same and the per-ticket
+uuids inside it are what let the server settle the difference instead of booking
+the overlap again. The armed retry goes through the merge too, deliberately: left
+to the plain drain, the same sales would go out one at a time under their own
+uuids and a batch the server had already committed would be booked a second time
+as individual sales.
+
+### The module change this needs (patch proposal for jouma)
+
+Hand this to whoever changes `pos_offline_sync`. Until it is deployed the switch
+stays off; turned on against today's module the night books as one document with no
+per-ticket record and no per-ticket idempotency.
+
+**Method.** `sale.order.create_from_offline_pos(payloads)`, unchanged signature. A
+member of `payloads` with `batch: true` is a batch; anything else is a single sale
+and behaves exactly as it does today. No new entry point.
+
+**Payload shape.**
+
+```jsonc
+{
+  "uuid": "<the shift's uuid>",   // the batch's idempotency key
+  "batch": true,
+  "order_count": 37,
+  "created_at": "<the earliest ticket's moment of sale>",
+  "business_date": "2026-03-01",  // absent when the batch spans more than one
+  "company_id": 3, "config_id": 7, "warehouse_id": 2,
+  "delivery_cost": 120.0, "tip": 45.0,
+  "discount_amount": 210.0, "prices_include_discount": true,
+  "amount_total": 8430.0,
+  "lines": [ { "product_id": 41, "quantity": 2, "unit_price": 100.0,
+               "modifiers": [], "order_uuid": "<the ticket this line was rung on>" } ],
+  "payments": [ { "method_id": 1, "amount": 6100.0, "label": "Cash" } ],
+  "orders":  [ { "uuid": "...", "created_at": "...", "business_date": "...",
+                 "cashier_id": "...", "device_id": "...", "order_type": "dinein",
+                 "table_label": "12", "delivery_cost": 25.0, "tip": 5.0,
+                 "amount_total": 235.0, "payments": [ ... ] } ]
+}
+```
+
+`orders[]` carries every field a single-sale payload carries **except** `lines`:
+those are in the batch's own `lines`, each tagged with the `order_uuid` it belongs
+to, so nothing is duplicated and nothing is lost.
+
+**What it must do.**
+
+1. **Idempotency on two levels.** Return the existing document for a repeat of the
+   batch `uuid`. And before booking, drop any member of `orders[]` whose own uuid
+   is already booked, whether by an earlier batch or by a single push. A retry
+   after a re-cut is the normal case, not the exception, and per-ticket dedup is
+   what makes it safe.
+2. **The ids.** `company_id` is the branch the document belongs to, `config_id` the
+   point of sale it books through, `warehouse_id` where the stock leaves from.
+   They arrive only when the shop set them; an id that is not there means Odoo
+   decides as it does today.
+3. **Refuse per ticket, not per batch.** A line whose product was deleted must
+   reject the ticket it belongs to and let the rest book, the way a savepoint per
+   payload does today. A batch that rejects whole is a night parked over one dish.
+4. **Keep who rang what.** `offline_cashier_id`, `offline_device_id`, `order_type`,
+   the table and the trading day are per ticket. With one shared Odoo login they
+   are the only record there is, so they have to land somewhere per ticket rather
+   than being flattened onto the document.
+5. **Total and settle the same way.** The document totals from `lines` plus the
+   delivery and tip service lines it prices from `delivery_cost` and `tip`, and
+   settles from `payments`. `amount_total` is the till's own figure to check
+   against.
+6. **Answer per batch.** One status dict for the batch `uuid`
+   (`created`/`duplicate`/`rejected`), which is what the till reads today: it marks
+   every constituent sale synced on a `created` or a `duplicate` and leaves the
+   whole batch queued otherwise. Carrying the per-ticket statuses inside that dict
+   as well costs the module nothing and is what would let a later till release mark
+   exactly what booked when a batch only partly did.
 
 ## Catch-up after a long outage
 
