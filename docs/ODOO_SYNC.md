@@ -131,6 +131,24 @@ Every order push carries these, each one for a reason that has gone wrong somewh
 | `lines[].modifiers[].product_id` | Each modifier backed by a product becomes its own order line, so it moves stock and invoices exactly as on-site |
 | `discount_amount`, `prices_include_discount` | What was taken off, in money, and whether the prices already have it. See below |
 
+### What a line books against when the shop typed the item itself
+
+The till owns its menu: a manager creates items and categories on the device and they
+sell with the line down, linked to an Odoo record or not. The contract is unchanged,
+so `lines[].product_id` still has to name a real `product.product`. Which one it names
+is decided in this order, and stated rather than left to chance:
+
+| The item is | `product_id` carries | Why |
+|---|---|---|
+| Linked to an Odoo product | that product's id, captured onto the line when the sale was rung | Relinking the item afterwards must not rewrite a sale that is already booked, for the same reason the price is captured |
+| Not linked, and the shop named a **stand-in service product** on the server screen | the stand-in's id, with the line's own `name` alongside it | The money lands in the books and the Odoo document still reads as the dish that was sold. Same shape as the discount product, and a **service** product for the same reason |
+| Not linked, and no stand-in named | the till's own negative id | Odoo cannot resolve it, the module answers `rejected`, and the till parks that one sale in front of a human. Nothing at the counter is ever blocked and no money is quietly booked against the wrong product. The menu editor warns about this at the point the item is created |
+
+Locally created items and categories are held with **negative ids**, the same trick a
+till-local customer uses, so they can never collide with an Odoo id however the
+server's sequences move. The negative id never travels except in the third row above,
+where its unresolvability is the point.
+
 ### Where the shop is, and who decides
 
 The branch, the point of sale and the warehouse are typed on the server screen and

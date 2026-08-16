@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 21;
+  static const int version = 22;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -523,6 +523,46 @@ class Schema {
     // derived from the clock and checked on the device.
     [
       'ALTER TABLE users ADD COLUMN totp_secret TEXT',
+    ],
+    // v21 -> v22: the till owns its own menu.
+    //
+    // Until now the catalogue was a copy of Odoo's and a pull replaced it whole,
+    // which is fine for a shop whose menu is maintained upstream and useless for one
+    // that types its own. Two columns turn that around.
+    //
+    // `source` says who owns the row. 'odoo' means a pull put it there and a pull may
+    // replace or delete it; 'local' means somebody on this till created or edited it,
+    // and from that moment a pull leaves it alone. Editing a pulled row flips it to
+    // 'local', so the rule is one word long: whoever touched it last on the till owns
+    // it, and seeding never outranks a person standing at the counter.
+    //
+    // `odoo_id` is the record a row books against, which stops being the same thing
+    // as the row's own id once a manager can create rows. Backfilled from the id for
+    // everything already on the device, because everything already on the device came
+    // down from a pull.
+    [
+      'ALTER TABLE products ADD COLUMN odoo_id INTEGER',
+      "ALTER TABLE products ADD COLUMN source TEXT NOT NULL DEFAULT 'odoo'",
+      // A per-product tile colour, overriding the category's. Null keeps the tile
+      // exactly as it is today.
+      'ALTER TABLE products ADD COLUMN color INTEGER',
+      'UPDATE products SET odoo_id = id',
+      // A pull checks every incoming product against the local rows that claim it,
+      // so the claim has to be an indexed lookup and not a scan of the menu.
+      'CREATE INDEX idx_products_odoo ON products(odoo_id)',
+      'ALTER TABLE categories ADD COLUMN odoo_id INTEGER',
+      "ALTER TABLE categories ADD COLUMN source TEXT NOT NULL DEFAULT 'odoo'",
+      // Categories gain the archive flag products already had, so removing one hides
+      // it without orphaning the products filed under it or the sales that name it.
+      'ALTER TABLE categories ADD COLUMN active INTEGER NOT NULL DEFAULT 1',
+      'UPDATE categories SET odoo_id = id',
+      'CREATE INDEX idx_categories_odoo ON categories(odoo_id)',
+      // Modifiers are part of the menu, so they carry the same ownership word. A
+      // group a manager typed here survives every pull, including the link that
+      // attaches it to a product the pull does own.
+      "ALTER TABLE modifier_groups ADD COLUMN source TEXT NOT NULL DEFAULT 'odoo'",
+      "ALTER TABLE modifiers ADD COLUMN source TEXT NOT NULL DEFAULT 'odoo'",
+      "ALTER TABLE product_modifier_groups ADD COLUMN source TEXT NOT NULL DEFAULT 'odoo'",
     ],
   ];
 }

@@ -292,6 +292,76 @@ class OdooPuller {
         .toList();
   }
 
+  /// Odoo products a manager can link a locally created dish to.
+  ///
+  /// Narrowed to this till's point of sale wherever the server lets it be: a shop
+  /// with one Odoo database and six restaurants in it does not want the other five
+  /// menus in the pick list. The narrowing is by the categories that point of sale
+  /// is limited to, which is the only per-`pos.config` product scope Odoo has; a
+  /// point of sale that is not limited, a restaurant id nobody set, or a server that
+  /// will not answer the question all fall back to every product available in the
+  /// point of sale, which is the list this would have shown anyway.
+  ///
+  /// Off every selling path, like [searchCustomers]. A caller that cannot reach the
+  /// server gets an exception to show, not a wait.
+  Future<List<OdooRef>> searchProducts(String term, {int limit = 30}) async {
+    final scope = await _posCategoryScope();
+    final q = term.trim();
+    final rows = await _searchRead(
+      'product.product',
+      ['id', 'display_name', 'default_code'],
+      [
+        ['available_in_pos', '=', true],
+        if (scope.isNotEmpty) ['pos_categ_ids', 'in', scope],
+        if (q.isNotEmpty) ['name', 'ilike', q],
+      ],
+    );
+    return rows
+        .take(limit)
+        .map((r) => OdooRef(
+              id: r['id'] as int,
+              name: (r['display_name'] ?? r['name'] ?? '') as String,
+              reference: r['default_code'] is String ? r['default_code'] as String : null,
+            ))
+        .toList();
+  }
+
+  /// Odoo POS categories a manager can link a local category to, narrowed the same
+  /// way and degrading the same way.
+  Future<List<OdooRef>> searchCategories(String term, {int limit = 30}) async {
+    final scope = await _posCategoryScope();
+    final q = term.trim();
+    final rows = await _searchRead('pos.category', ['id', 'name'], [
+      if (scope.isNotEmpty) ['id', 'in', scope],
+      if (q.isNotEmpty) ['name', 'ilike', q],
+    ]);
+    return rows
+        .take(limit)
+        .map((r) => OdooRef(id: r['id'] as int, name: (r['name'] ?? '') as String))
+        .toList();
+  }
+
+  /// The POS categories this till's point of sale is limited to, or empty for "no
+  /// narrowing is possible", which every failure here answers with.
+  Future<List<int>> _posCategoryScope() async {
+    final configId = OdooSite.shared.restaurantId;
+    if (configId == null) return const [];
+    try {
+      final configs = await _searchRead(
+          'pos.config', ['id', 'limit_categories', 'iface_available_categ_ids'], [
+        ['id', '=', configId]
+      ]);
+      if (configs.isEmpty || configs.first['limit_categories'] != true) {
+        return const [];
+      }
+      return _ids(configs.first['iface_available_categ_ids']);
+    } catch (_) {
+      // An older point of sale without the field, or a server that refused the
+      // read. Either way the shop still gets a pick list.
+      return const [];
+    }
+  }
+
   Future<List<Map<String, dynamic>>> _searchRead(
       String model, List<String> fields, List<dynamic> domain) async {
     final res = await call(model, 'search_read', [domain, fields], {});
@@ -368,6 +438,18 @@ class OdooPuller {
         'free' => ModifierPriceType.free,
         _ => ModifierPriceType.fixed,
       };
+}
+
+/// One Odoo record a manager can point a local menu row at.
+class OdooRef {
+  const OdooRef({required this.id, required this.name, this.reference});
+
+  final int id;
+  final String name;
+
+  /// The internal reference, when the product carries one. Two dishes on a big menu
+  /// often read the same in a list; the code is what tells them apart.
+  final String? reference;
 }
 
 class CataloguePull {

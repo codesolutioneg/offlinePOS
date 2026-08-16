@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../../domain/business_day.dart';
-import '../../domain/order.dart' show DiscountBooking, OrderType;
+import '../../domain/order.dart'
+    show DiscountBooking, LocalProductBooking, OrderType;
 import '../auth/permissions.dart';
 import '../email/smtp_config.dart';
 import '../lan/lan_event.dart';
@@ -984,6 +985,12 @@ class SettingsStore {
   set odooDiscountProductId(int? v) =>
       _setOdooId('odoo_discount_product_id', v);
 
+  /// The Odoo service product a dish created on the till books against while nobody
+  /// has linked it to one of its own, or null. See [LocalProductBooking] for the
+  /// three ways an unlinked product can reach Odoo and why this is the middle one.
+  int? get odooLocalProductId => _positiveId('odoo_local_product_id');
+  set odooLocalProductId(int? v) => _setOdooId('odoo_local_product_id', v);
+
   /// An Odoo id is a positive integer. Anything else (a blank, a typo, a leftover
   /// zero) reads as "not set" rather than travelling and pointing the sale at a
   /// record that does not exist.
@@ -1009,6 +1016,7 @@ class SettingsStore {
     // Read when a sale is turned into a payload, so it belongs beside the ids that
     // are read at the same moment.
     DiscountBooking.productId = odooDiscountProductId;
+    LocalProductBooking.productId = odooLocalProductId;
   }
 
   // ── how the till looks and how big the paper prints ──────────────

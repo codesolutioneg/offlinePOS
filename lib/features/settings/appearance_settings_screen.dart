@@ -5,6 +5,7 @@ import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/feedback.dart';
+import '../../core/widgets/swatch_picker.dart';
 import '../../domain/catalogue.dart';
 
 /// How the till looks: light or dark, whether the grid shows product pictures,
@@ -33,79 +34,16 @@ class AppearanceSettingsScreen extends StatefulWidget {
   State<AppearanceSettingsScreen> createState() => _AppearanceSettingsScreenState();
 }
 
-/// A fixed, high-contrast palette. Fixed rather than a colour wheel: a manager
-/// mid-rush needs "pick one of ten", not a picker to fiddle with.
-const _palette = <Color>[
-  Colors.red,
-  Colors.deepOrange,
-  Colors.orange,
-  Colors.amber,
-  Colors.green,
-  Colors.teal,
-  Colors.blue,
-  Colors.indigo,
-  Colors.purple,
-  Colors.pink,
-];
-
-/// Shown for a category with no colour set yet, so unset never reads as "black".
-const _unsetColor = Colors.grey;
-
-/// Popped by the palette dialog's "Clear" option, distinct from the null that
-/// comes back when the dialog is dismissed without a choice.
-class _ClearSwatch {
-  const _ClearSwatch();
-}
-
-const _clearSwatch = _ClearSwatch();
-
 class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
-  Future<Object?> _pickSwatch(String title, int? current) => showDialog<Object>(
-        context: context,
-        builder: (ctx) => SimpleDialog(
-          title: Text(title),
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final color in _palette)
-                    InkWell(
-                      key: Key('swatch-${color.toARGB32()}'),
-                      onTap: () => Navigator.pop(ctx, color),
-                      child: Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                          border: current == color.toARGB32()
-                              ? Border.all(color: Colors.black, width: 2)
-                              : null,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            SimpleDialogOption(
-              key: const Key('swatch-clear'),
-              onPressed: () => Navigator.pop(ctx, _clearSwatch),
-              child: Text(tr(ctx, 'Clear')),
-            ),
-          ],
-        ),
-      );
+  Future<Object?> _pickSwatch(String title, int? current) =>
+      pickSwatch(context, title, current);
 
   Future<void> _pickColor(Category category) async {
     final result = await _pickSwatch('${tr(context, 'Colour for')} ${category.name}',
         widget.settings.categoryColors[category.id]);
     if (result == null) return;
     setState(() {
-      if (result is _ClearSwatch) {
+      if (result is ClearSwatch) {
         widget.settings.setCategoryColor(category.id, null);
       } else if (result is Color) {
         widget.settings.setCategoryColor(category.id, result.toARGB32());
@@ -238,7 +176,7 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
                 title: category.name,
                 color: s.categoryColors[category.id] != null
                     ? Color(s.categoryColors[category.id]!)
-                    : _unsetColor,
+                    : kUnsetSwatch,
                 isDefault: false,
                 onTap: () => _pickColor(category),
               ),

@@ -1149,4 +1149,71 @@ const Map<String, String> _ar = {
           'as cash. Set the server in Settings, then refresh the menu.':
       'لم تصل أي طرق دفع من أودو بعد، لذلك تُسجَّل هذه الفاتورة نقدًا. اضبط الخادم '
           'من الإعدادات ثم حدِّث القائمة.',
+  // The menu the till owns: the on-device editor for items, categories and the
+  // choices a cashier is asked, plus the link that says what each one books as in
+  // Odoo.
+  'Menu': 'القائمة',
+  'Items': 'الأصناف',
+  'Categories': 'الأقسام',
+  'Search the menu': 'ابحث في القائمة',
+  'Show removed items': 'إظهار الأصناف المحذوفة',
+  'No items yet': 'لا توجد أصناف بعد',
+  'Add the first one, or refresh the menu from Odoo':
+      'أضف أول صنف، أو حدِّث القائمة من أودو',
+  'Add item': 'إضافة صنف',
+  'New item': 'صنف جديد',
+  'Edit item': 'تعديل الصنف',
+  'Removed': 'محذوف',
+  'Restore': 'استرجاع',
+  'Remove from the menu?': 'حذف من القائمة؟',
+  'It leaves the grid and can be brought back from this screen. Past sales keep it.':
+      'يختفي من الشاشة ويمكن استرجاعه من هنا. الفواتير السابقة تحتفظ به.',
+  'A category groups items on the grid': 'القسم يجمع الأصناف معًا على الشاشة',
+  'Add category': 'إضافة قسم',
+  'Edit category': 'تعديل القسم',
+  'Odoo category id': 'رقم القسم في أودو',
+  'Optional': 'اختياري',
+  'No category': 'بدون قسم',
+  'A name is needed': 'الاسم مطلوب',
+  'Tile colour': 'لون المربع',
+  'Overrides the category colour on the grid': 'يتجاوز لون القسم على الشاشة',
+  'On the menu': 'ضمن القائمة',
+  'Books in Odoo as': 'يُسجَّل في أودو كـ',
+  'Odoo product id': 'رقم الصنف في أودو',
+  'Odoo': 'أودو',
+  'Not linked to Odoo': 'غير مرتبط بأودو',
+  'Find in Odoo': 'بحث في أودو',
+  'The server did not answer. Type the id instead.':
+      'لم يستجب الخادم. اكتب الرقم يدويًا.',
+  'Nothing matched on this point of sale.': 'لا توجد نتائج في نقطة البيع هذه.',
+  'It sells and prints normally. Until it is linked, Odoo books it against the stand-in product set on the server screen.':
+      'يُباع ويُطبع بشكل طبيعي. وإلى أن يتم ربطه، يسجّله أودو على الصنف البديل '
+          'المحدَّد في شاشة الخادم.',
+  'It sells and prints normally, but Odoo has nothing to book it against, so the sale will be held back for someone to fix. Link it, or name a stand-in product on the server screen.':
+      'يُباع ويُطبع بشكل طبيعي، لكن لا يوجد في أودو ما يُسجَّل عليه، لذلك ستُحجز '
+          'الفاتورة حتى يعالجها أحد. اربطه، أو حدِّد صنفًا بديلًا في شاشة الخادم.',
+  'Choices the cashier is asked': 'الخيارات التي تُعرض على الكاشير',
+  'A group with choices in it marks the item on the grid, so nobody has to guess.':
+      'المجموعة التي بها خيارات تضع علامة على الصنف في الشاشة، فلا يحتاج أحد للتخمين.',
+  'Save the item, then add its choices': 'احفظ الصنف ثم أضف خياراته',
+  'Add a choice group': 'إضافة مجموعة خيارات',
+  'From Odoo': 'من أودو',
+  'Edit group': 'تعديل المجموعة',
+  'Add a choice': 'إضافة خيار',
+  'Extra charge': 'رسوم إضافية',
+  'Leave empty for no charge': 'اتركها فارغة إذا كان بدون رسوم',
+  'Must be answered': 'يجب الإجابة عليها',
+  'Required': 'إلزامي',
+  'Min': 'الحد الأدنى',
+  'any': 'بلا حد',
+  '0 for any': '0 لبلا حد',
+  'Items, categories and the choices a cashier is asked':
+      'الأصناف والأقسام والخيارات التي تُعرض على الكاشير',
+  'Stand-in product id for unlinked items (a service product)':
+      'رقم الصنف البديل للأصناف غير المرتبطة (صنف خدمي)',
+  'An item created on the till and not yet linked to an Odoo '
+          'product books against this one, under its own name. Empty '
+          'means such a sale is held back for someone to sort out.':
+      'الصنف الذي أُنشئ على الكاشير ولم يُربط بصنف في أودو يُسجَّل على هذا الصنف '
+          'باسمه هو. وتركها فارغة يعني حجز الفاتورة حتى يعالجها أحد.',
 };
