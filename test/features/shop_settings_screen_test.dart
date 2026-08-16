@@ -30,7 +30,17 @@ void main() {
         ),
       );
 
+  /// The settings list is longer than the default test window, and Save is at the
+  /// bottom of it.
+  void tallWindow(WidgetTester t) {
+    t.view.physicalSize = const Size(800, 1600);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+  }
+
   testWidgets('entering a shop name and saving persists it to the store', (t) async {
+    tallWindow(t);
     await t.pumpWidget(app());
 
     await t.enterText(find.byKey(const Key('shop-name')), 'Cairo Diner');
@@ -44,6 +54,7 @@ void main() {
 
   testWidgets('a shop that closes at 03:00 can move its trading-day cutover',
       (t) async {
+    tallWindow(t);
     await t.pumpWidget(app());
 
     expect(settings.businessDayCutoverHour, BusinessDay.defaultCutoverHour);

@@ -2190,6 +2190,16 @@ class _SellScreenState extends State<SellScreen> {
                     onPressed: widget.onOpenShift,
                   ),
                 ),
+              // The way off the till goes with the grid, so it is offered here too:
+              // a cashier who is not the one opening the drawer must still be able
+              // to hand the till back.
+              if (widget.onSignOut != null)
+                TextButton.icon(
+                  key: const Key('sign-out'),
+                  icon: const Icon(Icons.logout),
+                  label: Text(tr(context, 'End shift')),
+                  onPressed: widget.onSignOut,
+                ),
             ],
           ),
         ),

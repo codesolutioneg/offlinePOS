@@ -48,6 +48,9 @@ void main() {
   setUpAll(useSystemSqlite);
   setUp(() async {
     db = Db.open(':memory:');
+    // The till refuses to start an order with no shift open, so a test that
+    // sells opens the drawer first.
+    ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     audit = AuditLog(db);
     CatalogueStore(db).replaceAll(
