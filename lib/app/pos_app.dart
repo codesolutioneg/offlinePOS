@@ -237,11 +237,17 @@ const _firstSaleSteps = [
 ];
 
 class _PosAppState extends State<PosApp> {
-  /// The navigator MaterialApp builds, so code that runs outside any screen (the
-  /// post-sign-in jump to the floor) can still push one.
+  /// The navigator MaterialApp builds, so code that runs outside any screen can
+  /// still reach one: the shift nudge above the navigator, and the tab recalled
+  /// from the Open orders list after that list has closed itself.
   final GlobalKey<NavigatorState> _navigator = GlobalKey<NavigatorState>();
 
   PosSession? _session;
+
+  /// Whether the counter is up. False is the resting state of a restaurant till:
+  /// the floor is home, and an order has to be started or recalled to leave it.
+  bool _onCounter = false;
+
   bool _firstSaleHelp = false;
 
   /// Whether the walkthrough for the provisioning account is up. Only that account
@@ -382,7 +388,7 @@ class _PosAppState extends State<PosApp> {
 
   void _signedIn(Cashier cashier) {
     setState(() {
-      _session = PosSession(
+      final session = _session = PosSession(
         catalogue: widget.catalogue,
         orders: widget.orders,
         outbox: widget.outbox,
@@ -406,6 +412,12 @@ class _PosAppState extends State<PosApp> {
       // do. A real cashier meets the first-sale help instead.
       _firstSignInHelp = cashier.id == BootstrapCashier.id &&
           widget.wizards.shouldShow(WizardId.firstSignIn, cashier.id);
+      // Crash recovery: a draft read back off the disk puts the cashier straight
+      // onto that order, because half a bill with a customer standing there is not
+      // something to make them go and find. An empty till lands on the floor, which
+      // is where a service starts.
+      _onCounter = session.current.lines.isNotEmpty ||
+          session.current.tableLabel != null;
     });
     // Support asks who is on the till before anything else.
     widget.sync.cashierId = cashier.id;
@@ -417,21 +429,41 @@ class _PosAppState extends State<PosApp> {
       if (mounted) setState(() {});
     }));
     _publishActivity();
-    final session = _session;
-    if (session == null) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Through the navigator's own context, not this shell's: this state is the
-      // parent of MaterialApp, so Navigator.of would look upwards and find
-      // nothing.
-      final below = _navigator.currentContext;
-      if (!mounted || below == null) return;
-      // Land on the floor home once signed in, unless a draft order was restored
-      // (crash recovery): the table plan is the base screen an order starts from.
-      if (session.current.lines.isEmpty && session.current.tableLabel == null) {
-        _openFloor(below, session);
-      }
-    });
     _nudgeShift();
+  }
+
+  /// Put the cashier on the counter, for an order they have just started, recalled
+  /// or reopened. The only way a bill gets on screen.
+  void _toCounter() {
+    if (!mounted || _onCounter) return;
+    setState(() => _onCounter = true);
+  }
+
+  /// Leave the counter and show the floor again.
+  ///
+  /// Whatever is still on the counter is PARKED on the way out rather than left as
+  /// the draft. Both keep the order, but only a parked tab can be found again from
+  /// everywhere a cashier looks for it: the floor tile, the Open orders list, and
+  /// the prompt that asks whether the next delivery call is one already waiting. A
+  /// draft is in none of those, so the second call would open a duplicate bag. The
+  /// order keeps its lines and its number, and tapping its table recalls it.
+  ///
+  /// A no-op on an empty counter and on one that was just paid or parked, because
+  /// [PosSession.hold] does nothing to an order with no lines.
+  void _toFloor() {
+    _session?.hold();
+    _publishActivity();
+    if (!mounted) return;
+    setState(() => _onCounter = false);
+  }
+
+  /// Start a fresh order of [type] and open the counter on it. The takeaway, to-go
+  /// and delivery buttons on the floor home.
+  void _startOrder(PosSession session, OrderType type) {
+    setState(() {
+      session.startFresh(type);
+      _onCounter = true;
+    });
   }
 
   /// Work out whether the cashier signing in needs telling about the drawer: no
@@ -456,8 +488,8 @@ class _PosAppState extends State<PosApp> {
   /// A strip and not a dialog, deliberately: a modal at sign-in is a modal that gets
   /// dismissed without being read. It sits above the navigator rather than on one
   /// screen, so it is read on the floor the cashier lands on as well as on the sell
-  /// screen, and it takes its own space instead of covering the till. The refusal
-  /// itself lives on the sell screen; this is the way to the fix from anywhere.
+  /// screen, and it takes its own space instead of covering the till. It is
+  /// dismissible; the refusals that are not live on the floor and on the counter.
   Widget _shiftNudgeBar(BuildContext context, ShiftNudge nudge) {
     final stale = nudge == ShiftNudge.staleShift;
     return Material(
@@ -515,6 +547,8 @@ class _PosAppState extends State<PosApp> {
     setState(() {
       _session = null;
       _firstSaleHelp = false;
+      // The next cashier starts where a service starts, on the floor.
+      _onCounter = false;
       // The nudge belongs to the cashier who was told it, not to the sign-in screen
       // the next one is looking at.
       _nudge = null;
@@ -838,8 +872,8 @@ class _PosAppState extends State<PosApp> {
       builder: (context, locale, _) => MaterialApp(
         title: 'offlinePOS',
         // Held because this shell sits ABOVE the navigator it builds, so its own
-        // context cannot push a route. Sign-in opens the floor from outside any
-        // screen, and did nothing at all until this key existed.
+        // context cannot reach one. The shift nudge and the tab recalled from a
+        // list that has already closed itself both run from up here.
         navigatorKey: _navigator,
         // Tuned for a touch screen: comfortable spacing and buttons/inputs tall
         // enough to tap reliably with a finger. Dark is the same theme with the
@@ -868,6 +902,9 @@ class _PosAppState extends State<PosApp> {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
+        // A restaurant till sits on its floor plan: signed in, that is home, and the
+        // counter is what an order opens onto. A device that is only a kitchen board
+        // or only a customer display has neither.
         home: widget.config.displayMode
             ? _displayOnly()
             : widget.config.kdsMode
@@ -879,8 +916,41 @@ class _PosAppState extends State<PosApp> {
                         onSignedIn: _signedIn,
                         provisioningPin: widget.provisioningPin,
                       )
-                    : _selling(session),
+                    : _home(session),
       ),
+    );
+  }
+
+  /// What a signed-in cashier is looking at, with the walkthrough over it.
+  ///
+  /// The floor unless an order has been started or recalled. The coach is stacked
+  /// on whichever it is rather than on the counter alone: the floor is home now, so
+  /// help pinned to the sell screen would go unread on a till that has not opened
+  /// an order yet.
+  Widget _home(PosSession session) {
+    final screen = _onCounter ? _selling(session) : _floorHome(session);
+    // One coach at a time, and setting the till up comes before the first sale: two
+    // scrims over each other is a cashier with no way out.
+    if (!_firstSignInHelp && !_firstSaleHelp) return screen;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        screen,
+        // Builder, so the panels are written in the language the app is in.
+        Builder(
+          builder: (context) => _firstSignInHelp
+              ? WizardOverlay(
+                  steps: _firstSignInSteps(context, _setupChecklist()),
+                  onClosed: (outcome) =>
+                      _closeFirstSignInHelp(outcome, session.cashierId),
+                )
+              : WizardOverlay(
+                  steps: _firstSaleSteps,
+                  onClosed: (outcome) =>
+                      _closeFirstSaleHelp(outcome, session.cashierId),
+                ),
+        ),
+      ],
     );
   }
 
@@ -981,168 +1051,154 @@ class _PosAppState extends State<PosApp> {
   Future<List<OdooRef>> _searchOdooCategories(String term) =>
       OdooPuller(call: widget.odoo.catalogueCall).searchCategories(term);
 
-  Widget _selling(PosSession session) => Stack(
-        fit: StackFit.expand,
-        children: [
-          Builder(
-            // Builder, so navigation targets the Navigator inside this MaterialApp.
-            builder: (context) => SellScreen(
-              session: session,
-              formatAmount: PosApp.money,
-              staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
-              catalogueChanged: widget.sync.catalogueRevision,
-              // No per-sale push: orders are held and sent as one batch at shift
-              // close, so the shared Odoo login is not hit per order.
-              online: widget.sync.online,
-              pendingToSync: () => widget.sync.pendingSales,
-              // Tickets and receipts a printer would not take. They flush themselves,
-              // but until they do the kitchen has not seen them.
-              spooledJobs: () => _receiptPrinter.spooledCount,
-              categoryColors: widget.settings.categoryColors,
-              // Read only when the shop shows them, and answered from a map the
-              // catalogue holds: no picture is fetched while a tile is being built.
-              productImages: widget.settings.showProductImages
-                  ? widget.catalogue.images()
-                  : const {},
-              quickComments: widget.settings.quickComments,
-              discountReasons: widget.settings.discountReasons,
-              discountPercents: widget.settings.discountPercents,
-              maxDiscountPercent: widget.settings.maxDiscountPercent,
-              allowAmountDiscount: widget.settings.allowAmountDiscount,
-              authorize: (p) => _authorize(p, context),
-              unavailableProducts: widget.settings.unavailableProducts,
-              onToggleAvailable: (id, available) {
-                widget.settings.setProductAvailable(id, available);
-                widget.audit.record(session.cashierId,
-                    available ? 'product.available' : 'product.sold_out', detail: '$id');
-                setState(() {});
-              },
-              favourites: widget.settings.favourites,
-              onToggleFavourite: (id, fav) {
-                widget.settings.setFavourite(id, fav);
-                setState(() {});
-              },
-              gridColumns: widget.settings.gridColumns,
-              extraCustomers: (q) => widget.customers.search(query: q, limit: 30),
-              // A customer captured mid-order is kept on the till like any other, so
-              // the next order can pick them instead of retyping them.
-              onAddCustomer: ({required name, phone, address}) =>
-                  widget.customers.add(name: name, phone: phone, address: address),
-              // A shop with more partners than the catalogue pull carries can find
-              // the rest while the line is up. Off the payment path, and silent
-              // when there is no line: the picker keeps answering from disk.
-              searchServerCustomers: _searchServerCustomers,
-              // The delivery lists, read live so an edit in settings shows on the
-              // next order without a restart.
-              deliveryZones: widget.delivery == null ? null : () => widget.delivery!.zones(),
-              deliveryChannels:
-                  widget.delivery == null ? null : () => widget.delivery!.channels(),
-              drivers: widget.delivery == null
-                  ? null
-                  : () => widget.delivery!.drivers(activeOnly: true),
-              // What this cashier's role may open. Read per build, so a manager
-              // narrowing it takes effect on the next order rather than at restart.
-              allowedOrderTypes: _allowedOrderTypes,
-              // The tender an on-account sale books against, when the shop runs
-              // accounts. Absent, the payment sheet offers no such thing.
-              payLaterMethodId: widget.settings.payLaterMethodId,
-              // Dividers are floor decoration, never a table an order sits at.
-              tables: () => widget.tables
-                  .all()
-                  .where((t) => !t.isDivider)
-                  .map((t) => t.name)
-                  .toList(),
-              heldOrders: () => widget.orders.held(),
-              // Seat a dine-in (or move a bill) on the real floor plan, not a flat
-              // list, so choosing a table looks like the floor the manager drew.
-              onPickTable: ({exclude}) =>
-                  _pickTableFromFloor(context, session, exclude: exclude),
-              // New order returns to the floor home to choose a table or the
-              // takeaway/delivery buttons.
-              onNewOrder: () => _openFloor(context, session),
-              // No open shift, no sale. Read per build so opening one on the shift
-              // screen and coming straight back lifts the block with no restart.
-              shiftOpen: () => widget.shifts.currentOpenShift() != null,
-              onOpenShift: () => _openShift(context, session),
-              onChanged: _publishActivity,
-              onSignOut: _signOut,
-              drawer: _buildDrawer(context, session),
-              onOpenOrders: () => _openOrders(context, session),
-              // The table asked for the bill. Paper only: nothing is settled, nothing
-              // is pushed, and the order stays exactly as it is.
-              onPrintBill: (order) => unawaited(_printBill(order)),
-              // A payment that leaves the tab part paid gets its own detail slip:
-              // what it covered and what is still owed, which no other paper says.
-              onPartialPayment: (payment) =>
-                  unawaited(_printPartialPayment(payment)),
-              onHold: () {
-                // Holding only parks the order. It does NOT fire the kitchen: food
-                // reaches the kitchen only via the explicit Send to kitchen button,
-                // so a cashier can park a tab that is still being built without the
-                // line cooking it.
-                session.hold();
-                _publishActivity();
-              },
-              // Fire the kitchen ticket but keep the order on the counter. The
-              // result is handed back so the screen can say what really happened.
-              onSendToKitchen: () => _fireKitchen(session.current),
-              // Re-fire every line (a lost or re-requested ticket), ignoring the
-              // already-printed flag.
-              onResendToKitchen: () =>
-                  _fireKitchen(session.current, only: session.current.lines, resend: true),
-              onLineVoided: (line, reason) {
-                // The deletion slip is the till's own record that an item was taken
-                // off, printed for every void. The kitchen cancel slip only fires
-                // when the kitchen already has a copy, or it would send a cancel for
-                // food that was never ordered to the pass.
-                if (line.printedToKitchen || line.firedStations.isNotEmpty) {
-                  unawaited(_fireVoid(session.current, line, reason));
-                }
-                // Only while this order is being corrected, so the set stays the
-                // size of one amendment rather than a shift's worth of voids.
-                if (_amending.containsKey(session.current.uuid)) {
-                  _slipped.add(line.uuid);
-                }
-                unawaited(_printDeletion(session.current, [line],
-                    title: 'ITEM VOIDED', reason: reason));
-              },
-              onPaid: (order) {
-                _publishActivity();
-                final sale = order as Order;
-                // A straight counter sale never held, so its lines reach the
-                // kitchen here; a dine-in order already fired on hold and reprints
-                // nothing. Only lines the kitchen has never seen are fired, which
-                // is also what keeps a corrected sale from cooking its food twice.
-                // The sale is NOT pushed to Odoo now: it waits on the till for the
-                // shift-close batch.
-                _slipRemovedOnAmend(sale);
-                unawaited(_fireKitchen(sale).then((_) => _printReceipt(sale)));
-              },
-            ),
-          ),
-          // One coach at a time, and setting the till up comes before the first
-          // sale: two scrims over each other is a cashier with no way out.
-          if (_firstSignInHelp)
-            // Builder, so the panels are written in the language the app is in.
-            Builder(
-              builder: (context) => WizardOverlay(
-                steps: _firstSignInSteps(context, _setupChecklist()),
-                onClosed: (outcome) =>
-                    _closeFirstSignInHelp(outcome, session.cashierId),
-              ),
-            )
-          else if (_firstSaleHelp)
-            WizardOverlay(
-              steps: _firstSaleSteps,
-              onClosed: (outcome) =>
-                  _closeFirstSaleHelp(outcome, session.cashierId),
-            ),
-        ],
+  /// The counter, opened onto one order. Reached from the floor home by seating a
+  /// table, by the table-less buttons, by recalling a parked tab, or by reopening a
+  /// paid sale to correct it. Never the resting screen.
+  Widget _selling(PosSession session) => Builder(
+        // Builder, so navigation targets the Navigator inside this MaterialApp.
+        builder: (context) => SellScreen(
+          session: session,
+          formatAmount: PosApp.money,
+          staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
+          catalogueChanged: widget.sync.catalogueRevision,
+          // No per-sale push: orders are held and sent as one batch at shift
+          // close, so the shared Odoo login is not hit per order.
+          online: widget.sync.online,
+          pendingToSync: () => widget.sync.pendingSales,
+          // Tickets and receipts a printer would not take. They flush themselves,
+          // but until they do the kitchen has not seen them.
+          spooledJobs: () => _receiptPrinter.spooledCount,
+          categoryColors: widget.settings.categoryColors,
+          // Read only when the shop shows them, and answered from a map the
+          // catalogue holds: no picture is fetched while a tile is being built.
+          productImages: widget.settings.showProductImages
+              ? widget.catalogue.images()
+              : const {},
+          quickComments: widget.settings.quickComments,
+          discountReasons: widget.settings.discountReasons,
+          discountPercents: widget.settings.discountPercents,
+          maxDiscountPercent: widget.settings.maxDiscountPercent,
+          allowAmountDiscount: widget.settings.allowAmountDiscount,
+          authorize: (p) => _authorize(p, context),
+          unavailableProducts: widget.settings.unavailableProducts,
+          onToggleAvailable: (id, available) {
+            widget.settings.setProductAvailable(id, available);
+            widget.audit.record(session.cashierId,
+                available ? 'product.available' : 'product.sold_out', detail: '$id');
+            setState(() {});
+          },
+          favourites: widget.settings.favourites,
+          onToggleFavourite: (id, fav) {
+            widget.settings.setFavourite(id, fav);
+            setState(() {});
+          },
+          gridColumns: widget.settings.gridColumns,
+          extraCustomers: (q) => widget.customers.search(query: q, limit: 30),
+          // A customer captured mid-order is kept on the till like any other, so
+          // the next order can pick them instead of retyping them.
+          onAddCustomer: ({required name, phone, address}) =>
+              widget.customers.add(name: name, phone: phone, address: address),
+          // A shop with more partners than the catalogue pull carries can find
+          // the rest while the line is up. Off the payment path, and silent
+          // when there is no line: the picker keeps answering from disk.
+          searchServerCustomers: _searchServerCustomers,
+          // The delivery lists, read live so an edit in settings shows on the
+          // next order without a restart.
+          deliveryZones: widget.delivery == null ? null : () => widget.delivery!.zones(),
+          deliveryChannels:
+              widget.delivery == null ? null : () => widget.delivery!.channels(),
+          drivers: widget.delivery == null
+              ? null
+              : () => widget.delivery!.drivers(activeOnly: true),
+          // What this cashier's role may open. Read per build, so a manager
+          // narrowing it takes effect on the next order rather than at restart.
+          allowedOrderTypes: _allowedOrderTypes,
+          // The tender an on-account sale books against, when the shop runs
+          // accounts. Absent, the payment sheet offers no such thing.
+          payLaterMethodId: widget.settings.payLaterMethodId,
+          // Dividers are floor decoration, never a table an order sits at.
+          tables: () => widget.tables
+              .all()
+              .where((t) => !t.isDivider)
+              .map((t) => t.name)
+              .toList(),
+          heldOrders: () => widget.orders.held(),
+          // Seat a dine-in (or move a bill) on the real floor plan, not a flat
+          // list, so choosing a table looks like the floor the manager drew.
+          onPickTable: ({exclude}) =>
+              _pickTableFromFloor(context, session, exclude: exclude),
+          // The way off the counter: back to the floor home, where the next
+          // order is started by a table or one of the table-less buttons.
+          onNewOrder: _toFloor,
+          // No open shift, no sale. Read per build so opening one on the shift
+          // screen and coming straight back lifts the block with no restart.
+          shiftOpen: () => widget.shifts.currentOpenShift() != null,
+          onOpenShift: () => _openShift(context, session),
+          onChanged: _publishActivity,
+          onSignOut: _signOut,
+          drawer: _buildDrawer(context, session),
+          onOpenOrders: () => _openOrders(context, session),
+          // The table asked for the bill. Paper only: nothing is settled, nothing
+          // is pushed, and the order stays exactly as it is.
+          onPrintBill: (order) => unawaited(_printBill(order)),
+          // A payment that leaves the tab part paid gets its own detail slip:
+          // what it covered and what is still owed, which no other paper says.
+          onPartialPayment: (payment) =>
+              unawaited(_printPartialPayment(payment)),
+          // Holding parks the order and returns to the floor, where the table it
+          // was parked on now reads as occupied. It does NOT fire the kitchen:
+          // food reaches the kitchen only via the explicit Send to kitchen
+          // button, so a cashier can park a tab that is still being built
+          // without the line cooking it.
+          onHold: _toFloor,
+          // Fire the kitchen ticket but keep the order on the counter. The
+          // result is handed back so the screen can say what really happened.
+          onSendToKitchen: () => _fireKitchen(session.current),
+          // Re-fire every line (a lost or re-requested ticket), ignoring the
+          // already-printed flag.
+          onResendToKitchen: () =>
+              _fireKitchen(session.current, only: session.current.lines, resend: true),
+          onLineVoided: (line, reason) {
+            // The deletion slip is the till's own record that an item was taken
+            // off, printed for every void. The kitchen cancel slip only fires
+            // when the kitchen already has a copy, or it would send a cancel for
+            // food that was never ordered to the pass.
+            if (line.printedToKitchen || line.firedStations.isNotEmpty) {
+              unawaited(_fireVoid(session.current, line, reason));
+            }
+            // Only while this order is being corrected, so the set stays the
+            // size of one amendment rather than a shift's worth of voids.
+            if (_amending.containsKey(session.current.uuid)) {
+              _slipped.add(line.uuid);
+            }
+            unawaited(_printDeletion(session.current, [line],
+                title: 'ITEM VOIDED', reason: reason));
+          },
+          onPaid: (order) {
+            _publishActivity();
+            final sale = order as Order;
+            // The money is booked, so the cashier goes back to the floor now,
+            // ahead of the paper: the kitchen fire and the receipt below are
+            // unawaited and own their own failures, and a till that waited on a
+            // printer to release the screen would be a till that stops selling
+            // when the printer does. A split check is the exception, because it
+            // leaves the rest of the table open and still being settled.
+            if (!session.hasLines) _toFloor();
+            // A straight counter sale never held, so its lines reach the
+            // kitchen here; a dine-in order already fired on hold and reprints
+            // nothing. Only lines the kitchen has never seen are fired, which
+            // is also what keeps a corrected sale from cooking its food twice.
+            // The sale is NOT pushed to Odoo now: it waits on the till for the
+            // shift-close batch.
+            _slipRemovedOnAmend(sale);
+            unawaited(_fireKitchen(sale).then((_) => _printReceipt(sale)));
+          },
+        ),
       );
 
-  /// The app shell's navigation. Selling stays on the main screen; everything a
-  /// cashier or manager reaches occasionally lives here so the sell screen is not
-  /// buried under buttons.
+  /// The app shell's navigation, carried by the floor home and by the counter
+  /// alike; everything a cashier or manager reaches occasionally lives here so
+  /// neither screen is buried under buttons.
   Widget _buildDrawer(BuildContext rootContext, PosSession session) {
     final isManager = widget.auth.signedIn?.isManager ?? false;
     return Drawer(
@@ -1160,7 +1216,7 @@ class _PosAppState extends State<PosApp> {
             title: Text(tr(rootContext, 'Tables')),
             onTap: () {
               Navigator.pop(rootContext);
-              _openFloor(rootContext, session);
+              _toFloor();
             },
           ),
           ListTile(
@@ -1322,9 +1378,7 @@ class _PosAppState extends State<PosApp> {
         // on the screen underneath, one microtask later.
         onRecall: (order) => scheduleMicrotask(() {
           final below = _navigator.currentContext;
-          if (below != null) {
-            unawaited(_resumeTab(below, session, order, closeAfter: false));
-          }
+          if (below != null) unawaited(_resumeTab(below, session, order));
         }),
         // A parked tab's bill prints without recalling it, so the list stays put.
         onPrintBill: (order) => unawaited(_printBill(order)),
@@ -1363,7 +1417,9 @@ class _PosAppState extends State<PosApp> {
           widget.audit.record(session.cashierId, 'order.cancelled',
               detail: '${order.uuid}|$reason');
           if (sheetContext.mounted) Navigator.of(sheetContext).pop();
-          setState(() {});
+          // A discarded tab is finished work, so it ends where every finished order
+          // ends: on the floor, with that table free again.
+          _toFloor();
         },
       ),
     ));
@@ -1430,9 +1486,10 @@ class _PosAppState extends State<PosApp> {
     _amending[order.uuid] = before;
     session.recall(order.uuid);
     _publishActivity();
-    // Back to the sell screen, past the detail and the history list, so the
-    // reopened order is on the counter rather than behind two screens.
+    // Back to the counter, past the detail and the history list, so the reopened
+    // order is on screen rather than behind two of them.
     if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+    _toCounter();
     if (mounted) setState(() {});
   }
 
@@ -1611,155 +1668,168 @@ class _PosAppState extends State<PosApp> {
   Set<OrderType> get _allowedOrderTypes => widget.settings
       .availableOrderTypesFor(widget.auth.signedIn?.role ?? 'cashier');
 
-  void _openFloor(BuildContext context, PosSession session) {
-    final occ = _floorOccupancy(session);
-    final occupied = occ.occupied;
-    final allowed = _allowedOrderTypes;
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (floorContext) => TableFloorScreen(
-        // Read as the floor is built, so a close that arrives over the fabric shows
-        // the next time a waiter looks at the plan rather than at the next restart.
-        dayNotice: _dayCloseNotice(floorContext)?.text,
-        blockNewOrders: _dayCloseNotice(floorContext)?.blocking ?? false,
-        store: widget.tables,
-        occupiedLabels: occupied,
-        occupiedInfo: occ.info,
-        formatAmount: PosApp.money,
-        // The floor's own rules, on the screen a manager already opens to lay the
-        // room out.
-        settings: widget.settings,
-        onTransferTables: () => unawaited(_transferTables(floorContext)),
-        authorize: () => _authorize(Permission.openSettings, floorContext),
-        // The book, so a table with guests due shortly says so on the plan.
-        reservations: widget.reservations,
-        // The rooms down the side, where the shop reads them fastest.
-        sectionsAtSide: widget.settings.floorSectionsSide,
-        // What a table tap may open. A to-go is seated like a dine-in when the
-        // shop takes them, and the waiter says which before tapping the table.
-        seatTypes: [
-          for (final t in OrderType.values)
-            if (t.seatsAtTable && allowed.contains(t)) t,
-        ],
-        // The table-less ways to start an order, straight from the floor home.
-        // Each starts a fresh order of that type and drops to the order screen. A
-        // type this role may not ring has no button rather than a button that
-        // refuses.
-        onToGo: !allowed.contains(OrderType.toGo)
-            ? null
-            : () {
-                setState(() => session.startFresh(OrderType.toGo));
-                Navigator.of(floorContext).pop();
-              },
-        onTakeaway: !allowed.contains(OrderType.takeaway)
-            ? null
-            : () {
-                setState(() => session.startFresh(OrderType.takeaway));
-                Navigator.of(floorContext).pop();
-              },
-        onDelivery: !allowed.contains(OrderType.delivery)
-            ? null
-            : () async {
-                // A delivery has no table to tap, so a parked one is only reachable
-                // through Open orders: a cashier taking the next call has no way of
-                // knowing they are about to start a second order for a bag already
-                // waiting. Ask, but only when there is something to resume.
-                final parked = widget.orders
-                    .held()
-                    .where((o) => o.type == OrderType.delivery)
-                    .toList();
-                final resume = parked.isEmpty
-                    ? null
-                    : await _pickParkedDelivery(floorContext, parked);
-                if (resume == 'cancel') return;
-                setState(() {
-                  if (resume is Order) {
-                    session.recall(resume.uuid);
-                  } else {
-                    session.startFresh(OrderType.delivery);
-                  }
-                });
-                if (floorContext.mounted) Navigator.of(floorContext).pop();
-              },
-        onOpenTable: (t, seatAs) async {
-          // Tapping the table the current order is already seated at just returns
-          // to it rather than parking it and starting a duplicate.
-          if (session.current.tableLabel == t.name &&
-              session.current.lines.isNotEmpty) {
-            Navigator.of(floorContext).pop();
-            return;
-          }
-          // Every bill parked on this table, whatever it was rung as: a to-go left
-          // on a table is recalled by tapping it exactly like a dine-in.
-          final held =
-              widget.orders.held().where((o) => o.tableLabel == t.name).toList();
-          if (held.isEmpty) {
-            // Parked on another till. Neither start a second order on the table nor
-            // recall theirs: a tab is settled where it was opened, because that till
-            // is the one that books it.
-            final elsewhere = widget.orders
-                .heldElsewhere()
-                .where((o) => o.tableLabel == t.name)
-                .toList();
-            if (elsewhere.isNotEmpty) {
-              // Unless the shop runs handhelds and has said a tab may change
-              // hands, in which case the other till is asked and has to agree.
-              if (widget.lan != null && widget.settings.lanAllowTakeover) {
-                unawaited(_takeOverTab(floorContext, session, elsewhere.first));
+  /// The till's home screen: the room, drawn as the manager laid it out.
+  ///
+  /// A restaurant works off its floor, so this is what a cashier lands on and what
+  /// every finished order comes back to. Nothing on it is a route: it is rebuilt
+  /// with the shell, which is how a tab settled on another till shows up here
+  /// without anybody refreshing anything.
+  Widget _floorHome(PosSession session) => Builder(
+        // Builder, so navigation targets the Navigator inside this MaterialApp.
+        builder: (floorContext) {
+          final occ = _floorOccupancy(session);
+          final allowed = _allowedOrderTypes;
+          return TableFloorScreen(
+            // The same drawer the counter carries. The floor is home now, so support,
+            // reprints, reports and the shift screen have to be reachable from it.
+            drawer: _buildDrawer(floorContext, session),
+            // No open shift, no order. Read per build so opening one and coming
+            // straight back lifts the block with no restart, exactly as the counter
+            // reads it.
+            shiftOpen: () => widget.shifts.currentOpenShift() != null,
+            onOpenShift: () => _openShift(floorContext, session),
+            // The way off the till. On the counter it is disabled mid-order; here
+            // it needs no guard, because whatever was on the counter was parked on
+            // the way to this screen.
+            onSignOut: _signOut,
+            // Read as the floor is built, so a close that arrives over the fabric shows
+            // the next time a waiter looks at the plan rather than at the next restart.
+            dayNotice: _dayCloseNotice(floorContext)?.text,
+            blockNewOrders: _dayCloseNotice(floorContext)?.blocking ?? false,
+            store: widget.tables,
+            occupiedLabels: occ.occupied,
+            occupiedInfo: occ.info,
+            formatAmount: PosApp.money,
+            // The floor's own rules, on the screen a manager already opens to lay the
+            // room out.
+            settings: widget.settings,
+            onTransferTables: () => unawaited(_transferTables(floorContext)),
+            authorize: () => _authorize(Permission.openSettings, floorContext),
+            // The book, so a table with guests due shortly says so on the plan.
+            reservations: widget.reservations,
+            // The rooms down the side, where the shop reads them fastest.
+            sectionsAtSide: widget.settings.floorSectionsSide,
+            // What a table tap may open. A to-go is seated like a dine-in when the
+            // shop takes them, and the waiter says which before tapping the table.
+            seatTypes: [
+              for (final t in OrderType.values)
+                if (t.seatsAtTable && allowed.contains(t)) t,
+            ],
+            // The table-less ways to start an order, straight from the floor home.
+            // Each starts a fresh order of that type and opens the counter on it. A
+            // type this role may not ring has no button rather than a button that
+            // refuses.
+            onToGo: !allowed.contains(OrderType.toGo)
+                ? null
+                : () => _startOrder(session, OrderType.toGo),
+            onTakeaway: !allowed.contains(OrderType.takeaway)
+                ? null
+                : () => _startOrder(session, OrderType.takeaway),
+            onDelivery: !allowed.contains(OrderType.delivery)
+                ? null
+                : () async {
+                    // A delivery has no table to tap, so a parked one is only reachable
+                    // through Open orders: a cashier taking the next call has no way of
+                    // knowing they are about to start a second order for a bag already
+                    // waiting. Ask, but only when there is something to resume.
+                    final parked = widget.orders
+                        .held()
+                        .where((o) => o.type == OrderType.delivery)
+                        .toList();
+                    final resume = parked.isEmpty
+                        ? null
+                        : await _pickParkedDelivery(floorContext, parked);
+                    if (resume == 'cancel' || !mounted) return;
+                    setState(() {
+                      if (resume is Order) {
+                        session.recall(resume.uuid);
+                      } else {
+                        session.startFresh(OrderType.delivery);
+                      }
+                      _onCounter = true;
+                    });
+                  },
+            onOpenTable: (t, seatAs) async {
+              // Tapping the table the current order is already seated at just returns
+              // to it rather than parking it and starting a duplicate.
+              if (session.current.tableLabel == t.name &&
+                  session.current.lines.isNotEmpty) {
+                _toCounter();
                 return;
               }
-              ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
-                content: Text(tr(floorContext,
-                    'This table is open on another device. Settle it there.')),
-              ));
-              return;
-            }
-            // Seating a table opens a sale, so a till that may open none of the
-            // seatable kinds says so plainly instead of landing on one it may not
-            // have started. The selector only ever offers a type this till rings,
-            // so what is refused here is the dine-in a shop with no seating fell
-            // back to. Recalling a tab that is already open is untouched by this:
-            // settling somebody else's table is not opening one.
-            if (!allowed.contains(seatAs)) {
-              ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
-                content: Text(
-                    tr(floorContext, 'This role does not open dine-in orders.')),
-              ));
-              return;
-            }
-          }
-          // How many are sitting down, when the shop asks. Before the order is
-          // started, so backing out of the prompt leaves no half-seated table
-          // behind, and only when a table is actually being seated: recalling a
-          // tab already has its covers.
-          if (held.isNotEmpty) {
-            // Whose tab it is may need answering first; the rest of the tap waits
-            // for that answer rather than opening the bill behind it. Before the
-            // guest prompt, so resuming never sits behind an await it does not need.
-            unawaited(_resumeTab(floorContext, session, held.first));
-            return;
-          }
-          // Covers belong to a bill that is eaten at the table. A to-go is packed
-          // while its guests wait, so it takes the table without taking a count.
-          final dineIn = seatAs == OrderType.dineIn;
-          int? covers;
-          if (dineIn && widget.settings.askGuestCount) {
-            covers = await _askGuestCount(floorContext, t.seats);
-            if (covers == null) return;
-          }
-          setState(() {
-            session.startFresh(seatAs);
-            session.setTable(t.name);
-            // The prompt's answer when there was one, otherwise the table's own
-            // seat count, which is what the floor has always seeded. A tab that was
-            // already open never reaches here: the resume path above took it.
-            final seated = covers ?? t.seats;
-            if (dineIn && seated > 0) session.setGuestCount(seated);
-          });
-          if (floorContext.mounted) Navigator.of(floorContext).pop();
+              // Every bill parked on this table, whatever it was rung as: a to-go left
+              // on a table is recalled by tapping it exactly like a dine-in.
+              final held =
+                  widget.orders.held().where((o) => o.tableLabel == t.name).toList();
+              if (held.isEmpty) {
+                // Parked on another till. Neither start a second order on the table nor
+                // recall theirs: a tab is settled where it was opened, because that till
+                // is the one that books it.
+                final elsewhere = widget.orders
+                    .heldElsewhere()
+                    .where((o) => o.tableLabel == t.name)
+                    .toList();
+                if (elsewhere.isNotEmpty) {
+                  // Unless the shop runs handhelds and has said a tab may change
+                  // hands, in which case the other till is asked and has to agree.
+                  if (widget.lan != null && widget.settings.lanAllowTakeover) {
+                    unawaited(_takeOverTab(floorContext, session, elsewhere.first));
+                    return;
+                  }
+                  ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
+                    content: Text(tr(floorContext,
+                        'This table is open on another device. Settle it there.')),
+                  ));
+                  return;
+                }
+                // Seating a table opens a sale, so a till that may open none of the
+                // seatable kinds says so plainly instead of landing on one it may not
+                // have started. The selector only ever offers a type this till rings,
+                // so what is refused here is the dine-in a shop with no seating fell
+                // back to. Recalling a tab that is already open is untouched by this:
+                // settling somebody else's table is not opening one.
+                if (!allowed.contains(seatAs)) {
+                  ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
+                    content: Text(
+                        tr(floorContext, 'This role does not open dine-in orders.')),
+                  ));
+                  return;
+                }
+              }
+              // How many are sitting down, when the shop asks. Before the order is
+              // started, so backing out of the prompt leaves no half-seated table
+              // behind, and only when a table is actually being seated: recalling a
+              // tab already has its covers.
+              if (held.isNotEmpty) {
+                // Whose tab it is may need answering first; the rest of the tap waits
+                // for that answer rather than opening the bill behind it. Before the
+                // guest prompt, so resuming never sits behind an await it does not need.
+                unawaited(_resumeTab(floorContext, session, held.first));
+                return;
+              }
+              // Covers belong to a bill that is eaten at the table. A to-go is packed
+              // while its guests wait, so it takes the table without taking a count.
+              final dineIn = seatAs == OrderType.dineIn;
+              int? covers;
+              if (dineIn && widget.settings.askGuestCount) {
+                covers = await _askGuestCount(floorContext, t.seats);
+                if (covers == null) return;
+              }
+              if (!mounted) return;
+              setState(() {
+                session.startFresh(seatAs);
+                session.setTable(t.name);
+                // The prompt's answer when there was one, otherwise the table's own
+                // seat count, which is what the floor has always seeded. A tab that was
+                // already open never reaches here: the resume path above took it.
+                final seated = covers ?? t.seats;
+                if (dineIn && seated > 0) session.setGuestCount(seated);
+                _onCounter = true;
+              });
+            },
+          );
         },
-      ),
-    ));
-  }
+      );
 
   // ── the shop's trading day, across devices ───────────────────────
 
@@ -1801,14 +1871,16 @@ class _PosAppState extends State<PosApp> {
   /// has said tabs belong to the cashier who opened them.
   ///
   /// One door for every way a tab is resumed, so the answer cannot be walked around
-  /// by opening it from the other screen.
-  /// [closeAfter] is false when the screen that asked has already closed itself.
-  Future<void> _resumeTab(BuildContext context, PosSession session, Order tab,
-      {bool closeAfter = true}) async {
+  /// by opening it from the other screen. A resumed tab lands on the counter, from
+  /// the floor tile and from the Open orders list alike.
+  Future<void> _resumeTab(BuildContext context, PosSession session, Order tab) async {
     if (!await _authorizeTab(context, tab)) return;
-    setState(() => session.recall(tab.uuid));
+    if (!mounted) return;
+    setState(() {
+      session.recall(tab.uuid);
+      _onCounter = true;
+    });
     _publishActivity();
-    if (closeAfter && context.mounted) Navigator.of(context).pop();
   }
 
   /// Whether the cashier on the till may open [tab].
@@ -1982,9 +2054,11 @@ class _PosAppState extends State<PosApp> {
           kind: ToastKind.error);
       return;
     }
-    setState(() => session.recall(tab.uuid));
+    setState(() {
+      session.recall(tab.uuid);
+      _onCounter = true;
+    });
     _publishActivity();
-    Navigator.of(context).pop();
   }
 
   /// How many are sitting at the table just tapped, offered as quick counts with
