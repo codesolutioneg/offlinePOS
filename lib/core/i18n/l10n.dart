@@ -1084,4 +1084,17 @@ const Map<String, String> _ar = {
   'Total outstanding': 'إجمالي المستحقات',
   'Sales on account': 'المبيعات على الحساب',
   'Unnamed': 'بدون اسم',
+
+  // payment experience
+  'Amount due': 'المبلغ المستحق',
+  'How is this being paid?': 'كيف سيتم الدفع؟',
+  'All of it': 'المبلغ كامل',
+  'By guest': 'لكل ضيف',
+  'By item': 'لكل صنف',
+  'Mixed methods': 'طرق متعددة',
+  'Change to give back': 'الباقي للعميل',
+  'Bill': 'الفاتورة',
+  'Part payment': 'دفعة جزئية',
+  'Share of': 'حصة من',
+  'Move / merge': 'نقل / دمج',
 };

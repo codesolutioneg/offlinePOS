@@ -8,6 +8,7 @@ import '../../app/pos_session.dart';
 import '../../core/auth/permissions.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/printing/kitchen_ticket.dart' show KitchenFireResult;
+import '../../core/printing/receipt_builder.dart' show PartialPayment;
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/numeric_keypad.dart';
@@ -65,6 +66,7 @@ class SellScreen extends StatefulWidget {
     this.onNewOrder,
     this.onResendToKitchen,
     this.onPrintBill,
+    this.onPartialPayment,
     this.allowedOrderTypes = const {
       OrderType.dineIn,
       OrderType.takeaway,
@@ -112,6 +114,11 @@ class SellScreen extends StatefulWidget {
   /// bill to the table. Paper only: the order is not changed and nothing is settled.
   /// Absent hides the action.
   final void Function(Order order)? onPrintBill;
+
+  /// A payment that leaves the bill part paid (a share, a guest's check, a selection
+  /// of items) was taken. The shell prints its detail slip. Fired after the money is
+  /// already booked, so paper never stands between the cashier and the next guest.
+  final void Function(PartialPayment payment)? onPartialPayment;
 
   /// Opens the parked-orders list to recall a table.
   final VoidCallback? onOpenOrders;
@@ -1570,8 +1577,19 @@ class _SellScreenState extends State<SellScreen> {
       isScrollControlled: true,
       builder: (ctx) => _PaymentSheet(
         total: partPaid ? s.current.balance : s.total,
+        billTotal: s.current.total,
+        alreadyPaid: s.current.amountPaid,
         format: widget.formatAmount,
         methods: s.catalogue.paymentMethods(),
+        // How the bill can be split is asked here, at the top of the payment sheet,
+        // because everything about taking money belongs in one place. The split
+        // flows themselves are dine-in only, so a counter sale sees a plain tender
+        // step with no first step to answer.
+        modes: _splitModes(),
+        onMode: (mode) {
+          Navigator.pop(ctx);
+          _startPayMode(mode);
+        },
         // Only on the whole bill: a share left on account is a part-paid tab and a
         // receivable at once, which is more bookkeeping than a till should invent.
         onAccountMethod: partPaid ? null : _onAccountMethod(),
@@ -1589,19 +1607,61 @@ class _SellScreenState extends State<SellScreen> {
     );
   }
 
+  /// The ways this bill can be split, offered as the payment sheet's first step.
+  /// Only a seated table can be split: a counter sale has no guests to divide it
+  /// between and no table to leave open on a balance.
+  List<_PayMode> _splitModes() => s.current.type == OrderType.dineIn
+      ? const [_PayMode.all, _PayMode.evenly, _PayMode.guest, _PayMode.item]
+      : const [];
+
+  /// Leave the tender step and start the chosen way of splitting. Each route ends
+  /// back in the same payment sheet, at its tender step, for the amount that route
+  /// worked out.
+  Future<void> _startPayMode(_PayMode mode) async {
+    switch (mode) {
+      // The sheet the cashier just left already was "all of it", so there is nothing
+      // to start; it is in the list to show which step they are on.
+      case _PayMode.all:
+        return;
+      case _PayMode.evenly:
+        await _splitEvenly();
+      case _PayMode.guest:
+        await _splitByGuest();
+      case _PayMode.item:
+        await _pickLines(
+            title: tr(context, 'Pay selected items'),
+            confirmLabel: tr(context, 'Pay'),
+            onConfirm: (picks) => _payPicks(picks, label: tr(context, 'Check')));
+    }
+  }
+
   /// Settle a part payment / even-split share against the open balance. Closes the
   /// table and prints once the balance reaches zero; otherwise keeps it open.
   void _completeShare(
-      List<OrderPayment> payments, String label, double tip, double? cashReceived) {
+      List<OrderPayment> payments, String label, double tip, double? cashReceived,
+      {String? slipTitle}) {
     final settling = s.current; // finalized in place if this share settles it
     final balance = s.payShare(payments: payments, cashReceived: cashReceived, tip: tip);
+    final paidNow = payments.fold(0.0, (a, p) => a + p.amount);
     setState(() {});
     if (balance <= 0.001) {
       widget.onPaid?.call(settling);
       if (!mounted) return;
       showToast(context, tr(context, 'Table closed.'),
           kind: ToastKind.success, key: const Key('share-settled'));
-    } else if (mounted) {
+    } else {
+      // A share that leaves money on the table is the one payment nothing else puts
+      // on paper: the sale receipt only prints when the tab settles. Fired after the
+      // money is booked, so the slip cannot hold the next guest up.
+      widget.onPartialPayment?.call(PartialPayment(
+        order: settling,
+        paidNow: paidNow,
+        stillOwed: balance,
+        title: slipTitle ?? tr(context, 'Part payment'),
+        tenders: payments,
+        cashReceived: cashReceived,
+      ));
+      if (!mounted) return;
       showToast(
           context,
           '${tr(context, 'Paid')} ${widget.formatAmount(settling.amountPaid)}, '
@@ -1654,22 +1714,45 @@ class _SellScreenState extends State<SellScreen> {
         methods: s.catalogue.paymentMethods(),
         onConfirm: (payments, payLabel, tip, cashReceived) {
           Navigator.pop(ctx);
-          final check = s.payCheck(ids,
-              payments: payments, cashReceived: cashReceived, tip: tip);
-          setState(() {});
-          widget.onPaid?.call(check);
-          if (!mounted) return;
-          showToast(
-              context,
-              '${label ?? tr(context, 'Check')}: '
-                  '${widget.formatAmount(check.total)} ($payLabel). '
-                  '${s.hasLines ? tr(context, 'Rest of the table stays open.') : tr(context, 'Table closed.')}',
-              kind: ToastKind.success,
-              key: const Key('check-complete'),
-              duration: const Duration(seconds: 3));
+          _completeCheck(ids, payments, payLabel, tip, cashReceived, label);
         },
       ),
     );
+  }
+
+  /// Book a check (a guest's lines, or a picked selection) and tell the cashier what
+  /// happened to the table. The check is a paid sale of its own, so the shell prints
+  /// its receipt; the detail slip on top of it is the only paper that states what
+  /// the table still owes, so it prints only while something is still owed.
+  void _completeCheck(List<String> ids, List<OrderPayment> payments, String payLabel,
+      double tip, double? cashReceived, String? label) {
+    final check =
+        s.payCheck(ids, payments: payments, cashReceived: cashReceived, tip: tip);
+    // Read before the rebuild, and only while the table is still open: once the last
+    // check is paid the session has moved on to a fresh blank order.
+    final owed = s.hasLines ? s.current.balance : 0.0;
+    setState(() {});
+    widget.onPaid?.call(check);
+    if (owed > 0.001) {
+      widget.onPartialPayment?.call(PartialPayment(
+        order: check,
+        paidNow: check.total,
+        stillOwed: owed,
+        title: label ?? tr(context, 'Check'),
+        tenders: check.payments,
+        covered: check.lines,
+        cashReceived: cashReceived,
+      ));
+    }
+    if (!mounted) return;
+    showToast(
+        context,
+        '${label ?? tr(context, 'Check')}: '
+            '${widget.formatAmount(check.total)} ($payLabel). '
+            '${s.hasLines ? tr(context, 'Rest of the table stays open.') : tr(context, 'Table closed.')}',
+        kind: ToastKind.success,
+        key: const Key('check-complete'),
+        duration: const Duration(seconds: 3));
   }
 
   /// Pay a picks selection as its own check. The chosen quantities are peeled only
@@ -1689,19 +1772,7 @@ class _SellScreenState extends State<SellScreen> {
           Navigator.pop(ctx);
           final ids = _peelPicks(picks).map((l) => l.uuid).toList();
           if (ids.isEmpty) return;
-          final check = s.payCheck(ids,
-              payments: payments, cashReceived: cashReceived, tip: tip);
-          setState(() {});
-          widget.onPaid?.call(check);
-          if (!mounted) return;
-          showToast(
-              context,
-              '${label ?? tr(context, 'Check')}: '
-                  '${widget.formatAmount(check.total)} ($payLabel). '
-                  '${s.hasLines ? tr(context, 'Rest of the table stays open.') : tr(context, 'Table closed.')}',
-              kind: ToastKind.success,
-              key: const Key('check-complete'),
-              duration: const Duration(seconds: 3));
+          _completeCheck(ids, payments, payLabel, tip, cashReceived, label);
         },
       ),
     );
@@ -1717,8 +1788,9 @@ class _SellScreenState extends State<SellScreen> {
         kind: ToastKind.success, key: const Key('bill-printed'));
   }
 
-  /// The dine-in bill menu: split by guest, pay selected items, move items to
-  /// another table, or merge another table in. Mirrors a table-service till.
+  /// The dine-in table menu: print the check, move items to another table, merge
+  /// another table in, hold the order back from the kitchen. Everything about taking
+  /// money moved to the payment sheet, where a cashier looks for it.
   Future<void> _billOptions() async {
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -1735,26 +1807,6 @@ class _SellScreenState extends State<SellScreen> {
               subtitle: Text(tr(ctx, 'The check to take to the table, before payment')),
               onTap: () => Navigator.pop(ctx, 'print'),
             ),
-          ListTile(
-            key: const Key('bill-split-even'),
-            leading: const Icon(Icons.safety_divider),
-            title: Text(tr(ctx, 'Split evenly')),
-            subtitle: Text(tr(ctx, 'Divide the bill into equal shares')),
-            onTap: () => Navigator.pop(ctx, 'even'),
-          ),
-          ListTile(
-            key: const Key('bill-split-guest'),
-            leading: const Icon(Icons.groups_2_outlined),
-            title: Text(tr(ctx, 'Split by guest')),
-            subtitle: Text(tr(ctx, 'Pay each guest separately')),
-            onTap: () => Navigator.pop(ctx, 'guest'),
-          ),
-          ListTile(
-            key: const Key('bill-pay-selected'),
-            leading: const Icon(Icons.checklist),
-            title: Text(tr(ctx, 'Pay selected items')),
-            onTap: () => Navigator.pop(ctx, 'selected'),
-          ),
           ListTile(
             key: const Key('bill-move'),
             leading: const Icon(Icons.drive_file_move_outline),
@@ -1784,15 +1836,6 @@ class _SellScreenState extends State<SellScreen> {
         _printBill();
       case 'timing':
         await _setFireTiming();
-      case 'even':
-        await _splitEvenly();
-      case 'guest':
-        await _splitByGuest();
-      case 'selected':
-        await _pickLines(
-            title: tr(context, 'Pay selected items'),
-            confirmLabel: tr(context, 'Pay'),
-            onConfirm: (picks) => _payPicks(picks, label: tr(context, 'Check')));
       case 'move':
         await _moveItems();
       case 'merge':
@@ -1809,7 +1852,7 @@ class _SellScreenState extends State<SellScreen> {
     if (ways == null || ways < 2 || !mounted) return;
     final share = s.current.total / ways;
     final due = share < s.current.balance ? share : s.current.balance;
-    _payShareSheet(due);
+    _payShareSheet(due, slipTitle: '${tr(context, 'Share of')} $ways');
   }
 
   Future<int?> _askShareCount() {
@@ -1839,18 +1882,20 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   /// Take one share/part payment against the open balance via the payment sheet.
-  void _payShareSheet(double amount) {
+  void _payShareSheet(double amount, {String? slipTitle}) {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
       builder: (ctx) => _PaymentSheet(
         total: amount,
+        billTotal: s.current.total,
+        alreadyPaid: s.current.amountPaid,
         format: widget.formatAmount,
         methods: s.catalogue.paymentMethods(),
         onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
-          _completeShare(payments, label, tip, cashReceived);
+          _completeShare(payments, label, tip, cashReceived, slipTitle: slipTitle);
         },
       ),
     );
@@ -2475,8 +2520,8 @@ class _SellScreenState extends State<SellScreen> {
             if (s.hasLines)
               ActionChip(
                 key: const Key('bill-options'),
-                avatar: const Icon(Icons.call_split, size: 16),
-                label: Text(tr(context, 'Split / move')),
+                avatar: const Icon(Icons.drive_file_move_outline, size: 16),
+                label: Text(tr(context, 'Move / merge')),
                 onPressed: _billOptions,
               ),
           ],
@@ -3062,9 +3107,14 @@ class _LineTile extends StatelessWidget {
       );
 }
 
-/// The tender step: choose how the sale is paid, split it across methods if needed,
-/// add a tip, enter cash received to see the change, and confirm. A real payment
-/// moment with feedback, not a silent clear.
+/// How a bill is being paid. The payment sheet's first question, and the reason a
+/// cashier no longer has to leave the payment sheet to split a table.
+enum _PayMode { all, evenly, guest, item }
+
+/// The tender step: choose how the bill is being paid (all of it, or split), pick
+/// the method, split it across methods if needed, add a tip, enter cash received to
+/// see the change, and confirm. A real payment moment with feedback, not a silent
+/// clear.
 class _PaymentSheet extends StatefulWidget {
   const _PaymentSheet({
     required this.total,
@@ -3073,6 +3123,10 @@ class _PaymentSheet extends StatefulWidget {
     required this.onConfirm,
     this.onAccountMethod,
     this.hasCustomer = false,
+    this.modes = const [],
+    this.onMode,
+    this.billTotal,
+    this.alreadyPaid = 0,
   });
 
   final double total;
@@ -3080,6 +3134,20 @@ class _PaymentSheet extends StatefulWidget {
   final List<PaymentMethod> methods;
   final void Function(
       List<OrderPayment> payments, String label, double tip, double? cashReceived) onConfirm;
+
+  /// The ways this bill can be split, offered above the tender step. Empty leaves
+  /// the sheet a plain tender step, which is all a counter sale ever needs.
+  final List<_PayMode> modes;
+
+  /// A way of splitting was chosen. The host closes the sheet and runs that flow,
+  /// which comes back to this same sheet for the share it worked out.
+  final void Function(_PayMode mode)? onMode;
+
+  /// What the whole bill comes to, when [total] is only part of it. Shown beside
+  /// what has already been taken, so a part-paid tab reads as a running balance
+  /// rather than as a bare figure a cashier has to trust.
+  final double? billTotal;
+  final double alreadyPaid;
 
   /// The method an on-account sale books against, when the shop runs accounts.
   /// Null leaves the sheet exactly as it was.
@@ -3203,6 +3271,195 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     );
   }
 
+  /// What is owed, in the biggest type on the sheet, because it is the number the
+  /// cashier and the customer both look for. A tab that has already had shares taken
+  /// off it shows the bill and what has been paid underneath, so the running balance
+  /// is obvious rather than inferred.
+  Widget _amountOwed(BuildContext context) {
+    final bill = widget.billTotal;
+    final partPaid = bill != null && widget.alreadyPaid > 0.001;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(tr(context, 'Amount due'),
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              Text(widget.format(_grand),
+                  key: const Key('pay-total'),
+                  style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          if (partPaid) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${tr(context, 'Bill')} ${widget.format(bill)}  ·  '
+              '${tr(context, 'Paid')} ${widget.format(widget.alreadyPaid)}',
+              key: const Key('running-balance'),
+              style: const TextStyle(fontSize: 13, color: Colors.black54),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// The first step: how is this being paid. Answered in the payment sheet, where a
+  /// cashier looks for it, rather than in a menu somewhere else on the screen.
+  Widget _modeRow(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(tr(context, 'How is this being paid?'),
+            style: const TextStyle(fontSize: 13, color: Colors.black54)),
+        const SizedBox(height: 8),
+        Row(children: [
+          for (final mode in widget.modes) ...[
+            Expanded(child: _modeButton(context, mode)),
+            if (mode != widget.modes.last) const SizedBox(width: 8),
+          ],
+        ]),
+      ],
+    );
+  }
+
+  Widget _modeButton(BuildContext context, _PayMode mode) {
+    // "All of it" is where the sheet already is, so it reads as the selected step
+    // rather than as a button that would do something.
+    final selected = mode == _PayMode.all;
+    final (icon, label) = switch (mode) {
+      _PayMode.all => (Icons.payments, tr(context, 'All of it')),
+      _PayMode.evenly => (Icons.safety_divider, tr(context, 'Split evenly')),
+      _PayMode.guest => (Icons.groups_2_outlined, tr(context, 'By guest')),
+      _PayMode.item => (Icons.checklist, tr(context, 'By item')),
+    };
+    return InkWell(
+      key: Key('pay-mode-${mode.name}'),
+      borderRadius: BorderRadius.circular(12),
+      onTap: selected ? null : () => widget.onMode?.call(mode),
+      child: Container(
+        height: 72,
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.primary.withValues(alpha: 0.16)
+              : Colors.black.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: selected ? AppColors.primary : Colors.black.withValues(alpha: 0.12),
+              width: selected ? 2 : 1),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 22, color: selected ? AppColors.primary : Colors.black87),
+            const SizedBox(height: 4),
+            Text(label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 12,
+                    height: 1.1,
+                    fontWeight: selected ? FontWeight.bold : FontWeight.w500)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// A tender as a button big enough to hit without looking, the way the shop's
+  /// other till does it. The icon is picked off the method so cash, card and wallet
+  /// are told apart at a glance on a busy screen.
+  Widget _methodButton(BuildContext context, PaymentMethod m) {
+    final selected = _method?.id == m.id;
+    return SizedBox(
+      width: 132,
+      child: InkWell(
+        key: Key('method-${m.id}'),
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => setState(() => _method = m),
+        child: Container(
+          height: 76,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.16)
+                : Colors.black.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+                color:
+                    selected ? AppColors.primary : Colors.black.withValues(alpha: 0.12),
+                width: selected ? 2 : 1),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(_methodIcon(m),
+                  size: 24, color: selected ? AppColors.primary : Colors.black87),
+              const SizedBox(height: 4),
+              Text(m.name,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: selected ? FontWeight.bold : FontWeight.w500)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _methodIcon(PaymentMethod m) {
+    if (m.isCash) return Icons.payments_outlined;
+    final name = m.name.toLowerCase();
+    if (name.contains('wallet') || name.contains('محفظة')) {
+      return Icons.account_balance_wallet_outlined;
+    }
+    if (name.contains('transfer') || name.contains('bank')) {
+      return Icons.account_balance_outlined;
+    }
+    return Icons.credit_card;
+  }
+
+  /// Change owed, as a band the cashier cannot miss. Nothing is shown when there is
+  /// no change: an empty row where a number should be reads as a fault.
+  Widget _changeBanner(BuildContext context) {
+    if (_change <= 0.001) return const SizedBox.shrink();
+    return Container(
+      key: const Key('change'),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.green.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.shade400),
+      ),
+      child: Row(children: [
+        Icon(Icons.savings_outlined, color: Colors.green.shade800),
+        const SizedBox(width: 10),
+        Expanded(
+            child: Text(tr(context, 'Change to give back'),
+                style: const TextStyle(fontWeight: FontWeight.w600))),
+        Text(widget.format(_change),
+            style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: Colors.green.shade800)),
+      ]),
+    );
+  }
+
   List<double> _quickAmounts() {
     final t = _grand;
     final set = <double>{t};
@@ -3228,11 +3485,11 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               Text(tr(context, 'Payment'),
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const Spacer(),
-              // Split lets one bill be paid part cash, part card, which a single
-              // shared-total field cannot express.
+              // One bill paid part cash, part card. Named for the methods, not for
+              // splitting the bill: that is what the mode row answers.
               FilterChip(
                 key: const Key('split-toggle'),
-                label: Text(tr(context, 'Split')),
+                label: Text(tr(context, 'Mixed methods')),
                 selected: _split,
                 onSelected: (v) => setState(() {
                   _split = v;
@@ -3241,16 +3498,25 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               ),
             ]),
             const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(tr(context, 'Total due')),
-                Text(widget.format(_grand),
-                    key: const Key('pay-total'),
-                    style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
-              ],
-            ),
-            const SizedBox(height: 8),
+            _amountOwed(context),
+            if (widget.modes.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _modeRow(context),
+            ],
+            const SizedBox(height: 12),
+            // The tender comes before the tip and the cash, because picking it is
+            // what the cashier does first and what the rest of the sheet reacts to.
+            if (_methods.isNotEmpty)
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (final m in _methods) _methodButton(context, m),
+                ],
+              )
+            else
+              Text(tr(context, 'Cash'), style: const TextStyle(color: Colors.black54)),
+            const SizedBox(height: 12),
             TextField(
               key: const Key('tip'),
               controller: _tip,
@@ -3265,25 +3531,6 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 }
               }),
             ),
-            const SizedBox(height: 12),
-            if (_methods.isNotEmpty)
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (final m in _methods)
-                    ChoiceChip(
-                      key: Key('method-${m.id}'),
-                      labelPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      labelStyle: const TextStyle(fontSize: 16),
-                      label: Text(m.name),
-                      selected: _method?.id == m.id,
-                      onSelected: (_) => setState(() => _method = m),
-                    ),
-                ],
-              )
-            else
-              Text(tr(context, 'Cash'), style: const TextStyle(color: Colors.black54)),
             if (_split) ...[
               const SizedBox(height: 12),
               for (final t in _tenders)
@@ -3349,19 +3596,8 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               ),
             ],
             const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(tr(context, 'Change')),
-                Text(_change >= 0 ? widget.format(_change) : '-',
-                    key: const Key('change'),
-                    style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: _change >= 0 ? Colors.green.shade700 : Colors.red)),
-              ],
-            ),
-            const SizedBox(height: 18),
+            _changeBanner(context),
+            const SizedBox(height: 14),
             SizedBox(
               height: 64,
               child: FilledButton.icon(
