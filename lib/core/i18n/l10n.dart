@@ -1097,4 +1097,13 @@ const Map<String, String> _ar = {
       'أعد عدّ الدرج، أو سجّل الفرق كإيداع أو صرف نقدي، ثم أغلق.',
   'How far the counted drawer may sit from the expected drawer and still close the shift':
       'مقدار الفرق المسموح بين الدرج المعدود والدرج المتوقع مع إمكانية إغلاق الوردية',
+  'Current shift': 'الوردية الحالية',
+  'Download': 'تنزيل',
+  'Excel': 'إكسل',
+  'PDF': 'PDF',
+  'CSV': 'CSV',
+  'Report': 'التقرير',
+  'Period': 'الفترة',
+  'Run by': 'بواسطة',
+  'Generated': 'تاريخ الإصدار',
 };

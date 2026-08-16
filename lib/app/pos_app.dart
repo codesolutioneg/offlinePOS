@@ -1431,6 +1431,10 @@ class _PosAppState extends State<PosApp> {
             .where((o) => o.tableLabel != null)
             .length,
         onPrint: _printShiftReport,
+        // What every exported report is headed with, so a downloaded file says
+        // which shop it came from and who ran it.
+        shopName: widget.settings.shopName ?? widget.config.shopName,
+        ranBy: _session?.cashierId ?? '',
       ),
     ));
   }
