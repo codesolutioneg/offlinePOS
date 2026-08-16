@@ -17,8 +17,14 @@ class DeliveryStore {
 
   /// Every zone, oldest first, which is the order the manager typed them in and
   /// usually reads near to far.
+  /// Zones and channels read back in the order they were typed.
+  ///
+  /// Tie-broken on rowid rather than on the name: a Windows clock ticks in
+  /// milliseconds at best, so two rows added in one breath share a created_at, and
+  /// an alphabetical tiebreak silently reorders a manager's list on one platform
+  /// and not the other.
   List<DeliveryZone> zones() => _db.raw
-      .select('SELECT * FROM delivery_zones ORDER BY created_at, name')
+      .select('SELECT * FROM delivery_zones ORDER BY created_at, rowid')
       .map((r) => DeliveryZone(
             id: r['id'] as String,
             name: r['name'] as String,
@@ -47,7 +53,7 @@ class DeliveryStore {
   // ── channels ─────────────────────────────────────────────────────
 
   List<DeliveryChannel> channels() => _db.raw
-      .select('SELECT * FROM delivery_channels ORDER BY created_at, name')
+      .select('SELECT * FROM delivery_channels ORDER BY created_at, rowid')
       .map((r) => DeliveryChannel(
             id: r['id'] as String,
             name: r['name'] as String,
