@@ -10,16 +10,23 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  # The Flutter this repo is known to build against, and the only line to change to
+  # move it. Cloning `stable` meant a Flutter release could break the build
+  # overnight with no change from us. appveyor.yml and codemagic.yaml pin the same
+  # version; bump them together.
+  FLUTTER_VERSION: '3.41.6'
+
 jobs:
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Flutter (stable)
+      - name: Install Flutter
         shell: pwsh
         run: |
-          git clone --depth 1 -b stable https://github.com/flutter/flutter.git "$env:RUNNER_TEMP\flutter"
+          git clone --depth 1 -b $env:FLUTTER_VERSION https://github.com/flutter/flutter.git "$env:RUNNER_TEMP\flutter"
           echo "$env:RUNNER_TEMP\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Flutter version
