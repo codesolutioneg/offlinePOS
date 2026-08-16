@@ -1497,7 +1497,10 @@ class _PosAppState extends State<PosApp> {
         occupiedLabels: occ.occupied,
         occupiedInfo: occ.info,
         formatAmount: PosApp.money,
-        onOpenTable: (t) => Navigator.of(routeContext).pop(t.name),
+        sectionsAtSide: widget.settings.floorSectionsSide,
+        // Picking is only about which table; what is being seated was decided on
+        // the order already on screen.
+        onOpenTable: (t, _) => Navigator.of(routeContext).pop(t.name),
       ),
     ));
   }
@@ -1537,10 +1540,11 @@ class _PosAppState extends State<PosApp> {
           ]),
         ),
       ).then((v) => v ?? 'cancel');
-  /// The kinds of sale the signed-in role may open. Unrestricted until a manager
-  /// says otherwise, and a manager themselves is never restricted.
-  Set<OrderType> get _allowedOrderTypes =>
-      widget.settings.orderTypesFor(widget.auth.signedIn?.role ?? 'cashier');
+  /// The kinds of sale the signed-in role may open here: what the shop offers at
+  /// all, narrowed by what this role may ring. Unrestricted until a manager says
+  /// otherwise on either.
+  Set<OrderType> get _allowedOrderTypes => widget.settings
+      .availableOrderTypesFor(widget.auth.signedIn?.role ?? 'cashier');
 
   void _openFloor(BuildContext context, PosSession session) {
     final occ = _floorOccupancy(session);
@@ -1563,10 +1567,24 @@ class _PosAppState extends State<PosApp> {
         authorize: () => _authorize(Permission.openSettings, floorContext),
         // The book, so a table with guests due shortly says so on the plan.
         reservations: widget.reservations,
-        // The two table-less ways to start an order, straight from the floor home.
+        // The rooms down the side, where the shop reads them fastest.
+        sectionsAtSide: widget.settings.floorSectionsSide,
+        // What a table tap may open. A to-go is seated like a dine-in when the
+        // shop takes them, and the waiter says which before tapping the table.
+        seatTypes: [
+          for (final t in OrderType.values)
+            if (t.seatsAtTable && allowed.contains(t)) t,
+        ],
+        // The table-less ways to start an order, straight from the floor home.
         // Each starts a fresh order of that type and drops to the order screen. A
         // type this role may not ring has no button rather than a button that
         // refuses.
+        onToGo: !allowed.contains(OrderType.toGo)
+            ? null
+            : () {
+                setState(() => session.startFresh(OrderType.toGo));
+                Navigator.of(floorContext).pop();
+              },
         onTakeaway: !allowed.contains(OrderType.takeaway)
             ? null
             : () {
@@ -1597,7 +1615,7 @@ class _PosAppState extends State<PosApp> {
                 });
                 if (floorContext.mounted) Navigator.of(floorContext).pop();
               },
-        onOpenTable: (t) async {
+        onOpenTable: (t, seatAs) async {
           // Tapping the table the current order is already seated at just returns
           // to it rather than parking it and starting a duplicate.
           if (session.current.tableLabel == t.name &&
@@ -1605,6 +1623,8 @@ class _PosAppState extends State<PosApp> {
             Navigator.of(floorContext).pop();
             return;
           }
+          // Every bill parked on this table, whatever it was rung as: a to-go left
+          // on a table is recalled by tapping it exactly like a dine-in.
           final held =
               widget.orders.held().where((o) => o.tableLabel == t.name).toList();
           if (held.isEmpty) {
@@ -1628,11 +1648,13 @@ class _PosAppState extends State<PosApp> {
               ));
               return;
             }
-            // Seating a table opens a dine-in, so a role that does not ring them is
-            // told plainly instead of landing on a sale it may not have started.
-            // Recalling a tab that is already open is untouched by this: settling
-            // somebody else's table is not opening one.
-            if (!allowed.contains(OrderType.dineIn)) {
+            // Seating a table opens a sale, so a till that may open none of the
+            // seatable kinds says so plainly instead of landing on one it may not
+            // have started. The selector only ever offers a type this till rings,
+            // so what is refused here is the dine-in a shop with no seating fell
+            // back to. Recalling a tab that is already open is untouched by this:
+            // settling somebody else's table is not opening one.
+            if (!allowed.contains(seatAs)) {
               ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
                 content: Text(
                     tr(floorContext, 'This role does not open dine-in orders.')),
@@ -1651,19 +1673,22 @@ class _PosAppState extends State<PosApp> {
             unawaited(_resumeTab(floorContext, session, held.first));
             return;
           }
+          // Covers belong to a bill that is eaten at the table. A to-go is packed
+          // while its guests wait, so it takes the table without taking a count.
+          final dineIn = seatAs == OrderType.dineIn;
           int? covers;
-          if (widget.settings.askGuestCount) {
+          if (dineIn && widget.settings.askGuestCount) {
             covers = await _askGuestCount(floorContext, t.seats);
             if (covers == null) return;
           }
           setState(() {
-            session.startFresh(OrderType.dineIn);
+            session.startFresh(seatAs);
             session.setTable(t.name);
             // The prompt's answer when there was one, otherwise the table's own
             // seat count, which is what the floor has always seeded. A tab that was
             // already open never reaches here: the resume path above took it.
             final seated = covers ?? t.seats;
-            if (seated > 0) session.setGuestCount(seated);
+            if (dineIn && seated > 0) session.setGuestCount(seated);
           });
           if (floorContext.mounted) Navigator.of(floorContext).pop();
         },
