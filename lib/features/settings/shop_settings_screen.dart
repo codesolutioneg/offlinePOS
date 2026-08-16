@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../domain/order.dart' show OrderType, OrderTypeLabel;
 
 /// Lets a manager edit the shop identity that prints on the receipt, on the
 /// device, without a rebuild.
@@ -29,6 +30,8 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late bool _showTax;
   late bool _askGuests;
   late int _cutoverHour;
+  late Set<OrderType> _offered;
+  late bool _sectionsSide;
 
   @override
   void initState() {
@@ -39,6 +42,19 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _showTax = widget.settings.receiptShowTax;
     _askGuests = widget.settings.askGuestCount;
     _cutoverHour = widget.settings.businessDayCutoverHour;
+    _offered = widget.settings.shopOrderTypes;
+    _sectionsSide = widget.settings.floorSectionsSide;
+  }
+
+  /// Offer or withdraw one kind of sale shop-wide. The last one standing cannot be
+  /// withdrawn: a till that offers nothing sells nothing.
+  void _toggleOffered(OrderType t, bool on) {
+    if (!on && _offered.length <= 1) return;
+    setState(() {
+      final next = _offered.toSet();
+      on ? next.add(t) : next.remove(t);
+      _offered = next;
+    });
   }
 
   @override
@@ -56,6 +72,8 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.receiptShowTax = _showTax;
     widget.settings.askGuestCount = _askGuests;
     widget.settings.businessDayCutoverHour = _cutoverHour;
+    widget.settings.shopOrderTypes = _offered;
+    widget.settings.floorSectionsSide = _sectionsSide;
     widget.onChanged();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
   }
@@ -108,6 +126,51 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             subtitle: Text(tr(context, 'When a table is seated from the floor')),
             value: _askGuests,
             onChanged: (v) => setState(() => _askGuests = v),
+          ),
+          const SizedBox(height: 12),
+          // What this shop sells at all, above whatever each role may ring: a shop
+          // that does not deliver has nobody who takes a delivery.
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Order types this shop offers')),
+            subtitle: Text(tr(context,
+                'A type that is off is offered to nobody, whatever their role allows')),
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final t in OrderType.values)
+                FilterChip(
+                  key: Key('shop-type-${t.name.toLowerCase()}'),
+                  label: Text(tr(context, t.label)),
+                  selected: _offered.contains(t),
+                  onSelected: (v) => _toggleOffered(t, v),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Table sections')),
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              ChoiceChip(
+                key: const Key('sections-side'),
+                label: Text(tr(context, 'Beside the plan')),
+                selected: _sectionsSide,
+                onSelected: (_) => setState(() => _sectionsSide = true),
+              ),
+              ChoiceChip(
+                key: const Key('sections-top'),
+                label: Text(tr(context, 'Above the plan')),
+                selected: !_sectionsSide,
+                onSelected: (_) => setState(() => _sectionsSide = false),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(
