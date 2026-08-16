@@ -633,6 +633,40 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
+  /// Print the detail slip for a payment that leaves the bill part paid: a share, a
+  /// guest's check, a selection of items.
+  ///
+  /// Spooled like every other slip, so a dead printer costs a held job and never a
+  /// refused payment, and never awaited by the screen that took the money. Cash
+  /// taken as a part payment goes in the drawer like any other cash, so the drawer
+  /// kick rides on this slip when the shop has it wired that way.
+  Future<void> _printPartialPayment(PartialPayment payment) async {
+    final order = payment.order;
+    try {
+      final cashIds = widget.catalogue
+          .paymentMethods()
+          .where((m) => m.isCash)
+          .map((m) => m.id)
+          .toSet();
+      final isCash = payment.tenders.isEmpty ||
+          payment.tenders.any((t) => cashIds.contains(t.methodId));
+      final bytes =
+          _receiptBuilder(openDrawer: isCash && widget.settings.openDrawerOnSale)
+              .buildPartialPayment(payment,
+                  at: DateTime.now(), actor: _session?.cashierId ?? order.cashierId);
+      // Several shares land against the same order, so the timestamp keeps each one
+      // out of the spool's dedupe rather than folding the second guest into the first.
+      await _receiptPrinter.send(bytes,
+          reference: 'part-${order.uuid}-${DateTime.now().microsecondsSinceEpoch}');
+    } on PrinterUnavailable {
+      // Held in the spool; the background flush prints it when the printer is back.
+    } catch (e) {
+      // Same reason the sale receipt builds inside its try: a character the printer
+      // cannot carry must leave a record, not an error over a taken payment.
+      widget.audit.record(order.cashierId, 'receipt.failed', detail: '${order.uuid}: $e');
+    }
+  }
+
   /// Print one slip for what a corrected sale lost, when it is tendered again.
   ///
   /// A line the kitchen already held printed its own slip the moment it was voided,
@@ -1014,6 +1048,10 @@ class _PosAppState extends State<PosApp> {
               // The table asked for the bill. Paper only: nothing is settled, nothing
               // is pushed, and the order stays exactly as it is.
               onPrintBill: (order) => unawaited(_printBill(order)),
+              // A payment that leaves the tab part paid gets its own detail slip:
+              // what it covered and what is still owed, which no other paper says.
+              onPartialPayment: (payment) =>
+                  unawaited(_printPartialPayment(payment)),
               onHold: () {
                 // Holding only parks the order. It does NOT fire the kitchen: food
                 // reaches the kitchen only via the explicit Send to kitchen button,
