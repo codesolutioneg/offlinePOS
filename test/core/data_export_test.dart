@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/export/data_export.dart';
+import 'package:offline_pos/core/export/export_header.dart';
 
 void main() {
   test('a CSV is the header plus one line per row', () {
@@ -30,6 +31,28 @@ void main() {
       ],
     );
     expect(csv.split('\n')[1], '"Fish, chips","well ""done"""');
+  });
+
+  test('a headed CSV opens with the report name and its provenance', () {
+    final csv = buildCsv(
+      ['Reason', 'Amount'],
+      [
+        ['Taxi', '25.00'],
+      ],
+      head: const ExportHeader(title: 'Expenses', lines: [
+        ('Shop', 'Nour Grill, Zamalek'),
+        ('Period', 'Today'),
+      ]),
+    );
+    expect(csv.split('\n'), [
+      'Expenses',
+      // The shop's own comma must not split its line into two columns.
+      'Shop,"Nour Grill, Zamalek"',
+      'Period,Today',
+      '',
+      'Reason,Amount',
+      'Taxi,25.00',
+    ]);
   });
 
   test('the export file name stamps the timestamp down to the minute', () {

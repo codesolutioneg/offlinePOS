@@ -46,6 +46,10 @@ dependencies:
   flutter_secure_storage: ^11.0.0
   pdf: ^3.12.0
   printing: ^5.14.3
+  # Reports download as a real workbook, not a CSV a manager has to coax into
+  # Excel. Pure Dart, so it costs the till nothing at runtime until one is asked
+  # for.
+  excel: ^4.0.4
 
 dev_dependencies:
   flutter_test:
