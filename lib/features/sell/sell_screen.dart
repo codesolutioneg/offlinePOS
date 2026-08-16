@@ -3280,7 +3280,24 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 ],
               )
             else
-              Text(tr(context, 'Cash'), style: const TextStyle(color: Colors.black54)),
+              // No tender came from Odoo. The sale still goes through and books as
+              // cash, but silence here reads as "this till only takes cash", so it
+              // says which of the two it is and what fixes it.
+              Column(
+                key: const Key('no-payment-methods'),
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(tr(context, 'Cash'),
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text(
+                    tr(context,
+                        'No payment methods have come from Odoo yet, so this sale books '
+                        'as cash. Set the server in Settings, then refresh the menu.'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
             if (_split) ...[
               const SizedBox(height: 12),
               for (final t in _tenders)
