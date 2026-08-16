@@ -23,8 +23,24 @@ class LineRasteriser {
   /// a receipt's second copy and its reprint cost nothing to render.
   static LineRasteriser shared = LineRasteriser();
 
-  /// Dots tall. Font A is a 12 by 24 cell, and 20 leaves a little room under the
-  /// baseline for the marks Arabic hangs below it.
+  /// The font the band is drawn in, carried in the app rather than asked of the
+  /// machine (see pubspec.yaml). A till is whatever Windows box the shop already
+  /// owned, and asking it for an Arabic glyph it does not have gives a row of empty
+  /// boxes on paper while every geometry test still passes.
+  static const String family = 'Cairo';
+
+  /// Tried in turn when the family above is missing a rune, so a name mixing scripts
+  /// still comes out whole. Latin and digits are in Cairo, so this is only ever
+  /// reached by something exotic.
+  static const List<String> fallbackFamilies = [
+    'Noto Naskh Arabic',
+    'Noto Sans Arabic',
+    'Arial Unicode MS',
+  ];
+
+  /// Point size of the rendered line, to sit beside the printer's own 12 by 24 cell.
+  /// The band is as tall as the font says this size needs, which for Arabic is more
+  /// than 24 dots because of what it hangs above and below the baseline.
   final double fontSize;
 
   /// A band is never shorter than a text line would have been, so a receipt does not
@@ -67,9 +83,13 @@ class LineRasteriser {
     // exactly as they do in the bytes.
     final stretch = r.totalWidthScale;
     final usable = r.dots / stretch;
+    // No `height` override: the font's own ascent and descent are what keeps the
+    // marks Arabic hangs above and below the baseline inside the band. Squeezing the
+    // line box to the point size shaved the bottom off every ba, ya and jim.
     final style = TextStyle(
       fontSize: fontSize * r.totalHeightScale,
-      height: 1.0,
+      fontFamily: family,
+      fontFamilyFallback: fallbackFamilies,
       fontWeight: r.bold ? FontWeight.w700 : FontWeight.w400,
       color: const Color(0xFF000000),
     );
@@ -94,6 +114,14 @@ class LineRasteriser {
     );
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder);
+    // Painted onto opaque white, not onto nothing. Reading a transparent canvas back
+    // means trusting how the platform reports straight versus premultiplied alpha,
+    // which differs by backend; on white the ink is just the dark pixels and the
+    // answer is the same everywhere.
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, r.dots.toDouble(), height.toDouble()),
+      Paint()..color = const Color(0xFFFFFFFF),
+    );
     if (stretch != 1) canvas.scale(stretch.toDouble(), 1);
     left.paint(canvas, Offset.zero);
     right?.paint(canvas, Offset(usable - right.width, 0));
@@ -101,8 +129,7 @@ class LineRasteriser {
     final image = await picture.toImage(r.dots, height);
     picture.dispose();
     try {
-      final pixels =
-          await image.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
+      final pixels = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       if (pixels == null) return null;
       return RasterBand(
         widthDots: r.dots,
@@ -156,17 +183,28 @@ class LineRasteriser {
   static bool _isLatinLetter(int r) =>
       (r >= 0x41 && r <= 0x5a) || (r >= 0x61 && r <= 0x7a) || (r >= 0xc0 && r <= 0x24f);
 
+  /// The luminance at or below which a pixel is burned. Generous on purpose: Arabic
+  /// at receipt size is thin, and its antialiased edges are most of the letter. This
+  /// is the same cut the old alpha test made for black text on white.
+  static const int inkThreshold = 160;
+
   /// One bit per dot, rows top to bottom, most significant bit leftmost. A dot is
-  /// inked wherever anything was drawn: the threshold sits below half opacity so the
-  /// thin edges of a rendered glyph survive as heat rather than disappearing.
+  /// inked wherever the pixel is darker than [inkThreshold], which on the white
+  /// ground [_draw] paints means wherever a glyph put ink.
   static Uint8List _pack(ByteData pixels, int width, int height) {
     final widthBytes = width ~/ 8;
     final bits = Uint8List(widthBytes * height);
     for (var y = 0; y < height; y++) {
       final row = y * widthBytes;
       for (var x = 0; x < width; x++) {
-        final alpha = pixels.getUint8(((y * width) + x) * 4 + 3);
-        if (alpha >= 96) bits[row + (x >> 3)] |= 0x80 >> (x & 7);
+        final at = ((y * width) + x) * 4;
+        // Rec. 601 luminance, in integer arithmetic so a whole receipt of bands
+        // costs no floating point.
+        final lum = (pixels.getUint8(at) * 299 +
+                pixels.getUint8(at + 1) * 587 +
+                pixels.getUint8(at + 2) * 114) ~/
+            1000;
+        if (lum <= inkThreshold) bits[row + (x >> 3)] |= 0x80 >> (x & 7);
       }
     }
     return bits;
