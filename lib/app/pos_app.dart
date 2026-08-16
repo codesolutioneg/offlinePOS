@@ -638,8 +638,9 @@ class _PosAppState extends State<PosApp> {
   ///
   /// Spooled like every other slip, so a dead printer costs a held job and never a
   /// refused payment, and never awaited by the screen that took the money. Cash
-  /// taken as a part payment goes in the drawer like any other cash, so the drawer
-  /// kick rides on this slip when the shop has it wired that way.
+  /// taken as a part payment goes in the drawer like any other cash, so this slip
+  /// carries the drawer kick, but only when no sale receipt is printing for the same
+  /// money: a check kicks the drawer on its own receipt.
   Future<void> _printPartialPayment(PartialPayment payment) async {
     final order = payment.order;
     try {
@@ -650,10 +651,10 @@ class _PosAppState extends State<PosApp> {
           .toSet();
       final isCash = payment.tenders.isEmpty ||
           payment.tenders.any((t) => cashIds.contains(t.methodId));
-      final bytes =
-          _receiptBuilder(openDrawer: isCash && widget.settings.openDrawerOnSale)
-              .buildPartialPayment(payment,
-                  at: DateTime.now(), actor: _session?.cashierId ?? order.cashierId);
+      final kick =
+          isCash && !payment.alsoReceipted && widget.settings.openDrawerOnSale;
+      final bytes = _receiptBuilder(openDrawer: kick).buildPartialPayment(payment,
+          at: DateTime.now(), actor: _session?.cashierId ?? order.cashierId);
       // Several shares land against the same order, so the timestamp keeps each one
       // out of the spool's dedupe rather than folding the second guest into the first.
       await _receiptPrinter.send(bytes,

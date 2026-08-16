@@ -18,6 +18,7 @@ class PartialPayment {
     this.tenders = const [],
     this.covered = const [],
     this.cashReceived,
+    this.alsoReceipted = false,
   });
 
   /// The bill the payment was taken against, for its table, number and cashier.
@@ -44,6 +45,11 @@ class PartialPayment {
   /// Cash handed over, when it was more than the amount settled, so the slip can
   /// print the change the way a sale receipt does.
   final double? cashReceived;
+
+  /// Whether a sale receipt prints for this payment as well. A guest's check is its
+  /// own paid sale and gets one; a share of a tab that stays open does not. The
+  /// caller uses this to keep one cash payment from kicking the drawer twice.
+  final bool alsoReceipted;
 }
 
 /// Formats an order as printer bytes.

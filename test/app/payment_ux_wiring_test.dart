@@ -160,6 +160,19 @@ void main() {
     return jobs.where((j) => (j.reference ?? '').startsWith(prefix)).length;
   }
 
+  Future<List<int>> slipBytes(String prefix) async {
+    final jobs = await spool.oldestFirst(limit: 100);
+    return jobs.firstWhere((j) => (j.reference ?? '').startsWith(prefix)).bytes;
+  }
+
+  /// ESC p, the drawer-kick sequence.
+  bool kicksDrawer(List<int> bytes) {
+    for (var i = 0; i + 1 < bytes.length; i++) {
+      if (bytes[i] == 0x1b && bytes[i + 1] == 0x70) return true;
+    }
+    return false;
+  }
+
   testWidgets('the payment sheet asks how the bill is being paid, in one place',
       (t) async {
     tableOnTheTill();
@@ -312,6 +325,47 @@ void main() {
     expect(paper, contains('PAID NOW'));
     expect(paper, contains('STILL OWED'));
     expect(paper, contains('250.00'));
+  });
+
+  testWidgets('a cash share opens the drawer once, and a check leaves it to the receipt',
+      (t) async {
+    SettingsStore(db).openDrawerOnSale = true;
+    final order = tableOnTheTill();
+    await signIn(t);
+
+    // A share: no sale receipt prints, so this slip is what opens the drawer.
+    await t.tap(find.byKey(const Key('pay')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pay-mode-evenly')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('split-ways')), '2');
+    await t.tap(find.byKey(const Key('split-ways-ok')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('method-1')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+    expect(kicksDrawer(await slipBytes('part-${order.uuid}-')), isTrue);
+
+    // A check: its own receipt kicks the drawer, so the detail slip must not do it
+    // again for the same money.
+    await t.tap(find.byKey(const Key('pay')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pay-mode-item')));
+    await t.pumpAndSettle();
+    await t.tap(find.descendant(
+        of: find.widgetWithText(ListTile, 'Cola'), matching: find.byType(Checkbox)));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pick-confirm')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('method-1')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+
+    final jobs = await spool.oldestFirst(limit: 100);
+    final checkSlip = jobs.lastWhere((j) => (j.reference ?? '').startsWith('part-'));
+    expect(kicksDrawer(checkSlip.bytes), isFalse);
   });
 
   testWidgets('a check asks for the service charge it is about to book', (t) async {

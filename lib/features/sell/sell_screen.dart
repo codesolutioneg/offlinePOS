@@ -1742,6 +1742,7 @@ class _SellScreenState extends State<SellScreen> {
         tenders: check.payments,
         covered: check.lines,
         cashReceived: cashReceived,
+        alsoReceipted: true,
       ));
     }
     if (!mounted) return;
