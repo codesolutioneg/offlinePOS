@@ -22,9 +22,10 @@ import 'package:offline_pos/core/sync/odoo_endpoint.dart';
 import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
+import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/shift/shift_screen.dart';
-import 'package:offline_pos/features/tables/table_floor_screen.dart';
+import 'package:offline_pos/features/support/diagnostics_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
@@ -37,16 +38,18 @@ class _NoPrinters extends PrinterDiscovery {
   Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async => const [];
 }
 
-/// What a cashier is told about the drawer when they sign in.
+/// No open shift, no sale.
 ///
-/// Two ways a day goes wrong quietly: a Z with no float because nobody opened a
-/// shift, and yesterday's shift silently swallowing today's sales. Both are told on
-/// the screen the cashier actually lands on. The strip is the way to the fix from
-/// anywhere; the refusal to sell without a shift is the sell screen's own.
+/// A sale rung outside a shift belongs to no drawer and no Z. The till refuses to
+/// start an order at all until one is open, and sends the cashier to open it. What
+/// it must never refuse is the way out: the drawer, the support screens and the
+/// shift screen itself all stay reachable.
 void main() {
   late Db db;
   late ShiftStore shifts;
   late AuditLog audit;
+
+  const cash = PaymentMethod(id: 1, name: 'Cash', isCash: true);
 
   setUpAll(useSystemSqlite);
   setUp(() async {
@@ -54,6 +57,14 @@ void main() {
     shifts = ShiftStore(db);
     audit = AuditLog(db);
     SettingsStore(db);
+    CatalogueStore(db).replaceAll(
+      categories: const [Category(id: 1, name: 'Pizza')],
+      products: const [Product(id: 10, name: 'Margherita', price: 250, categoryId: 1)],
+      groups: const [],
+      productGroupIds: const {},
+      paymentMethods: const [cash],
+      refreshedAt: DateTime.now().toUtc(),
+    );
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234', role: 'manager');
     WizardStore(db).dismiss(WizardId.firstSale, 'sara');
@@ -106,99 +117,82 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  testWidgets('signing in with no shift open nudges the cashier to open one',
-      (t) async {
+  /// A till-shaped window: the keypad and the drawer both want the height.
+  void tallWindow(WidgetTester t) {
+    t.view.physicalSize = const Size(1000, 2400);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+  }
+
+  /// Sign in and land on the till, which is where an order would be started.
+  Future<void> onTheTill(WidgetTester t) async {
+    tallWindow(t);
     await t.pumpWidget(app());
     await signIn(t);
-
-    // On the floor, which is where sign-in lands, and readable there.
-    expect(find.byType(TableFloorScreen), findsOneWidget);
-    expect(find.byKey(const Key('shift-nudge')).hitTestable(), findsOneWidget);
-    expect(find.text('No shift is open. Selling is blocked until you open one.'),
-        findsOneWidget);
-
-    await t.tap(find.byKey(const Key('shift-nudge-open')));
-    await t.pumpAndSettle();
-
-    expect(find.byType(ShiftScreen), findsOneWidget);
-    expect(find.byKey(const Key('open-shift')), findsOneWidget);
-    // Taken, not just hidden behind the screen it opened.
-    expect(find.byKey(const Key('shift-nudge')), findsNothing);
-  });
-
-  testWidgets('a shift left open from an earlier day says so', (t) async {
-    shifts.openShift(
-      openingFloat: 100,
-      cashierId: 'sara',
-      at: DateTime.now().toUtc().subtract(const Duration(days: 2)),
-    );
-
-    await t.pumpWidget(app());
-    await signIn(t);
-
-    expect(find.byKey(const Key('shift-nudge')).hitTestable(), findsOneWidget);
-    expect(
-        find.text('A shift is open from an earlier day. Close it first.'),
-        findsOneWidget);
-
-    // The way out is the shift screen, with the same drawer figures it always has.
-    await t.tap(find.byKey(const Key('shift-nudge-open')));
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('close-shift')), findsOneWidget);
-  });
-
-  testWidgets("a shift opened today's trading is not nagged about", (t) async {
-    shifts.openShift(openingFloat: 100, cashierId: 'sara');
-
-    await t.pumpWidget(app());
-    await signIn(t);
-
-    expect(find.byKey(const Key('shift-nudge')), findsNothing);
-  });
-
-  testWidgets('waving the strip away does not open the drawer', (t) async {
-    await t.pumpWidget(app());
-    await signIn(t);
-
-    // The floor still navigates with the strip up, and the till behind it still
-    // refuses the order: dismissing the reminder is not a way past the gate.
     await t.tap(find.byKey(const Key('floor-takeaway')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
-    expect(find.byKey(const Key('shift-nudge')).hitTestable(), findsOneWidget);
+  }
 
-    await t.tap(find.byKey(const Key('shift-nudge-dismiss')));
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('shift-nudge')), findsNothing);
+  testWidgets('with no shift open the till refuses to start an order', (t) async {
+    await onTheTill(t);
+
     expect(find.byKey(const Key('no-shift-gate')), findsOneWidget);
+    expect(find.text('No shift is open'), findsOneWidget);
+    // Nothing to ring up with: no grid, no cart, no Pay.
+    expect(find.text('Margherita'), findsNothing);
+    expect(find.byKey(const Key('pay')), findsNothing);
+    expect(find.byKey(const Key('search')), findsNothing);
   });
 
-  testWidgets('an Arabic till reads the nudge in Arabic', (t) async {
-    // The strip is built above the navigator, which is the one place in this app
-    // where a missing Localizations ancestor would only show up on an Arabic till.
-    SettingsStore(db).language = 'ar';
+  testWidgets('the refusal opens the shift, and the till sells again', (t) async {
+    await onTheTill(t);
 
-    await t.pumpWidget(app());
-    await signIn(t);
+    await t.tap(find.byKey(const Key('no-shift-open-shift')));
+    await t.pumpAndSettle();
+    expect(find.byType(ShiftScreen), findsOneWidget);
 
-    expect(find.text('لا توجد وردية مفتوحة. البيع متوقف حتى تفتح واحدة.'),
-        findsOneWidget);
+    // Open with a hundred on the float, the way a cashier starts the day.
+    await t.tap(find.byKey(const Key('open-shift')));
+    await t.pumpAndSettle();
+    for (final d in '100'.split('')) {
+      await t.tap(find.byKey(Key('key-$d')));
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('keypad-ok')));
+    await t.pumpAndSettle();
+    expect(shifts.currentOpenShift(), isNotNull);
+
+    // Back to the till, which is open for business without a restart.
+    await t.pageBack();
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('no-shift-gate')), findsNothing);
+
+    await t.tap(find.text('Margherita'));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('pay')), findsOneWidget);
   });
 
-  testWidgets('the nudge does not follow the cashier out to the sign-in screen',
+  testWidgets('a closed drawer does not lock the cashier out of a reprint',
       (t) async {
-    await t.pumpWidget(app());
-    await signIn(t);
-    expect(find.byKey(const Key('shift-nudge')).hitTestable(), findsOneWidget);
+    await onTheTill(t);
 
-    // Off the floor and out: the next cashier's PIN screen is not the place to be
-    // told about the last one's drawer.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    // The drawer is the way to everything that is not selling, and it is still
+    // there: support carries the receipt reprints.
+    await t.tap(find.byTooltip('Open navigation menu'));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('sign-out')));
+    await t.tap(find.byKey(const Key('nav-support')));
     await t.pumpAndSettle();
 
-    expect(find.byKey(const Key('shift-nudge')), findsNothing);
-    expect(find.byKey(const Key('user-sara')), findsOneWidget);
+    expect(find.byType(DiagnosticsScreen), findsOneWidget);
+  });
+
+  testWidgets('a till with a shift open is not gated at all', (t) async {
+    shifts.openShift(openingFloat: 100, cashierId: 'sara');
+    await onTheTill(t);
+
+    expect(find.byKey(const Key('no-shift-gate')), findsNothing);
+    expect(find.text('Margherita'), findsOneWidget);
   });
 }

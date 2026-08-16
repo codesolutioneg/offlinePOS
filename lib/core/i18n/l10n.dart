@@ -748,8 +748,6 @@ const Map<String, String> _ar = {
   'Business day starts at': 'يبدأ يوم العمل الساعة',
   'Sales before this hour count as the previous trading day':
       'المبيعات قبل هذه الساعة تُحسب على يوم العمل السابق',
-  'No shift is open. Open one with a float?':
-      'لا توجد وردية مفتوحة. هل تفتح واحدة برصيد ابتدائي؟',
   'A shift is open from an earlier day. Close it first.':
       'هناك وردية مفتوحة من يوم سابق. أغلقها أولاً.',
   'Not now': 'ليس الآن',
@@ -1084,4 +1082,19 @@ const Map<String, String> _ar = {
   'Total outstanding': 'إجمالي المستحقات',
   'Sales on account': 'المبيعات على الحساب',
   'Unnamed': 'بدون اسم',
+  // shift discipline and reports
+  'No shift is open. Selling is blocked until you open one.':
+      'لا توجد وردية مفتوحة. البيع متوقف حتى تفتح واحدة.',
+  'Open a shift with a float before you take an order. Reprints and support still work.':
+      'افتح وردية برصيد ابتدائي قبل استقبال أي طلب. إعادة الطباعة والدعم تعمل كالمعتاد.',
+  'The shift cannot close until every one of these is settled or discarded.':
+      'لا يمكن إغلاق الوردية حتى يتم تحصيل أو إلغاء كل واحد منها.',
+  'Cannot close: still open on this till':
+      'لا يمكن الإغلاق: ما زال مفتوحًا على هذه الكاشة',
+  'The drawer does not add up': 'الدرج غير مطابق',
+  'Allowed difference': 'الفرق المسموح به',
+  'Recount the drawer, or record the difference as a cash in or cash out, then close.':
+      'أعد عدّ الدرج، أو سجّل الفرق كإيداع أو صرف نقدي، ثم أغلق.',
+  'How far the counted drawer may sit from the expected drawer and still close the shift':
+      'مقدار الفرق المسموح بين الدرج المعدود والدرج المتوقع مع إمكانية إغلاق الوردية',
 };

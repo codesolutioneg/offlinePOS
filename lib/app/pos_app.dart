@@ -212,8 +212,9 @@ class PosApp extends StatefulWidget {
 }
 
 /// What the till has to say about the drawer when a cashier signs in: nobody
-/// opened a shift, or one is still open from an earlier trading day. Neither stops
-/// anyone selling; both are how a day ends up with a Z that makes no sense.
+/// opened a shift, or one is still open from an earlier trading day. Both are how a
+/// day ends up with a Z that makes no sense; the first one also stops the till
+/// selling, which the sell screen enforces.
 enum ShiftNudge { noShift, staleShift }
 
 /// What a cashier is shown the first time they ring something up.
@@ -451,11 +452,11 @@ class _PosAppState extends State<PosApp> {
 
   /// The strip that carries [_nudge], above every screen in the app.
   ///
-  /// A strip and not a dialog, deliberately. Selling is never gated on this: a queue
-  /// at the counter outranks the paperwork, and a modal at sign-in is a modal that
-  /// gets dismissed without being read. It sits above the navigator rather than on
-  /// one screen, so it is read on the floor the cashier lands on as well as on the
-  /// sell screen, and it takes its own space instead of covering the till.
+  /// A strip and not a dialog, deliberately: a modal at sign-in is a modal that gets
+  /// dismissed without being read. It sits above the navigator rather than on one
+  /// screen, so it is read on the floor the cashier lands on as well as on the sell
+  /// screen, and it takes its own space instead of covering the till. The refusal
+  /// itself lives on the sell screen; this is the way to the fix from anywhere.
   Widget _shiftNudgeBar(BuildContext context, ShiftNudge nudge) {
     final stale = nudge == ShiftNudge.staleShift;
     return Material(
@@ -475,7 +476,7 @@ class _PosAppState extends State<PosApp> {
                     context,
                     stale
                         ? 'A shift is open from an earlier day. Close it first.'
-                        : 'No shift is open. Open one with a float?'),
+                        : 'No shift is open. Selling is blocked until you open one.'),
                 style: const TextStyle(color: Colors.white),
               ),
             ),
@@ -1007,6 +1008,10 @@ class _PosAppState extends State<PosApp> {
               // New order returns to the floor home to choose a table or the
               // takeaway/delivery buttons.
               onNewOrder: () => _openFloor(context, session),
+              // No open shift, no sale. Read per build so opening one on the shift
+              // screen and coming straight back lifts the block with no restart.
+              shiftOpen: () => widget.shifts.currentOpenShift() != null,
+              onOpenShift: () => _openShift(context, session),
               onChanged: _publishActivity,
               onSignOut: _signOut,
               drawer: _buildDrawer(context, session),
@@ -2572,20 +2577,15 @@ class _PosAppState extends State<PosApp> {
         cashMethodIds: cashMethodIds,
         formatAmount: PosApp.money,
         onPrintReport: _printShiftReport,
-        // Read at the moment the Z is attempted, not now: a tab can be settled
-        // while the shift screen is open.
+        // Read at the moment the Z is attempted, not only when the screen was
+        // built: a tab can be settled while the shift screen is open.
         openWork: () => _openWork(context),
-        // Leaving a parked tab or an unfired course behind is money and food nobody
-        // has accounted for, so it always takes a manager, whatever the cashier's
-        // role allows for an ordinary close. Audited either way: an override and a
-        // refusal are both worth knowing about the morning after.
-        authorizeOpenWork: () async {
-          final who = session.cashierId;
-          final ok = await _authorizeManager(context);
-          widget.audit.record(
-              who, ok ? 'shift.close.override' : 'shift.close.blocked');
-          return ok;
-        },
+        // The allowance the counted drawer is held to, zero unless the shop set one.
+        cashVarianceTolerance: widget.settings.cashVarianceTolerance,
+        // A refused Z is worth knowing about the morning after: it says a till was
+        // left with work on it or a drawer that did not add up.
+        onCloseBlocked: (reason) =>
+            widget.audit.record(session.cashierId, reason),
         // Gated BEFORE the shift closes, since the close is irreversible: the
         // cashier's role may allow it outright, otherwise a manager approves.
         authorizeClose: () => _authorize(Permission.closeShift, context),
@@ -2619,7 +2619,15 @@ class _PosAppState extends State<PosApp> {
               'pending, try again from Support > Sync now.';
         },
       ),
-    ));
+    ))
+        // Coming back from a shift opened or closed changes whether the till may
+        // sell, so the screen underneath is rebuilt rather than left stale.
+        .then((_) {
+      if (mounted) {
+        setState(() {});
+        _nudgeShift();
+      }
+    });
   }
 
   /// Queue the closed Z for whoever the shop asked to send it to.
