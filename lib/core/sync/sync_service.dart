@@ -50,7 +50,7 @@ class SyncService {
     AuditLog? audit,
     Future<bool> Function()? probe,
     this.reconcile,
-    this.catalogueMaxAge = const Duration(hours: 6),
+    this.catalogueMaxAge = const Duration(minutes: 30),
     this.retryWindow = const Duration(hours: 12),
     this.retryInterval = const Duration(minutes: 5),
     DateTime Function()? now,
@@ -75,6 +75,14 @@ class SyncService {
 
   final String deviceId;
   final String appVersion;
+
+  /// How old the menu may get before the background loop pulls it again.
+  ///
+  /// Half an hour, because the thing the shop actually complains about is a price
+  /// changed in Odoo that the till is still selling at yesterday's number. Sign-in
+  /// and the manual refresh both force a pull, so this only sets the worst case for
+  /// a till nobody touches. The pull is read-only and stays that way: shortening it
+  /// changes how often prices come down, never how often orders go up.
   final Duration catalogueMaxAge;
 
   /// How long after a batch push failed the timer keeps trying to finish it. Wide
@@ -248,10 +256,9 @@ class SyncService {
   /// runs, keeping the badge and prices current without booking anything.
   ///
   /// [force] skips the age gate only. A price changed in Odoo at 09:00 would
-  /// otherwise sit unseen until the catalogue aged past [catalogueMaxAge], which is
-  /// most of a service; a cashier signing in, or asking for the menu by hand, gets
-  /// the prices now. Nothing else changes: forced or not, this pass still cannot
-  /// send an order.
+  /// otherwise sit unseen until the catalogue aged past [catalogueMaxAge]; a cashier
+  /// signing in, or asking for the menu by hand, gets the prices now. Nothing else
+  /// changes: forced or not, this pass still cannot send an order.
   Future<RefreshOutcome> refresh({bool force = false}) async {
     if (_state == SyncState.working) return RefreshOutcome.unchanged;
     if (_probe != null) {

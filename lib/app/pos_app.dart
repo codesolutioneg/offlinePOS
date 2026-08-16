@@ -1107,6 +1107,10 @@ class _PosAppState extends State<PosApp> {
           session: session,
           formatAmount: PosApp.money,
           staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
+          // When the menu came down, said plainly beside the online badge. The
+          // background loop now pulls every half hour, so this is usually within the
+          // hour, and when it is not the cashier can see that rather than assume.
+          pricesAt: widget.catalogue.refreshedAt,
           catalogueChanged: widget.sync.catalogueRevision,
           // No per-sale push: orders are held and sent as one batch at shift
           // close, so the shared Odoo login is not hit per order.

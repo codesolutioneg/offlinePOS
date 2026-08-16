@@ -96,6 +96,27 @@ void main() {
     expect(serviceWith().catalogueNeedsRefresh, isTrue);
   });
 
+  test('the background loop chases a price change within the half hour', () {
+    // A price changed in Odoo used to sit unseen for six hours, which is most of a
+    // service. The loop is read-only either way: this only says how often the menu
+    // is re-read, never that anything is pushed.
+    final s = serviceWith();
+    expect(s.catalogueMaxAge, const Duration(minutes: 30));
+
+    void pulledAgo(Duration age) => cat.replaceAll(
+          categories: const [],
+          products: const [Product(id: 1, name: 'A', price: 5)],
+          groups: const [],
+          productGroupIds: const {},
+          refreshedAt: DateTime.now().toUtc().subtract(age),
+        );
+
+    pulledAgo(const Duration(minutes: 10));
+    expect(s.catalogueNeedsRefresh, isFalse);
+    pulledAgo(const Duration(minutes: 45));
+    expect(s.catalogueNeedsRefresh, isTrue);
+  });
+
   test('a batch push re-queues a paid sale that never reached the outbox', () async {
     // Simulates the app being killed between saving a paid sale and queuing it: the
     // reconcile hook re-enqueues it, so a flush still delivers it rather than

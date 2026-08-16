@@ -33,6 +33,7 @@ class SellScreen extends StatefulWidget {
     this.onChanged,
     this.onSignOut,
     this.staleness,
+    this.pricesAt,
     this.catalogueChanged,
     this.drawer,
     this.onHold,
@@ -91,6 +92,13 @@ class SellScreen extends StatefulWidget {
   final VoidCallback? onSignOut;
 
   final Duration? staleness;
+
+  /// When the menu on this till last came down from the server, in UTC. Shown
+  /// beside the online badge as a plain fact rather than only as a warning once the
+  /// prices are a day old, because "is this the current price?" is a question a
+  /// cashier has long before that. Null on a till that has never pulled, which shows
+  /// nothing rather than a made-up time.
+  final DateTime? pricesAt;
 
   /// Ticks when a background sync refreshes the catalogue, so the grid reloads
   /// itself instead of the cashier leaving and re-entering the screen.
@@ -2301,6 +2309,22 @@ class _SellScreenState extends State<SellScreen> {
                   label: Text('$pending ${tr(context, 'to sync')}', style: const TextStyle(fontSize: 11)),
                 ),
               ),
+            // When the prices on the grid came down. The one fact behind "is this
+            // still what Odoo says?", on screen from the first sale rather than as a
+            // banner that only appears once the menu is a day old.
+            if (widget.pricesAt != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Chip(
+                  key: const Key('prices-as-of'),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  avatar: const Icon(Icons.sell_outlined, size: 14),
+                  label: Text(
+                      '${tr(context, 'Prices')} ${_hhmm(widget.pricesAt!)}',
+                      style: const TextStyle(fontSize: 11)),
+                ),
+              ),
             // Paper waiting on a printer, which is a different problem from sales
             // waiting on the server and needs its own badge.
             if (held > 0)
@@ -2325,6 +2349,14 @@ class _SellScreenState extends State<SellScreen> {
       valueListenable: online,
       builder: (context, isOnline, child) => badge(isOnline),
     );
+  }
+
+  /// A UTC instant as the local wall clock, which is the only way a cashier reads a
+  /// time.
+  static String _hhmm(DateTime utc) {
+    final at = utc.toLocal();
+    return '${at.hour.toString().padLeft(2, '0')}:'
+        '${at.minute.toString().padLeft(2, '0')}';
   }
 
   /// The configured colour for a product's category, or null to leave the tile

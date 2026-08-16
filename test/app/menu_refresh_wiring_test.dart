@@ -180,6 +180,22 @@ void main() {
     expect(CatalogueStore(db).products().single.price, 10);
   });
 
+  testWidgets('the counter says when the prices came down', (t) async {
+    draftOnTheTill();
+    await t.pumpWidget(app());
+    await signIn(t);
+    await t.pumpAndSettle();
+
+    // Sign-in pulled the menu, so the counter can say to the minute how old the
+    // prices are instead of leaving a cashier to guess until the day-old warning.
+    final at = CatalogueStore(db).refreshedAt!.toLocal();
+    final hhmm = '${at.hour.toString().padLeft(2, '0')}:'
+        '${at.minute.toString().padLeft(2, '0')}';
+    expect(find.byKey(const Key('prices-as-of')), findsOneWidget);
+    expect(find.text('Prices $hhmm'), findsOneWidget);
+    expect(find.byKey(const Key('stale-banner')), findsNothing);
+  });
+
   testWidgets('Refresh menu brings a new price down there and then', (t) async {
     tallWindow(t);
     draftOnTheTill();
@@ -189,7 +205,7 @@ void main() {
     expect(pulls, 1);
 
     // The manager changed the price in Odoo a minute ago. The catalogue on the
-    // till is minutes old, so the ordinary six-hour gate would hold it back.
+    // till is minutes old, so the ordinary half-hour gate would hold it back.
     price = 14;
     await openSettingsHub(t);
     await t.tap(find.byKey(const Key('set-refresh-menu')));
