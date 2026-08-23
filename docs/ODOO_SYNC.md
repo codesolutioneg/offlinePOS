@@ -134,6 +134,35 @@ Every order push carries these, each one for a reason that has gone wrong somewh
 | `discount_amount`, `prices_include_discount` | What was taken off, in money, and whether the prices already have it. See below |
 | `amount_total` | What the till charged. The module totals the sale itself from the lines it built; this is the figure to hold that against, so a divergence is visible instead of silent |
 
+### Prices travel net, and the tax is charged on top
+
+A menu price is **net**. The till adds the tax to it, prints it as its own row, and
+charges the guest the sum; the payload carries the net price and the server applies
+each product's own tax to exactly that figure. The two therefore land on the same
+total by construction rather than by agreement, which is what lets `amount_total` be
+stated and the sale refused if the server ever arrives at anything else.
+
+It is net because that is what the shop's on-site till does, and its guests have been
+paying that way for as long as it has been running: a 200.00 basket on a 14% menu is
+228.00 at the counter, and both tills now say so. A till that treated the menu price
+as tax-inclusive would undercharge by the tax and, worse, disagree with the books.
+
+What is inside the base and what is not:
+
+| | In the tax base | Why |
+|---|---|---|
+| Food, after every discount | yes | The supply, at the price actually charged for it |
+| Service charge | yes | It rides inside the line prices on the wire, so the server taxes it there; the slip has to match |
+| Delivery | no | Exempt on the shop's on-site till, so the module books its line untaxed |
+| Tip | no | Not a supply; booked untaxed for the same reason |
+
+The one place the two tills deliberately differ: the on-site till computes its tax on
+the subtotal **before** the invoice discount and then subtracts the discount from the
+total, so a discounted bill there carries tax on money the guest did not pay. Here
+the tax follows the discount, because the server computes it from the discounted
+price it is sent and a sale whose stated total disagreed with the booking would be
+refused on every discounted bill.
+
 ### The payload has to add up
 
 The module builds the sale from the `lines` it is handed and then settles it from
