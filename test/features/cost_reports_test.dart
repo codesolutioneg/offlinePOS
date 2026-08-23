@@ -27,15 +27,26 @@ void main() {
           taxRate: taxRate);
 
   group('the aggregation', () {
-    test('margin is revenue net of tax and discount, less what it cost', () {
-      // 2 x 115 at 15% tax is 200 net; costing 60 each leaves 80.
+    test('margin is the net revenue less what it cost, tax left out of it', () {
+      // Menu prices are net, so 2 x 115 is 230 of revenue whatever the tax rate is:
+      // the 15% is charged on top and belongs to the state, not to the shop. Costing
+      // 60 each leaves 110.
       final rows = productMargins(
           [sale([item(1, 'Pizza', 2, 115, taxRate: 15)])], {1: 60});
       final pizza = rows.single;
-      expect(pizza.revenue, closeTo(200, 0.001));
+      expect(pizza.revenue, closeTo(230, 0.001));
       expect(pizza.cost, 120);
-      expect(pizza.margin, closeTo(80, 0.001));
-      expect(pizza.marginPercent, closeTo(40, 0.001));
+      expect(pizza.margin, closeTo(110, 0.001));
+      expect(pizza.marginPercent, closeTo(110 / 230 * 100, 0.001));
+    });
+
+    test('the tax rate changes nothing about a margin', () {
+      final taxed = productMargins(
+          [sale([item(1, 'Pizza', 1, 100, taxRate: 14)])], {1: 40}).single;
+      final untaxed = productMargins(
+          [sale([item(1, 'Pizza', 1, 100)])], {1: 40}).single;
+      expect(taxed.revenue, closeTo(untaxed.revenue, 0.001));
+      expect(taxed.margin, closeTo(untaxed.margin, 0.001));
     });
 
     test('a whole-order discount comes off the revenue, not off the cost', () {

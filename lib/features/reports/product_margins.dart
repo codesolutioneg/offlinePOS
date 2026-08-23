@@ -54,9 +54,12 @@ List<ProductMargin> productMargins(List<Order> orders, Map<int, double> costs) {
     for (final line in order.lines) {
       names[line.productId] = line.name;
       units[line.productId] = (units[line.productId] ?? 0) + line.quantity;
-      final gross = line.total * orderFactor;
-      final net = line.taxRate > 0 ? gross / (1 + line.taxRate / 100) : gross;
-      revenue[line.productId] = (revenue[line.productId] ?? 0) + net;
+      // The line price is already net: the tax is charged on top of it and is the
+      // state's money, not the shop's, so it never enters a margin. Dividing it back
+      // out here (as this did when prices were tax-inclusive) would take 14% off the
+      // revenue twice and understate every margin in the report.
+      revenue[line.productId] =
+          (revenue[line.productId] ?? 0) + line.total * orderFactor;
     }
   }
   final out = [
