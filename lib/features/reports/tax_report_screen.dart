@@ -4,8 +4,9 @@ import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 import 'report_export.dart';
 
-/// A tax report: net, tax and gross grouped by tax rate. Prices are tax-inclusive,
-/// so the tax shown is the portion already contained in what customers paid.
+/// A tax report: net, tax and gross grouped by tax rate. Menu prices are net, so
+/// the tax shown is what was charged on top of them and the gross is what the
+/// customers actually paid.
 class TaxReportScreen extends StatelessWidget {
   const TaxReportScreen({super.key, required this.orders, required this.formatAmount});
 
@@ -23,10 +24,12 @@ class TaxReportScreen extends StatelessWidget {
       final f = o.discountFactor * o.serviceChargeFactor;
       for (final l in o.lines) {
         if (l.taxRate <= 0) continue;
-        final gross = l.total * f;
-        final tax = gross - gross / (1 + l.taxRate / 100);
+        // The line's net, then the tax charged on top of it. Gross is the sum of the
+        // two, which is what the customer handed over for this line.
+        final net = l.total * f;
+        final tax = net * l.taxRate / 100;
         final acc = byRate.putIfAbsent(l.taxRate, () => [0, 0]);
-        acc[0] += gross;
+        acc[0] += net + tax;
         acc[1] += tax;
       }
     }
