@@ -249,11 +249,16 @@ class ReceiptBuilder {
     p.rule(divider);
     // Show the breakdown only when there is one, so a plain sale stays a plain
     // receipt but a discounted delivery with a tip is fully itemised.
+    // A taxed sale always gets the breakdown: with the tax added on top, a slip that
+    // jumped from the items straight to a VAT row and a total would give the guest no
+    // net figure to add it to.
+    final tax = order.taxTotal;
     final hasBreakdown = showTotals &&
         (order.discountPercent > 0 ||
             order.serviceChargePercent > 0 ||
             order.deliveryCost > 0 ||
-            order.tip > 0);
+            order.tip > 0 ||
+            (showTax && tax > 0.001));
     if (hasBreakdown) {
       p.row('Subtotal', formatAmount(order.subtotal));
       if (order.discountPercent > 0) {
@@ -269,15 +274,18 @@ class ReceiptBuilder {
         p.row('Service ${_pct(order.serviceChargePercent)}%',
             formatAmount(order.serviceCharge));
       }
+      // The tax sits directly under what it is charged on, and above delivery and
+      // tip, which are outside its base. The order of the rows is the arithmetic.
+      if (showTax && tax > 0.001) {
+        // Only one rate is in play on almost every bill, so name it; a mixed bill
+        // (a zero-rated category beside a taxed one) prints the plain label.
+        final rates =
+            order.lines.where((l) => l.taxRate > 0).map((l) => l.taxRate).toSet();
+        p.row(rates.length == 1 ? 'VAT ${_pct(rates.first)}%' : 'VAT',
+            formatAmount(tax));
+      }
       if (order.deliveryCost > 0) p.row('Delivery', formatAmount(order.deliveryCost));
       if (order.tip > 0) p.row('Tip', formatAmount(order.tip));
-    }
-    // Tax is shown as included in the total (prices are tax-inclusive), so the
-    // slip is a valid tax receipt without changing what the customer pays.
-    final tax = order.taxTotal;
-    if (showTax && showTotals && tax > 0.001) {
-      p.row('Net', formatAmount(order.total - tax));
-      p.row('Tax', formatAmount(tax));
     }
     if (showTotals) {
       p.size(doubleHeight: true).bold(true)

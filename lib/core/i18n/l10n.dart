@@ -192,6 +192,7 @@ const Map<String, String> _ar = {
   // reports
   'Sales summary': 'ملخص المبيعات',
   'Tax': 'الضريبة',
+  'VAT': 'ض.ق.م',
   'Tax report': 'تقرير الضريبة',
   'Top products': 'أفضل المنتجات',
   'Category performance': 'أداء الأقسام',

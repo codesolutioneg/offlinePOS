@@ -2724,10 +2724,10 @@ class _SellScreenState extends State<SellScreen> {
                 _totalRow('Delivery', widget.formatAmount(s.current.deliveryCost), muted: true),
               const SizedBox(height: 6),
             ],
-            // Tax is included in the prices, so it is shown as an "incl." line
-            // rather than added on; the total is unchanged.
+            // Charged on top of the net prices, so it is a row of the sum the
+            // cashier reads out, not a note about what is inside the total.
             if (s.current.taxTotal > 0.001)
-              _totalRow('Tax (incl.)', widget.formatAmount(s.current.taxTotal),
+              _totalRow('VAT', widget.formatAmount(s.current.taxTotal),
                   key: const Key('tax-line'), muted: true),
             Row(children: [
               Text(tr(context, 'TOTAL'), style: const TextStyle(fontWeight: FontWeight.bold)),
