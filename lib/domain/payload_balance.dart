@@ -46,9 +46,40 @@ double payloadLinesTotal(Map<String, dynamic> payload) {
 double payloadPricedExtras(Map<String, dynamic> payload) =>
     _num(payload['delivery_cost']) + _num(payload['tip']);
 
-/// Everything this payload says was sold: its lines plus [payloadPricedExtras].
+/// The tax this payload's own lines say will be charged on them.
+///
+/// Prices travel net and the server adds the tax, so the money tendered is always
+/// more than the lines come to. Without this the check would read that difference
+/// as a payload that does not add up and park every taxed sale on the till.
+///
+/// Each line's own rate, applied to that line and to the modifiers priced into it,
+/// which is exactly how the till worked the figure out before it charged the guest.
+/// Delivery and a tip carry no tax and so are not in here: the module books their
+/// lines untaxed for the same reason.
+double payloadTaxTotal(Map<String, dynamic> payload) {
+  var tax = 0.0;
+  for (final raw in (payload['lines'] as List? ?? const [])) {
+    final line = (raw as Map).cast<String, dynamic>();
+    final rate = _num(line['tax_rate']);
+    if (rate <= 0) continue;
+    final qty = _num(line['quantity']);
+    var net = qty * _num(line['unit_price']);
+    for (final rawMod in (line['modifiers'] as List? ?? const [])) {
+      final mod = (rawMod as Map).cast<String, dynamic>();
+      if (mod['product_id'] == null) continue;
+      net += qty * _num(mod['quantity']) * _num(mod['unit_price']);
+    }
+    tax += net * rate / 100;
+  }
+  return tax;
+}
+
+/// Everything this payload says was sold: its lines, the tax charged on them, and
+/// [payloadPricedExtras].
 double payloadDeclaredTotal(Map<String, dynamic> payload) =>
-    payloadLinesTotal(payload) + payloadPricedExtras(payload);
+    payloadLinesTotal(payload) +
+    payloadTaxTotal(payload) +
+    payloadPricedExtras(payload);
 
 /// Everything this payload says was tendered.
 double payloadTendered(Map<String, dynamic> payload) => (payload['payments']
@@ -78,7 +109,8 @@ String? payloadImbalanceReason(Map<String, dynamic> payload) {
   if (payloadBalances(payload)) return null;
   final gap = payloadImbalance(payload);
   return 'payload does not add up: tendered ${_money(payloadTendered(payload))} '
-      'against lines ${_money(payloadLinesTotal(payload))} plus delivery and tip '
+      'against lines ${_money(payloadLinesTotal(payload))} plus tax '
+      '${_money(payloadTaxTotal(payload))} plus delivery and tip '
       '${_money(payloadPricedExtras(payload))}, a gap of ${_money(gap)}';
 }
 
