@@ -206,8 +206,8 @@ class OrderLine {
   final int? categoryId;
 
   /// The line's tax rate as a percent (e.g. 14 for 14%), captured from the product
-  /// at the moment of sale. Prices are treated as tax-inclusive, so this is used
-  /// only to show the tax component; the amount the customer pays is unchanged.
+  /// at the moment of sale. The price is net, so this rate is charged on top of it:
+  /// it is part of what the customer pays, not a breakdown of it.
   // Mutable so the category/order-type tax matrix can override the product's rate
   // when the line is added or the order type changes.
   double taxRate;
@@ -460,9 +460,15 @@ class Order {
   double get serviceChargeFactor => 1 + serviceChargePercent.clamp(0, 100) / 100;
 
   /// What the customer pays: lines (each already net of its own discount), less
-  /// the whole-order discount, plus service, delivery and tip.
+  /// the whole-order discount, plus service, the tax charged on those two,
+  /// delivery and tip.
+  ///
+  /// Menu prices are NET: the tax is added here rather than sitting inside them.
+  /// That is what the shop's other till does and therefore what its guests have
+  /// been paying, and it is what the server books when it applies each product's
+  /// tax to the price this sale is sent at.
   double get total =>
-      subtotal * discountFactor + serviceCharge + deliveryCost + tip;
+      subtotal * discountFactor + serviceCharge + taxTotal + deliveryCost + tip;
 
   /// Money already tendered against this order. On a normal sale this equals the
   /// total; on an even/part-paid open tab it is the sum of the shares taken so far.
@@ -471,19 +477,24 @@ class Order {
   /// What is still owed. Zero (or below) means the order is fully settled.
   double get balance => total - amountPaid;
 
-  /// The tax already contained in the line prices (prices are tax-inclusive), after
-  /// the whole-order discount. Informational: it does not change [total]. The server
-  /// remains the source of truth for the tax actually booked.
+  /// The tax charged on this bill, added on top of the net prices.
+  ///
+  /// Per line at that line's own rate rather than one rate for the sale, because the
+  /// shop can zero-rate a category or an order type, and because this has to equal
+  /// what the server works out: it applies each product's tax to the very price this
+  /// line is sent at. The two agreeing is what lets the sale state its total and be
+  /// refused if the server ever disagrees.
+  ///
+  /// The base is the food after every discount, scaled by the service charge, since
+  /// the service rides inside the line prices on the wire and is taxed there too.
+  /// Delivery and tip stay outside it: delivery is exempt on the shop's other till,
+  /// and a tip is not a supply.
   double get taxTotal {
     var t = 0.0;
-    // The service charge rides in the line prices on the wire, so the server taxes it
-    // at each item's own rate. Scaling by it here keeps the tax shown on the slip equal
-    // to the tax that gets booked.
     final s = serviceChargeFactor;
     for (final l in lines) {
       if (l.taxRate <= 0) continue;
-      final net = l.total * discountFactor * s;
-      t += net - net / (1 + l.taxRate / 100);
+      t += l.total * discountFactor * s * l.taxRate / 100;
     }
     return t;
   }
