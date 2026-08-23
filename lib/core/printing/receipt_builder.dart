@@ -392,9 +392,16 @@ class ReceiptBuilder {
       p.row('Service ${_pct(order.serviceChargePercent)}%',
           formatAmount(serviced * order.serviceChargePercent / 100));
     }
+    // What the customer would have handed over for these lines, tax included, since
+    // that is the money the slip is accounting for. The bill's own helper works it
+    // out, so this cannot drift from what the till would have charged.
+    final removedCharge = order.chargeFor(lines);
+    final removedTax = removedCharge - removed * order.discountFactor * order.serviceChargeFactor;
+    if (removedTax > 0.005) {
+      p.row('VAT', formatAmount(removedTax));
+    }
     p.size(doubleHeight: true).bold(true)
-      ..row('REMOVED',
-          formatAmount(removed * order.discountFactor * order.serviceChargeFactor))
+      ..row('REMOVED', formatAmount(removedCharge))
       ..bold(false)
       ..size();
     if (reason != null && reason.isNotEmpty) p.feed().line('Reason: $reason');

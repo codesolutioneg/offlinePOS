@@ -470,6 +470,33 @@ class Order {
   double get total =>
       subtotal * discountFactor + serviceCharge + taxTotal + deliveryCost + tip;
 
+  /// What part of this bill is charged: the given lines net of their own discounts,
+  /// less the whole-order discount, plus the bill's service charge, plus the tax on
+  /// all of that at each line's own rate.
+  ///
+  /// Every path that charges a part rather than the whole (a split check, a picked
+  /// selection, a refund of some lines) goes through here, so none of them can be
+  /// the one that forgets the tax and asks a guest for the net.
+  ///
+  /// [quantityOf] overrides how much of a line is being taken, for a flow that
+  /// refunds or pays two of the four that were rung. It is charged at that line's
+  /// per-unit value, so a discounted line stays discounted.
+  double chargeFor(Iterable<OrderLine> subset,
+      {double Function(OrderLine line)? quantityOf}) {
+    final f = discountFactor * serviceChargeFactor;
+    var charge = 0.0;
+    for (final l in subset) {
+      var value = l.total;
+      if (quantityOf != null) {
+        final perUnit = l.total / (l.quantity == 0 ? 1 : l.quantity);
+        value = perUnit * quantityOf(l);
+      }
+      final net = value * f;
+      charge += net + net * l.taxRate / 100;
+    }
+    return charge;
+  }
+
   /// Money already tendered against this order. On a normal sale this equals the
   /// total; on an even/part-paid open tab it is the sum of the shares taken so far.
   double get amountPaid => payments.fold(0.0, (s, p) => s + p.amount);

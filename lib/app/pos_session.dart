@@ -623,14 +623,11 @@ class PosSession {
     orders.save(current);
   }
 
-  /// What a check made of [lines] is charged: the lines net of their own discounts,
-  /// less the whole-order discount, plus the bill's service charge. [payCheck] books
-  /// exactly this, so a tender sheet asks for this figure rather than re-deriving part
-  /// of it and coming up short by the service.
-  double checkTotal(Iterable<OrderLine> lines) =>
-      lines.fold(0.0, (a, l) => a + l.total) *
-      current.discountFactor *
-      current.serviceChargeFactor;
+  /// What a check made of [lines] is charged. [payCheck] books exactly this, so a
+  /// tender sheet asks for this figure rather than re-deriving part of it and coming
+  /// up short: it used to come up short by the service charge, and then by the tax.
+  /// One helper on the bill now answers it for every partial-charge path.
+  double checkTotal(Iterable<OrderLine> lines) => current.chargeFor(lines);
 
   /// Carve a subset of the current order's lines into their own paid check and
   /// take payment for it, leaving the rest of the table open. This is how a split

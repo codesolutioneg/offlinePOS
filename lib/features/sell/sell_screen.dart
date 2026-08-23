@@ -2012,19 +2012,22 @@ class _SellScreenState extends State<SellScreen> {
   /// The charge for a picks selection, computed without peeling (per-unit price x
   /// units), so the payment sheet can show a total before anything is committed.
   double _picksTotal(Map<String, int> picks) {
-    var sum = 0.0;
+    final taken = <OrderLine>[];
+    final units = <String, double>{};
     picks.forEach((uuid, q) {
       final i = s.current.lines.indexWhere((l) => l.uuid == uuid);
       if (i < 0) return;
       final l = s.current.lines[i];
+      taken.add(l);
       // A weighed/fractional line can only be taken whole (splitOffQuantity refuses
-      // to peel it), so charge its full total; a whole-number line charges per unit.
-      final whole = l.quantity == l.quantity.roundToDouble();
-      sum += whole ? (l.total / l.quantity) * q : l.total;
+      // to peel it), so charge its full quantity; a whole-number line charges per unit.
+      units[l.uuid] =
+          l.quantity == l.quantity.roundToDouble() ? q.toDouble() : l.quantity;
     });
-    // Discount and service exactly as payCheck applies them, so the sheet asks for
-    // the figure the check is about to book.
-    return sum * s.current.discountFactor * s.current.serviceChargeFactor;
+    // The bill's own arithmetic: discount, service and tax exactly as payCheck will
+    // book them, so the sheet asks for the figure the check is about to be.
+    return s.current
+        .chargeFor(taken, quantityOf: (l) => units[l.uuid] ?? l.quantity);
   }
 
   Future<void> _pickLines({

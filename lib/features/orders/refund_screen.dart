@@ -49,20 +49,13 @@ class _RefundScreenState extends State<RefundScreen> {
     super.dispose();
   }
 
+  /// What handing these units back is worth: the same helper the bill charges a
+  /// part of itself with, so a refund returns exactly what was taken for them,
+  /// discount, service charge and tax included.
   double get _refundTotal {
-    var t = 0.0;
-    for (final l in widget.original.lines) {
-      final q = _qty[l.uuid] ?? 0;
-      if (q <= 0) continue;
-      // Per-unit line value (net of its own discount), times the refunded count.
-      final perUnit = l.total / (l.quantity == 0 ? 1 : l.quantity);
-      t += perUnit * q;
-    }
-    // The whole-order discount and the bill's service charge applied proportionally, so
-    // a refund returns what was actually paid rather than the pre-discount,
-    // pre-service price.
     final o = widget.original;
-    return t * o.discountFactor * o.serviceChargeFactor;
+    final taken = o.lines.where((l) => (_qty[l.uuid] ?? 0) > 0).toList();
+    return o.chargeFor(taken, quantityOf: (l) => _qty[l.uuid] ?? 0);
   }
 
   bool get _anySelected => _qty.values.any((q) => q > 0);
