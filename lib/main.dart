@@ -28,6 +28,9 @@ import 'core/db/reservation_store.dart';
 import 'core/db/printer_store.dart';
 import 'core/db/shift_store.dart';
 import 'core/db/sqlite_outbox_store.dart';
+import 'core/diagnostics/startup_failure_app.dart';
+import 'core/diagnostics/startup_log.dart';
+import 'core/diagnostics/startup_probe.dart';
 import 'core/email/email_outbox.dart';
 import 'core/email/email_service.dart';
 import 'core/export/db_backup.dart';
@@ -65,16 +68,51 @@ const String appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '0
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  final log = StartupLog.forThisLaunch()..begin(appVersion);
+  try {
+    await _openTheTill(log);
+  } catch (error, stack) {
+    log.failed(error, stack);
+    // The window is only shown once a frame has been rendered, so a startup that
+    // threw would otherwise leave a live process and an empty screen: no window,
+    // no error, nothing to report. Say what happened, in language the person at
+    // the counter can act on, and put the report where they can be asked for it.
+    runApp(StartupFailureApp(
+      error: error,
+      logPath: log.path,
+      reportPath: log.copyForSupport(),
+    ));
+  }
+}
+
+/// Everything the till needs before it can show its first screen.
+Future<void> _openTheTill(StartupLog log) async {
+  log.step('read the build configuration');
   final config = TillConfig.fromEnvironment();
 
+  log.step('resolve the application support directory');
   final dir = await getApplicationSupportDirectory();
   // Encrypted at rest with SQLCipher. The key is generated once and kept in the
   // platform keychain via SecureKeyStore, never in a file beside the data. If the
   // keychain is ever wiped, an existing database becomes unreadable rather than
   // silently reset: a till must be synced before a wipe, which is why enrolment
   // happens online. See docs/SECURITY.md.
-  final dbKey = await DbKey(SecureKeyStore()).getOrCreate();
-  final db = Db.open('${dir.path}${Platform.pathSeparator}pos.db', encryptionKey: dbKey);
+  final dbPath = '${dir.path}${Platform.pathSeparator}pos.db';
+  // Written before the first thing that can fail, so the report answers the
+  // questions support would otherwise have to ask the operator to go and look up.
+  log.facts(StartupProbe.facts(version: appVersion, databasePath: dbPath));
+
+  log.step('read the database key from the platform keychain');
+  // Told whether there is anything to lose: with a database already on disk a
+  // missing key is retried and then refused, never replaced. See DbKey.
+  final dbKey = await DbKey(SecureKeyStore())
+      .getOrCreate(databaseExists: File(dbPath).existsSync());
+
+  // The path, never the key. A key the keychain no longer has and a file another
+  // instance still holds are the two failures that strand a launch here, and both
+  // are named by this being the last line in the log.
+  log.step('open and migrate the encrypted database at $dbPath');
+  final db = Db.open(dbPath, encryptionKey: dbKey);
 
   final catalogue = CatalogueStore(db);
   final users = UserStore(db);
@@ -84,6 +122,7 @@ Future<void> main() async {
 
   // Generated on this device on first launch. A constant would make every till in
   // a shop file its sales under the same id.
+  log.step('read this device id');
   final deviceId = devices.deviceId();
 
   final settings = SettingsStore(db);
@@ -148,6 +187,7 @@ Future<void> main() async {
 
   // Random, per device, shown once on the sign-in screen. Never a literal: see
   // BootstrapCashier for why.
+  log.step('ensure the bootstrap cashier');
   final provisioningPin = await BootstrapCashier.ensure(auth, users);
 
   // One transport for every Odoo call: the login, the order push, the catalogue
@@ -183,6 +223,7 @@ Future<void> main() async {
   // the server screen. Button-driven only: it authenticates, and the badge must not.
   Future<ServerCheckResult> checkTheServer(OdooEndpoint e) => checkServer(e, post);
 
+  log.step('start the sync service');
   final sync = SyncService(
     outbox: outbox,
     catalogue: catalogue,
@@ -252,6 +293,7 @@ Future<void> main() async {
   // behind the first frame, so no part of opening the till waits on a socket, a LAN
   // address or a peer.
   if (lanOn) {
+    log.step('assemble the LAN node');
     // The first till to share invents the shop's key; the others are paired by
     // copying it across on the shop network screen. Until a device holds the same
     // key it is turned away, so switching sharing on does not open this till's tabs
@@ -275,6 +317,10 @@ Future<void> main() async {
     );
   }
 
+  // The last line of a launch that got everything it needed. If the log ends here
+  // and there is still no window, the till started and the window is the problem,
+  // not the startup.
+  log.step('render the first frame');
   runApp(PosApp(
     auth: auth,
     users: users,
