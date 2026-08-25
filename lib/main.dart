@@ -123,7 +123,10 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   // are named by this being the last line in the log.
   log.step('open and migrate the encrypted database at $dbPath');
   final db = Db.open(dbPath, encryptionKey: dbKey);
-  unwind.add(db.close);
+  // Deliberately not closed on a failed launch. SyncService.start fires one pass
+  // that is not awaited, and stop() only cancels the timer, so disposing the
+  // handle here could pull it out from under a read still in flight. The failure
+  // screen is a terminal state and the process releases the file when it exits.
 
   final catalogue = CatalogueStore(db);
   final users = UserStore(db);
@@ -264,7 +267,9 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       onOrderBooked: orders.markSynced,
     ).run,
   )..start();
-  // Its timer is running from here, so a later failure has to switch it off.
+  // Its timer is running from here, so a later failure has to switch it off:
+  // otherwise the till goes on talking to the server behind a screen that says it
+  // could not open.
   unwind.add(sync.stop);
 
   // Printers are resolved by name at print time, so a DHCP lease that moves
