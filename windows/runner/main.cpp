@@ -17,8 +17,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // file the first one holds and dies on it, and an operator who sees nothing
   // happen launches it again, stacking processes that each go nowhere. Held for
   // the life of the process, released by Windows when it exits however it exits.
-  ::CreateMutexW(nullptr, TRUE, L"offline_pos_single_instance");
-  if (::GetLastError() == ERROR_ALREADY_EXISTS) {
+  // The handle is checked before the error code is believed: a mutex that could
+  // not be created at all must not be read as another till already running, or a
+  // shop is left with a message box and no way to sell.
+  HANDLE instance_lock = ::CreateMutexW(nullptr, TRUE, L"offline_pos_single_instance");
+  if (instance_lock != nullptr && ::GetLastError() == ERROR_ALREADY_EXISTS) {
     HWND running = ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", L"offline_pos");
     if (running) {
       // Already selling, just behind something. Bring it forward.
