@@ -33,6 +33,10 @@ class Db {
       // failure deep in a query.
       db.execute('SELECT count(*) FROM sqlite_master');
     }
+    // Wait for a moment's overlap rather than dying on it. The default of zero
+    // turns another connection still letting go of the file into a launch that
+    // fails outright, which on a till reads as an app that will not open.
+    db.execute('PRAGMA busy_timeout = 5000');
     db.execute('PRAGMA journal_mode = WAL');
     db.execute('PRAGMA foreign_keys = ON');
     final instance = Db(db);
