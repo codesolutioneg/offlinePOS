@@ -42,10 +42,7 @@ void main() {
   });
 
   test('a launch that got nowhere has nothing to undo', () {
-    final unwind = StartupUnwind();
-
-    expect(unwind.length, 0);
-    expect(() => unwind.run(log), returnsNormally);
+    expect(() => StartupUnwind().run(log), returnsNormally);
   });
 
   test('nothing is closed twice', () {

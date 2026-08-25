@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/auth/permissions.dart';
 import '../../core/db/sqlite_outbox_store.dart';
+import '../../core/diagnostics/startup_log.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/onboarding/wizard_store.dart';
 import '../../core/printing/printer_registry.dart';
@@ -247,6 +248,10 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           ],
           _row(tr(context, 'Device'), s.deviceId, keyName: 'device'),
           _row(tr(context, 'App version'), s.appVersion),
+          // The launch trail, so it can be asked for on a till that did open and
+          // is merely misbehaving. A till that never opened shows the same path on
+          // the screen it puts up instead.
+          _row(tr(context, 'Startup log'), StartupLog.thisLaunchPath),
           _row(tr(context, 'Signed in'), widget.cashierId ?? s.cashierId ?? '-'),
           const Divider(),
           _row(tr(context, 'Connection'), _connection, keyName: 'connection',

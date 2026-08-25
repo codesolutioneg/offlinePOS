@@ -11,8 +11,6 @@ class StartupUnwind {
 
   void add(void Function() close) => _steps.add(close);
 
-  int get length => _steps.length;
-
   /// Closes everything in reverse, so a service is stopped before the database it
   /// was writing through is closed.
   void run(StartupLog log) {

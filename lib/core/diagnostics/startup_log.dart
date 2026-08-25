@@ -19,10 +19,15 @@ class StartupLog {
   /// Kept in the system temp directory rather than the app's own, because
   /// resolving the app's directory is itself a step worth logging and is a step
   /// that can hang. Temp needs no plugin channel and no await.
-  factory StartupLog.forThisLaunch({Directory? directory}) {
-    final base = directory ?? Directory.systemTemp;
-    return StartupLog(File('${base.path}${Platform.pathSeparator}$fileName'));
-  }
+  factory StartupLog.forThisLaunch({Directory? directory}) =>
+      StartupLog(File(pathIn(directory ?? Directory.systemTemp)));
+
+  static String pathIn(Directory directory) =>
+      '${directory.path}${Platform.pathSeparator}$fileName';
+
+  /// Shown on the diagnostics screen, so the trail is findable on a till that did
+  /// open and is merely misbehaving, not only on one that failed to start.
+  static String get thisLaunchPath => pathIn(Directory.systemTemp);
 
   static const fileName = 'offline_pos_startup.log';
 
