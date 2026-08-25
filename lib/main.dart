@@ -31,6 +31,7 @@ import 'core/db/sqlite_outbox_store.dart';
 import 'core/diagnostics/startup_failure_app.dart';
 import 'core/diagnostics/startup_log.dart';
 import 'core/diagnostics/startup_probe.dart';
+import 'core/diagnostics/startup_unwind.dart';
 import 'core/email/email_outbox.dart';
 import 'core/email/email_service.dart';
 import 'core/export/db_backup.dart';
@@ -69,10 +70,16 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final log = StartupLog.forThisLaunch()..begin(appVersion);
+  // What to undo if a later step throws. A failure screen with the sync timer
+  // still running behind it is a till that says it is shut while it goes on
+  // talking to the server, and it would hold the database open against the next
+  // launch.
+  final unwind = StartupUnwind();
   try {
-    await _openTheTill(log);
+    await _openTheTill(log, unwind);
   } catch (error, stack) {
     log.failed(error, stack);
+    unwind.run(log);
     // The window is only shown once a frame has been rendered, so a startup that
     // threw would otherwise leave a live process and an empty screen: no window,
     // no error, nothing to report. Say what happened, in language the person at
@@ -86,7 +93,10 @@ Future<void> main() async {
 }
 
 /// Everything the till needs before it can show its first screen.
-Future<void> _openTheTill(StartupLog log) async {
+///
+/// Anything started here that outlives a throw is registered on [unwind], so a
+/// launch that fails part way leaves nothing running behind the failure screen.
+Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   log.step('read the build configuration');
   final config = TillConfig.fromEnvironment();
 
@@ -113,6 +123,7 @@ Future<void> _openTheTill(StartupLog log) async {
   // are named by this being the last line in the log.
   log.step('open and migrate the encrypted database at $dbPath');
   final db = Db.open(dbPath, encryptionKey: dbKey);
+  unwind.add(db.close);
 
   final catalogue = CatalogueStore(db);
   final users = UserStore(db);
@@ -253,6 +264,8 @@ Future<void> _openTheTill(StartupLog log) async {
       onOrderBooked: orders.markSynced,
     ).run,
   )..start();
+  // Its timer is running from here, so a later failure has to switch it off.
+  unwind.add(sync.stop);
 
   // Printers are resolved by name at print time, so a DHCP lease that moves
   // overnight costs one subnet sweep rather than a support call. Nothing is

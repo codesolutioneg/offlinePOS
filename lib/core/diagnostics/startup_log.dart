@@ -47,6 +47,10 @@ class StartupLog {
   /// Records that [description] is about to begin.
   void step(String description) => _write('step: $description');
 
+  /// Something worth recording that is not a step of its own, such as undoing
+  /// what a failed launch had already started.
+  void note(String description) => _write('note: $description');
+
   /// What the till found around itself, from [StartupProbe].
   void facts(Iterable<String> facts) {
     for (final fact in facts) {
