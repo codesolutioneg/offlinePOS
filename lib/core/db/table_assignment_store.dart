@@ -1,4 +1,5 @@
 import '../lan/lan_event.dart';
+import 'announced_write.dart';
 import 'database.dart';
 
 /// One table given to one waiter for the service, with the trail of who gave it to
@@ -127,7 +128,8 @@ class TableAssignmentStore {
   /// from another till, so a room shared out over there is not bounced back to it.
   void apply(TableAssignment a, {bool announce = true}) {
     final publish = _publish;
-    _commit(
+    announcedWrite(
+      _db,
       () => _db.raw.execute(
         'INSERT INTO table_assignments (table_id, cashier_id, assigned_at, assigned_by) '
         'VALUES (?,?,?,?) '
@@ -145,7 +147,8 @@ class TableAssignmentStore {
   /// Hand a table back to nobody, which opens it to everyone again.
   void clear(String tableId, {bool announce = true}) {
     final publish = _publish;
-    _commit(
+    announcedWrite(
+      _db,
       () => _db.raw
           .execute('DELETE FROM table_assignments WHERE table_id = ?', [tableId]),
       announce && publish != null
@@ -171,25 +174,5 @@ class TableAssignmentStore {
       clear(id, announce: announce);
     }
     return ids.length;
-  }
-
-  /// One writer, optionally with the fabric event in the same transaction so a table
-  /// cannot be announced as handed over unless it really was. A failed announce still
-  /// commits: the room in front of the manager is the one they just shared out, and
-  /// refusing that because a peer till misbehaved would be the wrong way round.
-  void _commit(void Function() write, void Function()? announce) {
-    if (announce == null) {
-      write();
-      return;
-    }
-    _db.raw.execute('BEGIN');
-    try {
-      write();
-      announce();
-      _db.raw.execute('COMMIT');
-    } catch (_) {
-      _db.raw.execute('ROLLBACK');
-      write();
-    }
   }
 }

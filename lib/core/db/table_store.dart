@@ -1,5 +1,6 @@
 import '../../domain/identity.dart';
 import '../lan/lan_event.dart';
+import 'announced_write.dart';
 import 'database.dart';
 
 /// How a floor element is drawn: a real shape for a seatable table, or
@@ -214,7 +215,8 @@ class TableStore {
   /// floor plan is not bounced back to the device that drew it.
   void upsert(PosTable t, {bool announce = true}) {
     final publish = _publish;
-    _commit(
+    announcedWrite(
+      _db,
       () => _db.raw.execute(
         'INSERT INTO pos_tables (id, section, name, seats, pos_x, pos_y, sequence, shape, vertical, span) '
         'VALUES (?,?,?,?,?,?,?,?,?,?) '
@@ -233,7 +235,8 @@ class TableStore {
 
   void remove(String id, {bool announce = true}) {
     final publish = _publish;
-    _commit(
+    announcedWrite(
+      _db,
       () => _db.raw.execute('DELETE FROM pos_tables WHERE id = ?', [id]),
       announce && publish != null
           ? () => publish(LanEventKind.tableUpsert, id, {'id': id, 'deleted': true})
@@ -257,27 +260,6 @@ class TableStore {
   void deleteSection(String section) {
     for (final t in inSection(section)) {
       remove(t.id);
-    }
-  }
-
-  /// One writer, optionally with the fabric event in the same transaction so a
-  /// table cannot be announced as moved unless it really moved. A failed announce
-  /// still commits the change: the floor plan in front of the manager is what they
-  /// just drew, and refusing their edit because a peer table misbehaved would be
-  /// the wrong way round.
-  void _commit(void Function() write, void Function()? announce) {
-    if (announce == null) {
-      write();
-      return;
-    }
-    _db.raw.execute('BEGIN');
-    try {
-      write();
-      announce();
-      _db.raw.execute('COMMIT');
-    } catch (_) {
-      _db.raw.execute('ROLLBACK');
-      write();
     }
   }
 

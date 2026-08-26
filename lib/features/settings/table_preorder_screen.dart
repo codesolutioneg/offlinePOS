@@ -60,6 +60,9 @@ class _TablePreorderScreenState extends State<TablePreorderScreen> {
   Widget build(BuildContext context) {
     final tables =
         widget.tables.inSection(_active).where((t) => !t.isDivider).toList();
+    // Read once for the whole room. Asking per table re-read and re-parsed the stored
+    // value on every tile, which is a full room's worth of parsing per frame.
+    final overrides = widget.settings.tablePreorderOverrides();
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'What a table opens with'))),
       body: ListView(
@@ -87,7 +90,7 @@ class _TablePreorderScreenState extends State<TablePreorderScreen> {
               subtitle: Text(tr(context, 'No tables in this section yet.')),
             )
           else
-            for (final t in tables) _tableTile(t),
+            for (final t in tables) _tableTile(t, overrides[t.id]),
         ],
       ),
     );
@@ -122,9 +125,7 @@ class _TablePreorderScreenState extends State<TablePreorderScreen> {
           leading: const Icon(Icons.meeting_room_outlined),
           title: Text('${tr(context, 'Whole section')}: $_active',
               style: const TextStyle(fontWeight: FontWeight.bold)),
-          subtitle: Text(lines.isEmpty
-              ? tr(context, 'Opens with nothing')
-              : '${lines.length} ${tr(context, 'line(s)')}'),
+          subtitle: Text(_linesLabel(lines)),
           trailing: IconButton(
             key: const Key('preorder-section-add'),
             icon: const Icon(Icons.add_circle_outline),
@@ -149,8 +150,7 @@ class _TablePreorderScreenState extends State<TablePreorderScreen> {
     );
   }
 
-  Widget _tableTile(PosTable t) {
-    final own = widget.settings.tablePreorders(t.id);
+  Widget _tableTile(PosTable t, List<TablePreorder>? own) {
     final follows = own == null;
     final lines = own ?? const <TablePreorder>[];
     return Column(
@@ -160,11 +160,8 @@ class _TablePreorderScreenState extends State<TablePreorderScreen> {
           key: Key('preorder-table-${t.id}'),
           leading: const Icon(Icons.table_restaurant_outlined),
           title: Text(t.name),
-          subtitle: Text(follows
-              ? tr(context, 'Same as the section')
-              : lines.isEmpty
-                  ? tr(context, 'Opens with nothing')
-                  : '${lines.length} ${tr(context, 'line(s)')}'),
+          subtitle: Text(
+              follows ? tr(context, 'Same as the section') : _linesLabel(lines)),
           trailing: Row(mainAxisSize: MainAxisSize.min, children: [
             if (!follows)
               IconButton(
@@ -233,6 +230,14 @@ class _TablePreorderScreenState extends State<TablePreorderScreen> {
           ),
         ),
       );
+
+  /// "Opens with nothing", "1 item", "3 items". Spelled out rather than "item(s)",
+  /// which is the kind of thing a shop reads on screen every day.
+  String _linesLabel(List<TablePreorder> lines) {
+    if (lines.isEmpty) return tr(context, 'Opens with nothing');
+    if (lines.length == 1) return '1 ${tr(context, 'item')}';
+    return '${lines.length} ${tr(context, 'items')}';
+  }
 
   String _qtyLabel(double qty) =>
       qty == qty.roundToDouble() ? '${qty.toInt()}' : qty.toStringAsFixed(2);

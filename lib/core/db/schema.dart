@@ -566,18 +566,13 @@ class Schema {
     ],
     // v22 -> v23: whose section of the room is whose.
     //
-    // One waiter per table, so the key is the table and not a pair: a second
-    // assignment for a table replaces the first, which is what a manager moving a
-    // section between two waiters mid-service means. A table with no row here
-    // belongs to nobody and stays open to anyone, so a shop that never assigns
-    // works exactly as it did.
+    // Keyed on the table, so a second assignment replaces the first: that is what a
+    // manager moving a section between two waiters means. No row means nobody owns it.
     //
-    // The cascade is the whole reason for the foreign key: a table deleted off the
-    // floor must not leave an assignment naming it, or a floor redrawn between two
-    // services would slowly fill with rows for tables that no longer exist.
-    // `cashier_id` deliberately carries NO such key: a waiter can be taken off the
-    // roster mid-shift and their tables have to stay assigned until a manager moves
-    // them, rather than silently opening to everybody.
+    // The cascade is the reason for the foreign key: a table taken off the floor must
+    // not leave a row naming it. `cashier_id` deliberately has no such key, because a
+    // waiter taken off the roster mid-shift has to keep their tables until a manager
+    // moves them rather than have them silently open to everybody.
     [
       '''
       CREATE TABLE table_assignments (

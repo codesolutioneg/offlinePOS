@@ -1,5 +1,6 @@
 import '../../domain/identity.dart';
 import '../lan/lan_event.dart';
+import 'announced_write.dart';
 import 'database.dart';
 
 /// Where a booking is up to.
@@ -150,7 +151,8 @@ class ReservationStore {
   /// till that took it.
   void save(Reservation r, {bool announce = true}) {
     final publish = _publish;
-    _commit(
+    announcedWrite(
+      _db,
       () => _db.raw.execute(
         'INSERT INTO reservations (uuid, table_label, name, phone, at, covers, '
         'state, note, updated_at) VALUES (?,?,?,?,?,?,?,?,?) '
@@ -186,7 +188,8 @@ class ReservationStore {
 
   void remove(String uuid, {bool announce = true}) {
     final publish = _publish;
-    _commit(
+    announcedWrite(
+      _db,
       () => _db.raw.execute('DELETE FROM reservations WHERE uuid = ?', [uuid]),
       announce && publish != null
           ? () => publish(
@@ -198,22 +201,6 @@ class ReservationStore {
   /// One writer, optionally with the fabric event in the same transaction. A failed
   /// announce still commits: the booking in front of whoever took the phone call is
   /// what they just wrote down, and losing it because a peer table misbehaved would
-  /// be the wrong way round.
-  void _commit(void Function() write, void Function()? announce) {
-    if (announce == null) {
-      write();
-      return;
-    }
-    _db.raw.execute('BEGIN');
-    try {
-      write();
-      announce();
-      _db.raw.execute('COMMIT');
-    } catch (_) {
-      _db.raw.execute('ROLLBACK');
-      write();
-    }
-  }
 
   Reservation _map(Map<String, Object?> r) => Reservation(
         uuid: r['uuid'] as String,

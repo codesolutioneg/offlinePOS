@@ -116,4 +116,40 @@ void main() {
     expect(section.last.quantity, 2);
     expect(fresh.tablePreorders('t1')!.single.quantity, 3);
   });
+
+  test('a product typed on this till is not dropped from the list', () {
+    // CatalogueStore mints NEGATIVE ids for a product a manager types here, so any
+    // "id below zero" sentinel or filter would silently drop a shop's own cover
+    // charge from every bill. Nothing in this class may treat an id as a marker.
+    settings.setSectionPreorders('Main', const [
+      TablePreorder(productId: -1, perGuest: true),
+      TablePreorder(productId: -2, quantity: 2),
+    ]);
+
+    final lines = settings.preordersFor(tableId: 't1', section: 'Main');
+    expect(lines.map((l) => l.productId), [-1, -2]);
+    expect(lines.first.perGuest, isTrue);
+  });
+
+  test('an empty override survives storage without standing in for a product', () {
+    settings.setSectionPreorders('Main', const [TablePreorder(productId: -1)]);
+    settings.setTablePreorders('t1', const []);
+
+    final fresh = SettingsStore(db);
+    expect(fresh.tablePreorders('t1'), isEmpty);
+    expect(fresh.preordersFor(tableId: 't1', section: 'Main'), isEmpty);
+    // And the local-id product on the room's list is still there.
+    expect(fresh.preordersFor(tableId: 't2', section: 'Main').single.productId, -1);
+  });
+
+  test('every table with a list of its own is readable in one go', () {
+    settings.setTablePreorders('t1', const [TablePreorder(productId: 11)]);
+    settings.setTablePreorders('t2', const []);
+
+    // What a screen drawing a whole room reads, instead of asking per tile.
+    final overrides = settings.tablePreorderOverrides();
+    expect(overrides.keys.toSet(), {'t1', 't2'});
+    expect(overrides['t1']!.single.productId, 11);
+    expect(overrides['t2'], isEmpty);
+  });
 }

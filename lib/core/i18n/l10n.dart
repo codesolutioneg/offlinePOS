@@ -960,7 +960,8 @@ const Map<String, String> _ar = {
   'Tables in this section': 'طاولات هذا القسم',
   'No tables in this section yet.': 'لا توجد طاولات في هذا القسم بعد.',
   'Opens with nothing': 'تبدأ فارغة',
-  'line(s)': 'بند',
+  'item': 'صنف',
+  'items': 'أصناف',
   'Same as the section': 'مثل القسم',
   'Follow the section': 'اتبع القسم',
   'Nothing, on purpose. Use the arrow to follow the section again.':

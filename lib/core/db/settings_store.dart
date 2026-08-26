@@ -13,6 +13,7 @@ import '../printing/printer_logo.dart';
 import '../sync/odoo_puller.dart';
 import '../sync/odoo_site.dart';
 import '../theme/table_palette.dart';
+import 'announced_write.dart';
 import 'database.dart';
 
 /// On-device configuration a manager can change without a rebuild: shop name and
@@ -463,31 +464,16 @@ class SettingsStore {
   ///
   /// A failed announce still commits: a till that knows an item is off must act on
   /// it whatever the other devices heard, exactly as a sale outranks replication.
-  void _writeAvailability(int productId, bool available, void Function()? announce) {
-    void write() {
-      final set = unavailableProducts;
-      if (available) {
-        set.remove(productId);
-      } else {
-        set.add(productId);
-      }
-      unavailableProducts = set;
-    }
-
-    if (announce == null) {
-      write();
-      return;
-    }
-    _db.raw.execute('BEGIN');
-    try {
-      write();
-      announce();
-      _db.raw.execute('COMMIT');
-    } catch (_) {
-      _db.raw.execute('ROLLBACK');
-      write();
-    }
-  }
+  void _writeAvailability(int productId, bool available, void Function()? announce) =>
+      announcedWrite(_db, () {
+        final set = unavailableProducts;
+        if (available) {
+          set.remove(productId);
+        } else {
+          set.add(productId);
+        }
+        unavailableProducts = set;
+      }, announce);
 
   /// Products pinned as favourites for a quick-access grid.
   Set<int> get favourites =>
@@ -882,6 +868,10 @@ class SettingsStore {
     }
   }
 
+  /// An empty list is written, not dropped. "This table opens with nothing" is a real
+  /// answer and a different one from "follow the room", so it has to survive the round
+  /// trip; a sentinel line standing in for it would collide with a real product, since
+  /// a product typed on this till is given a negative id (see CatalogueStore).
   void _writePreorderMap(Map<String, Map<String, List<TablePreorder>>> map) =>
       setString(
           _tablePreorders,
@@ -889,8 +879,7 @@ class SettingsStore {
             for (final bucket in map.entries)
               bucket.key: {
                 for (final e in bucket.value.entries)
-                  if (e.value.isNotEmpty)
-                    e.key: [for (final l in e.value) l.toMap()],
+                  e.key: [for (final l in e.value) l.toMap()],
               },
           }));
 
@@ -903,17 +892,13 @@ class SettingsStore {
   /// Null and an empty list are deliberately different answers: null is "whatever the
   /// room does", and empty is "this table opens with nothing", which is the only way
   /// to keep the cover charge off the two tables by the door.
-  List<TablePreorder>? tablePreorders(String tableId) {
-    final own = _preorderMap['tables']?[tableId];
-    if (own == null) return null;
-    // The "opens with nothing" marker never leaves this class: a caller asking what a
-    // table opens with must get the empty list it means, not a line it would then try
-    // to draw or ring.
-    return [
-      for (final l in own)
-        if (l.productId >= 0) l,
-    ];
-  }
+  List<TablePreorder>? tablePreorders(String tableId) =>
+      _preorderMap['tables']?[tableId];
+
+  /// Every table that has a list of its own, so a screen drawing a whole room reads
+  /// the stored value once instead of once per table.
+  Map<String, List<TablePreorder>> tablePreorderOverrides() =>
+      _preorderMap['tables'] ?? const {};
 
   /// The name one room's or one table's list travels the fabric under.
   ///
@@ -925,7 +910,8 @@ class SettingsStore {
 
   void setSectionPreorders(String section, List<TablePreorder> lines) {
     final publish = _publish;
-    _writePreorders(
+    announcedWrite(
+      _db,
       () => _applySectionPreorders(section, lines),
       publish == null
           ? null
@@ -948,7 +934,8 @@ class SettingsStore {
   /// so the marker is what survives the round trip.
   void setTablePreorders(String tableId, List<TablePreorder>? lines) {
     final publish = _publish;
-    _writePreorders(
+    announcedWrite(
+      _db,
       () => _applyTablePreorders(tableId, lines),
       publish == null
           ? null
@@ -997,48 +984,20 @@ class SettingsStore {
     if (lines == null) {
       map['tables']!.remove(tableId);
     } else {
-      map['tables']![tableId] = lines.isEmpty ? const [_noPreorder] : lines;
+      map['tables']![tableId] = lines;
     }
     _writePreorderMap(map);
   }
 
-  /// One writer, optionally with the fabric event in the same transaction. A failed
-  /// announce still commits, for the same reason a sale outranks replication: the
-  /// list in front of the manager is the one they just set.
-  void _writePreorders(void Function() write, void Function()? announce) {
-    if (announce == null) {
-      write();
-      return;
-    }
-    _db.raw.execute('BEGIN');
-    try {
-      write();
-      announce();
-      _db.raw.execute('COMMIT');
-    } catch (_) {
-      _db.raw.execute('ROLLBACK');
-      write();
-    }
-  }
 
-  /// The stand-in for "this table opens with nothing": a line for a product id no
-  /// catalogue can hold, so it is stored and read back but never rung. Without it an
-  /// empty override would be indistinguishable from no override at all.
-  static const _noPreorder = TablePreorder(productId: -1);
 
   /// The lines a bill opened on this table actually starts with.
   ///
   /// The table's own list wins when it has one, otherwise the room's. Never both: a
   /// table told to open with a bottle of water instead of the section's cover charge
   /// must not get the cover charge as well.
-  List<TablePreorder> preordersFor({required String tableId, required String section}) {
-    final own = tablePreorders(tableId);
-    final lines = own ?? sectionPreorders(section);
-    return [
-      for (final l in lines)
-        if (l.productId >= 0) l,
-    ];
-  }
+  List<TablePreorder> preordersFor({required String tableId, required String section}) =>
+      tablePreorders(tableId) ?? sectionPreorders(section);
 
   /// Whether anything at all is set up, so a screen can say so rather than showing
   /// an empty list that looks broken.
