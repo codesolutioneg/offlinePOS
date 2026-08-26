@@ -49,6 +49,14 @@ enum LanEventKind {
   /// earlier.
   tableAssignment('table.assignment'),
 
+  /// What a room or one table opens with: the cover charge, the water, the bread.
+  ///
+  /// Shared because the selling path reads it. A manager sets the cover charge on the
+  /// counter and a handheld seats the table, so a till that never heard this would
+  /// open a bill without the line every other till puts on it, and the shop would
+  /// find out from a customer.
+  tablePreorders('table.preorders'),
+
   /// A till saying its trading day is over. Carried so the other devices can be
   /// told rather than each closing whenever somebody remembers, and deliberately
   /// only ever advisory: a device that hears nothing sells exactly as it always

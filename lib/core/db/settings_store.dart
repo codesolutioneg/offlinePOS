@@ -915,10 +915,30 @@ class SettingsStore {
     ];
   }
 
+  /// The name one room's or one table's list travels the fabric under.
+  ///
+  /// Per scope rather than one event for the whole map, because the fabric resolves a
+  /// conflict per record: a manager editing the terrace on a handheld must not roll
+  /// back what somebody just set for the main room on the counter.
+  static String preorderRecord({String? section, String? tableId}) =>
+      section != null ? 'preorder:s:$section' : 'preorder:t:$tableId';
+
   void setSectionPreorders(String section, List<TablePreorder> lines) {
-    final map = _preorderMap;
-    map['sections']![section] = lines;
-    _writePreorderMap(map);
+    final publish = _publish;
+    _writePreorders(
+      () => _applySectionPreorders(section, lines),
+      publish == null
+          ? null
+          : () => publish(
+                LanEventKind.tablePreorders,
+                preorderRecord(section: section),
+                {
+                  'scope': 'section',
+                  'key': section,
+                  'lines': [for (final l in lines) l.toMap()],
+                },
+              ),
+    );
   }
 
   /// Set what one table opens with, or pass null to put it back on its section's list.
@@ -927,6 +947,52 @@ class SettingsStore {
   /// through a marker rather than dropped: [_writePreorderMap] leaves empty lists out,
   /// so the marker is what survives the round trip.
   void setTablePreorders(String tableId, List<TablePreorder>? lines) {
+    final publish = _publish;
+    _writePreorders(
+      () => _applyTablePreorders(tableId, lines),
+      publish == null
+          ? null
+          : () => publish(
+                LanEventKind.tablePreorders,
+                preorderRecord(tableId: tableId),
+                {
+                  'scope': 'table',
+                  'key': tableId,
+                  // Null is a real state and not an absent field: "follow the room" has
+                  // to reach the other tills as clearly as a list does.
+                  'follows_section': lines == null,
+                  'lines': [for (final l in lines ?? const <TablePreorder>[]) l.toMap()],
+                },
+              ),
+    );
+  }
+
+  /// Apply a pre-order list that arrived from another till. Announces nothing: the
+  /// origin already told everybody, and echoing it back would have two devices
+  /// claiming one manager's edit.
+  void applyPreorders(Map<String, dynamic> payload) {
+    final key = payload['key'];
+    if (key is! String || key.isEmpty) {
+      throw FormatException('preorders for ${payload['scope']}');
+    }
+    final lines = [
+      for (final raw in (payload['lines'] as List? ?? const []))
+        ?TablePreorder.fromMap(raw),
+    ];
+    if (payload['scope'] == 'section') {
+      _applySectionPreorders(key, lines);
+      return;
+    }
+    _applyTablePreorders(key, payload['follows_section'] == true ? null : lines);
+  }
+
+  void _applySectionPreorders(String section, List<TablePreorder> lines) {
+    final map = _preorderMap;
+    map['sections']![section] = lines;
+    _writePreorderMap(map);
+  }
+
+  void _applyTablePreorders(String tableId, List<TablePreorder>? lines) {
     final map = _preorderMap;
     if (lines == null) {
       map['tables']!.remove(tableId);
@@ -934,6 +1000,25 @@ class SettingsStore {
       map['tables']![tableId] = lines.isEmpty ? const [_noPreorder] : lines;
     }
     _writePreorderMap(map);
+  }
+
+  /// One writer, optionally with the fabric event in the same transaction. A failed
+  /// announce still commits, for the same reason a sale outranks replication: the
+  /// list in front of the manager is the one they just set.
+  void _writePreorders(void Function() write, void Function()? announce) {
+    if (announce == null) {
+      write();
+      return;
+    }
+    _db.raw.execute('BEGIN');
+    try {
+      write();
+      announce();
+      _db.raw.execute('COMMIT');
+    } catch (_) {
+      _db.raw.execute('ROLLBACK');
+      write();
+    }
   }
 
   /// The stand-in for "this table opens with nothing": a line for a product id no

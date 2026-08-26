@@ -161,6 +161,7 @@ class LanApplier {
         LanEventKind.orderClaim => _applyClaim(event),
         LanEventKind.reservationUpsert => _applyReservation(event),
         LanEventKind.tableAssignment => _applyAssignment(event),
+        LanEventKind.tablePreorders => _applyPreorders(event),
         LanEventKind.shiftLifecycle => _applyShiftNotice(event),
         LanEventKind.cartDisplay => _applyCart(event),
       };
@@ -273,6 +274,14 @@ class LanApplier {
       return true;
     }
     _assignments.apply(TableAssignment.fromMap(event.payload), announce: false);
+    return true;
+  }
+
+  /// What a room or a table opens with, set somewhere else. Written and nothing more:
+  /// the lines are read at the next seating, so this can never touch a bill already
+  /// on a counter.
+  bool _applyPreorders(LanEvent event) {
+    _settings.applyPreorders(event.payload);
     return true;
   }
 
