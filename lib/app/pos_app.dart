@@ -1138,6 +1138,9 @@ class _PosAppState extends State<PosApp> {
           maxDiscountPercent: widget.settings.maxDiscountPercent,
           allowAmountDiscount: widget.settings.allowAmountDiscount,
           authorize: (p) => _authorize(p, context),
+          // Whose table a parked tab is sitting on, for the ways onto a bill that do
+          // not go through the floor: merging one table into another.
+          authorizeTabTable: (tab) => _authorizeTabTable(context, tab),
           unavailableProducts: widget.settings.unavailableProducts,
           onToggleAvailable: (id, available) {
             widget.settings.setProductAvailable(id, available);

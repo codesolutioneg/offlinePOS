@@ -23,6 +23,7 @@ import 'package:offline_pos/core/sync/odoo_endpoint.dart';
 import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
+import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/shift/shift_screen.dart';
@@ -71,6 +72,13 @@ void main() {
     assignments = TableAssignmentStore(db);
     tableFive = tables.add(name: '5').id;
     tables.add(name: '6');
+    CatalogueStore(db).replaceAll(
+      categories: const [Category(id: 1, name: 'Food')],
+      products: const [Product(id: 10, name: 'Pizza', price: 100, categoryId: 1)],
+      groups: const [],
+      productGroupIds: const {},
+      refreshedAt: DateTime.utc(2026, 1, 1),
+    );
     final auth =
         AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit);
     await auth.enrol(id: 'sara', name: 'Sara', pin: '1234');
@@ -321,5 +329,43 @@ void main() {
     expect(shifts.currentOpenShift(), isNull);
     expect(assignments.isEmpty, isTrue);
     expect(audit.recent(event: 'tables.unassigned_all'), isNotEmpty);
+  });
+
+  testWidgets('merging a colleague\'s table into your own is refused too', (t) async {
+    // The other way onto somebody else's bill: it takes their lines and their money
+    // onto yours, so the floor refusing the tile has to mean something here as well.
+    assignments.assign(tableFive, 'ana', by: 'mo');
+    final six = tables.byName('6')!;
+    final theirs = Order(
+      deviceId: 'till-1',
+      cashierId: 'ana',
+      type: OrderType.dineIn,
+      tableLabel: '5',
+    )
+      ..state = OrderState.held
+      ..lines.add(OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100));
+    orders.save(theirs, announce: false);
+
+    await t.pumpWidget(app());
+    await signIn(t, 'sara', '1234');
+    // Sara opens her own table, then tries to pull table 5 onto it.
+    await t.tap(find.byKey(Key('table-tile-${six.id}')));
+    await t.pumpAndSettle();
+    expect(find.byType(SellScreen), findsOneWidget);
+    // A bill needs a line before it can absorb another one.
+    await t.tap(find.byKey(const Key('product-10')));
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('bill-options')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('bill-merge')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(Key('merge-${theirs.uuid}')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('manager-pin')), findsOneWidget);
+    await managerPin(t, '1111');
+    // Refused: Ana's tab is still hers and still parked.
+    expect(orders.byUuid(theirs.uuid)!.state, OrderState.held);
   });
 }

@@ -51,6 +51,7 @@ class SellScreen extends StatefulWidget {
     this.maxDiscountPercent = 0,
     this.allowAmountDiscount = false,
     this.authorize,
+    this.authorizeTabTable,
     this.unavailableProducts = const {},
     this.onToggleAvailable,
     this.favourites = const {},
@@ -176,6 +177,11 @@ class SellScreen extends StatefulWidget {
   /// needs and returns true if the cashier's role allows it or a manager approves.
   /// When null, actions are not gated.
   final Future<bool> Function(Permission)? authorize;
+
+  /// Clears the gate to work a parked tab sitting on a table that belongs to another
+  /// waiter. Null asks nobody, which is a shop that has assigned no tables and every
+  /// host that predates them.
+  final Future<bool> Function(Order tab)? authorizeTabTable;
 
   /// Products marked sold-out; their tiles are greyed and cannot be added.
   final Set<int> unavailableProducts;
@@ -2145,6 +2151,12 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (uuid == null) return;
+    // Merging takes another table's lines and its money onto this bill, so it is as
+    // much "opening" that table as tapping its tile is. Without this the floor could
+    // refuse a waiter a colleague's table and this sheet would hand it over anyway.
+    final source = others.firstWhere((o) => o.uuid == uuid);
+    if (!(await widget.authorizeTabTable?.call(source) ?? true)) return;
+    if (!mounted) return;
     _changed(() => s.mergeOrderInto(uuid));
     if (!mounted) return;
     showToast(context, tr(context, 'Tables merged'), kind: ToastKind.success);
