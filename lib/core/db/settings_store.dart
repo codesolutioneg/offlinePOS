@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import '../../domain/business_day.dart';
 import '../../domain/order.dart'
     show DiscountBooking, LocalProductBooking, OrderType;
+import '../../domain/table_preorder.dart';
 import '../auth/permissions.dart';
 import '../email/smtp_config.dart';
 import '../lan/lan_event.dart';
@@ -77,6 +78,7 @@ class SettingsStore {
   static const _codePage = 'receipt_code_page';
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
+  static const _tablePreorders = 'table_preorders';
 
   // ── generic accessors ────────────────────────────────────────────
   String? getString(String key) {
@@ -841,6 +843,125 @@ class SettingsStore {
 
   /// Whether [role] may do [p] without a manager PIN.
   bool roleCan(String role, Permission p) => permissionsFor(role).contains(p);
+
+  // ── what a table opens with ──────────────────────────────────────
+  // The cover charge, the bottle of water, the bread: things that go on the bill the
+  // moment guests sit down, and that a waiter would otherwise ring by hand on every
+  // single table. Set for a whole room, or for one table that is not like the rest.
+  //
+  // Stored as one JSON value keyed by room and by table id, rather than as rows:
+  // there is one list per section and the odd override, it is read once per seating,
+  // and a shop that sets none pays for nothing.
+
+  /// The raw stored shape: {"sections": {name: [line]}, "tables": {id: [line]}}.
+  /// Unparsable or missing data reads as empty, so a corrupt value costs a shop its
+  /// pre-orders and never a seating.
+  Map<String, Map<String, List<TablePreorder>>> get _preorderMap {
+    final v = getString(_tablePreorders);
+    // A fresh mutable map every read, never a const literal: the setters below edit
+    // what this hands back before writing it, and an unmodifiable empty case would
+    // throw on the very first list a shop sets up.
+    if (v == null) return {'sections': {}, 'tables': {}};
+    try {
+      final root = (jsonDecode(v) as Map).cast<String, dynamic>();
+      Map<String, List<TablePreorder>> bucket(String key) {
+        final raw = root[key];
+        if (raw is! Map) return {};
+        return {
+          for (final e in raw.entries)
+            e.key as String: [
+              for (final line in (e.value as List))
+                ?TablePreorder.fromMap(line),
+            ],
+        };
+      }
+
+      return {'sections': bucket('sections'), 'tables': bucket('tables')};
+    } catch (_) {
+      return {'sections': {}, 'tables': {}};
+    }
+  }
+
+  void _writePreorderMap(Map<String, Map<String, List<TablePreorder>>> map) =>
+      setString(
+          _tablePreorders,
+          jsonEncode({
+            for (final bucket in map.entries)
+              bucket.key: {
+                for (final e in bucket.value.entries)
+                  if (e.value.isNotEmpty)
+                    e.key: [for (final l in e.value) l.toMap()],
+              },
+          }));
+
+  /// What every table in [section] opens with, unless the table says otherwise.
+  List<TablePreorder> sectionPreorders(String section) =>
+      _preorderMap['sections']?[section] ?? const [];
+
+  /// What this one table opens with, or null when it simply follows its section.
+  ///
+  /// Null and an empty list are deliberately different answers: null is "whatever the
+  /// room does", and empty is "this table opens with nothing", which is the only way
+  /// to keep the cover charge off the two tables by the door.
+  List<TablePreorder>? tablePreorders(String tableId) {
+    final own = _preorderMap['tables']?[tableId];
+    if (own == null) return null;
+    // The "opens with nothing" marker never leaves this class: a caller asking what a
+    // table opens with must get the empty list it means, not a line it would then try
+    // to draw or ring.
+    return [
+      for (final l in own)
+        if (l.productId >= 0) l,
+    ];
+  }
+
+  void setSectionPreorders(String section, List<TablePreorder> lines) {
+    final map = _preorderMap;
+    map['sections']![section] = lines;
+    _writePreorderMap(map);
+  }
+
+  /// Set what one table opens with, or pass null to put it back on its section's list.
+  ///
+  /// An empty list is stored as an explicit "nothing", which is why it is written
+  /// through a marker rather than dropped: [_writePreorderMap] leaves empty lists out,
+  /// so the marker is what survives the round trip.
+  void setTablePreorders(String tableId, List<TablePreorder>? lines) {
+    final map = _preorderMap;
+    if (lines == null) {
+      map['tables']!.remove(tableId);
+    } else {
+      map['tables']![tableId] = lines.isEmpty ? const [_noPreorder] : lines;
+    }
+    _writePreorderMap(map);
+  }
+
+  /// The stand-in for "this table opens with nothing": a line for a product id no
+  /// catalogue can hold, so it is stored and read back but never rung. Without it an
+  /// empty override would be indistinguishable from no override at all.
+  static const _noPreorder = TablePreorder(productId: -1);
+
+  /// The lines a bill opened on this table actually starts with.
+  ///
+  /// The table's own list wins when it has one, otherwise the room's. Never both: a
+  /// table told to open with a bottle of water instead of the section's cover charge
+  /// must not get the cover charge as well.
+  List<TablePreorder> preordersFor({required String tableId, required String section}) {
+    final own = tablePreorders(tableId);
+    final lines = own ?? sectionPreorders(section);
+    return [
+      for (final l in lines)
+        if (l.productId >= 0) l,
+    ];
+  }
+
+  /// Whether anything at all is set up, so a screen can say so rather than showing
+  /// an empty list that looks broken.
+  bool get hasPreorders {
+    final map = _preorderMap;
+    return (map['sections']?.isNotEmpty ?? false) ||
+        (map['tables']?.isNotEmpty ?? false);
+  }
 
   // ── roles the shop invented ──────────────────────────────────────
   // A restaurant is not two job titles. A supervisor who may void and discount but
