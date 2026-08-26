@@ -145,6 +145,16 @@ class TableStore {
     return rows.isEmpty ? null : _map(rows.first);
   }
 
+  /// The table drawn under [name], or null when the shop has no floor plan or rang
+  /// the sale against a name it never laid out (a pushed-together pair, an outdoor
+  /// extra). By name because that is all an order keeps of the table it was sat at,
+  /// and names are unique across the floor (see [uniqueName]), so there is one row.
+  PosTable? byName(String name) {
+    final rows =
+        _db.raw.select('SELECT * FROM pos_tables WHERE name = ? LIMIT 1', [name]);
+    return rows.isEmpty ? null : _map(rows.first);
+  }
+
   /// Which part of the floor the table called [name] sits in, or null when the shop
   /// has no floor plan or rang the sale against a name it never laid out. Answered
   /// by name because that is all an order keeps of the table it was sat at, and

@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 22;
+  static const int version = 23;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -563,6 +563,33 @@ class Schema {
       "ALTER TABLE modifier_groups ADD COLUMN source TEXT NOT NULL DEFAULT 'odoo'",
       "ALTER TABLE modifiers ADD COLUMN source TEXT NOT NULL DEFAULT 'odoo'",
       "ALTER TABLE product_modifier_groups ADD COLUMN source TEXT NOT NULL DEFAULT 'odoo'",
+    ],
+    // v22 -> v23: whose section of the room is whose.
+    //
+    // One waiter per table, so the key is the table and not a pair: a second
+    // assignment for a table replaces the first, which is what a manager moving a
+    // section between two waiters mid-service means. A table with no row here
+    // belongs to nobody and stays open to anyone, so a shop that never assigns
+    // works exactly as it did.
+    //
+    // The cascade is the whole reason for the foreign key: a table deleted off the
+    // floor must not leave an assignment naming it, or a floor redrawn between two
+    // services would slowly fill with rows for tables that no longer exist.
+    // `cashier_id` deliberately carries NO such key: a waiter can be taken off the
+    // roster mid-shift and their tables have to stay assigned until a manager moves
+    // them, rather than silently opening to everybody.
+    [
+      '''
+      CREATE TABLE table_assignments (
+        table_id    TEXT PRIMARY KEY REFERENCES pos_tables(id) ON DELETE CASCADE,
+        cashier_id  TEXT NOT NULL,
+        assigned_at TEXT NOT NULL,
+        assigned_by TEXT NOT NULL
+      )
+      ''',
+      // "Which tables are mine" is asked per waiter on every floor build, so it is
+      // an indexed lookup rather than a scan of the room.
+      'CREATE INDEX idx_table_assignments_cashier ON table_assignments(cashier_id)',
     ],
   ];
 }
