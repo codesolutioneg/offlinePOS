@@ -82,6 +82,7 @@ import '../features/settings/receipt_designer_screen.dart';
 import '../features/settings/server_settings_screen.dart';
 import '../features/settings/settings_hub_screen.dart';
 import '../features/settings/shop_settings_screen.dart';
+import '../features/settings/table_preorder_screen.dart';
 import '../features/shift/shift_screen.dart';
 import '../features/support/diagnostics_screen.dart';
 import '../features/tables/table_floor_screen.dart';
@@ -1798,6 +1799,7 @@ class _PosAppState extends State<PosApp> {
             // room out.
             settings: widget.settings,
             onTransferTables: () => unawaited(_transferTables(floorContext)),
+            onEditPreorders: () => unawaited(_editPreorders(floorContext)),
             authorize: () => _authorize(Permission.openSettings, floorContext),
             // The book, so a table with guests due shortly says so on the plan.
             reservations: widget.reservations,
@@ -1950,6 +1952,10 @@ class _PosAppState extends State<PosApp> {
                 // already open never reaches here: the resume path above took it.
                 final seated = covers ?? t.seats;
                 if (dineIn && seated > 0) session.setGuestCount(seated);
+                // What the table opens with, after the covers are known: a cover
+                // charge is priced per guest, so the count has to be on the order
+                // before the line is rung.
+                if (dineIn) _addPreorders(session, t, guests: seated);
                 _onCounter = true;
               });
             },
@@ -2116,6 +2122,52 @@ class _PosAppState extends State<PosApp> {
   /// The end of a waiter's shift with four tables still sitting: without this the
   /// tabs stay locked to somebody who has gone home and land on their flash. Only
   /// parked tabs move, never a paid sale, so who took the money is never rewritten.
+  /// Edit what a table opens with, from the screen a manager already opens to lay the
+  /// room out. Gated like any other setting: these lines land on every bill.
+  Future<void> _editPreorders(BuildContext context) async {
+    if (!await _authorize(Permission.openSettings, context)) return;
+    if (!context.mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => TablePreorderScreen(
+        settings: widget.settings,
+        tables: widget.tables,
+        catalogue: widget.catalogue,
+      ),
+    ));
+    if (mounted) setState(() {});
+  }
+
+  /// Put the lines a table opens with on a bill that has just been seated.
+  ///
+  /// Only on a fresh seating, never on a recall: a tab picked back up already has its
+  /// cover charge, and adding it again on every visit to the table is how a guest ends
+  /// up paying for the water four times. They are ordinary lines from here on, so a
+  /// waiter takes one off with the void they already have.
+  ///
+  /// A line naming a product the catalogue no longer has is skipped rather than
+  /// guessed at: a deleted product must not stop a table being seated.
+  void _addPreorders(PosSession session, PosTable table, {required int guests}) {
+    // A table typed in by hand rather than drawn on the plan is in no room, so it
+    // follows no room's list: guessing a section for it would put the cover charge on
+    // a bill nobody set it for.
+    final onFloor = widget.tables.byId(table.id) ?? widget.tables.byName(table.name);
+    if (onFloor == null) return;
+    final lines = widget.settings
+        .preordersFor(tableId: onFloor.id, section: onFloor.section);
+    if (lines.isEmpty) return;
+    var added = 0;
+    for (final line in lines) {
+      final product = widget.catalogue.byId(line.productId);
+      if (product == null || !product.active) continue;
+      session.addProduct(product, qty: line.quantityFor(guests));
+      added++;
+    }
+    if (added > 0) {
+      widget.audit.record(_session?.cashierId ?? 'system', 'table.preorder',
+          detail: '${table.name}|$added line(s)');
+    }
+  }
+
   /// Give one table to a waiter, or hand it back to nobody with a null cashier.
   ///
   /// Audited either way: which waiter had which table is what a shop reconstructs a
