@@ -14,6 +14,7 @@ import 'package:offline_pos/core/db/customer_store.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/reservation_store.dart';
+import 'package:offline_pos/core/db/table_assignment_store.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
@@ -134,6 +135,7 @@ void main() {
         tables: TableStore(db),
         settings: settings,
         reservations: ReservationStore(db),
+        assignments: TableAssignmentStore(db),
         audit: audit,
         port: 0,
         beaconPort: 0,

@@ -22,6 +22,7 @@ import 'core/db/customer_store.dart';
 import 'core/db/delivery_store.dart';
 import 'core/db/order_store.dart';
 import 'core/db/settings_store.dart';
+import 'core/db/table_assignment_store.dart';
 import 'core/db/table_store.dart';
 import 'core/db/print_job_store.dart';
 import 'core/db/reservation_store.dart';
@@ -124,6 +125,13 @@ Future<void> main() async {
   // Bookings, shared for the same reason the floor plan is: one taken at the
   // counter has to reach the handheld the waiter is holding.
   final reservations = ReservationStore(
+    db,
+    publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+  );
+  // Who works which table. Shared because the manager hands the room out on one
+  // device and the waiters read it on the others; a handheld that never heard the
+  // assignment would refuse its own waiter their own tables.
+  final assignments = TableAssignmentStore(
     db,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
   );
@@ -269,6 +277,7 @@ Future<void> main() async {
       tables: tables,
       settings: settings,
       reservations: reservations,
+      assignments: assignments,
       audit: audit,
       port: config.lanPort,
       beaconPort: config.lanBeaconPort,

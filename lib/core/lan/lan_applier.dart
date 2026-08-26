@@ -2,6 +2,7 @@ import '../../domain/order.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
+import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
 import 'lan_cart_board.dart';
 import 'lan_event.dart';
@@ -33,12 +34,14 @@ class LanApplier {
     required TableStore tables,
     required SettingsStore settings,
     required ReservationStore reservations,
+    required TableAssignmentStore assignments,
     required LanEventLog log,
     LanLog? onRefused,
   })  : _orders = orders,
         _tables = tables,
         _settings = settings,
         _reservations = reservations,
+        _assignments = assignments,
         _log = log,
         _onRefused = onRefused;
 
@@ -49,6 +52,7 @@ class LanApplier {
   final TableStore _tables;
   final SettingsStore _settings;
   final ReservationStore _reservations;
+  final TableAssignmentStore _assignments;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -140,6 +144,15 @@ class LanApplier {
         // and the difference decides whether the cursor may move past this.
         return _Landing.deferred;
       }
+      if (event.kind == LanEventKind.tableAssignment &&
+          event.payload['deleted'] != true &&
+          _tables.byId('${event.payload['table_id']}') == null) {
+        // Same reason, and the row would be refused by the foreign key anyway: the
+        // table the assignment names is on its way in an earlier event this till has
+        // not applied yet. A clear is exempt because there is nothing to point at:
+        // the table is gone, so the cascade already took its assignment with it.
+        return _Landing.deferred;
+      }
       final written = switch (event.kind) {
         LanEventKind.orderUpsert => _applyOrder(event),
         LanEventKind.kitchenStatus => _applyKitchenStatus(event),
@@ -147,6 +160,7 @@ class LanApplier {
         LanEventKind.productAvailability => _applyAvailability(event),
         LanEventKind.orderClaim => _applyClaim(event),
         LanEventKind.reservationUpsert => _applyReservation(event),
+        LanEventKind.tableAssignment => _applyAssignment(event),
         LanEventKind.shiftLifecycle => _applyShiftNotice(event),
         LanEventKind.cartDisplay => _applyCart(event),
       };
@@ -241,6 +255,24 @@ class LanApplier {
       return true;
     }
     _reservations.save(Reservation.fromMap(event.payload), announce: false);
+    return true;
+  }
+
+  /// A table shared out somewhere else. Written and nothing more: what this till
+  /// does about an assignment is a rule the screen owns, so applying one can never
+  /// stop anybody selling.
+  bool _applyAssignment(LanEvent event) {
+    // The table comes from the payload, not from the record name: an assignment
+    // travels under its own key so it cannot fight the floor plan over one clock.
+    final tableId = event.payload['table_id'];
+    if (tableId is! String) {
+      throw FormatException('assignment for ${event.recordUuid}');
+    }
+    if (event.payload['deleted'] == true) {
+      _assignments.clear(tableId, announce: false);
+      return true;
+    }
+    _assignments.apply(TableAssignment.fromMap(event.payload), announce: false);
     return true;
   }
 

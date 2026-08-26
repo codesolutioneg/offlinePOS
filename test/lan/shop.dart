@@ -7,6 +7,7 @@ import 'package:offline_pos/core/db/reservation_store.dart';
 import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
+import 'package:offline_pos/core/db/table_assignment_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
 import 'package:offline_pos/core/lan/lan_applier.dart';
 import 'package:offline_pos/core/lan/lan_cart_board.dart';
@@ -71,12 +72,18 @@ class TestTill {
       db,
       publish: (kind, uuid, payload) => fabric.publish(kind, uuid, payload),
     );
+    assignments = TableAssignmentStore(
+      db,
+      publish: (kind, uuid, payload) => fabric.publish(kind, uuid, payload),
+      now: () => this.clock(),
+    );
     applier = LanApplier(
       deviceId: deviceId,
       orders: orders,
       tables: tables,
       settings: settings,
       reservations: reservations,
+      assignments: assignments,
       log: log,
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
@@ -124,6 +131,7 @@ class TestTill {
   late final TableStore tables;
   late final SettingsStore settings;
   late final ReservationStore reservations;
+  late final TableAssignmentStore assignments;
   late final LanApplier applier;
   late final LanClaimDesk claims;
   late final LanProtocol protocol;

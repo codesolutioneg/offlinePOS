@@ -41,6 +41,14 @@ enum LanEventKind {
   /// waiter is holding, or two people promise one table.
   reservationUpsert('reservation.upsert'),
 
+  /// A table handed to a waiter, moved to another one, or handed back. Its own kind
+  /// rather than part of [tableUpsert], because the two change on completely
+  /// different clocks: the plan is drawn a few times a year and the room is shared
+  /// out every shift, and sharing them one record would let a table nudged an inch
+  /// on the counter overwrite an assignment made on the manager's handheld a second
+  /// earlier.
+  tableAssignment('table.assignment'),
+
   /// A till saying its trading day is over. Carried so the other devices can be
   /// told rather than each closing whenever somebody remembers, and deliberately
   /// only ever advisory: a device that hears nothing sells exactly as it always
