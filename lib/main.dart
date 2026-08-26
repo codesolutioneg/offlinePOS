@@ -314,6 +314,7 @@ Future<void> main() async {
     delivery: DeliveryStore(db),
     attendance: AttendanceStore(db),
     reservations: reservations,
+    assignments: assignments,
     lan: lan,
     // The Z report by mail. Reads the settings on every attempt, so a password
     // corrected mid-evening is used by the next retry without a restart.

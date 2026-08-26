@@ -18,6 +18,7 @@ import '../core/db/customer_store.dart';
 import '../core/db/delivery_store.dart';
 import '../core/db/order_store.dart';
 import '../core/db/reservation_store.dart';
+import '../core/db/table_assignment_store.dart';
 import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
@@ -124,11 +125,16 @@ class PosApp extends StatefulWidget {
     this.lan,
     this.emailer,
     this.reservations,
+    this.assignments,
   });
 
   /// Tables booked ahead. Null on a shop that does not take bookings and in the
   /// suites that predate them, and then the floor reads exactly as it did.
   final ReservationStore? reservations;
+
+  /// Who works which table this service. Null in the suites that predate it, and
+  /// then every table is open to whoever is signed in, exactly as before.
+  final TableAssignmentStore? assignments;
 
   final AuthService auth;
   final UserStore users;
@@ -1679,6 +1685,19 @@ class _PosAppState extends State<PosApp> {
         occupiedInfo: occ.info,
         formatAmount: PosApp.money,
         sectionsAtSide: widget.settings.floorSectionsSide,
+        // The same rule as the floor home, or seating from the counter would be the
+        // way around it: a waiter refused a tile could otherwise pick it here.
+        assignments: widget.assignments?.byTable() ?? const {},
+        staff: [
+          for (final u in widget.users.all())
+            (id: u.id, name: u.name, active: u.active),
+        ],
+        myCashierId: session.cashierId,
+        mayOpenAnyTable: widget.assignments == null ||
+            widget.settings.roleCan(
+                widget.auth.signedIn?.role ?? 'cashier', Permission.openAnyTable),
+        authorizeForeignTable: () =>
+            _authorize(Permission.openAnyTable, routeContext),
         // Picking is only about which table; what is being seated was decided on
         // the order already on screen.
         onOpenTable: (t, _) => Navigator.of(routeContext).pop(t.name),
@@ -1784,6 +1803,32 @@ class _PosAppState extends State<PosApp> {
             reservations: widget.reservations,
             // The rooms down the side, where the shop reads them fastest.
             sectionsAtSide: widget.settings.floorSectionsSide,
+            // Who works which table, and who is standing here. Read per build, so a
+            // manager moving a section on a handheld reaches this floor the next time
+            // a waiter looks at it.
+            assignments: widget.assignments?.byTable() ?? const {},
+            staff: [
+              // Everyone, so a waiter taken off the roster mid-shift is still named on
+              // the tables they are holding; the picker offers only the active ones.
+              for (final u in widget.users.all())
+                (id: u.id, name: u.name, active: u.active),
+            ],
+            myCashierId: session.cashierId,
+            // A role that may open anybody's table sees the names and no locks. Read
+            // from the role rather than from the account being a manager, so a shop
+            // that runs a head-waiter role can grant it without granting the rest.
+            mayOpenAnyTable: widget.assignments == null ||
+                widget.settings.roleCan(
+                    widget.auth.signedIn?.role ?? 'cashier', Permission.openAnyTable),
+            authorizeForeignTable: () =>
+                _authorize(Permission.openAnyTable, floorContext),
+            onAssign: widget.assignments == null
+                ? null
+                : (table, cashierId) => _assignTable(table, cashierId),
+            authorizeAssign: () => _authorize(Permission.assignTables, floorContext),
+            // The nudge only for whoever may act on it without being asked for a PIN.
+            assignHint: widget.settings
+                .roleCan(widget.auth.signedIn?.role ?? 'cashier', Permission.assignTables),
             // Kept in the shell, so a round trip to the counter comes back to the
             // room the waiter was working and the seating they had chosen.
             section: _floorSection,
@@ -1964,6 +2009,36 @@ class _PosAppState extends State<PosApp> {
     _publishActivity();
   }
 
+  /// Whether the table a parked tab is sitting on is one this person may work.
+  ///
+  /// The floor already refuses the tile, but a parked tab is also reachable from the
+  /// Open orders list, and a rule that only holds on one screen is not a rule. Asked
+  /// through the same permission, so a manager passes without being prompted and a
+  /// waiter is told whose section they are reaching into before the PIN box appears.
+  ///
+  /// Free on a tab with no table (takeaway, delivery) and on a table name the floor
+  /// plan does not know: nobody has been given a table that was never drawn.
+  Future<bool> _authorizeTabTable(BuildContext context, Order tab) async {
+    final store = widget.assignments;
+    final label = tab.tableLabel;
+    if (store == null || label == null || label.isEmpty) return true;
+    final table = widget.tables.byName(label);
+    if (table == null) return true;
+    final owner = store.cashierFor(table.id);
+    if (owner == null || owner == _session?.cashierId) return true;
+    final who = widget.users.byId(owner)?.name ?? owner;
+    if (!widget.settings
+        .roleCan(widget.auth.signedIn?.role ?? 'cashier', Permission.openAnyTable)) {
+      showToast(context, '${tr(context, 'This table belongs to')} $who',
+          kind: ToastKind.error);
+    }
+    final ok = await _authorize(Permission.openAnyTable, context);
+    widget.audit.record(_session?.cashierId ?? 'unknown',
+        ok ? 'table.foreign_opened' : 'table.foreign_refused',
+        detail: '$label|$owner');
+    return ok;
+  }
+
   /// Whether the cashier on the till may open [tab].
   ///
   /// Free unless the shop asked for table security, and free on your own tab either
@@ -1973,9 +2048,13 @@ class _PosAppState extends State<PosApp> {
   /// override; both outcomes are audited, because a tab opened by somebody else is
   /// exactly the thing that has to be explainable afterwards.
   Future<bool> _authorizeTab(BuildContext context, Order tab) async {
+    if (!await _authorizeTabTable(context, tab)) return false;
     if (!widget.settings.tableSecurity) return true;
     final who = _session?.cashierId;
     if (who == null || tab.cashierId == who) return true;
+    // The table question above may have put a dialog up and taken it down again, so
+    // the screen this prompt belongs to has to still be there before it is asked.
+    if (!context.mounted) return false;
     final owner = widget.users.byId(tab.cashierId);
     final pin = await _promptPin(
       context,
@@ -2037,6 +2116,41 @@ class _PosAppState extends State<PosApp> {
   /// The end of a waiter's shift with four tables still sitting: without this the
   /// tabs stay locked to somebody who has gone home and land on their flash. Only
   /// parked tabs move, never a paid sale, so who took the money is never rewritten.
+  /// Give one table to a waiter, or hand it back to nobody with a null cashier.
+  ///
+  /// Audited either way: which waiter had which table is what a shop reconstructs a
+  /// disputed bill from, and the row itself only ever holds the current answer.
+  void _assignTable(PosTable table, String? cashierId) {
+    final store = widget.assignments;
+    if (store == null) return;
+    final by = _session?.cashierId ?? 'system';
+    if (cashierId == null) {
+      store.clear(table.id);
+      widget.audit.record(by, 'table.unassigned', detail: table.name);
+    } else {
+      store.assign(table.id, cashierId, by: by);
+      widget.audit
+          .record(by, 'table.assigned', detail: '${table.name}|$cashierId');
+    }
+    // The floor reads the assignments off this build, so the shell is what has to
+    // rebuild: the screen's own setState would redraw the same map it was handed and
+    // leave the manager looking at the name they just replaced.
+    if (mounted) setState(() {});
+  }
+
+  /// Hand the whole room back at the end of a shift.
+  ///
+  /// Called as the Z lands, because a table still assigned to whoever went home is a
+  /// table the next service cannot open. Best effort and never in the way: the shift
+  /// is already closed by the time this runs, so nothing here can hold up a cash-up.
+  void _clearAssignments(PosSession session) {
+    final store = widget.assignments;
+    if (store == null || store.isEmpty) return;
+    final cleared = store.clearAll();
+    widget.audit.record(session.cashierId, 'tables.unassigned_all',
+        detail: '$cleared table(s)');
+  }
+
   Future<void> _transferTables(BuildContext context) async {
     if (!await _authorizeManager(context)) return;
     final held = widget.orders.held();
@@ -2863,7 +2977,13 @@ class _PosAppState extends State<PosApp> {
         // A copy of the day for whoever is not in the building. Queued and left
         // to the background lane, so the cash-up is over before the first packet
         // is sent and a mail server that is down changes nothing about closing.
-        onZClosed: _emailZReport,
+        onZClosed: (closed, rows) {
+          // The room goes back to nobody as the shift ends: a table still assigned to
+          // whoever went home is one the next service cannot open. Before the report,
+          // so a mail server that misbehaves cannot leave the room shared out.
+          _clearAssignments(session);
+          _emailZReport(closed, rows);
+        },
         // Closing the shift is when the day's orders are pushed to Odoo in one
         // batch. Returns a message for the cashier: how it went, or that the
         // orders are safe and will sync once the connection is back.
