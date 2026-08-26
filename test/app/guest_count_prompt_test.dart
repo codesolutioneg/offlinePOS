@@ -128,7 +128,40 @@ void main() {
           of: find.byKey(const Key('guests')), matching: find.byType(Text)))
       .data!;
 
-  testWidgets('off by default: seating a table is still one tap', (t) async {
+  testWidgets('on by default: the covers are asked for before the bill opens',
+      (t) async {
+    await t.pumpWidget(app());
+    await signIn(t);
+
+    await seatTable(t);
+
+    // The count decides the per-guest lines a table opens with and every per-head
+    // figure in the reports, so it is asked rather than assumed.
+    expect(find.byKey(const Key('guest-count-prompt')), findsOneWidget);
+    await t.tap(find.byKey(const Key('guests-3')));
+    await t.pumpAndSettle();
+    expect(find.byType(SellScreen), findsOneWidget);
+    expect(guestChipLabel(t), '3 guests');
+  });
+
+  testWidgets('every number up to the table\'s own maximum is offered', (t) async {
+    await t.pumpWidget(app());
+    await signIn(t);
+
+    await seatTable(t);
+
+    // Table 5 seats four, so one to four and nothing above it: a waiter seating five
+    // at a six-top was picking a round number and the covers were wrong from the tap.
+    for (final n in [1, 2, 3, 4]) {
+      expect(find.byKey(Key('guests-$n')), findsOneWidget,
+          reason: '\$n is within the table\'s seats');
+    }
+    expect(find.byKey(const Key('guests-5')), findsNothing);
+    expect(find.byKey(const Key('guests-6')), findsNothing);
+  });
+
+  testWidgets('a shop that turns it off keeps seating to one tap', (t) async {
+    settings.askGuestCount = false;
     await t.pumpWidget(app());
     await signIn(t);
 
@@ -136,7 +169,7 @@ void main() {
 
     expect(find.byKey(const Key('guest-count-prompt')), findsNothing);
     expect(find.byType(SellScreen), findsOneWidget);
-    // Seeded from the table itself, exactly as before.
+    // Seeded from the table itself.
     expect(guestChipLabel(t), '4 guests');
   });
 

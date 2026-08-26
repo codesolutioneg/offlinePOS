@@ -2259,24 +2259,37 @@ class _PosAppState extends State<PosApp> {
   /// How many are sitting at the table just tapped, offered as quick counts with
   /// the table's own seats first. Returns null when the waiter backs out, which
   /// aborts the seating rather than opening a tab nobody asked for.
+  /// Ask how many are sitting down, as every number the table takes.
+  ///
+  /// One to the table's own seat count, not a handful of round numbers: a waiter
+  /// seating five at a six-top was picking 6 and the covers on the bill were wrong
+  /// from the first tap. A table whose seat count was never set falls back to eight,
+  /// which is a guess only for a floor plan that never said.
   Future<int?> _askGuestCount(BuildContext context, int seats) {
-    final counts = <int>{if (seats > 0) seats, 1, 2, 3, 4, 6, 8}.toList()..sort();
+    // Bounded so a banquet table cannot produce a dialog the till cannot draw; the
+    // content scrolls above that anyway.
+    final max = seats > 0 ? (seats > 40 ? 40 : seats) : 8;
     return showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
         key: const Key('guest-count-prompt'),
         title: Text(tr(ctx, 'How many guests?')),
-        content: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final n in counts)
-              ActionChip(
-                key: Key('guests-$n'),
-                label: Text('$n'),
-                onPressed: () => Navigator.pop(ctx, n),
-              ),
-          ],
+        content: SizedBox(
+          width: 320,
+          child: SingleChildScrollView(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (var n = 1; n <= max; n++)
+                  ActionChip(
+                    key: Key('guests-$n'),
+                    label: Text('$n'),
+                    onPressed: () => Navigator.pop(ctx, n),
+                  ),
+              ],
+            ),
+          ),
         ),
         actions: [
           TextButton(

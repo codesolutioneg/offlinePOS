@@ -546,7 +546,12 @@ class SettingsStore {
   /// where one cashier serves the room gains nothing from a dialog between tapping
   /// a table and ringing the first drink, and the covers can still be set from the
   /// Guests chip whenever they matter.
-  bool get askGuestCount => getBool('ask_guest_count');
+  /// Whether seating a table asks how many are sitting down before the bill opens.
+  ///
+  /// On by default: the covers decide the per-guest lines a table opens with and every
+  /// per-head figure in the reports, and a table seated with the wrong count is wrong
+  /// from the first tap. A shop that does not care turns it off here.
+  bool get askGuestCount => getBool('ask_guest_count', fallback: true);
   set askGuestCount(bool v) => setBool('ask_guest_count', v);
 
   /// Draw the floor's sections down the side of the plan rather than as a strip
