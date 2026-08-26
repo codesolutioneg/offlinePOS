@@ -37,6 +37,7 @@ class TableFloorScreen extends StatefulWidget {
     this.sectionsAtSide = true,
     this.settings,
     this.onTransferTables,
+    this.onEditPreorders,
     this.authorize,
     this.reservations,
     this.nowFn = DateTime.now,
@@ -51,7 +52,55 @@ class TableFloorScreen extends StatefulWidget {
     this.onSectionChanged,
     this.seatAs,
     this.onSeatAsChanged,
+    this.assignments = const {},
+    this.staff = const [],
+    this.myCashierId,
+    this.mayOpenAnyTable = true,
+    this.authorizeForeignTable,
+    this.onAssign,
+    this.authorizeAssign,
+    this.assignHint = false,
   });
+
+  /// Who each table belongs to for this service, by table id.
+  ///
+  /// Empty until a manager shares the room out, and a table absent from it belongs
+  /// to nobody: that is what keeps a shop which never assigns anything on exactly
+  /// the floor it had before assignments existed.
+  final Map<String, String> assignments;
+
+  /// The staff a table may be given to, in offer order, with the names to draw on
+  /// the tiles. Empty in the picker and in the suites that only draw the plan.
+  ///
+  /// Carries the inactive ones too, purely so their name still resolves: somebody
+  /// taken off the roster mid-shift keeps their tables until a manager moves them,
+  /// and a tile that fell back to showing a raw id would be the only sign of it. Only
+  /// the active ones are offered when a table is handed over.
+  final List<({String id, String name, bool active})> staff;
+
+  /// Who is standing at the till, so their own tables are told apart from the rest.
+  final String? myCashierId;
+
+  /// Whether this person may open a table that belongs to somebody else without
+  /// being asked. True for a manager, and true by default so the picker and the
+  /// plan-only suites are unaffected; false is what puts the lock on the tiles.
+  final bool mayOpenAnyTable;
+
+  /// Clears the gate to open somebody else's table anyway, which is a manager
+  /// standing at a waiter's till. Null refuses outright instead of asking.
+  final Future<bool> Function()? authorizeForeignTable;
+
+  /// Give [table] to a waiter, or hand it back to nobody with a null cashier. Null
+  /// hides the assign tools altogether.
+  final void Function(PosTable table, String? cashierId)? onAssign;
+
+  /// Clears the gate to enter assign mode. Null asks nobody.
+  final Future<bool> Function()? authorizeAssign;
+
+  /// Whether to offer sharing the room out on the strip above the plan. Set by the
+  /// shell for whoever may do it, so a waiter is not shown a button that only ever
+  /// asks them for a manager's PIN.
+  final bool assignHint;
 
   /// The room to open on, and the way back up to whoever remembers it.
   ///
@@ -121,6 +170,10 @@ class TableFloorScreen extends StatefulWidget {
   /// waiter went home mid-service. Null hides the action.
   final VoidCallback? onTransferTables;
 
+  /// Edit what a table opens with (the cover charge, the water). Null hides the
+  /// action, which is what the picker and the plan-only suites want.
+  final VoidCallback? onEditPreorders;
+
   /// Clears the shell's permission gate before a floor rule is changed. Null (the
   /// picker, and the suites that only draw the plan) asks nobody, because nothing
   /// there can change a rule.
@@ -185,6 +238,12 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   final GlobalKey _canvasKey = GlobalKey();
   bool _editing = false;
+
+  /// Whether a tap hands the table to a waiter instead of opening an order. A mode
+  /// and not a dialog per table, because sharing a room out is a dozen taps in a row
+  /// and a manager doing it should not have to re-enter anything between them.
+  bool _assigning = false;
+
   String? _section;
   Timer? _tick;
 
@@ -405,7 +464,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                 controller: seatsCtrl,
                 keyboardType: TextInputType.number,
                 decoration: InputDecoration(
-                    labelText: tr(ctx, 'Seats'), border: const OutlineInputBorder()),
+                    // Named as the ceiling, because that is what it now drives: the
+                    // guest-count prompt offers one to this number.
+                    labelText: tr(ctx, 'Seats (max guests)'),
+                    border: const OutlineInputBorder()),
               ),
               const SizedBox(height: 8),
               Align(
@@ -557,6 +619,13 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     // can clear a table assigned by mistake (setTable('')). A tile tap and this
     // share the one callback; the shell pops the picker with the name.
     if (!mounted || label == null) return;
+    // A name typed in here is the one way onto a table without tapping its tile, so
+    // it is held to the same rule: without this, "Other" would spell a waiter onto
+    // any table on the floor. A name that is not on the plan belongs to nobody and
+    // passes, which is what the field is for.
+    final onFloor = widget.store.byName(label);
+    if (onFloor != null && !await _mayOpen(onFloor)) return;
+    if (!mounted) return;
     widget.onOpenTable(PosTable(id: 'custom', name: label), _seatType);
   }
 
@@ -579,14 +648,29 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               label: Text(tr(context, 'Other')),
             )
           else ...[
+            if (widget.onAssign != null)
+              IconButton(
+                key: const Key('toggle-assign'),
+                tooltip: _assigning
+                    ? tr(context, 'Done')
+                    : tr(context, 'Assign tables'),
+                icon: Icon(_assigning ? Icons.check : Icons.people_alt_outlined),
+                onPressed: () => unawaited(_toggleAssign()),
+              ),
             IconButton(
               key: const Key('toggle-edit'),
               tooltip: _editing ? tr(context, 'Done') : tr(context, 'Edit floor'),
               icon: Icon(_editing ? Icons.check : Icons.edit),
-              onPressed: () => setState(() => _editing = !_editing),
+              // Leaving assign mode on the way into the floor editor, for the same
+              // reason entering it leaves the editor: a tile does one thing at a time.
+              onPressed: () => setState(() {
+                _editing = !_editing;
+                _assigning = false;
+              }),
             ),
             if (widget.settings != null ||
                 widget.onTransferTables != null ||
+                widget.onEditPreorders != null ||
                 widget.reservations != null)
               _floorMenu(),
             if (widget.onSignOut != null)
@@ -599,7 +683,14 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           ],
         ],
       ),
-      floatingActionButton: _editing && !widget.pickMode
+      floatingActionButton: _assigning && !widget.pickMode
+          ? FloatingActionButton.extended(
+              key: const Key('assign-section'),
+              onPressed: () => unawaited(_assignSection()),
+              icon: const Icon(Icons.groups_2_outlined),
+              label: Text(tr(context, 'Whole section')),
+            )
+          : _editing && !widget.pickMode
           ? Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -629,6 +720,17 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           if (_noShift) _noShiftStrip(),
           if (widget.dayNotice case final notice?) _dayNoticeStrip(notice),
           if (widget.parkedNotice case final parked?) _parkedStrip(parked),
+          if (_assigning) _assigningStrip(),
+          // Only with a drawer open and a room to share out: before that the strip
+          // above it is the one that matters, and an empty floor has its own prompt.
+          if (!_assigning &&
+              widget.assignHint &&
+              widget.onAssign != null &&
+              !widget.pickMode &&
+              !_noShift &&
+              widget.assignments.isEmpty &&
+              tables.isNotEmpty)
+            _assignHintStrip(),
           // The sections moved to the side, so the room above the plan is where the
           // waiter now says what they are seating.
           if (widget.seatTypes.length > 1) _seatTypeStrip(),
@@ -674,6 +776,53 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             const SizedBox(width: 8),
             Expanded(
                 child: Text(notice, style: const TextStyle(color: Colors.white))),
+          ]),
+        ),
+      );
+
+  /// What assign mode says while it is on, so a manager mid-way through a room knows
+  /// why a tap is picking a waiter instead of opening a bill.
+  Widget _assigningStrip() => Material(
+        key: const Key('floor-assigning'),
+        color: AppColors.primary,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(children: [
+            const Icon(Icons.people_alt_outlined, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                tr(context, 'Tap a table to give it to a waiter.'),
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ]),
+        ),
+      );
+
+  /// The nudge at the start of a service: a shift is open and the room has not been
+  /// shared out yet. A strip and not a dialog, because a shop that works the floor
+  /// without assigning anything is allowed to keep doing exactly that.
+  Widget _assignHintStrip() => Material(
+        key: const Key('floor-assign-hint'),
+        color: AppColors.warning,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Row(children: [
+            const Icon(Icons.people_alt_outlined, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(tr(context, 'No tables are assigned yet.'),
+                  style: const TextStyle(color: Colors.white)),
+            ),
+            FilledButton(
+              key: const Key('floor-assign-now'),
+              style: FilledButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: AppColors.warning),
+              onPressed: () => unawaited(_toggleAssign()),
+              child: Text(tr(context, 'Assign')),
+            ),
           ]),
         ),
       );
@@ -730,6 +879,155 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   String get _noShiftMessage => tr(context,
       'No shift is open. Open one before you start an order.');
+
+  /// Cashier id -> name, for the tiles and the picker. Rebuilt per build off a
+  /// handful of staff, which is cheaper than holding a second copy in step with the
+  /// roster.
+  Map<String, String> get _staffNames =>
+      {for (final s in widget.staff) s.id: s.name};
+
+  /// The waiter this table belongs to, or null when it belongs to nobody and is
+  /// therefore open to anyone.
+  String? _ownerOf(PosTable t) => widget.assignments[t.id];
+
+  /// Whether the tile is drawn locked: somebody else's table, seen by somebody who
+  /// may not open it. A manager sees the names and no locks, which is the difference
+  /// between reading the room and being kept out of it.
+  bool _lockedFor(PosTable t) {
+    if (widget.mayOpenAnyTable || _assigning) return false;
+    final owner = _ownerOf(t);
+    return owner != null && owner != widget.myCashierId;
+  }
+
+  /// Open a table, or refuse it because it is not this waiter's.
+  ///
+  /// The shift and day-close holds are asked first and unchanged: they stop the whole
+  /// room, so there is no point naming an owner for a table nobody may open anyway.
+  Future<void> _tapToOpen(PosTable t, bool occupied) async {
+    if (_orderingHeld(newWork: !occupied)) return;
+    if (!await _mayOpen(t)) return;
+    if (!mounted) return;
+    widget.onOpenTable(t, _seatType);
+  }
+
+  /// Whether the person at the till may open [t].
+  ///
+  /// Refused by name, never as a bare "not yours": a waiter told which colleague has
+  /// the table walks to them, and a waiter told nothing walks to the manager. A
+  /// manager's PIN opens it anyway, because the alternative on a single-till shop is
+  /// a bill nobody can settle until the waiter who opened it comes back.
+  Future<bool> _mayOpen(PosTable t) async {
+    final owner = _ownerOf(t);
+    if (owner == null || owner == widget.myCashierId) return true;
+    if (widget.mayOpenAnyTable) return true;
+    final who = _staffNames[owner] ?? owner;
+    final gate = widget.authorizeForeignTable;
+    if (gate == null) {
+      showToast(context, '${tr(context, 'This table belongs to')} $who',
+          kind: ToastKind.error);
+      return false;
+    }
+    final proceed = await _confirmForeignTable(t.name, who);
+    if (proceed != true || !mounted) return false;
+    return gate();
+  }
+
+  Future<bool?> _confirmForeignTable(String table, String who) => showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          key: const Key('foreign-table-dialog'),
+          title: Text('${tr(ctx, 'Table')} $table · $who'),
+          content: Text(tr(ctx,
+              'This table is assigned to another waiter. A manager can open it.')),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(tr(ctx, 'Cancel'))),
+            FilledButton(
+              key: const Key('foreign-table-approve'),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(tr(ctx, 'Manager approval')),
+            ),
+          ],
+        ),
+      );
+
+  /// Enter or leave assign mode. Entering is gated once, for the whole run of taps
+  /// that follows; leaving never is.
+  Future<void> _toggleAssign() async {
+    if (_assigning) {
+      setState(() => _assigning = false);
+      return;
+    }
+    if (!(await widget.authorizeAssign?.call() ?? true)) return;
+    if (!mounted) return;
+    // Never both at once: one lays the room out and the other shares it out, and a
+    // drag handle under a tile that is also a waiter picker is neither.
+    setState(() {
+      _assigning = true;
+      _editing = false;
+    });
+  }
+
+  /// Hand one table to a waiter, or back to nobody.
+  Future<void> _assignTable(PosTable t) async {
+    final assign = widget.onAssign;
+    if (assign == null) return;
+    final picked = await _pickWaiter(
+        title: '${tr(context, 'Table')} ${t.name}', current: _ownerOf(t));
+    if (picked == null || !mounted) return;
+    assign(t, picked.isEmpty ? null : picked);
+    setState(() {});
+  }
+
+  /// Hand the whole room on screen to one waiter, which is how a section is shared
+  /// out at the start of a service: a manager picks once instead of tapping fifteen
+  /// tables. Dividers are skipped; they seat nobody.
+  Future<void> _assignSection() async {
+    final assign = widget.onAssign;
+    if (assign == null) return;
+    final picked = await _pickWaiter(
+        title: '${tr(context, 'Whole section')}: $_activeSection', current: null);
+    if (picked == null || !mounted) return;
+    for (final t in widget.store.inSection(_activeSection)) {
+      if (t.isDivider) continue;
+      assign(t, picked.isEmpty ? null : picked);
+    }
+    setState(() {});
+  }
+
+  /// Pick one of the staff, or nobody. Returns null when the sheet was dismissed,
+  /// which changes nothing, and an empty string for "nobody", which is a clear: the
+  /// two have to be told apart or backing out would unassign the table.
+  Future<String?> _pickWaiter({required String title, required String? current}) =>
+      showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: ListView(shrinkWrap: true, children: [
+            ListTile(
+              title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text(tr(ctx, 'Who is working it?')),
+            ),
+            for (final s in widget.staff.where((s) => s.active))
+              ListTile(
+                key: Key('assign-to-${s.id}'),
+                leading: const Icon(Icons.person_outline),
+                title: Text(s.name),
+                trailing: s.id == current
+                    ? const Icon(Icons.check, color: AppColors.primary)
+                    : null,
+                onTap: () => Navigator.pop(ctx, s.id),
+              ),
+            const Divider(height: 1),
+            ListTile(
+              key: const Key('assign-to-nobody'),
+              leading: const Icon(Icons.person_off_outlined),
+              title: Text(tr(ctx, 'Nobody (open to all)')),
+              onTap: () => Navigator.pop(ctx, ''),
+            ),
+          ]),
+        ),
+      );
 
   /// Whether opening an order is refused right now, saying why when it is.
   ///
@@ -854,6 +1152,8 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           setState(() => settings.tableSecurity = !settings.tableSecurity);
         } else if (value == 'transfer') {
           widget.onTransferTables?.call();
+        } else if (value == 'preorders') {
+          widget.onEditPreorders?.call();
         } else if (value == 'reservations' && book != null) {
           await Navigator.of(context).push(MaterialPageRoute<void>(
             builder: (_) => ReservationsScreen(
@@ -877,6 +1177,12 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             value: 'security',
             checked: settings.tableSecurity,
             child: Text(tr(ctx, 'Ask before opening someone else\'s tab')),
+          ),
+        if (widget.onEditPreorders != null)
+          PopupMenuItem(
+            key: const Key('floor-preorders'),
+            value: 'preorders',
+            child: Text(tr(ctx, 'What a table opens with')),
           ),
         if (widget.onTransferTables != null)
           PopupMenuItem(
@@ -1153,9 +1459,15 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final occupied = !isDivider && widget.occupiedLabels.contains(t.name);
     final info = isDivider ? null : widget.occupiedInfo[t.name];
     final booking = isDivider ? null : _due[t.name];
+    final owner = isDivider ? null : _ownerOf(t);
     final tile = _TableTile(
       table: t,
       occupied: occupied,
+      // The waiter's name on the tile, so the room reads as shared out at a glance
+      // rather than only when a tap is refused.
+      assignee: owner == null ? null : (_staffNames[owner] ?? owner),
+      mine: owner != null && owner == widget.myCashierId,
+      locked: !isDivider && _lockedFor(t),
       total: info == null ? null : widget.formatAmount?.call(info.total),
       ageMinutes: info == null ? null : DateTime.now().difference(info.since).inMinutes,
       // A free table with guests due in twenty minutes is not free, and a waiter
@@ -1171,15 +1483,22 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     if (!_editing) {
       // A wall/divider is never tapped to open an order; it is just drawn.
       if (isDivider) return tile;
+      // While sharing the room out a tap picks the waiter. Deliberately a different
+      // key from the open tap, so a suite cannot pass by tapping the wrong mode.
+      if (_assigning) {
+        return InkWell(
+          key: Key('table-assign-${t.id}'),
+          onTap: () => unawaited(_assignTable(t)),
+          child: tile,
+        );
+      }
       return InkWell(
         key: Key('table-tile-${t.id}'),
         // A free table is new work and can be held by the day-close policy; an
         // occupied one is a bill somebody is waiting to pay and never is. The
-        // shift gate is above both and stops either.
-        onTap: () {
-          if (_orderingHeld(newWork: !occupied)) return;
-          widget.onOpenTable(t, _seatType);
-        },
+        // shift gate is above both and stops either, and whose table it is is
+        // asked after both of them.
+        onTap: () => unawaited(_tapToOpen(t, occupied)),
         child: tile,
       );
     }
@@ -1264,11 +1583,26 @@ class _TableTile extends StatelessWidget {
     this.total,
     this.ageMinutes,
     this.booking,
+    this.assignee,
+    this.mine = false,
+    this.locked = false,
   });
   final PosTable table;
   final bool occupied;
   final String? total;
   final int? ageMinutes;
+
+  /// The waiter working this table, or null when it belongs to nobody.
+  final String? assignee;
+
+  /// Whether [assignee] is the person at the till, which is what the tile
+  /// highlights: a waiter should find their own tables without reading names.
+  final bool mine;
+
+  /// Whether the person at the till may not open it. Drawn faded with a lock, never
+  /// hidden: a waiter has to be able to see the whole room to work in it, and a
+  /// table that vanished would read as a table that does not exist.
+  final bool locked;
 
   /// The guests due on this table shortly, in local wall-clock time. Null when
   /// nobody is expected, which is every table in a shop that takes no bookings.
@@ -1284,7 +1618,7 @@ class _TableTile extends StatelessWidget {
     final color = occupied ? palette.occupied : palette.free;
     final wide = table.shape == TableShape.rectangle;
     final round = table.shape == TableShape.round;
-    return Container(
+    final tile = Container(
       // A rectangle is short rather than extra-wide so it still fits one grid slot
       // and cannot overlap the table snapped into the next cell.
       width: 100,
@@ -1292,7 +1626,10 @@ class _TableTile extends StatelessWidget {
       margin: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.15),
-        border: Border.all(color: color, width: 2),
+        // A waiter's own table is ringed in the app's colour, so their section is
+        // findable across a room of free/occupied greens and reds.
+        border: Border.all(
+            color: mine ? AppColors.primary : color, width: mine ? 3 : 2),
         borderRadius: round ? BorderRadius.circular(999) : BorderRadius.circular(12),
       ),
       // A short rectangle tile cannot fit the full name+seats+status stack at full
@@ -1321,6 +1658,25 @@ class _TableTile extends StatelessWidget {
               else
                 Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
                     style: TextStyle(fontSize: 11, color: color)),
+              if (assignee case final who?)
+                Padding(
+                  key: Key('table-waiter-${table.id}'),
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Icon(locked ? Icons.lock_outline : Icons.person, size: 12,
+                        color: mine ? AppColors.primary : Colors.black54),
+                    const SizedBox(width: 2),
+                    Text(
+                      who,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: mine ? AppColors.primary : Colors.black54,
+                        fontWeight: mine ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ]),
+                ),
               if (booking case final due?)
                 Padding(
                   key: Key('table-booked-${table.id}'),
@@ -1343,6 +1699,11 @@ class _TableTile extends StatelessWidget {
         ),
       ),
     );
+    if (!locked) return tile;
+    // Faded rather than greyed out: the occupancy colour underneath is still the
+    // fastest read on the floor, and a waiter needs it for a table they cannot open
+    // as much as for one they can.
+    return Opacity(key: Key('table-locked-${table.id}'), opacity: 0.5, child: tile);
   }
 
   /// A wall/divider draws as a plain bar with the table's name as a small label,
