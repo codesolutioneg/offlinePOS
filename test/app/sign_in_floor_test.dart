@@ -53,6 +53,9 @@ void main() {
   setUp(() async {
     db = Db.open(':memory:');
     orders = OrderStore(db, ownDeviceId: 'till-1');
+    // Seating here is about getting to the counter, not about the covers, so the
+    // guest prompt is off: on by default it would sit in front of every tap below.
+    SettingsStore(db).askGuestCount = false;
     tables = TableStore(db);
     table5 = tables.add(name: '5', seats: 4);
     // A drawer is open, so nothing here is refused for the wrong reason. The

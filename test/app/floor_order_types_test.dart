@@ -57,6 +57,9 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    // Seating here is about the order type / the receipt, not the covers, so the
+    // guest prompt is off: on by default it would sit in front of every seating.
+    settings.askGuestCount = false;
     tables = TableStore(db);
     audit = AuditLog(db);
     table5 = tables.add(name: '5', seats: 4);

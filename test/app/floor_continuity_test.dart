@@ -59,6 +59,10 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    // Seating here is about what the floor remembers across a trip to the counter,
+    // not about the covers, so the guest prompt is off: on by default it would sit in
+    // front of every seating below.
+    settings.askGuestCount = false;
     tables = TableStore(db);
     audit = AuditLog(db);
     // Two rooms, because the whole point is which of them the till comes back to.
