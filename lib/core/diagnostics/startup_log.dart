@@ -16,18 +16,53 @@ import 'dart:io';
 class StartupLog {
   StartupLog(this._file);
 
-  /// Kept in the system temp directory rather than the app's own, because
-  /// resolving the app's directory is itself a step worth logging and is a step
-  /// that can hang. Temp needs no plugin channel and no await.
+  /// Written next to the executable when that folder is writable, because that is
+  /// where an operator expects to find it, falling back to the system temp
+  /// directory when the exe sits in a protected location such as Program Files.
+  /// The exe path is resolved synchronously with no plugin channel, so it is safe
+  /// before the first frame; only the app's own data directory is avoided here, as
+  /// resolving that goes through a channel and can hang.
   factory StartupLog.forThisLaunch({Directory? directory}) =>
-      StartupLog(File(pathIn(directory ?? Directory.systemTemp)));
+      StartupLog(File(pathIn(directory ?? bestDirectory())));
 
   static String pathIn(Directory directory) =>
       '${directory.path}${Platform.pathSeparator}$fileName';
 
   /// Shown on the diagnostics screen, so the trail is findable on a till that did
   /// open and is merely misbehaving, not only on one that failed to start.
-  static String get thisLaunchPath => pathIn(Directory.systemTemp);
+  static String get thisLaunchPath => pathIn(bestDirectory());
+
+  /// The most discoverable directory that is actually writable: the executable's
+  /// own folder first, then the system temp directory as a guaranteed fallback.
+  static Directory bestDirectory() {
+    for (final dir in _candidates()) {
+      if (_isWritable(dir)) return dir;
+    }
+    return Directory.systemTemp;
+  }
+
+  static Iterable<Directory> _candidates() sync* {
+    try {
+      yield File(Platform.resolvedExecutable).parent;
+    } catch (_) {
+      // resolvedExecutable is synchronous and should not throw, but never let
+      // choosing where to log become the reason a till fails to open.
+    }
+    yield Directory.systemTemp;
+  }
+
+  static bool _isWritable(Directory dir) {
+    try {
+      if (!dir.existsSync()) return false;
+      final probe =
+          File('${dir.path}${Platform.pathSeparator}.offline_pos_write_test');
+      probe.writeAsStringSync('', flush: true);
+      probe.deleteSync();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   static const fileName = 'offline_pos_startup.log';
 

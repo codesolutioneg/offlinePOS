@@ -80,6 +80,19 @@ void main() {
     expect(written, contains('--- launch 1.2.3'));
   });
 
+  test('the chosen directory is writable, and is the exe folder or temp', () {
+    final chosen = StartupLog.bestDirectory();
+    // Whatever it picks must actually be writable, or the log is lost.
+    final probe = File('${chosen.path}${Platform.pathSeparator}.bd_write_test');
+    expect(() {
+      probe.writeAsStringSync('x', flush: true);
+      probe.deleteSync();
+    }, returnsNormally);
+    // Next to the executable when that folder is writable, else the temp fallback.
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    expect([exeDir, Directory.systemTemp.path], contains(chosen.path));
+  });
+
   test('a log that cannot be written never stops the till opening', () {
     final unwritable = File('${dir.path}/no/such/dir/${StartupLog.fileName}');
     final log = StartupLog(unwritable);
