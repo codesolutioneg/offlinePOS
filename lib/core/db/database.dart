@@ -15,9 +15,15 @@ class Db {
   /// [path] of ':memory:' gives an ephemeral database, used by the tests.
   static Db open(String path, {String? encryptionKey}) {
     final db = sqlite3.open(path);
+    // Before anything reads the file, because the key check below is itself a read
+    // and is the first thing a lock left by another connection can hit. At the
+    // default of zero that read fails outright, which on a till reads as an app
+    // that will not open. Sets a connection option only; it touches no page, so it
+    // does not disturb the key having to come before the first read.
+    db.execute('PRAGMA busy_timeout = 5000');
     if (encryptionKey != null && encryptionKey.isNotEmpty) {
-      // Must be the first statement on the handle: SQLCipher decrypts lazily on the
-      // first read, so the key has to be set before journal_mode touches the file.
+      // Must be the first statement to touch the file: SQLCipher decrypts lazily on
+      // the first read, so the key has to be set before journal_mode touches it.
       // A 64-char hex value is a raw 32-byte key (x'..'), used directly with no
       // key-derivation step; anything else is treated as a passphrase.
       final isRawHex =

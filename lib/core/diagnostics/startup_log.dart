@@ -1,0 +1,159 @@
+import 'dart:io';
+
+/// A breadcrumb trail of the launch, flushed to disk as each step begins.
+///
+/// The runner shows the window only once Flutter has rendered a frame
+/// (`windows/runner/flutter_window.cpp`), so anything that throws or blocks
+/// before `runApp` leaves a live process with no window and nothing on screen to
+/// say why. Support cannot read a stack trace that was never printed.
+///
+/// Each line is written synchronously *before* the work it names, so the last
+/// line in the file is the step that never finished. A launch that reached the
+/// first frame says so, which tells a startup failure apart from a window that
+/// opened somewhere off screen.
+///
+/// Never given a key, a password or a PIN: step names and failure reasons only.
+class StartupLog {
+  StartupLog(this._file);
+
+  /// Written next to the executable when that folder is writable, because that is
+  /// where an operator expects to find it, falling back to the system temp
+  /// directory when the exe sits in a protected location such as Program Files.
+  /// The exe path is resolved synchronously with no plugin channel, so it is safe
+  /// before the first frame; only the app's own data directory is avoided here, as
+  /// resolving that goes through a channel and can hang.
+  factory StartupLog.forThisLaunch({Directory? directory}) =>
+      StartupLog(File(pathIn(directory ?? bestDirectory())));
+
+  static String pathIn(Directory directory) =>
+      '${directory.path}${Platform.pathSeparator}$fileName';
+
+  /// Shown on the diagnostics screen, so the trail is findable on a till that did
+  /// open and is merely misbehaving, not only on one that failed to start.
+  static String get thisLaunchPath => pathIn(bestDirectory());
+
+  /// The most discoverable directory that is actually writable: the executable's
+  /// own folder first, then the system temp directory as a guaranteed fallback.
+  static Directory bestDirectory() {
+    for (final dir in _candidates()) {
+      if (_isWritable(dir)) return dir;
+    }
+    return Directory.systemTemp;
+  }
+
+  static Iterable<Directory> _candidates() sync* {
+    try {
+      yield File(Platform.resolvedExecutable).parent;
+    } catch (_) {
+      // resolvedExecutable is synchronous and should not throw, but never let
+      // choosing where to log become the reason a till fails to open.
+    }
+    yield Directory.systemTemp;
+  }
+
+  static bool _isWritable(Directory dir) {
+    try {
+      if (!dir.existsSync()) return false;
+      final probe =
+          File('${dir.path}${Platform.pathSeparator}.offline_pos_write_test');
+      probe.writeAsStringSync('', flush: true);
+      probe.deleteSync();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static const fileName = 'offline_pos_startup.log';
+
+  /// Named for the person who will be asked to send it, not for the developer
+  /// who will read it.
+  static const supportFileName = 'offline_pos_problem_report.txt';
+
+  /// Kept across launches so a good one can be compared with a bad one, but
+  /// dropped once it stops being a diagnostic and starts being a disk usage.
+  static const maxBytes = 256 * 1024;
+
+  final File _file;
+
+  /// Where to look, quoted on the failure screen so an operator can find it.
+  String get path => _file.path;
+
+  void begin(String version) {
+    _trim();
+    _write('--- launch $version on ${Platform.operatingSystem} ---');
+  }
+
+  /// Records that [description] is about to begin.
+  void step(String description) => _write('step: $description');
+
+  /// Something worth recording that is not a step of its own, such as undoing
+  /// what a failed launch had already started.
+  void note(String description) => _write('note: $description');
+
+  /// What the till found around itself, from [StartupProbe].
+  void facts(Iterable<String> facts) {
+    for (final fact in facts) {
+      _write('fact: $fact');
+    }
+  }
+
+  /// Copies the whole log somewhere an operator can be asked for it in one
+  /// sentence, and returns where that was.
+  ///
+  /// The desktop first: "send me the file on your desktop" is an instruction
+  /// anyone can follow, and no one should be talked through a console. Falls back
+  /// to the home directory when the desktop has been redirected, and finally to
+  /// the log's own directory, which always exists because it was just written to.
+  String? copyForSupport() {
+    for (final directory in _destinations()) {
+      try {
+        if (!directory.existsSync()) continue;
+        final target =
+            File('${directory.path}${Platform.pathSeparator}$supportFileName');
+        target.writeAsStringSync(
+          _file.existsSync() ? _file.readAsStringSync() : '',
+          flush: true,
+        );
+        return target.path;
+      } catch (_) {
+        // Try the next one. A report that cannot be saved must not replace the
+        // failure it was describing.
+      }
+    }
+    return null;
+  }
+
+  Iterable<Directory> _destinations() {
+    final home = Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'];
+    return [
+      if (home != null) Directory('$home${Platform.pathSeparator}Desktop'),
+      if (home != null) Directory(home),
+      _file.parent,
+    ];
+  }
+
+  void failed(Object error, StackTrace stack) {
+    _write('FAILED: $error');
+    _write(stack.toString().trimRight());
+  }
+
+  void _write(String line) {
+    final stamped = '${DateTime.now().toIso8601String()} $line';
+    // Diagnostics must never be the reason a till fails to open, so a line that
+    // cannot be written is dropped rather than thrown. Also to stderr, which
+    // `flutter run` and a launch from a console both show.
+    try {
+      _file.writeAsStringSync('$stamped\n', mode: FileMode.append, flush: true);
+    } catch (_) {}
+    try {
+      stderr.writeln(stamped);
+    } catch (_) {}
+  }
+
+  void _trim() {
+    try {
+      if (_file.existsSync() && _file.lengthSync() > maxBytes) _file.deleteSync();
+    } catch (_) {}
+  }
+}
