@@ -235,6 +235,10 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
     await openPayment(t);
+    // This shop offers cash and the account, so the tender is picked rather than
+    // assumed: Charge stays dark until it is.
+    await t.tap(find.byKey(Key('method-${cash.id}')));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('confirm-payment')));
     await t.pumpAndSettle();
 
