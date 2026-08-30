@@ -1750,6 +1750,12 @@ class _SellScreenState extends State<SellScreen> {
         total: _linesTotal(lines),
         format: widget.formatAmount,
         methods: s.catalogue.paymentMethods(),
+        // Back steps out of this guest's tender and reopens the guest list, so the
+        // cashier can pick another guest without settling this one first.
+        onBack: () {
+          Navigator.pop(ctx);
+          _splitByGuest();
+        },
         onConfirm: (payments, payLabel, tip, cashReceived) {
           Navigator.pop(ctx);
           _completeCheck(ids, payments, payLabel, tip, cashReceived, label);
@@ -3332,6 +3338,7 @@ class _PaymentSheet extends StatefulWidget {
     this.onMode,
     this.billTotal,
     this.alreadyPaid = 0,
+    this.onBack,
   });
 
   final double total;
@@ -3361,6 +3368,11 @@ class _PaymentSheet extends StatefulWidget {
   /// Whether the order names the customer whose tab this would go on. Without one
   /// there is nobody to bill, so the action is offered but refused.
   final bool hasCustomer;
+
+  /// Step back out of this tender step to the step before it (the guest list, when
+  /// paying guest by guest), instead of only cancelling out of payment entirely.
+  /// Null hides the back control, which is what a plain whole-bill payment wants.
+  final VoidCallback? onBack;
 
   @override
   State<_PaymentSheet> createState() => _PaymentSheetState();
@@ -3693,6 +3705,13 @@ class _PaymentSheetState extends State<_PaymentSheet> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(children: [
+            if (widget.onBack != null)
+              IconButton(
+                key: const Key('payment-back'),
+                icon: const BackButtonIcon(),
+                tooltip: tr(context, 'Back'),
+                onPressed: widget.onBack,
+              ),
             Text(tr(context, 'Payment'),
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const Spacer(),

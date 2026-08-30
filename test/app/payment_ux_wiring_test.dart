@@ -193,6 +193,31 @@ void main() {
     expect(find.byKey(const Key('pay-total')), findsOneWidget);
   });
 
+  testWidgets('a guest tender can step back to the guest list without paying',
+      (t) async {
+    final order = tableOnTheTill();
+    await signIn(t);
+
+    await t.tap(find.byKey(const Key('pay')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pay-mode-guest')));
+    await t.pumpAndSettle();
+    // The guest list, then into one guest's tender step.
+    expect(find.byKey(const Key('guest-shared')), findsOneWidget);
+    await t.tap(find.descendant(
+        of: find.byKey(const Key('guest-shared')),
+        matching: find.byType(FilledButton)));
+    await t.pumpAndSettle();
+
+    // The tender step offers Back, which returns to the guest list unpaid.
+    expect(find.byKey(const Key('payment-back')), findsOneWidget);
+    await t.tap(find.byKey(const Key('payment-back')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('guest-shared')), findsOneWidget);
+    expect(orders.byUuid(order.uuid)!.amountPaid, 0);
+  });
+
   testWidgets('a counter sale is never asked how to split a table it has not got',
       (t) async {
     tableOnTheTill(type: OrderType.takeaway);
