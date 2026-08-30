@@ -2328,18 +2328,17 @@ class _PosAppState extends State<PosApp> {
     _publishActivity();
   }
 
-  /// How many are sitting at the table just tapped, offered as quick counts with
-  /// the table's own seats first. Returns null when the waiter backs out, which
+  /// How many are sitting at the table just tapped, picked from a list of every
+  /// number the table takes. Returns null when the waiter backs out, which
   /// aborts the seating rather than opening a tab nobody asked for.
-  /// Ask how many are sitting down, as every number the table takes.
   ///
   /// One to the table's own seat count, not a handful of round numbers: a waiter
   /// seating five at a six-top was picking 6 and the covers on the bill were wrong
   /// from the first tap. A table whose seat count was never set falls back to eight,
   /// which is a guess only for a floor plan that never said.
   Future<int?> _askGuestCount(BuildContext context, int seats) {
-    // Bounded so a banquet table cannot produce a dialog the till cannot draw; the
-    // content scrolls above that anyway.
+    // Bounded so a banquet table cannot produce a list the till cannot draw; the
+    // menu scrolls above that anyway.
     final max = seats > 0 ? (seats > 40 ? 40 : seats) : 8;
     return showDialog<int>(
       context: context,
@@ -2348,19 +2347,27 @@ class _PosAppState extends State<PosApp> {
         title: Text(tr(ctx, 'How many guests?')),
         content: SizedBox(
           width: 320,
-          child: SingleChildScrollView(
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (var n = 1; n <= max; n++)
-                  ActionChip(
-                    key: Key('guests-$n'),
-                    label: Text('$n'),
-                    onPressed: () => Navigator.pop(ctx, n),
-                  ),
-              ],
-            ),
+          child: DropdownButton<int>(
+            key: const Key('guest-count-dropdown'),
+            value: null,
+            isExpanded: true,
+            hint: Text(tr(ctx, 'Choose a number')),
+            // The closed button shows the hint rather than a keyed row, so each
+            // guests-N exists once, only while the menu is open.
+            selectedItemBuilder: (_) =>
+                [for (var n = 1; n <= max; n++) const SizedBox.shrink()],
+            items: [
+              for (var n = 1; n <= max; n++)
+                DropdownMenuItem<int>(
+                  key: Key('guests-$n'),
+                  value: n,
+                  child: Text('$n'),
+                ),
+            ],
+            // Picking a number is the answer; there is nothing further to confirm.
+            onChanged: (n) {
+              if (n != null) Navigator.pop(ctx, n);
+            },
           ),
         ),
         actions: [

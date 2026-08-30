@@ -298,7 +298,13 @@ void main() {
       await signIn(t);
 
       await tapTable(t);
-      await t.tap(find.byKey(const Key('guests-2')));
+      // The covers are picked from a list, so the menu opens before the number.
+      // The open menu is the last copy of the row; the button keeps an offstage one.
+      await t.tap(find.byKey(const Key('guest-count-dropdown')));
+      await t.pumpAndSettle();
+      await t.tap(find.descendant(
+          of: find.byKey(const Key('guests-2')),
+          matching: find.text('2')).last);
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('product-10')));
       await t.pumpAndSettle();

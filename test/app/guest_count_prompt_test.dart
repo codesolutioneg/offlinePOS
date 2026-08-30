@@ -128,6 +128,23 @@ void main() {
           of: find.byKey(const Key('guests')), matching: find.byType(Text)))
       .data!;
 
+  /// The count is picked from a list, so the menu has to be opened before any
+  /// number is in the tree to tap.
+  Future<void> openGuestList(WidgetTester t) async {
+    await t.tap(find.byKey(const Key('guest-count-dropdown')));
+    await t.pumpAndSettle();
+  }
+
+  Future<void> pickGuests(WidgetTester t, int n) async {
+    await openGuestList(t);
+    // The open menu is the last copy of the row in the tree; the button keeps an
+    // offstage one that cannot be tapped.
+    await t.tap(find.descendant(
+        of: find.byKey(Key('guests-$n')),
+        matching: find.text('$n')).last);
+    await t.pumpAndSettle();
+  }
+
   testWidgets('on by default: the covers are asked for before the bill opens',
       (t) async {
     await t.pumpWidget(app());
@@ -138,8 +155,7 @@ void main() {
     // The count decides the per-guest lines a table opens with and every per-head
     // figure in the reports, so it is asked rather than assumed.
     expect(find.byKey(const Key('guest-count-prompt')), findsOneWidget);
-    await t.tap(find.byKey(const Key('guests-3')));
-    await t.pumpAndSettle();
+    await pickGuests(t, 3);
     expect(find.byType(SellScreen), findsOneWidget);
     expect(guestChipLabel(t), '3 guests');
   });
@@ -149,6 +165,7 @@ void main() {
     await signIn(t);
 
     await seatTable(t);
+    await openGuestList(t);
 
     // Table 5 seats four, so one to four and nothing above it: a waiter seating five
     // at a six-top was picking a round number and the covers were wrong from the tap.
@@ -180,8 +197,7 @@ void main() {
 
     await seatTable(t);
     expect(find.byKey(const Key('guest-count-prompt')), findsOneWidget);
-    await t.tap(find.byKey(const Key('guests-2')));
-    await t.pumpAndSettle();
+    await pickGuests(t, 2);
 
     expect(guestChipLabel(t), '2 guests');
     // Ring something and park it: the covers travel with the bill.
@@ -213,8 +229,7 @@ void main() {
     await signIn(t);
     // Seat it, ring it, park it.
     await seatTable(t);
-    await t.tap(find.byKey(const Key('guests-3')));
-    await t.pumpAndSettle();
+    await pickGuests(t, 3);
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('hold')));

@@ -132,10 +132,17 @@ void main() {
 
 
 
-  /// Seat the table and answer the covers prompt with [guests].
+  /// Seat the table and answer the covers prompt with [guests], which is picked
+  /// from a list rather than tapped straight off the dialog.
   Future<void> seatFor(WidgetTester t, int guests) async {
     await seatTable(t);
-    await t.tap(find.byKey(Key('guests-$guests')));
+    await t.tap(find.byKey(const Key('guest-count-dropdown')));
+    await t.pumpAndSettle();
+    // The open menu is the last copy of the row in the tree; the button keeps an
+    // offstage one that cannot be tapped.
+    await t.tap(find.descendant(
+        of: find.byKey(Key('guests-$guests')),
+        matching: find.text('$guests')).last);
     await t.pumpAndSettle();
   }
 

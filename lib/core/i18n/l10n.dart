@@ -1091,6 +1091,7 @@ const Map<String, String> _ar = {
   'Ask for the guest count': 'السؤال عن عدد الضيوف',
   'When a table is seated from the floor': 'عند إجلاس طاولة من المخطط',
   'How many guests?': 'كم عدد الضيوف؟',
+  'Choose a number': 'اختر رقمًا',
   'Hours worked': 'ساعات العمل',
   'No hours': 'لا توجد ساعات',
   'Nobody clocked in during this range.': 'لم يسجل أحد حضوره في هذه الفترة.',
