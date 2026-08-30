@@ -3433,7 +3433,10 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   @override
   void initState() {
     super.initState();
-    if (_methods.isNotEmpty) _method = _methods.first;
+    // Auto-pick only when there is nothing to choose between. With several methods
+    // the cashier must tap the one used, so a sale is never closed against the wrong
+    // tender by a stray Charge; a single-method (or cash-only) till stays one tap.
+    if (_methods.length == 1) _method = _methods.first;
     // Seeded with what is owed, because the common cash sale is exact and Charge
     // is gated on the received amount covering the bill. Without this the cashier
     // has to type the total back in before the button will even light up. Anything
@@ -3477,6 +3480,12 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   bool get _covered => _split
       ? _paidSoFar >= _grand - 0.001
       : (_isCash ? _receivedAmount >= _grand - 0.001 : true);
+
+  /// A method must be chosen before the sale can close: the split flow needs at
+  /// least one tender, a plain sale needs a selected method. A till with no methods
+  /// at all books as cash, so it is allowed through.
+  bool get _methodChosen =>
+      _split ? _tenders.isNotEmpty : (_methods.isEmpty || _method != null);
 
   void _addTender() {
     if (_method == null || _remaining <= 0.001) return;
@@ -3908,7 +3917,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               key: const Key('confirm-payment'),
               style: FilledButton.styleFrom(
                   textStyle: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
-              onPressed: _covered ? _confirm : null,
+              onPressed: (_covered && _methodChosen) ? _confirm : null,
               icon: const Icon(Icons.check_circle, size: 24),
               label: Text('${tr(context, 'Charge')} ${widget.format(_grand)}'),
             ),

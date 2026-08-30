@@ -230,6 +230,26 @@ void main() {
     expect(find.byKey(const Key('confirm-payment')), findsOneWidget);
   });
 
+  testWidgets('with several methods, Charge waits for the cashier to pick one',
+      (t) async {
+    tableOnTheTill(type: OrderType.takeaway);
+    await signIn(t);
+
+    await t.tap(find.byKey(const Key('pay')));
+    await t.pumpAndSettle();
+    // No method picked yet: Charge does nothing, the sheet stays open.
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('pay-total')), findsOneWidget);
+
+    // Once a method is picked, Charge closes the sale.
+    await t.tap(find.byKey(const Key('method-1')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('pay-total')), findsNothing);
+  });
+
   testWidgets('an even share is taken from the payment sheet and prints its own slip',
       (t) async {
     final order = tableOnTheTill();
