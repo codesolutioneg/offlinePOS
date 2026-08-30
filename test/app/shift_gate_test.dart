@@ -163,6 +163,37 @@ void main() {
     expect(find.byType(TableFloorScreen), findsOneWidget);
   });
 
+  testWidgets('opening a shift asks who is working it and clocks them in',
+      (t) async {
+    // A second person to pick, and the session-staff prompt turned on.
+    await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
+        .enrol(id: 'ana', name: 'Ana', pin: '4321');
+    SettingsStore(db).askSessionStaff = true;
+
+    await onTheFloor(t);
+    await t.tap(find.byKey(const Key('floor-open-shift')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('open-shift')));
+    await t.pumpAndSettle();
+    for (final d in '100'.split('')) {
+      await t.tap(find.byKey(Key('key-$d')));
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('keypad-ok')));
+    await t.pumpAndSettle();
+
+    // The session-staff prompt appears; tick Ana and confirm.
+    expect(find.byKey(const Key('session-staff')), findsOneWidget);
+    await t.tap(find.byKey(const Key('session-staff-ana')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('session-staff-done')));
+    await t.pumpAndSettle();
+
+    final att = AttendanceStore(db);
+    expect(att.isClockedIn('sara'), isTrue, reason: 'the opener is on the clock');
+    expect(att.isClockedIn('ana'), isTrue, reason: 'the picked staff is clocked in');
+  });
+
   testWidgets('the refusal opens the shift, and the till sells again', (t) async {
     await onTheFloor(t);
 

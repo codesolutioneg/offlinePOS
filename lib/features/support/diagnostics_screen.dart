@@ -432,14 +432,21 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(child: Text(label)),
-            Text(
-              value,
-              key: keyName == null ? null : Key('diag-$keyName'),
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: bad ? Colors.red : null,
+            const SizedBox(width: 12),
+            // A long value (a file path such as the startup log's) must wrap rather
+            // than run off the edge of a narrow till.
+            Flexible(
+              child: Text(
+                value,
+                key: keyName == null ? null : Key('diag-$keyName'),
+                textAlign: TextAlign.end,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: bad ? Colors.red : null,
+                ),
               ),
             ),
           ],

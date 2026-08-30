@@ -3032,6 +3032,61 @@ class _PosAppState extends State<PosApp> {
   /// Opens the shift screen, and answers when the cashier comes back off it, so a
   /// caller whose own gate depends on the drawer can re-read it. Most callers just
   /// send them there and have nothing to wait for.
+  /// Ask who is working this session and put them on the clock. Shown right after a
+  /// shift is opened. Whoever opened it is on the clock and stays; the rest are
+  /// ticked if already clocked in, so ticking adds them and unticking clocks them
+  /// out, except the opener who cannot clock themselves out here.
+  Future<void> _pickSessionStaff(BuildContext context, PosSession session) async {
+    final users = widget.users.active();
+    if (users.isEmpty) return;
+    if (!widget.attendance.isClockedIn(session.cashierId)) {
+      widget.attendance.clockIn(session.cashierId);
+    }
+    final chosen = {
+      for (final u in users)
+        if (widget.attendance.isClockedIn(u.id)) u.id,
+    };
+    if (!context.mounted) return;
+    final result = await showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          key: const Key('session-staff'),
+          title: Text(tr(ctx, 'Who is working this session?')),
+          content: SizedBox(
+            width: 320,
+            child: ListView(shrinkWrap: true, children: [
+              for (final u in users)
+                CheckboxListTile(
+                  key: Key('session-staff-${u.id}'),
+                  title: Text(u.name),
+                  value: chosen.contains(u.id),
+                  onChanged: (v) => setD(() =>
+                      v == true ? chosen.add(u.id) : chosen.remove(u.id)),
+                ),
+            ]),
+          ),
+          actions: [
+            FilledButton(
+              key: const Key('session-staff-done'),
+              onPressed: () => Navigator.pop(ctx, chosen),
+              child: Text(tr(ctx, 'Done')),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null) return;
+    for (final u in users) {
+      final present = result.contains(u.id);
+      final on = widget.attendance.isClockedIn(u.id);
+      if (present && !on) widget.attendance.clockIn(u.id);
+      if (!present && on && u.id != session.cashierId) {
+        widget.attendance.clockOut(u.id);
+      }
+    }
+  }
+
   Future<void> _openShift(BuildContext context, PosSession session) {
     // Which tenders count as drawer cash, read from the synced catalogue so the
     // X/Z drawer total reconciles cash and leaves card sales out.
@@ -3044,6 +3099,11 @@ class _PosAppState extends State<PosApp> {
       builder: (_) => ShiftScreen(
         store: widget.shifts,
         cashierId: session.cashierId,
+        // Right after the shift opens, ask who is working this session so sales and
+        // tables can be attributed to whoever is actually on the floor. Opt-in.
+        onShiftOpened: widget.settings.askSessionStaff
+            ? () => unawaited(_pickSessionStaff(context, session))
+            : null,
         cashMethodIds: cashMethodIds,
         formatAmount: PosApp.money,
         onPrintReport: _printShiftReport,

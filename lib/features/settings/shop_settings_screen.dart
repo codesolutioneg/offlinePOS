@@ -30,6 +30,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late bool _showTax;
   late bool _askGuests;
   late bool _askCashierOnOpen;
+  late bool _askSessionStaff;
   late int _cutoverHour;
   late Set<OrderType> _offered;
   late bool _sectionsSide;
@@ -44,6 +45,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _showTax = widget.settings.receiptShowTax;
     _askGuests = widget.settings.askGuestCount;
     _askCashierOnOpen = widget.settings.askCashierOnOpen;
+    _askSessionStaff = widget.settings.askSessionStaff;
     _cutoverHour = widget.settings.businessDayCutoverHour;
     _offered = widget.settings.shopOrderTypes;
     _sectionsSide = widget.settings.floorSectionsSide;
@@ -78,6 +80,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.receiptShowTax = _showTax;
     widget.settings.askGuestCount = _askGuests;
     widget.settings.askCashierOnOpen = _askCashierOnOpen;
+    widget.settings.askSessionStaff = _askSessionStaff;
     widget.settings.businessDayCutoverHour = _cutoverHour;
     widget.settings.shopOrderTypes = _offered;
     widget.settings.floorSectionsSide = _sectionsSide;
@@ -144,6 +147,13 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             subtitle: Text(tr(context, 'On a shared till, assigns the table to them')),
             value: _askCashierOnOpen,
             onChanged: (v) => setState(() => _askCashierOnOpen = v),
+          ),
+          SwitchListTile(
+            key: const Key('ask-session-staff'),
+            title: Text(tr(context, 'Ask who is working the session')),
+            subtitle: Text(tr(context, 'When a shift is opened, and clocks them in')),
+            value: _askSessionStaff,
+            onChanged: (v) => setState(() => _askSessionStaff = v),
           ),
           const SizedBox(height: 12),
           // What this shop sells at all, above whatever each role may ring: a shop

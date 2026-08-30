@@ -548,6 +548,11 @@ class SettingsStore {
   bool get askCashierOnOpen => getBool('ask_cashier_on_open');
   set askCashierOnOpen(bool v) => setBool('ask_cashier_on_open', v);
 
+  /// Whether opening a shift asks who is working this session and clocks them in.
+  /// Off by default: a single-operator till has only the person who opened it.
+  bool get askSessionStaff => getBool('ask_session_staff');
+  set askSessionStaff(bool v) => setBool('ask_session_staff', v);
+
   /// Draw the floor's sections down the side of the plan rather than as a strip
   /// above it. On by default: a waiter reads a short vertical list of rooms faster
   /// than a horizontal one that scrolls off the edge, and the width it costs is

@@ -22,7 +22,12 @@ class ShiftScreen extends StatefulWidget {
     this.onCloseBlocked,
     this.cashVarianceTolerance = 0,
     this.expenseCategories = const ['Transport', 'Food', 'Supplies', 'Maintenance', 'Other'],
+    this.onShiftOpened,
   });
+
+  /// Called right after a shift is opened, so the host can ask who is working this
+  /// session and clock them in. Null skips the prompt.
+  final VoidCallback? onShiftOpened;
 
   final ShiftStore store;
   final String cashierId;
@@ -205,6 +210,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                 if (f != null) {
                   widget.store.openShift(openingFloat: f, cashierId: widget.cashierId);
                   _refresh();
+                  widget.onShiftOpened?.call();
                 }
               },
             ),
