@@ -1853,6 +1853,12 @@ class _SellScreenState extends State<SellScreen> {
               onTap: () => Navigator.pop(ctx, 'print'),
             ),
           ListTile(
+            key: const Key('bill-move-order'),
+            leading: const Icon(Icons.table_restaurant_outlined),
+            title: Text(tr(ctx, 'Move the whole order to another table')),
+            onTap: () => Navigator.pop(ctx, 'move-order'),
+          ),
+          ListTile(
             key: const Key('bill-move'),
             leading: const Icon(Icons.drive_file_move_outline),
             title: Text(tr(ctx, 'Move items to another table')),
@@ -1881,6 +1887,8 @@ class _SellScreenState extends State<SellScreen> {
         _printBill();
       case 'timing':
         await _setFireTiming();
+      case 'move-order':
+        await _moveWholeOrder();
       case 'move':
         await _moveItems();
       case 'merge':
@@ -2111,6 +2119,20 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   /// Pick lines and a destination table, then move them onto that table's tab.
+  /// Move the whole open order to another table in one step. Every line goes, so
+  /// the source table is left empty and closed and the destination takes the order
+  /// (merged if it already had one). Reuses the same move the item picker commits.
+  Future<void> _moveWholeOrder() async {
+    if (!s.hasLines) return;
+    final label = await _pickTable(exclude: s.current.tableLabel);
+    if (label == null || label.isEmpty || !mounted) return;
+    final ids = s.current.lines.map((l) => l.uuid).toSet();
+    _changed(() => s.moveLinesToTable(ids, label));
+    if (!mounted) return;
+    showToast(context, '${tr(context, 'Order moved to table')} $label',
+        kind: ToastKind.success, key: const Key('order-moved'));
+  }
+
   Future<void> _moveItems() async {
     await _pickLines(
       title: tr(context, 'Move items to another table'),

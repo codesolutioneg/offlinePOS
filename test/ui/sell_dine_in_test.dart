@@ -175,6 +175,27 @@ void main() {
     expect(moved.lines.single.productId, 11);
   });
 
+  testWidgets('moving the whole order relocates every line to the new table', (t) async {
+    await t.pumpWidget(app(tables: ['5']));
+    await t.tap(find.byKey(const Key('product-10'))); // Pizza
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('product-11'))); // Cola
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('bill-options')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('bill-move-order')));
+    await t.pumpAndSettle();
+    // Straight to the table picker , no item checklist for a whole-order move.
+    await t.tap(find.byKey(const Key('table-tile-5')));
+    await t.pumpAndSettle();
+
+    // The whole order is now a held tab on table 5; nothing left on the source.
+    final moved = orders.held().firstWhere((o) => o.tableLabel == '5');
+    expect(moved.lines.map((l) => l.productId).toSet(), {10, 11});
+    expect(session.current.lines, isEmpty);
+  });
+
   testWidgets('merging folds another open table into the current order', (t) async {
     // A held order on table 9 with a Cola.
     final other = Order(deviceId: 'till-1', cashierId: 'sara', tableLabel: '9')
