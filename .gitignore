@@ -45,3 +45,8 @@ app.*.map.json
 /android/app/release
 .claude/worktrees/
 .jez/
+
+# Screenshots the harness writes; regenerate with tool/run_shots.sh rather than
+# carrying binaries in the history.
+/.shots/
+/.shots-fresh/
