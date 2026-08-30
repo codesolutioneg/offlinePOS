@@ -1177,6 +1177,8 @@ class _PosAppState extends State<PosApp> {
           // The tender an on-account sale books against, when the shop runs
           // accounts. Absent, the payment sheet offers no such thing.
           payLaterMethodId: widget.settings.payLaterMethodId,
+          // Lets the payment sheet hide methods the shop switched off in Settings.
+          settings: widget.settings,
           // Dividers are floor decoration, never a table an order sits at.
           tables: () => widget.tables
               .all()

@@ -672,6 +672,32 @@ class SettingsStore {
     paymentMethodLabels = map;
   }
 
+  /// Payment methods switched off at the till, by id. A disabled method stays in
+  /// Odoo and in every report; it is only hidden from the payment sheet, so a
+  /// journal the shop does not take at the counter is never offered by mistake.
+  /// Off-by-omission: a method absent here is offered, so a fresh till shows them
+  /// all until a manager turns one off.
+  Set<int> get disabledPaymentMethodIds => getStringList('disabled_payment_methods')
+      .map(int.tryParse)
+      .whereType<int>()
+      .toSet();
+
+  set disabledPaymentMethodIds(Set<int> ids) =>
+      setStringList('disabled_payment_methods', ids.map((e) => '$e').toList());
+
+  bool isPaymentMethodOffered(int methodId) =>
+      !disabledPaymentMethodIds.contains(methodId);
+
+  void setPaymentMethodOffered(int methodId, bool offered) {
+    final ids = disabledPaymentMethodIds;
+    if (offered) {
+      ids.remove(methodId);
+    } else {
+      ids.add(methodId);
+    }
+    disabledPaymentMethodIds = ids;
+  }
+
   // ── letting a customer settle later ──────────────────────────────
 
   /// The payment method an on-account sale books against, or null when the shop

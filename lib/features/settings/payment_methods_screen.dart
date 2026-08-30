@@ -36,6 +36,9 @@ class PaymentMethodsScreen extends StatefulWidget {
 class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
   final Map<int, TextEditingController> _labels = {};
 
+  /// Whether each method is offered on the till's payment sheet.
+  final Map<int, bool> _offered = {};
+
   /// The method an on-account sale books against, or null for off.
   int? _payLater;
 
@@ -46,6 +49,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
     _payLater = widget.settings.payLaterMethodId;
     for (final m in widget.methods) {
       _labels[m.id] = TextEditingController(text: saved[m.id] ?? '');
+      _offered[m.id] = widget.settings.isPaymentMethodOffered(m.id);
     }
   }
 
@@ -60,6 +64,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
   void _save() {
     for (final m in widget.methods) {
       widget.settings.setPaymentMethodLabel(m.id, _labels[m.id]?.text);
+      widget.settings.setPaymentMethodOffered(m.id, _offered[m.id] ?? true);
     }
     widget.settings.payLaterMethodId = _payLater;
     widget.onChanged();
@@ -129,8 +134,17 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
                             Icon(m.isCash ? Icons.payments : Icons.credit_card,
                                 size: 18),
                             const SizedBox(width: 8),
-                            Text(m.name,
-                                style: const TextStyle(fontWeight: FontWeight.w600)),
+                            Expanded(
+                              child: Text(m.name,
+                                  style: const TextStyle(fontWeight: FontWeight.w600)),
+                            ),
+                            // Offered at the till or not. A method turned off is
+                            // hidden from the payment sheet but untouched in reports.
+                            Switch(
+                              key: Key('payment-offered-${m.id}'),
+                              value: _offered[m.id] ?? true,
+                              onChanged: (v) => setState(() => _offered[m.id] = v),
+                            ),
                           ]),
                           const SizedBox(height: 8),
                           TextField(

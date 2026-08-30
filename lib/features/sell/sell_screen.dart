@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../app/pos_session.dart';
 import '../../core/auth/permissions.dart';
 import '../../core/db/catalogue_store.dart' show ModifierMark;
+import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/printing/kitchen_ticket.dart' show KitchenFireResult;
 import '../../core/printing/receipt_builder.dart' show PartialPayment;
@@ -79,7 +80,12 @@ class SellScreen extends StatefulWidget {
     this.payLaterMethodId,
     this.shiftOpen,
     this.onOpenShift,
+    this.settings,
   });
+
+  /// Reads which payment methods the shop offers at the till. Null (as in some
+  /// tests) offers every method the catalogue carries.
+  final SettingsStore? settings;
 
   final PosSession session;
   final String Function(double) formatAmount;
@@ -1604,6 +1610,19 @@ class _SellScreenState extends State<SellScreen> {
     return null;
   }
 
+  /// The payment methods offered at the till: the catalogue's methods minus any the
+  /// shop switched off in Settings. With no settings (as in some tests) every method
+  /// is kept, and if a shop turned them all off the sheet still falls back to all of
+  /// them rather than showing a payment screen that cannot take money.
+  List<PaymentMethod> _offeredMethods() {
+    final all = s.catalogue.paymentMethods();
+    final settings = widget.settings;
+    if (settings == null) return all;
+    final offered =
+        all.where((m) => settings.isPaymentMethodOffered(m.id)).toList();
+    return offered.isEmpty ? all : offered;
+  }
+
   void _pay() {
     if (!s.hasLines) return;
     // If shares were already taken (even split), the main Pay settles what is left,
@@ -1618,7 +1637,7 @@ class _SellScreenState extends State<SellScreen> {
         billTotal: s.current.total,
         alreadyPaid: s.current.amountPaid,
         format: widget.formatAmount,
-        methods: s.catalogue.paymentMethods(),
+        methods: _offeredMethods(),
         // How the bill can be split is asked here, at the top of the payment sheet,
         // because everything about taking money belongs in one place. The split
         // flows themselves are dine-in only, so a counter sale sees a plain tender
@@ -1749,7 +1768,7 @@ class _SellScreenState extends State<SellScreen> {
       builder: (ctx) => _PaymentSheet(
         total: _linesTotal(lines),
         format: widget.formatAmount,
-        methods: s.catalogue.paymentMethods(),
+        methods: _offeredMethods(),
         // Back steps out of this guest's tender and reopens the guest list, so the
         // cashier can pick another guest without settling this one first.
         onBack: () {
@@ -1812,7 +1831,7 @@ class _SellScreenState extends State<SellScreen> {
       builder: (ctx) => _PaymentSheet(
         total: _picksTotal(picks),
         format: widget.formatAmount,
-        methods: s.catalogue.paymentMethods(),
+        methods: _offeredMethods(),
         onConfirm: (payments, payLabel, tip, cashReceived) {
           Navigator.pop(ctx);
           final ids = _peelPicks(picks).map((l) => l.uuid).toList();
@@ -1945,7 +1964,7 @@ class _SellScreenState extends State<SellScreen> {
         billTotal: s.current.total,
         alreadyPaid: s.current.amountPaid,
         format: widget.formatAmount,
-        methods: s.catalogue.paymentMethods(),
+        methods: _offeredMethods(),
         onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
           _completeShare(payments, label, tip, cashReceived, slipTitle: slipTitle);
