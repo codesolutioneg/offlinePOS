@@ -6,12 +6,16 @@
 # Usage: tool/run_shots.sh <integration_test/file.dart> [output-dir]
 set -u
 
+# Derived from the script's own location, so the harness runs from any checkout
+# rather than one machine's layout.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${1:-integration_test/screenshot_test.dart}"
-OUT="${2:-/home/username/workspace/offlinePOS/.shots-fresh}"
-REPO=/home/username/workspace/offlinePOS
-LOG=/tmp/pos_shots.log
+OUT="${2:-$REPO/.shots-fresh}"
+LOG="${SHOT_LOG:-${TMPDIR:-/tmp}/pos_shots.log}"
 
-export PATH="/opt/flutter/bin:$PATH"
+# Only when the toolchain is not already on PATH, which it is not under a
+# detached run; FLUTTER_HOME overrides for a checkout that installed elsewhere.
+command -v flutter >/dev/null 2>&1 || export PATH="${FLUTTER_HOME:-/opt/flutter}/bin:$PATH"
 export SHOT_DIR="$OUT"
 mkdir -p "$OUT"
 
