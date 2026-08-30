@@ -24,6 +24,21 @@ void main() {
     expect(settings.disabledPaymentMethodIds, isEmpty);
   });
 
+  test('a category accepts auto-add until it is turned off, and it persists', () {
+    expect(settings.isAutoAddAllowed(7), isTrue);
+    expect(settings.isAutoAddAllowed(null), isTrue);
+
+    settings.setAutoAddAllowed(7, false);
+    expect(settings.isAutoAddAllowed(7), isFalse);
+    expect(settings.isAutoAddAllowed(8), isTrue);
+
+    final fresh = SettingsStore(db);
+    expect(fresh.isAutoAddAllowed(7), isFalse);
+    fresh.setAutoAddAllowed(7, true);
+    expect(fresh.isAutoAddAllowed(7), isTrue);
+    expect(fresh.autoAddDisabledCategories, isEmpty);
+  });
+
   test('turning a method off hides only it, and it persists', () {
     settings.setPaymentMethodOffered(2, false);
     expect(settings.isPaymentMethodOffered(2), isFalse);

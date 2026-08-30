@@ -454,8 +454,12 @@ class _SellScreenState extends State<SellScreen> {
     }
     // Every group answers itself from its defaults: ring it straight through. A
     // sheet whose only possible answer is the one already filled in costs the
-    // cashier a tap per item and buys nothing.
-    if (groups.every((g) => g.resolvesItself)) {
+    // cashier a tap per item and buys nothing. A category the shop marked as not
+    // accepting auto-add is the exception: its items always open the sheet so the
+    // add-ons are confirmed rather than rung in silently.
+    final autoAddAllowed =
+        widget.settings?.isAutoAddAllowed(product.categoryId) ?? true;
+    if (autoAddAllowed && groups.every((g) => g.resolvesItself)) {
       _changed(() => s.addProduct(product,
           chosen: [
             for (final g in groups)

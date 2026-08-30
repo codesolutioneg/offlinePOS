@@ -553,6 +553,32 @@ class SettingsStore {
   bool get askSessionStaff => getBool('ask_session_staff');
   set askSessionStaff(bool v) => setBool('ask_session_staff', v);
 
+  /// Categories that do NOT accept automatic product addition: a product in one of
+  /// these never rings its default add-ons straight through, so the cashier always
+  /// confirms them. Off-by-omission: a category absent here accepts auto-add, so
+  /// nothing changes for a shop that never touches this.
+  Set<int> get autoAddDisabledCategories =>
+      getStringList('auto_add_disabled_categories')
+          .map(int.tryParse)
+          .whereType<int>()
+          .toSet();
+
+  set autoAddDisabledCategories(Set<int> ids) =>
+      setStringList('auto_add_disabled_categories', ids.map((e) => '$e').toList());
+
+  bool isAutoAddAllowed(int? categoryId) =>
+      categoryId == null || !autoAddDisabledCategories.contains(categoryId);
+
+  void setAutoAddAllowed(int categoryId, bool allowed) {
+    final ids = autoAddDisabledCategories;
+    if (allowed) {
+      ids.remove(categoryId);
+    } else {
+      ids.add(categoryId);
+    }
+    autoAddDisabledCategories = ids;
+  }
+
   /// Draw the floor's sections down the side of the plan rather than as a strip
   /// above it. On by default: a waiter reads a short vertical list of rooms faster
   /// than a horizontal one that scrolls off the edge, and the width it costs is

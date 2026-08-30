@@ -2605,6 +2605,11 @@ class _PosAppState extends State<PosApp> {
               onChanged: refresh,
               categoryColors: widget.settings.categoryColors,
               onSetCategoryColor: widget.settings.setCategoryColor,
+              autoAddAllowed: {
+                for (final c in widget.catalogue.categories())
+                  c.id: widget.settings.isAutoAddAllowed(c.id),
+              },
+              onSetCategoryAutoAdd: widget.settings.setAutoAddAllowed,
               searchOdooProducts: _searchOdooProducts,
               searchOdooCategories: _searchOdooCategories,
               localProductBookingId: widget.settings.odooLocalProductId,

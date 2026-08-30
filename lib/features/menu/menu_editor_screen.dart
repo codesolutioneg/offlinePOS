@@ -23,6 +23,8 @@ class MenuEditorScreen extends StatefulWidget {
     required this.onChanged,
     this.categoryColors = const {},
     this.onSetCategoryColor,
+    this.autoAddAllowed = const {},
+    this.onSetCategoryAutoAdd,
     this.searchOdooProducts,
     this.searchOdooCategories,
     this.localProductBookingId,
@@ -39,6 +41,12 @@ class MenuEditorScreen extends StatefulWidget {
   /// owner of them.
   final Map<int, int> categoryColors;
   final void Function(int categoryId, int? argb)? onSetCategoryColor;
+
+  /// Whether each category accepts automatic product addition (rings its items'
+  /// default add-ons straight through). Absent means allowed. Null callback hides
+  /// the toggle, for a host that does not wire it.
+  final Map<int, bool> autoAddAllowed;
+  final void Function(int categoryId, bool allowed)? onSetCategoryAutoAdd;
 
   /// Ask the server what a row could be linked to. Null when the till has no server
   /// configured; an offline till gets the exception and is told to type the id.
@@ -268,6 +276,24 @@ class _MenuEditorScreenState extends State<MenuEditorScreen> {
                         ? '${tr(context, 'Odoo')} #${c.odooId}'
                         : tr(context, 'Not linked to Odoo')),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      if (widget.onSetCategoryAutoAdd != null)
+                        IconButton(
+                          key: Key('category-auto-add-${c.id}'),
+                          icon: Icon((widget.autoAddAllowed[c.id] ?? true)
+                              ? Icons.bolt
+                              : Icons.bolt_outlined),
+                          color: (widget.autoAddAllowed[c.id] ?? true)
+                              ? Theme.of(context).colorScheme.primary
+                              : Colors.grey,
+                          tooltip: (widget.autoAddAllowed[c.id] ?? true)
+                              ? tr(context, 'Auto-add on (tap to turn off)')
+                              : tr(context, 'Auto-add off (tap to turn on)'),
+                          onPressed: () {
+                            widget.onSetCategoryAutoAdd!
+                                .call(c.id, !(widget.autoAddAllowed[c.id] ?? true));
+                            _reload();
+                          },
+                        ),
                       IconButton(
                         key: Key('edit-category-${c.id}'),
                         icon: const Icon(Icons.edit_outlined),
