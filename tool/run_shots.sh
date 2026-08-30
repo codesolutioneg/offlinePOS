@@ -19,9 +19,12 @@ command -v flutter >/dev/null 2>&1 || export PATH="${FLUTTER_HOME:-/opt/flutter}
 export SHOT_DIR="$OUT"
 mkdir -p "$OUT"
 
-pkill -f "Xvfb :99" >/dev/null 2>&1
-sleep 1
-Xvfb :99 -screen 0 1600x2400x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+# Claim a free display rather than a fixed one. A hardcoded :99 meant a second run
+# killed the first one's screen out from under it, which reads as the embedder
+# failing to attach; each run now owns its own.
+DISPLAY_NUM="${SHOT_DISPLAY:-$((100 + $$ % 50))}"
+XVFB_LOG="${TMPDIR:-/tmp}/xvfb-${DISPLAY_NUM}.log"
+Xvfb ":${DISPLAY_NUM}" -screen 0 1600x2400x24 -nolisten tcp >"$XVFB_LOG" 2>&1 &
 XVFB_PID=$!
 sleep 2
 
@@ -29,7 +32,7 @@ cd "$REPO" || exit 1
 
 dbus-run-session -- bash -c '
   eval "$(printf "\n" | gnome-keyring-daemon --unlock --components=secrets,pkcs11)"
-  export DISPLAY=:99
+  export DISPLAY=":'"$DISPLAY_NUM"'"
   cd '"$REPO"'
   # Bounded: a screen that never settles would otherwise wedge the run forever.
   timeout 900 flutter test "'"$TARGET"'" -d linux --no-pub 2>&1

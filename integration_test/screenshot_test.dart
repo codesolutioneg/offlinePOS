@@ -182,4 +182,19 @@ void main() {
         .last);
     await shoot(t, '05-sell-with-covers');
   });
+
+  // The shop runs the till in Arabic, so the list is photographed there too: a
+  // dropdown that reads correctly left to right can still open wrong under RTL.
+  testWidgets('the covers prompt in Arabic', (t) async {
+    SettingsStore(db).language = 'ar';
+
+    await t.pumpWidget(RepaintBoundary(key: shotKey, child: app()));
+    await signIn(t);
+
+    await t.tap(find.byKey(Key('table-tile-${table6.id}')));
+    await shoot(t, '06-guest-count-closed-ar');
+
+    await t.tap(find.byKey(const Key('guest-count-dropdown')));
+    await shoot(t, '07-guest-count-open-ar');
+  });
 }
