@@ -542,6 +542,12 @@ class SettingsStore {
   bool get askGuestCount => getBool('ask_guest_count', fallback: true);
   set askGuestCount(bool v) => setBool('ask_guest_count', v);
 
+  /// Whether opening a fresh table asks which cashier is opening it, and assigns the
+  /// table to them. Off by default: a single-operator till has nobody to choose
+  /// between. A shop that shares one screen between waiters turns it on.
+  bool get askCashierOnOpen => getBool('ask_cashier_on_open');
+  set askCashierOnOpen(bool v) => setBool('ask_cashier_on_open', v);
+
   /// Draw the floor's sections down the side of the plan rather than as a strip
   /// above it. On by default: a waiter reads a short vertical list of rooms faster
   /// than a horizontal one that scrolls off the edge, and the width it costs is

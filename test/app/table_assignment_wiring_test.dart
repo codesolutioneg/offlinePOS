@@ -148,6 +148,25 @@ void main() {
     await t.pumpAndSettle();
   }
 
+  testWidgets('opening a table asks who is opening it and assigns it to them',
+      (t) async {
+    settings.askCashierOnOpen = true;
+
+    await t.pumpWidget(app());
+    await signIn(t, 'sara', '1234');
+    await tapFive(t);
+    await t.pumpAndSettle();
+
+    // The prompt lists the staff; pick Ana.
+    expect(find.text('Who is opening this table?'), findsOneWidget);
+    await t.tap(find.byKey(const Key('transfer-ana')));
+    await t.pumpAndSettle();
+
+    // The table opens and is now Ana's, on the same assignment the floor shows.
+    expect(find.byType(SellScreen), findsOneWidget);
+    expect(assignments.cashierFor(tableFive), 'ana');
+  });
+
   testWidgets('a waiter is stopped at a table that is not theirs', (t) async {
     assignments.assign(tableFive, 'ana', by: 'mo');
 

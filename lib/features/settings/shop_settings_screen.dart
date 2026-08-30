@@ -29,6 +29,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late final TextEditingController _receiptFooter;
   late bool _showTax;
   late bool _askGuests;
+  late bool _askCashierOnOpen;
   late int _cutoverHour;
   late Set<OrderType> _offered;
   late bool _sectionsSide;
@@ -42,6 +43,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _receiptFooter = TextEditingController(text: widget.settings.receiptFooter ?? '');
     _showTax = widget.settings.receiptShowTax;
     _askGuests = widget.settings.askGuestCount;
+    _askCashierOnOpen = widget.settings.askCashierOnOpen;
     _cutoverHour = widget.settings.businessDayCutoverHour;
     _offered = widget.settings.shopOrderTypes;
     _sectionsSide = widget.settings.floorSectionsSide;
@@ -75,6 +77,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.receiptFooter = _receiptFooter.text.trim();
     widget.settings.receiptShowTax = _showTax;
     widget.settings.askGuestCount = _askGuests;
+    widget.settings.askCashierOnOpen = _askCashierOnOpen;
     widget.settings.businessDayCutoverHour = _cutoverHour;
     widget.settings.shopOrderTypes = _offered;
     widget.settings.floorSectionsSide = _sectionsSide;
@@ -134,6 +137,13 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             subtitle: Text(tr(context, 'When a table is seated from the floor')),
             value: _askGuests,
             onChanged: (v) => setState(() => _askGuests = v),
+          ),
+          SwitchListTile(
+            key: const Key('ask-cashier-on-open'),
+            title: Text(tr(context, 'Ask who is opening the table')),
+            subtitle: Text(tr(context, 'On a shared till, assigns the table to them')),
+            value: _askCashierOnOpen,
+            onChanged: (v) => setState(() => _askCashierOnOpen = v),
           ),
           const SizedBox(height: 12),
           // What this shop sells at all, above whatever each role may ring: a shop

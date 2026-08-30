@@ -1948,6 +1948,18 @@ class _PosAppState extends State<PosApp> {
                 covers = await _askGuestCount(floorContext, t.seats);
                 if (covers == null) return;
               }
+              // On a shared till, ask who is opening the table and assign it to them.
+              // Cancelling the prompt leaves the table unopened, so nobody's tab is
+              // started under the wrong name.
+              String? openedBy;
+              if (widget.assignments != null && widget.settings.askCashierOnOpen) {
+                if (!floorContext.mounted) return;
+                openedBy = await _pickCashier(
+                    floorContext,
+                    tr(floorContext, 'Who is opening this table?'),
+                    widget.users.active().map((u) => u.id).toList());
+                if (openedBy == null) return;
+              }
               if (!mounted) return;
               setState(() {
                 session.startFresh(seatAs);
@@ -1963,6 +1975,9 @@ class _PosAppState extends State<PosApp> {
                 if (dineIn) _addPreorders(session, t, guests: seated);
                 _onCounter = true;
               });
+              // Attribute the table to whoever opened it, using the same assignment
+              // the floor already shows against a waiter's tables.
+              if (openedBy != null) _assignTable(t, openedBy);
             },
           );
         },
