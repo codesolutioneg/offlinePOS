@@ -137,11 +137,10 @@ void main() {
 
   Future<void> pickGuests(WidgetTester t, int n) async {
     await openGuestList(t);
-    // The open menu is the last copy of the row in the tree; the button keeps an
-    // offstage one that cannot be tapped.
+    // Tap the number inside the row rather than the row itself: the menu item's
+    // own box reports a position the hit test does not land in.
     await t.tap(find.descendant(
-        of: find.byKey(Key('guests-$n')),
-        matching: find.text('$n')).last);
+        of: find.byKey(Key('guests-$n')), matching: find.text('$n')));
     await t.pumpAndSettle();
   }
 

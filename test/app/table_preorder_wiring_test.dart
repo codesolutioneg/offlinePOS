@@ -138,11 +138,10 @@ void main() {
     await seatTable(t);
     await t.tap(find.byKey(const Key('guest-count-dropdown')));
     await t.pumpAndSettle();
-    // The open menu is the last copy of the row in the tree; the button keeps an
-    // offstage one that cannot be tapped.
+    // Tap the number inside the row rather than the row itself: the menu item's
+    // own box reports a position the hit test does not land in.
     await t.tap(find.descendant(
-        of: find.byKey(Key('guests-$guests')),
-        matching: find.text('$guests')).last);
+        of: find.byKey(Key('guests-$guests')), matching: find.text('$guests')));
     await t.pumpAndSettle();
   }
 

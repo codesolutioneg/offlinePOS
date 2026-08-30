@@ -2349,13 +2349,12 @@ class _PosAppState extends State<PosApp> {
           width: 320,
           child: DropdownButton<int>(
             key: const Key('guest-count-dropdown'),
+            // Nothing is preselected: the covers decide the per-guest lines and
+            // every per-head figure in the reports, so the waiter picks rather
+            // than accepts whatever sat at the top of the list.
             value: null,
             isExpanded: true,
             hint: Text(tr(ctx, 'Choose a number')),
-            // The closed button shows the hint rather than a keyed row, so each
-            // guests-N exists once, only while the menu is open.
-            selectedItemBuilder: (_) =>
-                [for (var n = 1; n <= max; n++) const SizedBox.shrink()],
             items: [
               for (var n = 1; n <= max; n++)
                 DropdownMenuItem<int>(
