@@ -27,8 +27,11 @@ stores and LAN events, never a network call on a selling path.**
 
 ## Rules for whoever executes this (read before writing a line)
 
-Repo: `/home/username/workspace/offlinePOS`, branch `main`. Baseline: 605 tests
-passing + 1 skipped (staging, needs STAGING_URL), `flutter analyze` clean. Keep both.
+Repo: `/home/username/workspace/offlinePOS`, branch `main`. Baseline: 1506 tests
+passing + 1 skipped (staging, needs STAGING_URL), `flutter analyze` clean on the
+whole project. Keep both. That count is a local run with the six socket-binding
+suites left out, because they hang in a sandbox; CI runs the lot on Windows, so a
+green AppVeyor build is the number that covers everything.
 
 Hard constraints, none negotiable:
 
@@ -370,23 +373,37 @@ phone, time, covers, state) + due-soon badge on the floor tile + a
 
 ## Follow-ups from already-shipped work
 
-1. **Live shop-key rotation.** "New key" takes effect only on restart; the dialog
-   says so honestly. Make `LanNode` re-read the credential without a restart, or
-   keep the honest wording and close this as intended.
-2. **Persist the close-flush retry arming.** The armed state is in memory
-   (`sync_service.dart`); a till rebooted overnight after a failed close needs a
-   manual sync. Persist (armedAt, reason) in `app_settings` and re-arm on boot;
-   the re-arm must NOT be "pending > 0" alone or mid-shift pending sales would
-   drain on the timer and break the batch-at-close rule.
-3. **Update install execution.** The signed update pipeline gates correctly but the
-   install step itself is unwired (parity checklist section 8). Finish it or mark
-   it deliberately manual.
-4. **Two-till hardware test.** The fabric is proven in-memory and over loopback,
-   never on real hardware. Protocol: enable sharing on till A, copy the shop key to
-   till B, restart B; both appear in each other's peer lists; park a table on A and
-   see it busy on B; ring, bump on KDS, status lands on A; pull B's cable, sell on
-   both, replug, converge with no duplicates. Do this before any real shop.
-5. **AppVeyor**: confirm the Windows build stayed green after the recent pushes.
+1. ~~**Live shop-key rotation.**~~ DONE. The credential reads the key at the moment
+   of each request and rebuilds its hash only when the key changed, so rotating
+   unpairs from the next request. The dialog no longer mentions a restart. The
+   sharing switch itself still needs one for off-to-on, and says so.
+2. ~~**Persist the close-flush retry arming.**~~ DONE. (armedAt, reason) live in
+   `app_settings` and are read back before the first tick. Only the arming is
+   persisted, never "pending > 0", so mid-shift sales still wait for the close. An
+   arming whose window closed while the till was off reports that it gave up
+   instead of starting a fresh window.
+3. ~~**Update install execution.**~~ DONE for Windows, which is what CI packages: a
+   detached PowerShell handoff waits for this process to exit, unpacks the verified
+   zip over the install directory and restarts the app. Every path in the script is
+   a quoted literal, and a handoff that cannot start throws so the service keeps
+   the build and retries. Off Windows there is no installer and a verified build
+   stays staged for an operator, deliberately.
+4. **Two-till hardware test.** STILL OPEN, and it needs hardware rather than code.
+   The fabric is proven in-memory and over loopback, never on two machines.
+   Protocol: enable sharing on till A, copy the shop key to till B, restart B; both
+   appear in each other's peer lists; park a table on A and see it busy on B; ring,
+   bump on KDS, status lands on A; pull B's cable, sell on both, replug, converge
+   with no duplicates. Do this before any real shop.
+5. ~~**AppVeyor**~~ CONFIRMED green: build 1.0.101 on `f95e68a`, which runs
+   `flutter analyze`, the full `flutter test` including the socket-binding suites
+   that cannot run in a sandbox, and the Windows release build.
+6. **Which jouma branch is production.** Found while tracing the batch question and
+   listed here because it is upstream of it. `pos_offline_sync` on jouma `main` is
+   still the old `pos.order` variant (18.0.1.0.0, `models/pos_order.py`); only
+   `Staging_final` and `Staging_osam` carry the `sale.order` cascade this till
+   actually calls (18.0.3.0.0, `models/sale_order.py`). A till pointed at a jouma
+   running `main` gets `AttributeError` on `sale.order.create_from_offline_pos` and
+   books nothing. Establish what is deployed before shipping anything.
 
 ---
 
