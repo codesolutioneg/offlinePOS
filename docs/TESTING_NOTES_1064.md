@@ -42,7 +42,8 @@ never wipe a locally created item.
 
 **One sales order per batch (10).** The owner believes this needs no jouma change because
 Dishflow does it. That is being verified before anything is built: Dishflow books through
-its own FastAPI backend and a different addon, so its contract is not automatically ours.
+a different addon, `flutter_api`, which is in jouma alongside `pos_offline_sync`, so
+the server code exists but is a generic order creator with no idea a batch happened.
 The instruction to that lane is explicit: establish whether one-sales-order-per-batch can
 be done against the existing `create_from_offline_pos` by shaping the payload differently,
 and if it cannot, report the evidence and leave the decision to the owner rather than

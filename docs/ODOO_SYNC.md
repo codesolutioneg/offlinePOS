@@ -272,9 +272,11 @@ one VAT rate the tax total is identical; for a menu with mixed rates it is not, 
 is why it is opt-in and off until someone chooses it.
 
 Dishflow sends `discount_amount` / `discount_type` / `discount_value` as top-level
-fields and lets its own REST addon decide what to do with them. It can do that
-because that addon is theirs to change. Ours is the same information without the
-assumption: the amount travels, and the shop chooses whether it also becomes a line.
+fields and lets the addon it talks to decide what to do with them, which it books as
+a negative untaxed line. That addon is `flutter_api`, and it is in jouma, so it is
+as much ours to change as `pos_offline_sync` is. Ours is the same information
+without the assumption: the amount travels, and the shop chooses whether it also
+becomes a line.
 
 ## How the module answers
 
@@ -346,18 +348,33 @@ deciding anything:
   order can only have one customer.
 - **Credit (on-account) sales are pulled out of the merge** and still sent one by
   one, because an unpaid ticket cannot share a settlement with paid ones.
-- It goes through **Dishflow's own REST addon** (`POST /api/.../orders/create`), not
-  through standard Odoo. That endpoint takes a flat order with `payments[]`,
-  `discount_amount`, `delivery_fee`, an order date and a session PDF, and does the
-  booking itself.
+- It goes through a **second addon in jouma**, not through standard Odoo and not
+  through Dishflow's own FastAPI service, which is a dormant third path that books
+  `pos.order` one at a time and is not involved in consolidation. The addon is
+  `flutter_api` and the endpoint is `POST /api/sale/order/create`
+  (`flutter_api/controllers/sale_order_controller.py:275`), authenticated by an api
+  token rather than a session. It takes a flat order with `payments[]`,
+  `discount_amount`, `delivery_fee`, an order date and a session PDF, creates a
+  plain `sale.order` and does the booking itself.
+- **The merging is entirely client-side.** Nothing in `flutter_api` knows what a
+  batch is: Dart flattens every ticket's lines, aggregates them by product and sums
+  the payments by journal, then posts what the server reads as one ordinary order.
+  So the server has no batch code to reuse, only an endpoint permissive enough not
+  to notice.
+- The endpoint **does** have real idempotency, on `client_order_ref` scoped to the
+  company (`sale_order_controller.py:440-455`). Dishflow's consolidated close is
+  what throws it away, not the contract.
 - The consolidated call **deliberately drops its idempotency key**: the code strips
   `clientOrderRef` and, when the call times out, hunts for the order by matching an
   expected total against the last confirmed orders of that date
   (`_recoverSaleOrderByClientRef`, `findSessionCloseOrderOnOdoo`).
 
-So "Dishflow works the same way" is true about the *behaviour* and not about the
-*contract*: it can merge because the endpoint is theirs to shape, and it paid for it
-with the one guarantee this till is built on.
+So "Dishflow works the same way, in the same jouma, so nothing needs changing" is
+half right, and it is worth being exact about which half. Right: the server code it
+uses is already there, in jouma, and offlinePOS could call it today without a line
+of Python being written. Wrong: that code is not consolidation code. It is a generic
+order creator that never learned there was a batch, so adopting it means adopting
+Dishflow's client-side merge and everything that merge gives up, listed below.
 
 **Can we do it against `create_from_offline_pos` as it stands?** Shaping alone: yes,
 technically. The method takes a list of payloads and reads each one with `.get()`, so
