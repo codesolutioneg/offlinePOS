@@ -182,7 +182,14 @@ class Modifier {
         // The option's price is the whole dish's price, so what this adds is
         // whatever is left after the dish's own. A large coffee at 20 on a base of
         // 10 adds 10 and the line totals 20, which is the figure the menu shows.
-        ModifierPriceType.replace => price - parentUnitPrice,
+        //
+        // Zero is not a free dish. The field behind this is called price_extra, so
+        // the standard size in a group is very often left on nothing at all, and
+        // reading that as "this dish now costs zero" hands the food away: the
+        // option subtracts the whole price, the line totals nothing, and a group
+        // that resolves itself rings it without anybody touching the sheet. It
+        // means "no change", which is the only reading that is ever right.
+        ModifierPriceType.replace => price <= 0 ? 0 : price - parentUnitPrice,
         ModifierPriceType.fixed => price,
       };
 }

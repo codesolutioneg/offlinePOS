@@ -77,15 +77,19 @@ class OdooPuller {
         _branchFieldMissing = false;
         return byBranch;
       } catch (e) {
-        // Remembered only when the answer says the field is not there. The retry
-        // inside the read above probes each optional field before giving up, so
-        // asking an Odoo without the field on every refresh would spend a handful
-        // of failing calls each time to learn the same thing.
+        // Only an answer that says the field is not there earns the whole menu.
+        // The retry inside the read above probes each optional field before giving
+        // up, so asking an Odoo without the field on every refresh would spend a
+        // handful of failing calls each time to learn the same thing, which is why
+        // that case is remembered.
         //
-        // A timeout or a 500 is not that answer. Latching on one would quietly put
-        // a chain's till back on the whole chain's menu until somebody restarted
-        // it, on the strength of one bad minute.
-        if (_readsAsUnknownField(e)) _branchFieldMissing = true;
+        // A timeout or a 500 says nothing about branches. Falling through to the
+        // unfiltered read on one would hand a chain's till the whole chain's menu
+        // for that refresh, so the failure is thrown on instead: the refresh gives
+        // up, the till keeps the branch menu it already had, and the next pass
+        // tries again. A stale correct menu beats a fresh wrong one.
+        if (!_readsAsUnknownField(e)) rethrow;
+        _branchFieldMissing = true;
       }
     }
     return _searchReadOptional('product.product', fields, extras, [inPos]);
@@ -364,7 +368,13 @@ class OdooPuller {
         // A radio group is one choice by construction, and the server only holds
         // its own min/max to account for a checkbox, so a radio arrives as 0/0 and
         // would read here as "take as many as you like".
-        maxSelection: g['display_type'] == 'radio'
+        //
+        // A group whose options replace the dish's price is one choice too,
+        // however it is displayed. A dish has one price, so two of them is not a
+        // thing a bill can express: taken twice, the option's difference from the
+        // dish is applied twice and the size is charged as though it were an
+        // extra, which is the arithmetic this price mode exists to stop.
+        maxSelection: g['display_type'] == 'radio' || replaces.contains(gid)
             ? 1
             : (g['max_selection'] ?? 0) as int,
         required: g['required'] == true,

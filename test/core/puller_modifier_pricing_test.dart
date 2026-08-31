@@ -86,6 +86,15 @@ void main() {
         ModifierPriceType.fixed);
   });
 
+  test('a replace group takes one choice, however it is displayed', () async {
+    // A dish has one price, so two of them is not something a bill can express:
+    // taken twice, the option's difference from the dish applies twice and the
+    // size is charged as if it were an extra, which is the arithmetic this price
+    // mode exists to stop.
+    final pull = await pullerWith(priceMode: 'replace').pull();
+    expect(pull.groups.single.maxSelection, 1);
+  });
+
   test('an upgrade charges its own surcharge, not the option price', () async {
     // upgrade_price is already the difference from the option the dish comes with,
     // so it is a flat addition whatever the group is set to. Read as price_extra

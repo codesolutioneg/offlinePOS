@@ -35,6 +35,17 @@ void main() {
     expect(12 + small.priceFor(12), 8);
   });
 
+  test('a replacing option priced at nothing does not give the dish away', () {
+    // The field behind this is called price_extra, so the standard size in a
+    // group is very often left on zero. Read as "this dish now costs nothing" it
+    // subtracts the whole price and the line totals zero, and a group that
+    // resolves itself rings that without anyone opening the sheet. The receipt
+    // even reconciles: 10, then "Regular -10.00", then nothing to pay.
+    final regular = option(0, ModifierPriceType.replace);
+    expect(regular.priceFor(10), 0);
+    expect(10 + regular.priceFor(10), 10, reason: 'zero means no change');
+  });
+
   test('the other three ways of pricing are unchanged', () {
     expect(option(5, ModifierPriceType.fixed).priceFor(10), 5);
     expect(option(10, ModifierPriceType.percentage).priceFor(50), 5);
