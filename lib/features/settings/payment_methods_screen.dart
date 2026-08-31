@@ -72,6 +72,25 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
         .showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
   }
 
+  /// Where a tender's money ends up, in one line under its name.
+  ///
+  /// A method Odoo holds no journal against is its pay-later tender, and it is
+  /// named as that rather than as a gap: the shop settles it on account, so it is
+  /// offered here on purpose and not by oversight.
+  String _booksTo(PaymentMethod m) {
+    if (m.isPayLater) return tr(context, 'No journal, so this is pay later');
+    final name = m.journalName;
+    // The journal id with no name is a server that gave up the method but not the
+    // journal behind it. Saying which one it is still beats saying nothing.
+    if (name == null) return '${tr(context, 'Journal')} ${m.journalId}';
+    final kind = switch (m.journalType) {
+      'bank' => tr(context, 'Bank'),
+      'cash' => tr(context, 'Cash'),
+      _ => m.journalType ?? '',
+    };
+    return '${tr(context, 'Books to')} $name ($kind)';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -146,6 +165,16 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
                               onChanged: (v) => setState(() => _offered[m.id] = v),
                             ),
                           ]),
+                          // What this tender books to, so a manager can see that
+                          // the card method lands in the bank and not the drawer.
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              _booksTo(m),
+                              key: Key('payment-journal-${m.id}'),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
                           const SizedBox(height: 8),
                           TextField(
                             key: Key('payment-label-${m.id}'),

@@ -93,4 +93,37 @@ void main() {
 
     expect(settings.payLaterMethodId, 2);
   });
+
+  /// A manager choosing tenders has to see where each one puts the money, or
+  /// "Bank" and "Cash" are two words with nothing behind them.
+  group('what a tender books to', () {
+    String journalLine(WidgetTester t, int id) =>
+        t.widget<Text>(find.byKey(Key('payment-journal-$id'))).data!;
+
+    testWidgets('the journal name and its type sit under the method', (t) async {
+      await t.pumpWidget(app(withMethods: const [
+        PaymentMethod(
+            id: 1, name: 'Cash', isCash: true, journalId: 11,
+            journalName: 'Cash drawer', journalType: 'cash'),
+        PaymentMethod(
+            id: 2, name: 'Card', journalId: 12,
+            journalName: 'Bank CIB', journalType: 'bank'),
+      ]));
+
+      expect(journalLine(t, 1), contains('Cash drawer'));
+      expect(journalLine(t, 1), contains('Cash'));
+      expect(journalLine(t, 2), contains('Bank CIB'));
+      expect(journalLine(t, 2), contains('Bank'));
+    });
+
+    testWidgets('a method with no journal is named as pay later', (t) async {
+      await t.pumpWidget(app(withMethods: const [
+        PaymentMethod(id: 4, name: 'Customer account'),
+      ]));
+
+      expect(journalLine(t, 4), contains('pay later'),
+          reason: 'Odoo holds no journal against its pay-later tender, so the '
+              'gap is the meaning rather than missing data');
+    });
+  });
 }

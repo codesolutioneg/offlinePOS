@@ -248,17 +248,58 @@ class ModifierGroup {
 }
 
 /// A way a sale can be paid, as configured on the till's point of sale in Odoo.
+///
+/// Always a `pos.payment.method`, never the journal behind it. The booking module
+/// resolves the id it is sent against that model and reads the journal off it, so a
+/// till that sent a journal id would have its card takings land in the drawer.
 class PaymentMethod {
-  const PaymentMethod({required this.id, required this.name, this.isCash = false});
+  const PaymentMethod({
+    required this.id,
+    required this.name,
+    this.isCash = false,
+    this.journalId,
+    this.journalName,
+    this.journalType,
+  });
   final int id;
   final String name;
   final bool isCash;
 
-  Map<String, dynamic> toMap() => {'id': id, 'name': name, 'is_cash': isCash};
+  /// The `account.journal` the money ends up in, carried so a manager can see what
+  /// a tender books to. Null on the method Odoo holds no journal against, which is
+  /// its pay-later tender: nothing is banked when the customer settles later, so
+  /// that one is kept rather than filtered out with the journals a till does not
+  /// take over the counter.
+  final int? journalId;
+
+  /// The journal's name and Odoo's own type for it ('bank', 'cash', 'sale', ...),
+  /// both null when the journal itself could not be read.
+  final String? journalName;
+  final String? journalType;
+
+  /// Whether this tender settles into a bank or cash journal, which is the money
+  /// a shop actually takes at the counter.
+  bool get isBankOrCash => journalType == 'bank' || journalType == 'cash';
+
+  /// Odoo holds no journal against its pay-later tender, so that is what having
+  /// none means.
+  bool get isPayLater => journalId == null;
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'name': name,
+        'is_cash': isCash,
+        'journal_id': journalId,
+        'journal_name': journalName,
+        'journal_type': journalType,
+      };
   factory PaymentMethod.fromMap(Map<String, dynamic> m) => PaymentMethod(
         id: m['id'] as int,
         name: (m['name'] ?? '') as String,
         isCash: m['is_cash'] == true,
+        journalId: m['journal_id'] is int ? m['journal_id'] as int : null,
+        journalName: m['journal_name'] is String ? m['journal_name'] as String : null,
+        journalType: m['journal_type'] is String ? m['journal_type'] as String : null,
       );
 }
 
