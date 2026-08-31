@@ -91,6 +91,33 @@ void main() {
     expect(mentionsBranch(domains.last), isFalse);
   });
 
+  test('a bad minute does not put the till back on the whole menu', () async {
+    // A timeout is not Odoo saying the field is missing. Latching on one would
+    // quietly hand a chain's till the whole chain's menu until someone restarted
+    // it, on the strength of one failed refresh.
+    var failNext = true;
+    domains = [];
+    final p = OdooPuller(
+      branchId: () => 3,
+      call: (model, method, args, kwargs) async {
+        if (model != 'product.product') return const [];
+        final domain = (args.first as List).cast<dynamic>();
+        domains.add(domain);
+        if (failNext && mentionsBranch(domain)) {
+          throw Exception('SocketException: connection timed out');
+        }
+        return const [];
+      },
+    );
+
+    await p.pull();
+    failNext = false;
+    domains = [];
+    await p.pull();
+    expect(mentionsBranch(domains.first), isTrue,
+        reason: 'it asks for its own branch again on the next refresh');
+  });
+
   test('the branch is read at the moment of the pull, not at startup', () async {
     // A manager can move a till to another branch, and the puller is built once.
     var branch = 3;

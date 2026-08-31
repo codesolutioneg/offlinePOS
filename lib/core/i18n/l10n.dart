@@ -1184,6 +1184,9 @@ const Map<String, String> _ar = {
   'Restaurant (point of sale)': 'المطعم (نقطة البيع)',
   'Warehouse': 'المخزن',
   'Let Odoo decide': 'دع أودو يقرر',
+  'This belongs to another branch. Every sale this till sends will say so.':
+      'هذا يتبع فرعًا آخر. كل عملية بيع ترسلها هذه الكاشير ستقول ذلك.',
+  'Nothing chosen yet': 'لم يتم اختيار شيء بعد',
   'not in the list': 'غير موجود في القائمة',
   'Books to': 'يُسجَّل في',
   'Journal': 'دفتر اليومية',

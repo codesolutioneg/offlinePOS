@@ -399,25 +399,49 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     int? withinBranch,
   }) {
     final offered = _offer(options, value, withinBranch);
+    // Kept rather than cleared when the branch changes under it, because silently
+    // unsetting a configured id is the failure this screen exists to avoid. Said
+    // out loud instead: these ids ride on every sale, so one left pointing at the
+    // branch before last books this till's takings into another branch's books.
+    final elsewhere = withinBranch != null &&
+        value != null &&
+        options.any((o) =>
+            o.id == value && o.companyId != null && o.companyId != withinBranch);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: DropdownButtonFormField<int?>(
-        key: Key('pick-$name'),
-        initialValue: value,
-        isExpanded: true,
-        decoration: InputDecoration(
-          labelText: label,
-          border: const OutlineInputBorder(),
-        ),
-        items: [
-          DropdownMenuItem<int?>(
-            value: null,
-            child: Text(tr(context, 'Let Odoo decide')),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DropdownButtonFormField<int?>(
+            key: Key('pick-$name'),
+            initialValue: value,
+            isExpanded: true,
+            decoration: InputDecoration(
+              labelText: label,
+              border: const OutlineInputBorder(),
+            ),
+            items: [
+              DropdownMenuItem<int?>(
+                value: null,
+                child: Text(tr(context, 'Let Odoo decide')),
+              ),
+              for (final o in offered)
+                DropdownMenuItem<int?>(value: o.id, child: Text(_optionLabel(o))),
+            ],
+            onChanged: (v) => setState(() => onPicked(v)),
           ),
-          for (final o in offered)
-            DropdownMenuItem<int?>(value: o.id, child: Text(_optionLabel(o))),
+          if (elsewhere)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 12),
+              child: Text(
+                tr(context, 'This belongs to another branch. Every sale this '
+                    'till sends will say so.'),
+                key: Key('cross-branch-$name'),
+                style: TextStyle(
+                    fontSize: 12, color: Theme.of(context).colorScheme.error),
+              ),
+            ),
         ],
-        onChanged: (v) => setState(() => onPicked(v)),
       ),
     );
   }
