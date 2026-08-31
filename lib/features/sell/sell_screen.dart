@@ -3551,7 +3551,11 @@ class _PaymentSheetState extends State<_PaymentSheet> {
         ? _remaining
         : (typed > _remaining ? _remaining : typed);
     setState(() {
-      _tenders.add(OrderPayment(methodId: _method!.id, amount: amt, label: _method!.name));
+      _tenders.add(OrderPayment(
+          methodId: _method!.id,
+          journalId: _method!.journalId,
+          amount: amt,
+          label: _method!.name));
       _tenderAmount.clear();
     });
   }
@@ -3591,7 +3595,11 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       return;
     }
     widget.onConfirm(
-      [OrderPayment(methodId: method.id, amount: _grand, label: kOnAccountLabel)],
+      [OrderPayment(
+        methodId: method.id,
+        journalId: method.journalId,
+        amount: _grand,
+        label: kOnAccountLabel)],
       kOnAccountLabel,
       _tipAmount,
       null,
