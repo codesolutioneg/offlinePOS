@@ -115,9 +115,15 @@ class _ModifierSheetState extends State<ModifierSheet> {
 
   /// A percentage option shows a percentage. Showing it as money is how a 10%
   /// modifier gets mistaken for a flat 10.
+  ///
+  /// An option that replaces the dish's price shows that price with no plus in
+  /// front of it, because it is not an addition: the menu says a large coffee is
+  /// 20, and "+10" on the option a cashier taps to sell one is a different number
+  /// from the one the customer was quoted.
   String _label(Modifier m) => switch (m.priceType) {
         ModifierPriceType.free => '',
         ModifierPriceType.percentage => '+${m.price.toStringAsFixed(0)}%',
+        ModifierPriceType.replace => widget.formatAmount(m.price),
         ModifierPriceType.fixed =>
           m.price == 0 ? '' : '+${widget.formatAmount(m.price)}',
       };

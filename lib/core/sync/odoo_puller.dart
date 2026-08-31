@@ -76,12 +76,16 @@ class OdooPuller {
         ]);
         _branchFieldMissing = false;
         return byBranch;
-      } catch (_) {
-        // Remembered, because the retry inside the read above probes each optional
-        // field before it gives up. Asking an Odoo without the field on every
-        // refresh would spend a handful of failing calls each time to learn the
-        // same thing.
-        _branchFieldMissing = true;
+      } catch (e) {
+        // Remembered only when the answer says the field is not there. The retry
+        // inside the read above probes each optional field before giving up, so
+        // asking an Odoo without the field on every refresh would spend a handful
+        // of failing calls each time to learn the same thing.
+        //
+        // A timeout or a 500 is not that answer. Latching on one would quietly put
+        // a chain's till back on the whole chain's menu until somebody restarted
+        // it, on the strength of one bad minute.
+        if (_readsAsUnknownField(e)) _branchFieldMissing = true;
       }
     }
     return _searchReadOptional('product.product', fields, extras, [inPos]);
@@ -92,6 +96,20 @@ class OdooPuller {
   /// addon installed while the till is running is picked up at its next restart,
   /// which is soon enough for something that happens once.
   bool? _branchFieldMissing;
+
+  /// Whether a failure is Odoo saying it has never heard of the field, as opposed
+  /// to the network or the server having a bad moment.
+  ///
+  /// Matched on the message because that is all a JSON-RPC fault gives us. Read
+  /// conservatively: anything unrecognised is treated as a passing failure, so the
+  /// worst an unfamiliar wording costs is asking again next refresh.
+  static bool _readsAsUnknownField(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('branch_ids') ||
+        text.contains('invalid field') ||
+        text.contains('unknown field') ||
+        text.contains('does not exist');
+  }
 
   Future<CataloguePull> pull() async {
     final categories = await _searchRead(
@@ -268,7 +286,10 @@ class OdooPuller {
         'pos.product.modifier',
         ['id', 'name', 'sequence', 'product_tmpl_id', 'required', 'min_selection',
          'max_selection', 'display_type'],
-        ['auto_add', 'default_option_id'],
+        // price_mode decides whether an option adds to the dish's price or is it.
+        // Optional so an add-on without the field still gives up its groups, and a
+        // missing answer means 'add', which is the field's own default.
+        ['auto_add', 'default_option_id', 'price_mode'],
         [
           ['active', '=', true]
         ],
@@ -276,7 +297,10 @@ class OdooPuller {
       options = await _searchReadOptional(
         'pos.modifier.option',
         ['id', 'name', 'modifier_id', 'price_extra', 'sequence', 'product_id'],
-        ['is_default'],
+        // An upgrade names its surcharge separately, and that figure is already the
+        // difference from the option the dish comes with, so it is what gets
+        // charged rather than the option's own price.
+        ['is_default', 'is_upgrade', 'upgrade_price'],
         [
           ['active', '=', true]
         ],
@@ -292,18 +316,35 @@ class OdooPuller {
       final id = _id(g['default_option_id']);
       if (id != null) namedDefaults.add(id);
     }
+    // Whether a group's options replace the dish's price or add to it. Read off the
+    // group because that is where Odoo keeps it, and applied to each of its options
+    // below: 'add' is the default there and the assumption here.
+    final replaces = <int>{};
+    for (final g in groups) {
+      if (g['price_mode'] == 'replace') replaces.add(g['id'] as int);
+    }
+
     final byGroup = <int, List<Modifier>>{};
     for (final o in options) {
       final gid = _id(o['modifier_id']);
       if (gid == null) continue;
+      // Three ways an option is priced, and picking the wrong one charges the
+      // customer the wrong amount in silence.
+      //
+      // An upgrade carries its own surcharge, and that number is already the
+      // difference from the option the dish comes with, so it is a flat addition
+      // however its group is set. Otherwise a 'replace' group means the option's
+      // price is the whole dish's price, and everything else adds.
+      final upgrade = o['is_upgrade'] == true ? _num(o['upgrade_price']) : 0.0;
+      final isUpgrade = o['is_upgrade'] == true && upgrade != 0;
       byGroup.putIfAbsent(gid, () => []).add(Modifier(
             id: o['id'] as int,
             groupId: gid,
             name: (o['name'] ?? '') as String,
-            price: _num(o['price_extra']),
-            // Every option here is a flat amount: this add-on has no percentage
-            // option, and its "this price replaces the dish's" mode is not
-            // something a line that prices the dish plus its extras can express.
+            price: isUpgrade ? upgrade : _num(o['price_extra']),
+            priceType: !isUpgrade && replaces.contains(gid)
+                ? ModifierPriceType.replace
+                : ModifierPriceType.fixed,
             sequence: (o['sequence'] ?? 0) as int,
             productId: _id(o['product_id']),
             isDefault:
@@ -464,6 +505,14 @@ class OdooPuller {
   /// already carries: with no journals read nothing is narrowed, and a narrowing
   /// that leaves nothing is dropped, because a till that can name no tender at all
   /// cannot take money.
+  ///
+  /// Only a journal this login could actually read is judged. A journal that was
+  /// not in the answer is unknown, not disqualified, and the difference decides
+  /// whether a shop can take a card: journals are company-scoped, so a chain's till
+  /// sees its own branch's and none of the others'. Dropping the unknown ones would
+  /// take the card tender off that till while cash survived, which is quiet, wrong,
+  /// and would not even trip the empty-list guard below. Offering one tender too
+  /// many is the lesser mistake by a distance.
   List<Map<String, dynamic>> _onlyBankAndCash(List<Map<String, dynamic>> methods,
       Map<int, ({String name, String type})> journals) {
     if (journals.isEmpty || methods.isEmpty) return methods;
@@ -471,6 +520,7 @@ class OdooPuller {
     final kept = [
       for (final m in methods)
         if (_id(m['journal_id']) == null ||
+            !journals.containsKey(_id(m['journal_id'])) ||
             overTheCounter.contains(journals[_id(m['journal_id'])]?.type))
           m,
     ];

@@ -136,7 +136,14 @@ class Product {
       );
 }
 
-enum ModifierPriceType { fixed, percentage, free }
+/// How an option's number turns into money on the line.
+///
+/// [replace] is the size upgrade: the option's price IS the dish's price, not an
+/// addition to it, so a large coffee at 20 rings 20 and not 30. It is expressed as
+/// the difference from the dish it is attached to, because a line here prices a
+/// dish plus its extras, and the two ways of writing the same total put the same
+/// figure on the receipt.
+enum ModifierPriceType { fixed, percentage, free, replace }
 
 class Modifier {
   const Modifier({
@@ -172,6 +179,10 @@ class Modifier {
   double priceFor(double parentUnitPrice) => switch (priceType) {
         ModifierPriceType.free => 0,
         ModifierPriceType.percentage => parentUnitPrice * price / 100,
+        // The option's price is the whole dish's price, so what this adds is
+        // whatever is left after the dish's own. A large coffee at 20 on a base of
+        // 10 adds 10 and the line totals 20, which is the figure the menu shows.
+        ModifierPriceType.replace => price - parentUnitPrice,
         ModifierPriceType.fixed => price,
       };
 }
