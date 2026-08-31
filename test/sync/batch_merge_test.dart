@@ -29,7 +29,6 @@ void main() {
     double tip = 0,
     String cashier = 'sara',
     int methodId = 1,
-    int? journalId,
     DateTime? at,
   }) {
     final o = Order(
@@ -41,8 +40,7 @@ void main() {
       tip: tip,
     )..lines.add(
         OrderLine(productId: 10, odooProductId: 10, name: 'Pizza', quantity: 1, unitPrice: price));
-    o.payments = [OrderPayment(
-        methodId: methodId, journalId: journalId, amount: o.total, label: 'Cash')];
+    o.payments = [OrderPayment(methodId: methodId, amount: o.total, label: 'Cash')];
     o.state = OrderState.paid;
     return o;
   }
@@ -106,48 +104,6 @@ void main() {
     expect(payments.firstWhere((p) => p['method_id'] == 1)['amount'], closeTo(350, 0.01));
     expect(payments.firstWhere((p) => p['method_id'] == 2)['amount'], closeTo(40, 0.01));
     expect(payloadBalances(batch.payload), isTrue);
-  });
-
-  test('a merged tender keeps the journal the money went into', () {
-    // The whole point of naming the journal is that the server books where the
-    // till said. A merge that dropped it would put a night's card takings back on
-    // whatever the server resolved from the method.
-    final a = paidSale(methodId: 1, journalId: 90, at: DateTime.utc(2026, 3, 1, 19));
-    final b = paidSale(methodId: 1, journalId: 90, at: DateTime.utc(2026, 3, 1, 20));
-    final batch = mergeOrderPushes([entryFor(a), entryFor(b)],
-            batchUuid: 'shift-1')
-        .batch!;
-
-    final payments = (batch.payload['payments'] as List).cast<Map>();
-    expect(payments, hasLength(1));
-    expect(payments.single['journal_id'], 90);
-  });
-
-  test('one method taking money into two journals stays two tenders', () {
-    // Same method, different drawers. Summing on the method alone would settle
-    // both into whichever journal the server happened to resolve.
-    final a = paidSale(methodId: 1, journalId: 90, at: DateTime.utc(2026, 3, 1, 19));
-    final b = paidSale(methodId: 1, journalId: 91, at: DateTime.utc(2026, 3, 1, 20));
-    final batch = mergeOrderPushes([entryFor(a), entryFor(b)],
-            batchUuid: 'shift-1')
-        .batch!;
-
-    final payments = (batch.payload['payments'] as List).cast<Map>();
-    expect(payments, hasLength(2));
-    expect(payments.map((p) => p['journal_id']).toSet(), {90, 91});
-  });
-
-  test('a sale rung before journals existed still merges', () {
-    final a = paidSale(methodId: 1, at: DateTime.utc(2026, 3, 1, 19));
-    final b = paidSale(methodId: 1, at: DateTime.utc(2026, 3, 1, 20));
-    final batch = mergeOrderPushes([entryFor(a), entryFor(b)],
-            batchUuid: 'shift-1')
-        .batch!;
-
-    final payments = (batch.payload['payments'] as List).cast<Map>();
-    expect(payments, hasLength(1));
-    expect(payments.single.containsKey('journal_id'), isFalse,
-        reason: 'nothing to say, so it says nothing and the server resolves it');
   });
 
   test('delivery charges and tips are summed and still declared', () {

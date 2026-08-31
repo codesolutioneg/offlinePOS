@@ -760,12 +760,7 @@ const String kOnAccountLabel = 'On account';
 /// One tender against a sale: which Odoo payment method, how much, and any tip
 /// taken on that tender. Several of these on one order is a split payment.
 class OrderPayment {
-  const OrderPayment({
-    required this.methodId,
-    required this.amount,
-    this.label,
-    this.journalId,
-  });
+  const OrderPayment({required this.methodId, required this.amount, this.label});
   final int methodId;
   final double amount;
 
@@ -773,27 +768,11 @@ class OrderPayment {
   /// without a second catalogue lookup.
   final String? label;
 
-  /// The `account.journal` this tender books to, named on the wire rather than
-  /// left to be looked up.
-  ///
-  /// The journal is the thing that decides which drawer or bank account the money
-  /// landed in, and it is what a manager picks on the settings screen. Sending it
-  /// means the server books where the till said, instead of resolving the payment
-  /// method a second time and possibly disagreeing. Null on a tender rung before
-  /// this existed, or one whose method has no journal, which is Odoo's pay later:
-  /// the server falls back to the method exactly as it did before.
-  final int? journalId;
-
-  Map<String, dynamic> toMap() => {
-        'method_id': methodId,
-        'amount': amount,
-        'label': label,
-        if (journalId != null) 'journal_id': journalId,
-      };
+  Map<String, dynamic> toMap() =>
+      {'method_id': methodId, 'amount': amount, 'label': label};
   factory OrderPayment.fromMap(Map<String, dynamic> m) => OrderPayment(
         methodId: m['method_id'] as int,
         amount: (m['amount'] as num).toDouble(),
         label: m['label'] as String?,
-        journalId: m['journal_id'] as int?,
       );
 }

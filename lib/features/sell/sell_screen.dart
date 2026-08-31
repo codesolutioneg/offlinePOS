@@ -3551,11 +3551,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
         ? _remaining
         : (typed > _remaining ? _remaining : typed);
     setState(() {
-      _tenders.add(OrderPayment(
-          methodId: _method!.id,
-          journalId: _method!.journalId,
-          amount: amt,
-          label: _method!.name));
+      _tenders.add(OrderPayment(methodId: _method!.id, amount: amt, label: _method!.name));
       _tenderAmount.clear();
     });
   }
@@ -3573,11 +3569,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     } else if (_method != null) {
       // Book the amount due, never the note handed over: an overpayment is change,
       // not revenue. The cash tendered is kept only for the receipt's change line.
-      payments = [OrderPayment(
-          methodId: _method!.id,
-          journalId: _method!.journalId,
-          amount: _grand,
-          label: _method!.name)];
+      payments = [OrderPayment(methodId: _method!.id, amount: _grand, label: _method!.name)];
       if (_isCash && _receivedAmount > _grand + 0.001) cashReceived = _receivedAmount;
     } else {
       payments = <OrderPayment>[];
@@ -3599,11 +3591,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       return;
     }
     widget.onConfirm(
-      [OrderPayment(
-        methodId: method.id,
-        journalId: method.journalId,
-        amount: _grand,
-        label: kOnAccountLabel)],
+      [OrderPayment(methodId: method.id, amount: _grand, label: kOnAccountLabel)],
       kOnAccountLabel,
       _tipAmount,
       null,
