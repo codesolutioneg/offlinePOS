@@ -11,6 +11,11 @@ typedef ScriptLauncher = Future<void> Function(
 /// reason: a test that really called this would take the test runner with it.
 typedef ExitRequest = Future<void> Function();
 
+/// Whether the files in [dir] could actually be replaced by this process.
+/// Injected so a test can assert on a Windows install path that does not exist
+/// where the test runs.
+typedef WritabilityProbe = Future<bool> Function(Directory dir);
+
 /// Installs the Windows build by handing the job to a script that outlives us.
 ///
 /// CI packages the Windows release as a zip of the runner directory, not as an
@@ -44,7 +49,9 @@ class WindowsZipInstaller {
     int? processId,
     ScriptLauncher? launcher,
     ExitRequest? requestExit,
-  })  : executablePath = executablePath ?? Platform.resolvedExecutable,
+    WritabilityProbe? canWrite,
+  })  : _canWrite = canWrite ?? _probeByWriting,
+        executablePath = executablePath ?? Platform.resolvedExecutable,
         installDirectory = installDirectory ??
             File(executablePath ?? Platform.resolvedExecutable).parent,
         processId = processId ?? pid,
@@ -71,6 +78,7 @@ class WindowsZipInstaller {
 
   final ScriptLauncher _launch;
   final ExitRequest _exit;
+  final WritabilityProbe _canWrite;
 
   /// Matches [Installer]. Throws when the handoff could not be started.
   ///
@@ -79,6 +87,21 @@ class WindowsZipInstaller {
   /// installed when it does not, so a swallowed error would park a build that never
   /// actually installed and never gets another attempt.
   Future<void> install(String stagedZipPath) async {
+    // Checked before anything is launched and before the app is asked to go,
+    // because the script inherits this process's token. A till installed under
+    // Program Files runs unelevated, so the copy would fail with access denied
+    // after the app had already exited: an outage in exchange for an update that
+    // cannot land. Throwing here keeps the till running and the build staged, and
+    // puts the reason somewhere support can read it.
+    if (!await _canWrite(installDirectory)) {
+      throw FileSystemException(
+        'cannot write to the install directory, so the update would fail after '
+        'the app had already closed. Install the till somewhere its own user can '
+        'write, such as under LOCALAPPDATA',
+        installDirectory.path,
+      );
+    }
+
     final script = await _writeScript(stagedZipPath);
 
     // Detached, so it survives the exit below. If it cannot even be started there
@@ -97,6 +120,26 @@ class WindowsZipInstaller {
     ]);
 
     await _exit();
+  }
+
+  /// Whether this process could actually replace the files it is running from.
+  ///
+  /// Asked by writing, not by reading an attribute: on Windows the answer depends
+  /// on the directory's ACL, the process token and any redirection sitting in
+  /// front of it, and the only reliable way to know is to try.
+  static Future<bool> _probeByWriting(Directory dir) async {
+    final probe = File(
+        '${dir.path}${Platform.pathSeparator}.update-write-probe-$pid');
+    try {
+      await probe.writeAsString('', flush: true);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      try {
+        if (await probe.exists()) await probe.delete();
+      } catch (_) {}
+    }
   }
 
   Future<File> _writeScript(String stagedZipPath) async {

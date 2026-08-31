@@ -17,7 +17,12 @@ param(
   # The zip as downloaded from the build. Defaults to the one sitting next to
   # this script, which is how it arrives on a USB stick.
   [string]$Zip = "",
-  [string]$InstallDir = "$env:ProgramFiles\Code Solution\Offline POS",
+  # Under the user's own profile, not Program Files, and that is deliberate. The
+  # till updates itself, the app runs unelevated, and a detached updater inherits
+  # that token: an install under Program Files means every future update dies on
+  # access denied, or prompts for administrator on a machine nobody is watching.
+  # Here the app can replace its own files forever with no prompt.
+  [string]$InstallDir = "$env:LOCALAPPDATA\Programs\Code Solution\Offline POS",
   # The public half of the signing certificate. Only needed while the build is
   # signed with our own certificate rather than a bought one; with a CA
   # certificate this file does not exist and the step is skipped, which is the
@@ -28,14 +33,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-function Require-Admin {
+function Test-Admin {
   $me = New-Object Security.Principal.WindowsPrincipal(
     [Security.Principal.WindowsIdentity]::GetCurrent())
-  if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw "Run this as administrator: right-click the file and pick Run with PowerShell, or open an elevated terminal."
-  }
+  return $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
-Require-Admin
+$isAdmin = Test-Admin
 
 if (-not $Zip) {
   $found = Get-ChildItem -Path $here -Filter "offlinePOS-windows*.zip" |
@@ -58,11 +61,17 @@ Unblock-File -LiteralPath $Zip -ErrorAction SilentlyContinue
 if ($CerPath -and (Test-Path -LiteralPath $CerPath)) {
   # Trusted Root so the chain validates at all, Trusted Publisher so Windows
   # stops asking about a publisher this machine has already accepted. Both are
-  # per machine, which is why a bought certificate is worth it once tills are
-  # installed by anyone other than us.
-  Write-Host "Trusting the signing certificate"
-  Import-Certificate -FilePath $CerPath -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-  Import-Certificate -FilePath $CerPath -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+  # per machine, so this is the one step that needs administrator, and the one
+  # step a bought certificate would remove entirely.
+  if ($isAdmin) {
+    Write-Host "Trusting the signing certificate"
+    Import-Certificate -FilePath $CerPath -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+    Import-Certificate -FilePath $CerPath -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+  } else {
+    Write-Host "Not running as administrator, so the certificate was not trusted." -ForegroundColor Yellow
+    Write-Host "The app still installs and runs; Windows will just call the publisher unknown." -ForegroundColor Yellow
+    Write-Host "To fix it, right-click this file and pick Run with PowerShell." -ForegroundColor Yellow
+  }
 } else {
   Write-Host "No certificate alongside, skipping the trust step" -ForegroundColor Yellow
 }
@@ -84,10 +93,13 @@ New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-Item -Path (Join-Path $stage '*') -Destination $InstallDir -Recurse -Force
 Remove-Item -LiteralPath $stage -Recurse -Force
 
+# Per user, to match where the app is installed. A shortcut for everybody
+# pointing into one user's profile is a shortcut that is broken for everybody
+# else.
 $shell = New-Object -ComObject WScript.Shell
 foreach ($dir in @(
-  [Environment]::GetFolderPath('CommonDesktopDirectory'),
-  (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs')
+  [Environment]::GetFolderPath('Desktop'),
+  (Join-Path $env:AppData 'Microsoft\Windows\Start Menu\Programs')
 )) {
   $lnk = $shell.CreateShortcut((Join-Path $dir 'Offline POS.lnk'))
   $lnk.TargetPath = $exe

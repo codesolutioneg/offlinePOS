@@ -37,6 +37,7 @@ WindowsZipInstaller installerFor(
   String install = r'C:\Program Files\Offline POS',
   String exe = r'C:\Program Files\Offline POS\offline_pos.exe',
   int processId = 4242,
+  bool writable = true,
 }) =>
     WindowsZipInstaller(
       stagingDirectory: staging,
@@ -45,6 +46,9 @@ WindowsZipInstaller installerFor(
       processId: processId,
       launcher: launcher.call,
       requestExit: () async => exits.add('exit'),
+      // The real probe writes a file into the install directory, and these tests
+      // name a Windows path that does not exist where they run.
+      canWrite: (_) async => writable,
     );
 
 File get script =>
@@ -118,6 +122,22 @@ void main() {
         .buildScript(stagedZipPath: r"C:\o'brien\u.zip", scriptPath: 'x.ps1');
     expect(text, contains(r"-Destination 'C:\o''brien'"));
     expect(text, contains(r"-LiteralPath 'C:\o''brien\u.zip'"));
+  });
+
+  test('an install directory this user cannot write is refused up front',
+      () async {
+    // A till under Program Files runs unelevated, so the detached script would
+    // hit access denied on the copy. Discovering that after the app has closed
+    // buys an outage and no update, so it is discovered before.
+    final launcher = FakeLauncher();
+    final exits = <String>[];
+    await expectLater(
+      installerFor(launcher, exits: exits, writable: false)
+          .install('C:\\staged.zip'),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(launcher.calls, isEmpty, reason: 'nothing was handed off');
+    expect(exits, isEmpty, reason: 'and the till stayed up');
   });
 
   test('a bad archive never touches the working install', () async {
@@ -237,6 +257,23 @@ void main() {
           reason: 'the file is verified, so the next pass should reuse it');
 
       // The pass after it gets to try again, which stage installed would refuse.
+      expect((await service.check()).stage, UpdateStage.staged);
+    });
+
+    test('an install directory it cannot write keeps the build staged', () async {
+      // The refusal has to read as "not yet" and not as "done". Marking it
+      // installed would retire a build that never installed, and the till would
+      // sit on the old one with nothing left to try.
+      final storage = MemoryStorage();
+      final service = serviceWith(
+        (path) async => throw const FileSystemException('cannot write'),
+        storage,
+      );
+
+      final status = await service.check();
+      expect(status.stage, UpdateStage.staged);
+      expect(status.error, contains('cannot write'));
+      expect(storage.deleted, isEmpty);
       expect((await service.check()).stage, UpdateStage.staged);
     });
 
