@@ -22,9 +22,19 @@ enum LanAuth { ok, missing, wrongKey, staleClock }
 /// and does not need to be: a repeated pull re-reads, and a repeated notify re-applies
 /// events that are idempotent on their uuid.
 class LanCredential {
-  LanCredential(this.key, {DateTime Function()? now})
-      : _now = now ?? DateTime.now,
-        _mac = crypto.Hmac(crypto.sha256, utf8.encode(key));
+  LanCredential(String key, {DateTime Function()? now})
+      : this.rotating(() => key, now: now);
+
+  /// A credential that asks for the key at the moment of each request rather than
+  /// holding the one it was born with, so a key replaced on the shop network screen
+  /// is the key in force for the next request instead of at the next restart.
+  ///
+  /// Nothing else about the boundary moves: the key is still one shared secret, it
+  /// is still never on the wire, and a device holding the previous one is turned
+  /// away as an outsider, which is exactly what rotating a key is for.
+  LanCredential.rotating(String Function() readKey, {DateTime Function()? now})
+      : _readKey = readKey,
+        _now = now ?? DateTime.now;
 
   /// The header the stamp travels in.
   static const String header = 'x-lan-auth';
@@ -35,9 +45,17 @@ class LanCredential {
   /// looking like a network fault.
   static const Duration clockTolerance = Duration(minutes: 15);
 
-  final String key;
+  final String Function() _readKey;
   final DateTime Function() _now;
-  final crypto.Hmac _mac;
+
+  /// The key [_mac] was built from, so the hash is set up once per key and not once
+  /// per request: a till stamps and checks constantly and rotates a key almost
+  /// never.
+  String? _keyed;
+  crypto.Hmac? _mac;
+
+  /// The key this device is paired on right now.
+  String get key => _readKey();
 
   /// A key for a shop that has none yet: 32 random bytes, url-safe so it survives
   /// being pasted into a settings field or read down a phone.
@@ -87,7 +105,17 @@ class LanCredential {
   }
 
   String _sign(String method, String path, String query, String body, int at) =>
-      _mac.convert(utf8.encode('$method\n$path\n$query\n$at\n$body')).toString();
+      _hmac.convert(utf8.encode('$method\n$path\n$query\n$at\n$body')).toString();
+
+  /// The hash for the key in force, rebuilt only when the key itself changed.
+  crypto.Hmac get _hmac {
+    final current = _readKey();
+    if (_mac == null || current != _keyed) {
+      _keyed = current;
+      _mac = crypto.Hmac(crypto.sha256, utf8.encode(current));
+    }
+    return _mac!;
+  }
 
   /// Compares in constant time. Returning at the first differing character would let
   /// a device that is free to keep guessing learn the expected digest one character

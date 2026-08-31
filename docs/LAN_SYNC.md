@@ -182,6 +182,12 @@ The canonical query is the query parameters sorted by name and joined as
 signature. Because the stamp covers the method, path and body, it cannot be lifted off a
 pull and reused on a notify. Digests are compared in constant time.
 
+The key is read at the moment of each request rather than held from startup, so
+replacing it on the settings screen unpairs every device still on the old one from the
+next request onward. That matters because rotation is what a shop does after the key
+reached someone it should not have, and an unpairing that waits for a reboot is not an
+unpairing.
+
 Auth is the **first** gate: it runs before the body is parsed and before the schema is
 checked, so an unpaired device gets no say in what a till spends its time decoding. A
 refusal is `401` with the reason, and the reason is recorded in the audit trail so a
@@ -246,8 +252,8 @@ join when they are upgraded.
 
 On the device: **Settings, Shop network**. The switch shares open tabs, kitchen tickets
 and the floor plan; below it are the device's name (what the other devices show it as)
-and the shop key. Changes take effect when the device next starts, because the node is
-assembled at startup.
+and the shop key. The shop key is in force as soon as it is saved. The name is read
+when the node is assembled, so it follows at the next start.
 
 The build only supplies the default, so a shop that adds a second till flips a setting
 instead of waiting for a new binary:

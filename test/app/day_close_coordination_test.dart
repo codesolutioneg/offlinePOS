@@ -130,7 +130,7 @@ void main() {
         db: db,
         deviceId: 'till-1',
         deviceName: 'Counter',
-        shopKey: 'the-shop-key',
+        shopKey: () => 'the-shop-key',
         orders: orders,
         tables: TableStore(db),
         settings: settings,

@@ -163,17 +163,17 @@ const Map<String, String> _ar = {
   'New key': 'مفتاح جديد',
   'Replace': 'استبدال',
   'The other devices stop sharing with this one until they are given '
-          'the new key. This device keeps using the old key until it '
-          'restarts, so restart it once the others are set.':
+          'the new key. This device starts using it straight away, so set '
+          'the others now.':
       'ستتوقف الأجهزة الأخرى عن المشاركة مع هذا الجهاز حتى يتم إعطاؤها المفتاح '
-          'الجديد. وسيظل هذا الجهاز يستخدم المفتاح القديم حتى إعادة تشغيله، لذا '
-          'أعد تشغيله بعد ضبط الأجهزة الأخرى.',
+          'الجديد. وسيبدأ هذا الجهاز باستخدامه فورًا، لذا اضبط الأجهزة الأخرى '
+          'الآن.',
   'This table is open on another device. Settle it there.':
       'هذه الطاولة مفتوحة على جهاز آخر. أكمل الحساب هناك.',
   'A shop key is needed before this device can share.':
       'يلزم وجود مفتاح للمتجر قبل أن يتمكن هذا الجهاز من المشاركة.',
-  'Saved. Takes effect when this device restarts.':
-      'تم الحفظ. يسري التغيير عند إعادة تشغيل هذا الجهاز.',
+  'Saved. This device is paired on it now.':
+      'تم الحفظ. هذا الجهاز مُقترن به الآن.',
   'Front till': 'الكاشير الأمامي',
   'Device id': 'معرّف الجهاز',
   'Answering on': 'يستجيب على',

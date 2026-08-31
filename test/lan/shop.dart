@@ -45,11 +45,10 @@ class TestTill {
   TestTill(
     this.deviceId, {
     required this.shop,
-    required String shopKey,
+    required this.shopKey,
     String? name,
     StepClock? clock,
   })  : name = name ?? deviceId,
-        credential = LanCredential(shopKey),
         clock = clock ?? StepClock() {
     db = Db.open(':memory:');
     log = LanEventLog(db, deviceId: deviceId, now: () => this.clock());
@@ -118,9 +117,19 @@ class TestTill {
   final TestShop shop;
   final StepClock clock;
 
+  /// The key this till is paired on. Writable because a manager rotates it on the
+  /// settings screen while the till is up, and a test has to be able to do the same
+  /// without standing the till back up.
+  String shopKey;
+
   /// This till's half of the pairing. Tests reach for it to stamp a request the way
   /// the real client does, or hand a different one to play the guest laptop.
-  final LanCredential credential;
+  ///
+  /// Reads [shopKey] per request the way the shipped wiring reads settings, so what
+  /// these tests prove about pairing is a property of the composition a real till
+  /// runs.
+  late final LanCredential credential =
+      LanCredential.rotating(() => shopKey);
 
   late final Db db;
   late final LanEventLog log;

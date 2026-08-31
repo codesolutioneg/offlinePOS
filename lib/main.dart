@@ -333,7 +333,11 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     lan = LanNode.build(
       db: db,
       deviceId: deviceId,
-      shopKey: settings.lanShopKey!,
+      // Read at the moment of the request, so a manager who rotates the key has
+      // rotated it for the next one instead of at the next restart. Inventing one
+      // again if it is ever cleared keeps the fabric refusing strangers: an empty
+      // key is a key everybody knows.
+      shopKey: () => settings.lanShopKey ??= LanCredential.newKey(),
       // Unnamed until a manager names it on the shop network screen. The id is what
       // the other devices show until then, which is honest: two devices that both
       // call themselves "Till" are worse than two ids.

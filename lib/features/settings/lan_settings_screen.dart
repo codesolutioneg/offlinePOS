@@ -107,7 +107,7 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
     widget.settings.lanShopKey = key;
     widget.onChanged();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(tr(context, 'Saved. Takes effect when this device restarts.'))));
+        content: Text(tr(context, 'Saved. This device is paired on it now.'))));
   }
 
   Future<void> _copyShopKey() async {
@@ -128,8 +128,8 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
         content: Text(tr(
             context,
             'The other devices stop sharing with this one until they are given '
-                'the new key. This device keeps using the old key until it '
-                'restarts, so restart it once the others are set.')),
+                'the new key. This device starts using it straight away, so set '
+                'the others now.')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),

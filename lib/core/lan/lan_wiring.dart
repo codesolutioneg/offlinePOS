@@ -66,10 +66,13 @@ class LanNode {
     required Db db,
     required String deviceId,
     required String deviceName,
-    /// The shop's shared key. Required rather than optional so a fabric can never be
-    /// assembled without one: an unauthenticated till would serve the shop's tabs to
-    /// any device on the subnet.
-    required String shopKey,
+    /// The shop's shared key, read at the moment of the ask like the takeover
+    /// switch below, so a manager who rotates the key has rotated it for the
+    /// request that arrives a second later instead of at the next restart.
+    /// Required rather than optional so a fabric can never be assembled without a
+    /// key: an unauthenticated till would serve the shop's tabs to any device on
+    /// the subnet.
+    required String Function() shopKey,
     required OrderStore orders,
     required TableStore tables,
     required SettingsStore settings,
@@ -107,7 +110,7 @@ class LanNode {
       log: eventLog,
       onRefused: log,
     );
-    final credential = LanCredential(shopKey);
+    final credential = LanCredential.rotating(shopKey);
     final http = client ?? LanHttpClient(credential: credential);
     final claims = LanClaimDesk(
       deviceId: deviceId,

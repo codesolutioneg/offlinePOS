@@ -115,7 +115,7 @@ void main() {
         db: db,
         deviceId: 'till-a',
         deviceName: 'Front',
-        shopKey: 'the-shop-key',
+        shopKey: () => 'the-shop-key',
         orders: OrderStore(db, ownDeviceId: 'till-a'),
         tables: TableStore(db),
         settings: SettingsStore(db),
