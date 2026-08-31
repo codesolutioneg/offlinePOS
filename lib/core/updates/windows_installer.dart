@@ -169,6 +169,17 @@ class WindowsZipInstaller {
 \$ErrorActionPreference = 'Stop'
 \$tillPid = $processId
 
+# Bound once, as single-quoted literals, and used by name below. PowerShell
+# expands neither variables nor subexpressions inside single quotes, so a shop
+# path carrying either is inert text, and the only escape needed is a doubled
+# quote.
+\$zipPath = $zip
+\$targetDir = $target
+\$exePath = $exe
+\$unpackedDir = $unpacked
+\$reportPath = $report
+\$selfPath = $self
+
 # Wait for the till to let go of its own exe and dlls. Unpacking over a live
 # install fails part way through and leaves a mix of two builds behind.
 for (\$i = 0; \$i -lt $_waitSeconds; \$i++) {
@@ -179,7 +190,7 @@ if (Get-Process -Id \$tillPid -ErrorAction SilentlyContinue) {
   # Still running, so the files are still locked. Leaving the install untouched
   # means the till keeps the build it has and the next pass tries again.
   'still running after $_waitSeconds seconds, install not attempted' |
-    Set-Content -LiteralPath $report
+    Set-Content -LiteralPath \$reportPath
   exit 1
 }
 
@@ -190,30 +201,39 @@ try {
   # Unpacked beside the zip first, never straight over the install. A truncated
   # or unreadable archive then fails with the working build untouched, instead
   # of half replacing it and leaving a mix of two.
-  if (Test-Path -LiteralPath $unpacked) {
-    Remove-Item -LiteralPath $unpacked -Recurse -Force
+  if (Test-Path -LiteralPath \$unpackedDir) {
+    Remove-Item -LiteralPath \$unpackedDir -Recurse -Force
   }
-  Expand-Archive -LiteralPath $zip -DestinationPath $unpacked -Force
+  Expand-Archive -LiteralPath \$zipPath -DestinationPath \$unpackedDir -Force
 
-  # Only once the whole archive is on disk does the install get touched.
-  Copy-Item -Path (Join-Path $unpacked '*') -Destination $target -Recurse -Force
+  # Only once the whole archive is on disk does the install get touched, and it
+  # is mirrored rather than copied over. A copy leaves whatever the new build no
+  # longer ships: a dropped plugin's dll sitting next to the exe, assets orphaned
+  # under flutter_assets once the manifest naming them has been replaced. That is
+  # the mix of two builds this whole dance exists to avoid, arriving by the other
+  # door.
+  robocopy \$unpackedDir \$targetDir /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+  # Robocopy does not report success as zero. Anything below 8 is copied, extra
+  # files removed, or nothing to do; 8 and above is a real failure.
+  if (\$LASTEXITCODE -ge 8) { throw "robocopy failed with \$LASTEXITCODE" }
+  \$global:LASTEXITCODE = 0
 
-  'installed' | Set-Content -LiteralPath $report
+  'installed' | Set-Content -LiteralPath \$reportPath
 } catch {
   # Recorded for the next launch to find. The exit code cannot say anything: this
   # is detached, so nobody is waiting for it.
-  "failed: \$(\$_.Exception.Message)" | Set-Content -LiteralPath $report
+  "failed: \$(\$_.Exception.Message)" | Set-Content -LiteralPath \$reportPath
 } finally {
-  # Unconditional on purpose. Whether the copy finished, failed, or failed half
+  # Unconditional on purpose. Whether the mirror finished, failed, or failed half
   # way, the till comes back up: worst case on a mixed directory, where the app's
   # own startup guard reports what it found.
-  Start-Process -FilePath $exe -WorkingDirectory $target
-  Remove-Item -LiteralPath $unpacked -Recurse -Force -ErrorAction SilentlyContinue
+  Start-Process -FilePath \$exePath -WorkingDirectory \$targetDir
+  Remove-Item -LiteralPath \$unpackedDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # Best effort: the shell may still hold this file open, and a leftover copy is
 # overwritten by the next install anyway.
-Remove-Item -LiteralPath $self -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath \$selfPath -Force -ErrorAction SilentlyContinue
 ''';
   }
 

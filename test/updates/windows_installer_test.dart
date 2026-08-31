@@ -102,12 +102,12 @@ void main() {
     await installerFor(launcher, exits: []).install(zip);
 
     final text = script.readAsStringSync();
-    expect(text, contains("-LiteralPath '$zip'"));
-    expect(text, contains("-Destination 'C:\\Program Files\\Offline POS'"));
+    expect(text, contains("\$zipPath = '$zip'"));
+    expect(text, contains("\$targetDir = 'C:\\Program Files\\Offline POS'"));
     expect(
         text,
         contains(
-            "-FilePath 'C:\\Program Files\\Offline POS\\offline_pos.exe'"));
+            "\$exePath = 'C:\\Program Files\\Offline POS\\offline_pos.exe'"));
     // Nothing an install path could carry may end up as a bare word the shell
     // parses, and a single-quoted PowerShell literal expands nothing inside it.
     for (final line in text.split('\n')) {
@@ -120,8 +120,8 @@ void main() {
   test('a path containing a quote cannot break out of its literal', () async {
     final text = installerFor(FakeLauncher(), exits: [], install: r"C:\o'brien")
         .buildScript(stagedZipPath: r"C:\o'brien\u.zip", scriptPath: 'x.ps1');
-    expect(text, contains(r"-Destination 'C:\o''brien'"));
-    expect(text, contains(r"-LiteralPath 'C:\o''brien\u.zip'"));
+    expect(text, contains(r"$targetDir = 'C:\o''brien'"));
+    expect(text, contains(r"$zipPath = 'C:\o''brien\u.zip'"));
   });
 
   test('an install directory this user cannot write is refused up front',
@@ -146,12 +146,31 @@ void main() {
     final text = installerFor(FakeLauncher(), exits: [])
         .buildScript(stagedZipPath: r'C:\u.zip', scriptPath: r'C:\s.ps1');
 
+    expect(text, contains(WindowsZipInstaller.unpackedDirName),
+        reason: 'somewhere beside the zip is where it lands');
     final expand = RegExp(r'Expand-Archive[^\n]*').stringMatch(text)!;
-    expect(expand, contains(WindowsZipInstaller.unpackedDirName));
-    expect(expand, isNot(contains('Program Files')),
+    expect(expand, contains(r'$unpackedDir'));
+    expect(expand, isNot(contains(r'$targetDir')),
         reason: 'the archive is opened beside the zip, not over the install');
     // The install is only written once the whole archive is on disk.
-    expect(text.indexOf('Expand-Archive'), lessThan(text.indexOf('Copy-Item')));
+    expect(text.indexOf('Expand-Archive'), lessThan(text.indexOf('robocopy')));
+  });
+
+  test('the install is mirrored, so a dropped file does not survive', () async {
+    // A plain copy is an overlay: a dll the new build stopped shipping stays
+    // next to the exe, and assets orphaned under flutter_assets outlive the
+    // manifest that named them. That is the mix of two builds this is all
+    // supposed to prevent, arriving through the other door.
+    final text = installerFor(FakeLauncher(), exits: [])
+        .buildScript(stagedZipPath: r'C:\u.zip', scriptPath: r'C:\s.ps1');
+
+    final mirror = RegExp(r'robocopy[^\n]*').stringMatch(text)!;
+    expect(mirror, contains('/MIR'));
+    expect(mirror, contains(r'$unpackedDir'));
+    expect(mirror, contains(r'$targetDir'));
+    // Robocopy calls success anything below 8, so a plain non-zero check would
+    // treat a normal copy as a failure.
+    expect(text, contains(r'if ($LASTEXITCODE -ge 8)'));
   });
 
   test('the till is brought back up even when the install failed', () async {
@@ -171,9 +190,9 @@ void main() {
     expect(relaunch, greaterThan(finallyAt),
         reason: 'the relaunch is unconditional, not the last step of the happy path');
 
-    // And the copy is inside the guarded block, so a throw reaches the finally.
-    expect(text.indexOf('try {'), lessThan(text.indexOf('Copy-Item')));
-    expect(text.indexOf('Copy-Item'), lessThan(finallyAt));
+    // And the mirror is inside the guarded block, so a throw reaches the finally.
+    expect(text.indexOf('try {'), lessThan(text.indexOf('robocopy')));
+    expect(text.indexOf('robocopy'), lessThan(finallyAt));
   });
 
   test('the outcome is left where the next launch can read it', () async {
