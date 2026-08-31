@@ -1263,59 +1263,146 @@ class _PosAppState extends State<PosApp> {
 
   /// The app shell's navigation, carried by the floor home and by the counter
   /// alike; everything a cashier or manager reaches occasionally lives here so
-  /// neither screen is buried under buttons.
+  /// neither screen is buried under buttons. Grouped by how often a cashier needs
+  /// it: service first, then the money and staff admin, then the device itself.
   Widget _buildDrawer(BuildContext rootContext, PosSession session) {
     final isManager = widget.auth.signedIn?.isManager ?? false;
+    final scheme = Theme.of(rootContext).colorScheme;
+
+    Widget tile({
+      required Key key,
+      required IconData icon,
+      required String label,
+      Widget? trailing,
+      required VoidCallback onTap,
+    }) =>
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+          child: ListTile(
+            key: key,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            leading: Icon(icon, color: scheme.onSurfaceVariant),
+            title: Text(label,
+                style:
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            trailing: trailing,
+            onTap: onTap,
+          ),
+        );
+
+    Widget section(String label) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+          child: Text(label.toUpperCase(),
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.1,
+                  color: scheme.onSurfaceVariant)),
+        );
+
     return Drawer(
       child: SafeArea(
         child: ListView(children: [
-          const DrawerHeader(
-            child: Center(
-              child: Text('offlinePOS',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          // Who holds the till right now, over the shop's colour: the first thing
+          // a manager glancing at an unattended screen wants to know.
+          Container(
+            margin: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  scheme.primary,
+                  scheme.primary.withValues(alpha: 0.75),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(16),
             ),
+            child: Row(children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: scheme.onPrimary.withValues(alpha: 0.2),
+                child: Text(
+                  _initialsOf(widget.auth.signedIn?.name ?? session.cashierId),
+                  style: TextStyle(
+                      color: scheme.onPrimary,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(widget.auth.signedIn?.name ?? session.cashierId,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: scheme.onPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700)),
+                    Text(
+                        isManager
+                            ? tr(rootContext, 'Manager')
+                            : tr(rootContext, 'Cashier'),
+                        style: TextStyle(
+                            color: scheme.onPrimary.withValues(alpha: 0.85),
+                            fontSize: 12)),
+                  ],
+                ),
+              ),
+              Icon(Icons.storefront,
+                  color: scheme.onPrimary.withValues(alpha: 0.6)),
+            ]),
           ),
-          ListTile(
+          section(tr(rootContext, 'Service')),
+          tile(
             key: const Key('nav-tables'),
-            leading: const Icon(Icons.table_bar),
-            title: Text(tr(rootContext, 'Tables')),
+            icon: Icons.table_bar,
+            label: tr(rootContext, 'Tables'),
             onTap: () {
               Navigator.pop(rootContext);
               _toFloor();
             },
           ),
-          ListTile(
+          tile(
             key: const Key('nav-open-orders'),
-            leading: const Icon(Icons.table_restaurant),
-            title: Text(tr(rootContext, 'Open orders')),
-            trailing: session.heldCount > 0 ? Chip(label: Text('${session.heldCount}')) : null,
+            icon: Icons.table_restaurant,
+            label: tr(rootContext, 'Open orders'),
+            trailing: session.heldCount > 0
+                ? Chip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text('${session.heldCount}'))
+                : null,
             onTap: () {
               Navigator.pop(rootContext);
               _openOrders(rootContext, session);
             },
           ),
-          ListTile(
+          tile(
             key: const Key('nav-history'),
-            leading: const Icon(Icons.receipt_long),
-            title: Text(tr(rootContext, 'Order history')),
+            icon: Icons.receipt_long,
+            label: tr(rootContext, 'Order history'),
             onTap: () {
               Navigator.pop(rootContext);
               _openHistory(rootContext);
             },
           ),
-          ListTile(
+          tile(
             key: const Key('nav-kitchen'),
-            leading: const Icon(Icons.soup_kitchen),
-            title: Text(tr(rootContext, 'Kitchen display')),
+            icon: Icons.soup_kitchen,
+            label: tr(rootContext, 'Kitchen display'),
             onTap: () {
               Navigator.pop(rootContext);
               _openKitchen(rootContext);
             },
           ),
-          ListTile(
+          section(tr(rootContext, 'Money & staff')),
+          tile(
             key: const Key('nav-report'),
-            leading: const Icon(Icons.bar_chart),
-            title: Text(tr(rootContext, 'Reports')),
+            icon: Icons.bar_chart,
+            label: tr(rootContext, 'Reports'),
             onTap: () async {
               Navigator.pop(rootContext);
               if (await _authorize(Permission.viewReports, rootContext)) {
@@ -1323,49 +1410,48 @@ class _PosAppState extends State<PosApp> {
               }
             },
           ),
-          ListTile(
+          tile(
             key: const Key('nav-shift'),
-            leading: const Icon(Icons.point_of_sale),
-            title: Text(tr(rootContext, 'Shift / cash-up')),
+            icon: Icons.point_of_sale,
+            label: tr(rootContext, 'Shift / cash-up'),
             onTap: () {
               Navigator.pop(rootContext);
               _openShift(rootContext, session);
             },
           ),
-          ListTile(
+          tile(
             key: const Key('nav-attendance'),
-            leading: const Icon(Icons.how_to_reg_outlined),
-            title: Text(tr(rootContext, 'Attendance')),
+            icon: Icons.how_to_reg_outlined,
+            label: tr(rootContext, 'Attendance'),
             onTap: () {
               Navigator.pop(rootContext);
               _openAttendance(rootContext);
             },
           ),
-          ListTile(
+          tile(
             key: const Key('nav-nosale'),
-            leading: const Icon(Icons.money_off),
-            title: Text(tr(rootContext, 'No sale (open drawer)')),
+            icon: Icons.money_off,
+            label: tr(rootContext, 'No sale (open drawer)'),
             onTap: () {
               Navigator.pop(rootContext);
               unawaited(_openDrawerNoSale(rootContext));
             },
           ),
-          const Divider(),
           if (isManager)
-            ListTile(
+            tile(
               key: const Key('nav-staff'),
-              leading: const Icon(Icons.badge_outlined),
-              title: Text(tr(rootContext, 'Staff')),
+              icon: Icons.badge_outlined,
+              label: tr(rootContext, 'Staff'),
               onTap: () {
                 Navigator.pop(rootContext);
                 _openRoster(rootContext);
               },
             ),
           if (isManager)
-            ListTile(
+            tile(
               key: const Key('nav-audit'),
-              leading: const Icon(Icons.fact_check_outlined),
-              title: Text(tr(rootContext, 'Audit log')),
+              icon: Icons.fact_check_outlined,
+              label: tr(rootContext, 'Audit log'),
               onTap: () {
                 Navigator.pop(rootContext);
                 Navigator.of(rootContext).push(MaterialPageRoute<void>(
@@ -1373,27 +1459,38 @@ class _PosAppState extends State<PosApp> {
                 ));
               },
             ),
-          ListTile(
+          section(tr(rootContext, 'This till')),
+          tile(
             key: const Key('nav-settings'),
-            leading: const Icon(Icons.settings),
-            title: Text(tr(rootContext, 'Settings')),
+            icon: Icons.settings,
+            label: tr(rootContext, 'Settings'),
             onTap: () {
               Navigator.pop(rootContext);
               _openSettingsHub(rootContext);
             },
           ),
-          ListTile(
+          tile(
             key: const Key('nav-support'),
-            leading: const Icon(Icons.support_agent),
-            title: Text(tr(rootContext, 'Support & printers')),
+            icon: Icons.support_agent,
+            label: tr(rootContext, 'Support & printers'),
             onTap: () {
               Navigator.pop(rootContext);
               _openDiagnostics(rootContext);
             },
           ),
+          const SizedBox(height: 12),
         ]),
       ),
     );
+  }
+
+  /// Up to two initials from a display name, for the drawer's profile avatar.
+  static String _initialsOf(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return '?';
+    final first = parts.first.characters.first.toUpperCase();
+    if (parts.length == 1) return first;
+    return first + parts.last.characters.first.toUpperCase();
   }
 
   /// A required free-text reason, for discarding a tab the kitchen has started.

@@ -60,8 +60,8 @@ void main() {
 
   testWidgets('the keypad is inert until a cashier is picked', (t) async {
     await t.pumpWidget(app());
-    final key = t.widget<OutlinedButton>(find.byKey(const Key('key-1')));
-    expect(key.onPressed, isNull);
+    final key = t.widget<InkWell>(find.byKey(const Key('key-1')));
+    expect(key.onTap, isNull);
   });
 
   testWidgets('the right PIN signs in with no network', (t) async {

@@ -222,7 +222,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
     final sum = widget.store.summary(s, cashMethodIds: widget.cashMethodIds);
     return ListView(children: [
       Text('${tr(context, 'Open since')} ${_stamp(s.openedAt)}',
-          style: const TextStyle(color: Colors.black54)),
+          style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
       const Divider(),
       _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),
       _row('${tr(context, 'Sales')} (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),

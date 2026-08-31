@@ -75,23 +75,28 @@ class _Key extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAction = label == '⌫' || label == 'C';
+    final scheme = Theme.of(context).colorScheme;
     return SizedBox(
-      height: 60,
+      height: 64,
       child: Material(
-        color: isAction ? AppColors.error.withValues(alpha: 0.10) : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(12),
+        // Theme surfaces rather than fixed greys, so the pad reads correctly in
+        // the dark theme too.
+        color: isAction
+            ? AppColors.error.withValues(alpha: 0.10)
+            : scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(14),
         child: InkWell(
           key: Key('key-$label'),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           onTap: onTap,
           child: Center(
             child: label == '⌫'
                 ? const Icon(Icons.backspace_outlined, color: AppColors.error)
                 : Text(label,
                     style: TextStyle(
-                        fontSize: 24,
+                        fontSize: 26,
                         fontWeight: FontWeight.w600,
-                        color: isAction ? AppColors.error : null)),
+                        color: isAction ? AppColors.error : scheme.onSurface)),
           ),
         ),
       ),
@@ -128,21 +133,26 @@ Future<double?> promptNumber(
           content: SizedBox(
             width: 320,
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: Text(
-                  text.isEmpty ? '0' : text,
-                  key: const Key('keypad-display'),
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
-                ),
-              ),
+              Builder(builder: (ctx) {
+                final scheme = Theme.of(ctx).colorScheme;
+                return Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Text(
+                    text.isEmpty ? '0' : text,
+                    key: const Key('keypad-display'),
+                    textAlign: TextAlign.right,
+                    style:
+                        const TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
+                  ),
+                );
+              }),
               const SizedBox(height: 12),
               NumericKeypad(
                 decimal: decimal,

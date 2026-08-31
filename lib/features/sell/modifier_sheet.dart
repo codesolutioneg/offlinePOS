@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/pos_session.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/theme/app_colors.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';
 
@@ -139,7 +140,12 @@ class _ModifierSheetState extends State<ModifierSheet> {
           children: [
             ListTile(
               title: Text(widget.product.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+                  style:
+                      const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+              subtitle: Text(widget.formatAmount(widget.product.price),
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.primary)),
               trailing: IconButton(
                 icon: const Icon(Icons.close),
                 onPressed: () => Navigator.of(context).pop(),
@@ -154,15 +160,22 @@ class _ModifierSheetState extends State<ModifierSheet> {
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                       child: Row(children: [
-                        Text(g.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                        if (g.required)
-                          const Text(' *', style: TextStyle(color: Colors.red)),
+                        Text(g.name,
+                            style: const TextStyle(fontWeight: FontWeight.bold)),
+                        if (g.required) ...[
+                          const SizedBox(width: 6),
+                          StatusChip(tr(context, 'Required'), AppColors.warning),
+                        ],
                         const Spacer(),
                         Text(
                           g.maxSelection > 0
                               ? '${_countIn(g)}/${g.maxSelection}'
                               : '${_countIn(g)}',
-                          style: const TextStyle(color: Colors.black54),
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant),
                         ),
                       ]),
                     ),
@@ -210,15 +223,22 @@ class _ModifierSheetState extends State<ModifierSheet> {
                   Expanded(
                     child: Text(_problem!,
                         key: const Key('validation'),
-                        style: const TextStyle(color: Colors.orange)),
+                        style: const TextStyle(
+                            color: AppColors.warning,
+                            fontWeight: FontWeight.w600)),
                   )
                 else
                   const Spacer(),
                 const SizedBox(width: 8),
-                FilledButton(
-                  key: const Key('confirm-modifiers'),
-                  onPressed: _valid ? _confirm : null,
-                  child: Text(widget.confirmLabel ?? tr(context, 'Add to order')),
+                SizedBox(
+                  height: 52,
+                  child: FilledButton.icon(
+                    key: const Key('confirm-modifiers'),
+                    onPressed: _valid ? _confirm : null,
+                    icon: const Icon(Icons.check),
+                    label:
+                        Text(widget.confirmLabel ?? tr(context, 'Add to order')),
+                  ),
                 ),
               ]),
             ),

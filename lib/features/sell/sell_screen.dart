@@ -700,7 +700,9 @@ class _SellScreenState extends State<SellScreen> {
               padding: const EdgeInsets.only(top: 4),
               child: Text(
                   '${tr(ctx, 'Max')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%',
-                  style: const TextStyle(color: Colors.black54, fontSize: 12)),
+                  style: TextStyle(
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      fontSize: 12)),
             ),
           const SizedBox(height: 8),
           // A discount without a reason is what a manager cannot audit later, so the
@@ -1087,7 +1089,9 @@ class _SellScreenState extends State<SellScreen> {
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text('${tr(ctx, 'Max')} ${widget.maxDiscountPercent.toStringAsFixed(0)}%',
-                  style: const TextStyle(color: Colors.black54, fontSize: 12)),
+                  style: TextStyle(
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      fontSize: 12)),
             ),
         ]),
         actions: [
@@ -2331,7 +2335,15 @@ class _SellScreenState extends State<SellScreen> {
                   ? _noShiftGate()
                   : Row(
                       children: [
-                        SizedBox(width: 360, child: _orderPanel()),
+                        // The bill on its own raised surface, so the two halves of
+                        // the screen read as "the order" and "the menu" at a glance.
+                        SizedBox(
+                          width: 360,
+                          child: Material(
+                            color: Theme.of(context).colorScheme.surface,
+                            child: _orderPanel(),
+                          ),
+                        ),
                         const VerticalDivider(width: 1),
                         Expanded(child: _catalogue(products)),
                       ],
@@ -2405,7 +2417,9 @@ class _SellScreenState extends State<SellScreen> {
     Widget badge(bool isOnline) {
       final pending = widget.pendingToSync?.call() ?? 0;
       final held = widget.spooledJobs?.call() ?? 0;
-      final color = isOnline ? Colors.green : Colors.grey;
+      final color = isOnline
+          ? AppColors.success
+          : Theme.of(context).colorScheme.onSurfaceVariant;
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Row(
@@ -2675,7 +2689,10 @@ class _SellScreenState extends State<SellScreen> {
   /// Where the sale is served. Changing it reshapes what the context bar asks for
   /// (a table for dine-in, an address and charge for delivery).
   Widget _orderTypeStrip() => Material(
-        color: Colors.grey.shade100,
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withValues(alpha: 0.4),
         child: SizedBox(
           height: 48,
           // Scrolls rather than overflows: the chips do not all fit a narrow till
@@ -2847,11 +2864,16 @@ class _SellScreenState extends State<SellScreen> {
               _totalRow('VAT', widget.formatAmount(s.current.taxTotal),
                   key: const Key('tax-line'), muted: true),
             Row(children: [
-              Text(tr(context, 'TOTAL'), style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text(tr(context, 'TOTAL'),
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w800, letterSpacing: 0.5)),
               const Spacer(),
               Text(widget.formatAmount(s.total),
                   key: const Key('total'),
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                  style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: Theme.of(context).colorScheme.primary)),
             ]),
             // On an even/part-paid open tab, show what has been taken and what is
             // still owed, so the running balance is visible while the table is open.
@@ -2880,7 +2902,9 @@ class _SellScreenState extends State<SellScreen> {
   Widget _totalRow(String label, String amount,
       {Key? key, bool muted = false, bool green = false}) {
     final style = TextStyle(
-        color: green ? Colors.green.shade700 : (muted ? Colors.black54 : null));
+        color: green
+            ? AppColors.success
+            : (muted ? Theme.of(context).colorScheme.onSurfaceVariant : null));
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(children: [
@@ -2998,9 +3022,12 @@ class _StaleBanner extends StatelessWidget {
         color: Colors.amber.shade200,
         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
         // Say it plainly rather than let a cashier sell from month-old prices
-        // believing they are current.
+        // believing they are current. The ink is pinned dark because the amber
+        // band stays light in both themes.
         child: Text('Prices last updated ${age.inDays} day(s) ago',
-            textAlign: TextAlign.center),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                color: Colors.black87, fontWeight: FontWeight.w600)),
       );
 }
 
@@ -3632,7 +3659,9 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               '${tr(context, 'Bill')} ${widget.format(bill)}  ·  '
               '${tr(context, 'Paid')} ${widget.format(widget.alreadyPaid)}',
               key: const Key('running-balance'),
-              style: const TextStyle(fontSize: 13, color: Colors.black54),
+              style: TextStyle(
+                  fontSize: 13,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
             ),
           ],
         ],
@@ -3647,7 +3676,10 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(tr(context, 'How is this being paid?'),
-            style: const TextStyle(fontSize: 13, color: Colors.black54)),
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.onSurfaceVariant)),
         const SizedBox(height: 8),
         Row(children: [
           for (final mode in widget.modes) ...[
@@ -3669,6 +3701,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       _PayMode.guest => (Icons.groups_2_outlined, tr(context, 'By guest')),
       _PayMode.item => (Icons.checklist, tr(context, 'By item')),
     };
+    final scheme = Theme.of(context).colorScheme;
     return InkWell(
       key: Key('pay-mode-${mode.name}'),
       borderRadius: BorderRadius.circular(12),
@@ -3678,17 +3711,19 @@ class _PaymentSheetState extends State<_PaymentSheet> {
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.primary.withValues(alpha: 0.16)
-              : Colors.black.withValues(alpha: 0.04),
+              ? scheme.primary.withValues(alpha: 0.14)
+              : scheme.surfaceContainerHighest.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-              color: selected ? AppColors.primary : Colors.black.withValues(alpha: 0.12),
+              color: selected ? scheme.primary : scheme.outlineVariant,
               width: selected ? 2 : 1),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 22, color: selected ? AppColors.primary : Colors.black87),
+            Icon(icon,
+                size: 22,
+                color: selected ? scheme.primary : scheme.onSurfaceVariant),
             const SizedBox(height: 4),
             Text(label,
                 textAlign: TextAlign.center,
@@ -3709,6 +3744,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   /// are told apart at a glance on a busy screen.
   Widget _methodButton(BuildContext context, PaymentMethod m) {
     final selected = _method?.id == m.id;
+    final scheme = Theme.of(context).colorScheme;
     return SizedBox(
       width: 132,
       child: InkWell(
@@ -3720,19 +3756,19 @@ class _PaymentSheetState extends State<_PaymentSheet> {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           decoration: BoxDecoration(
             color: selected
-                ? AppColors.primary.withValues(alpha: 0.16)
-                : Colors.black.withValues(alpha: 0.04),
+                ? scheme.primary.withValues(alpha: 0.14)
+                : scheme.surfaceContainerHighest.withValues(alpha: 0.5),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-                color:
-                    selected ? AppColors.primary : Colors.black.withValues(alpha: 0.12),
+                color: selected ? scheme.primary : scheme.outlineVariant,
                 width: selected ? 2 : 1),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(_methodIcon(m),
-                  size: 24, color: selected ? AppColors.primary : Colors.black87),
+                  size: 24,
+                  color: selected ? scheme.primary : scheme.onSurfaceVariant),
               const SizedBox(height: 4),
               Text(m.name,
                   textAlign: TextAlign.center,
@@ -3768,21 +3804,21 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       key: const Key('change'),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.green.shade50,
+        color: AppColors.success.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.green.shade400),
+        border: Border.all(color: AppColors.success.withValues(alpha: 0.6)),
       ),
       child: Row(children: [
-        Icon(Icons.savings_outlined, color: Colors.green.shade800),
+        const Icon(Icons.savings_outlined, color: AppColors.success),
         const SizedBox(width: 10),
         Expanded(
             child: Text(tr(context, 'Change to give back'),
                 style: const TextStyle(fontWeight: FontWeight.w600))),
         Text(widget.format(_change),
-            style: TextStyle(
-                fontSize: 22,
+            style: const TextStyle(
+                fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: Colors.green.shade800)),
+                color: AppColors.success)),
       ]),
     );
   }
@@ -3940,17 +3976,26 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                     onChanged: (_) => setState(() => _receivedEdited = true),
                   ),
                   const SizedBox(height: 10),
+                  // The notes a customer actually hands over, as targets big
+                  // enough to hit mid-rush without looking twice.
                   Wrap(
                     spacing: 10,
                     runSpacing: 10,
                     children: [
                       for (final a in _quickAmounts())
-                        ActionChip(
-                          labelPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                          labelStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                          label: Text(widget.format(a)),
-                          onPressed: () =>
-                              setState(() => _received.text = a.toStringAsFixed(2)),
+                        SizedBox(
+                          height: 52,
+                          child: FilledButton.tonal(
+                            style: FilledButton.styleFrom(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 18),
+                              textStyle: const TextStyle(
+                                  fontSize: 17, fontWeight: FontWeight.w700),
+                            ),
+                            onPressed: () => setState(
+                                () => _received.text = a.toStringAsFixed(2)),
+                            child: Text(widget.format(a)),
+                          ),
                         ),
                     ],
                   ),

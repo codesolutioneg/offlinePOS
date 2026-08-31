@@ -1102,7 +1102,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   /// kind of order: a to-go that sits down while it is packed occupies the floor
   /// exactly like a dine-in, and the only thing that says which it is is this.
   Widget _seatTypeStrip() => Material(
-        color: Colors.grey.shade100,
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withValues(alpha: 0.4),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
           child: Row(children: [
@@ -1318,7 +1321,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final selected = _activeSection == s;
     final inSection = widget.store.inSection(s).where((t) => !t.isDivider);
     final busy = inSection.where((t) => widget.occupiedLabels.contains(t.name)).length;
-    final color = selected ? AppColors.primary : Colors.black26;
+    final color = selected
+        ? AppColors.primary
+        : Theme.of(context).colorScheme.outlineVariant;
     return InkWell(
       // The same key the top strip uses, so a shop that moves the sections back to
       // the top does not change how the floor is driven.
@@ -1348,7 +1353,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           ),
           const SizedBox(height: 2),
           Text('$busy/${inSection.length}',
-              style: const TextStyle(fontSize: 11, color: Colors.black54)),
+              style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
         ]),
       ),
     );
@@ -1523,7 +1530,8 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.table_restaurant, size: 48, color: Colors.black26),
+            Icon(Icons.table_restaurant,
+                size: 48, color: Theme.of(context).colorScheme.outlineVariant),
             const SizedBox(height: 8),
             Text(tr(context, 'No tables yet')),
             const SizedBox(height: 8),
@@ -1531,7 +1539,8 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             // Other action instead so the chooser never traps the user in edit mode.
             if (widget.pickMode)
               Text(tr(context, 'Use Other to name a table.'),
-                  style: const TextStyle(color: Colors.black54))
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant))
             else if (!_editing)
               FilledButton.icon(
                 key: const Key('empty-edit'),
@@ -1654,7 +1663,9 @@ class _TableTile extends StatelessWidget {
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
               if (occupied && ageMinutes != null)
                 Text('${ageMinutes}m',
-                    style: const TextStyle(fontSize: 11, color: Colors.black54))
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant))
               else
                 Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
                     style: TextStyle(fontSize: 11, color: color)),
@@ -1664,14 +1675,18 @@ class _TableTile extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 2),
                   child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                     Icon(locked ? Icons.lock_outline : Icons.person, size: 12,
-                        color: mine ? AppColors.primary : Colors.black54),
+                        color: mine
+                            ? AppColors.primary
+                            : Theme.of(context).colorScheme.onSurfaceVariant),
                     const SizedBox(width: 2),
                     Text(
                       who,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11,
-                        color: mine ? AppColors.primary : Colors.black54,
+                        color: mine
+                            ? AppColors.primary
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
                         fontWeight: mine ? FontWeight.bold : FontWeight.normal,
                       ),
                     ),
