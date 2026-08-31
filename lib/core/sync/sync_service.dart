@@ -39,6 +39,8 @@ abstract interface class RetryArmingStore {
   String? readStopped();
 
   void writeStopped(String reason);
+
+  void clearStopped();
 }
 
 /// What one catalogue refresh actually did, so a manual "Refresh menu" can say
@@ -411,7 +413,15 @@ class SyncService {
   /// refresh already re-reads the catalogue on its own.
   void _armRetryIfIncomplete(String? failure) {
     if (pendingSales == 0) {
-      if (_retryArmedAt != null) _disarmRetry('nothing left to send');
+      if (_retryArmedAt != null) {
+        _disarmRetry('nothing left to send');
+      } else {
+        // Nothing was armed, but a give-up recorded on an earlier run can still
+        // be on the books, and this push just proved it is out of date. A till
+        // that has caught up must stop reporting that it gave up.
+        _retryStoppedReason = null;
+        _arming?.clearStopped();
+      }
       return;
     }
     final reason = failure ?? '$pendingSales sale(s) still queued after the push';
@@ -430,15 +440,22 @@ class SyncService {
     _arming?.write(_retryArmedAt!, reason);
   }
 
-  void _disarmRetry(String why) {
+  /// [remember] carries the reason across a restart, and only a give-up earns
+  /// that. A delivery is the end of the story: leaving "gave up with 40 sales
+  /// queued" on a till that has since caught up sends support after a problem
+  /// that is not there any more.
+  void _disarmRetry(String why, {bool remember = false}) {
     _retryArmedAt = null;
     _retryStoppedReason = why;
     // Cleared on the way down as well as on delivery. A window that closed is
     // finished with, and leaving the record would re-arm it on the next boot and
-    // start the same dead push again every morning. The reason outlives the
-    // arming, so a till that gave up is still able to say so.
+    // start the same dead push again every morning.
     _arming?.clear();
-    _arming?.writeStopped(why);
+    if (remember) {
+      _arming?.writeStopped(why);
+    } else {
+      _arming?.clearStopped();
+    }
   }
 
   /// Pick up a batch push that was still owed when the process last stopped.
@@ -468,8 +485,10 @@ class SyncService {
       // says it, instead of silently starting a fresh twelve hours. Written down
       // as well as remembered: the boot after this one has no arming left to
       // find, and a till with a day's takings queued must not go quiet.
-      _disarmRetry('gave up with $pendingSales sale(s) still queued when the '
-          'retry window closed');
+      _disarmRetry(
+          'gave up with $pendingSales sale(s) still queued when the '
+          'retry window closed',
+          remember: true);
       return;
     }
     _retryArmedAt = saved.armedAt;
@@ -501,8 +520,10 @@ class SyncService {
     if (now.difference(armedAt) >= retryWindow) {
       // Recorded rather than dropped, so diagnostics can say it gave up instead of
       // showing a till that looks like it is still trying.
-      _disarmRetry('gave up with $pendingSales sale(s) still queued when the '
-          'retry window closed');
+      _disarmRetry(
+          'gave up with $pendingSales sale(s) still queued when the '
+          'retry window closed',
+          remember: true);
       return;
     }
     final last = _lastRetryAt;

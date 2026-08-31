@@ -47,4 +47,7 @@ class SettingsRetryArming implements RetryArmingStore {
 
   @override
   void writeStopped(String reason) => _settings.setString(_stoppedKey, reason);
+
+  @override
+  void clearStopped() => _settings.setString(_stoppedKey, null);
 }

@@ -60,6 +60,9 @@ class FakeArming implements RetryArmingStore {
 
   @override
   void writeStopped(String why) => stopped = why;
+
+  @override
+  void clearStopped() => stopped = null;
 }
 
 void main() {
@@ -418,6 +421,42 @@ void main() {
     later.restoreArming();
     expect(later.retryStoppedReason, contains('gave up'));
     expect(store.pendingSalesCount, 1, reason: 'still owed, and still saying so');
+  });
+
+  test('a till that caught up stops saying it gave up', () async {
+    // A stale give-up outlives the batch it describes otherwise, and diagnostics
+    // keeps showing it over a till that is perfectly well, which sends support
+    // after a problem that is not there.
+    final saved = FakeArming();
+    var clock = DateTime.utc(2026, 1, 1, 23);
+    final till = await armedTill(
+      arming: saved,
+      now: () => clock,
+      probe: () async => true,
+      retryWindow: const Duration(hours: 12),
+    );
+
+    clock = DateTime.utc(2026, 1, 4, 9);
+    final after = serviceWith(
+      outbox: till.outbox,
+      arming: saved,
+      now: () => clock,
+      probe: () async => true,
+      retryWindow: const Duration(hours: 12),
+    );
+    after.restoreArming();
+    expect(after.retryStoppedReason, contains('gave up'));
+    expect(saved.stopped, isNotNull, reason: 'remembered while it is true');
+
+    // The server comes back and a manual sync clears the backlog.
+    till.server.down = false;
+    await after.flush();
+    expect(store.pendingSalesCount, 0);
+    expect(saved.stopped, isNull, reason: 'and forgotten the moment it is not');
+
+    final tomorrow = serviceWith(outbox: till.outbox, arming: saved);
+    tomorrow.restoreArming();
+    expect(tomorrow.retryStoppedReason, isNot(contains('gave up')));
   });
 
   test('a timer pass drains the armed retry once the server is back', () async {
