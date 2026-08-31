@@ -55,6 +55,7 @@ import 'core/updates/update_gate.dart';
 import 'core/updates/update_service.dart';
 import 'core/updates/update_storage.dart';
 import 'core/updates/update_transport.dart';
+import 'core/updates/windows_installer.dart';
 
 /// The version this build reports to support and compares update manifests
 /// against.
@@ -409,6 +410,11 @@ UpdateService? _updateService(
 ) {
   if (!config.hasUpdateChannel) return null;
 
+  // One directory for the staged build and for the handoff script that installs
+  // it. Both of them decide what this till ends up running, so both belong
+  // somewhere only this app can write.
+  final staging = Directory('${support.path}${Platform.pathSeparator}updates');
+
   final transport = PinnedUpdateTransport(
     certificateSha256: config.updateCertificatePins,
   );
@@ -427,8 +433,9 @@ UpdateService? _updateService(
     ),
     fetchText: transport.fetchText,
     fetchBytes: transport.fetchBytes,
-    storage: FileUpdateStorage(
-      Directory('${support.path}${Platform.pathSeparator}updates'),
-    ),
+    storage: FileUpdateStorage(staging),
+    // Null off Windows: there a verified build is staged and installed by hand,
+    // which is the intended answer rather than a missing one.
+    installer: platformUpdateInstaller(stagingDirectory: staging),
   );
 }
