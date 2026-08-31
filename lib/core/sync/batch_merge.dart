@@ -94,7 +94,9 @@ MergeOutcome mergeOrderPushes(
 
   final lines = <Map<String, dynamic>>[];
   final orders = <Map<String, dynamic>>[];
-  final tenders = <int, Map<String, dynamic>>{};
+  // Keyed on the method and the journal together: the same method can book to
+  // different journals across a night, and those are different money.
+  final tenders = <(int, int?), Map<String, dynamic>>{};
   var delivery = 0.0;
   var tip = 0.0;
   var discount = 0.0;
@@ -117,8 +119,20 @@ MergeOutcome mergeOrderPushes(
       final pay = (raw as Map).cast<String, dynamic>();
       final method = (pay['method_id'] as num?)?.toInt();
       if (method == null) continue;
+      final journal = (pay['journal_id'] as num?)?.toInt();
+      // Grouped by the journal as well as the method, and the journal carried
+      // through. Summing on the method alone would fold two tenders that book to
+      // different journals into one figure, and the merged night would then settle
+      // into whichever the server resolved rather than the two the till took the
+      // money on.
       final at = tenders.putIfAbsent(
-          method, () => {'method_id': method, 'amount': 0.0, 'label': pay['label']});
+          (method, journal),
+          () => {
+                'method_id': method,
+                'journal_id': ?journal,
+                'amount': 0.0,
+                'label': pay['label'],
+              });
       at['amount'] = (at['amount'] as double) + _num(pay['amount']);
     }
     delivery += _num(p['delivery_cost']);
