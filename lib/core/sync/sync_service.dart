@@ -30,6 +30,15 @@ abstract interface class RetryArmingStore {
   void write(DateTime armedAt, String reason);
 
   void clear();
+
+  /// Why the last retry stopped, kept separately and for the same reason the
+  /// arming is kept: a till that gave up has to still say so tomorrow. Without
+  /// this the arming is cleared on the boot that finds it expired, and every boot
+  /// after that reports nothing at all while the takings are still queued, which
+  /// is the silence this was built to end.
+  String? readStopped();
+
+  void writeStopped(String reason);
 }
 
 /// What one catalogue refresh actually did, so a manual "Refresh menu" can say
@@ -426,8 +435,10 @@ class SyncService {
     _retryStoppedReason = why;
     // Cleared on the way down as well as on delivery. A window that closed is
     // finished with, and leaving the record would re-arm it on the next boot and
-    // start the same dead push again every morning.
+    // start the same dead push again every morning. The reason outlives the
+    // arming, so a till that gave up is still able to say so.
     _arming?.clear();
+    _arming?.writeStopped(why);
   }
 
   /// Pick up a batch push that was still owed when the process last stopped.
@@ -439,7 +450,13 @@ class SyncService {
   void restoreArming() {
     if (_retryArmedAt != null) return;
     final saved = _arming?.read();
-    if (saved == null) return;
+    if (saved == null) {
+      // Nothing owed. If the last thing that happened was a give-up, that is
+      // still the truth about this till and it survives the restart, because the
+      // arming it was attached to does not.
+      _retryStoppedReason ??= _arming?.readStopped();
+      return;
+    }
     if (pendingSales == 0) {
       // Delivered by some other route before the record was cleared. Nothing is
       // owed, so the record goes rather than arming a retry with nothing to send.
@@ -448,10 +465,11 @@ class SyncService {
     }
     if (_now().toUtc().difference(saved.armedAt) >= retryWindow) {
       // The window closed while the till was off. Say so, the way a live give-up
-      // says it, instead of silently starting a fresh twelve hours.
-      _retryStoppedReason = 'gave up with $pendingSales sale(s) still queued when '
-          'the retry window closed';
-      _arming?.clear();
+      // says it, instead of silently starting a fresh twelve hours. Written down
+      // as well as remembered: the boot after this one has no arming left to
+      // find, and a till with a day's takings queued must not go quiet.
+      _disarmRetry('gave up with $pendingSales sale(s) still queued when the '
+          'retry window closed');
       return;
     }
     _retryArmedAt = saved.armedAt;

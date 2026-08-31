@@ -37,6 +37,7 @@ class FlakyServer {
 class FakeArming implements RetryArmingStore {
   DateTime? armedAt;
   String? reason;
+  String? stopped;
 
   @override
   ({DateTime armedAt, String reason})? read() =>
@@ -53,6 +54,12 @@ class FakeArming implements RetryArmingStore {
     armedAt = null;
     reason = null;
   }
+
+  @override
+  String? readStopped() => stopped;
+
+  @override
+  void writeStopped(String why) => stopped = why;
 }
 
 void main() {
@@ -398,6 +405,19 @@ void main() {
     expect(after.retryStoppedReason, contains('gave up'),
         reason: 'support has to be told it stopped, not left to assume it is trying');
     expect(saved.armedAt, isNull);
+
+    // And the boot after that one, which has no arming left to find. Without the
+    // reason surviving on its own, a till with a day's takings queued goes
+    // completely silent from here, which is the state this was built to end.
+    final later = serviceWith(
+      outbox: till.outbox,
+      arming: saved,
+      now: () => clock,
+      retryWindow: const Duration(hours: 12),
+    );
+    later.restoreArming();
+    expect(later.retryStoppedReason, contains('gave up'));
+    expect(store.pendingSalesCount, 1, reason: 'still owed, and still saying so');
   });
 
   test('a timer pass drains the armed retry once the server is back', () async {

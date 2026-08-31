@@ -591,6 +591,8 @@ const Map<String, String> _ar = {
   "Find receipt printer": "البحث عن طابعة الإيصالات",
   "For local testing. A live fleet points at a backend and never stores ": "للاختبار المحلي. النظام الفعلي يتصل بخادم ولا يخزّن ",
   "Last error": "آخر خطأ",
+  "Finishing a failed close": "استكمال إقفال لم يكتمل",
+  "Last sync attempt": "آخر محاولة مزامنة",
   "Line-level discounts": "خصومات على مستوى الصنف",
   "Login": "تسجيل الدخول",
   "Looking...": "جارٍ البحث...",

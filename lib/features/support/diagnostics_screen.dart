@@ -267,6 +267,18 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           _row(tr(context, 'Oldest waiting'), _age(s.oldestPendingAge), keyName: 'oldest'),
           _row(tr(context, 'Rejected'), '${s.dead}',
               keyName: 'dead', bad: s.dead > 0),
+          // A close that did not deliver used to be invisible: the sales showed
+          // as waiting and nothing said whether anything was still chasing them.
+          // These two are the difference between "it is coming" and "it stopped".
+          if (widget.sync.retryArmed)
+            _row(tr(context, 'Finishing a failed close'),
+                widget.sync.retryArmedReason ?? '',
+                keyName: 'retry-armed'),
+          if (!widget.sync.retryArmed && widget.sync.retryStoppedReason != null)
+            _row(tr(context, 'Last sync attempt'),
+                widget.sync.retryStoppedReason!,
+                keyName: 'retry-stopped',
+                bad: widget.outboxStore.pendingSalesCount > 0),
           _row(tr(context, 'Audit entries waiting'), '${s.unsyncedAudit}'),
           _row(tr(context, 'Prices updated'), _age(s.catalogueRefreshedAt == null
               ? null

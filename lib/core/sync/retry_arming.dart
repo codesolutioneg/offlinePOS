@@ -13,6 +13,7 @@ class SettingsRetryArming implements RetryArmingStore {
 
   static const String _atKey = 'sync_retry_armed_at';
   static const String _reasonKey = 'sync_retry_armed_reason';
+  static const String _stoppedKey = 'sync_retry_stopped_reason';
 
   @override
   ({DateTime armedAt, String reason})? read() {
@@ -40,4 +41,10 @@ class SettingsRetryArming implements RetryArmingStore {
     _settings.setString(_atKey, null);
     _settings.setString(_reasonKey, null);
   }
+
+  @override
+  String? readStopped() => _settings.getString(_stoppedKey);
+
+  @override
+  void writeStopped(String reason) => _settings.setString(_stoppedKey, reason);
 }
