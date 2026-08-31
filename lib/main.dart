@@ -257,9 +257,18 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     appVersion: appVersion,
     // The branch is read at the moment of each pull, so a till moved to another
     // branch has the right menu on its next refresh rather than its next restart.
+    //
+    // The warehouse, not the company. A branch here is an outlet, and an outlet is
+    // a warehouse: that is what a sale already carries, what a requisition calls
+    // the branch warehouse, and what this shop's twenty of them are named after.
+    // The company is one row, so filtering a menu on it selected everything and
+    // looked like the feature working.
     puller: OdooPuller(
       call: odoo.catalogueCall,
-      branchId: () => settings.odooBranchId,
+      branchId: () => settings.odooWarehouseId,
+      // Read at the moment of each pull too: the till authenticates lazily, so the
+      // user is often not known yet when this is built.
+      userId: () => odoo.uid,
     ),
     probe: probeOnline,
     // Re-queue any paid sale that is not on the wire before a batch push. The

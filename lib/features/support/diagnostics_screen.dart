@@ -291,6 +291,30 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                 tr(context,
                     'The server would not send them. The till kept the ones it had.'),
                 keyName: 'modifiers-unread', bad: true),
+          // Which of the two modifier add-ons answered. A shop can have both
+          // installed and only one of them is the one to edit, so this is the line
+          // that stops a support call guessing at the wrong screen.
+          if (widget.sync.modifierModel != null)
+            _row(tr(context, 'Item options come from'), widget.sync.modifierModel!,
+                keyName: 'modifiers-model'),
+          // The branch menu the till asked for and did not get. It can still trade,
+          // which is why the fallback exists, and this is what explains a branch
+          // seeing dishes another shop sells.
+          if (widget.sync.branchFilterUnavailable)
+            _row(tr(context, 'Branch menu'),
+                tr(context,
+                    'This server has no branch field, so the till is showing the '
+                    'whole menu. Install the branch add-on to narrow it.'),
+                keyName: 'branch-filter-off', bad: true),
+          // An answered pull that held no products at all. Distinct from a pull
+          // that failed, which lands in the last error below, and the two want
+          // different people: this one is a menu nobody filed against the branch.
+          if (widget.sync.serverSentNoProducts)
+            _row(tr(context, 'Menu from the server'),
+                tr(context,
+                    'The server answered with no products for this till, so it '
+                    'kept the menu it had. Check the branch this till is set to.'),
+                keyName: 'no-products', bad: true),
           if (s.lastError != null)
             _row(tr(context, 'Last error'), s.lastError!, keyName: 'last-error', bad: true),
           if (widget.printError != null)

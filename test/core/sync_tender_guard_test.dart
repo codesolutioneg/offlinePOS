@@ -30,13 +30,9 @@ void main() {
       products: const [Product(id: 10, name: 'Margherita', price: 250, categoryId: 1)],
       groups: const [],
       productGroupIds: const {},
-      paymentMethods: const [
-        PaymentMethod(
-            id: 1, name: 'Cash', isCash: true, journalId: 11,
-            journalName: 'Cash drawer', journalType: 'cash'),
-        PaymentMethod(
-            id: 2, name: 'Card', journalId: 12,
-            journalName: 'Bank CIB', journalType: 'bank'),
+      paymentMethods: [
+        PaymentMethod.journal(journalId: 11, name: 'Cash drawer', type: 'cash'),
+        PaymentMethod.journal(journalId: 12, name: 'Bank CIB', type: 'bank'),
       ],
       refreshedAt: DateTime.now().toUtc(),
     );
@@ -55,8 +51,8 @@ void main() {
     );
   }
 
-  /// A menu that always lands, with the tender question answered by [methods].
-  OdooPuller puller({Object? methods, Object? journals}) => OdooPuller(
+  /// A menu that always lands, with the tender question answered by [journals].
+  OdooPuller puller({Object? journals}) => OdooPuller(
         call: (model, method, args, kwargs) async {
           switch (model) {
             case 'product.product':
@@ -66,9 +62,6 @@ void main() {
                   'pos_categ_ids': const <int>[], 'active': true,
                 }
               ];
-            case 'pos.payment.method':
-              if (methods is Exception) throw methods;
-              return methods ?? const [];
             case 'account.journal':
               if (journals is Exception) throw journals;
               return journals ?? const [];
@@ -79,9 +72,9 @@ void main() {
       );
 
   test('a refused tender read does not wipe the configured methods', () async {
-    await syncing(puller(methods: Exception('Access denied'))).refresh(force: true);
+    await syncing(puller(journals: Exception('Access denied'))).refresh(force: true);
 
-    expect(cat.paymentMethods().map((m) => m.name), ['Cash', 'Card'],
+    expect(cat.paymentMethods().map((m) => m.name), ['Cash drawer', 'Bank CIB'],
         reason: 'losing these leaves every sale to book as cash, which counts the '
             'drawer over by every card sale of the day');
     // The refresh itself worked: the menu is what a refused tender read must not
@@ -89,35 +82,19 @@ void main() {
     expect(cat.products(), isNotEmpty);
   });
 
-  test('a refused journal read does not wipe them either', () async {
-    await syncing(puller(
-      methods: const [
-        {'id': 1, 'name': 'Cash', 'is_cash_count': true, 'journal_id': [11, 'Cash']},
-        {'id': 2, 'name': 'Card', 'is_cash_count': false, 'journal_id': [12, 'Bank']},
-      ],
-      journals: Exception('Access denied'),
-    )).refresh(force: true);
-
-    expect(cat.paymentMethods().map((m) => m.id), [1, 2],
-        reason: 'the journals are what the narrowing needs, and not having them '
-            'is a reason to narrow nothing rather than to offer nothing');
-  });
-
   test('an answered read does replace them', () async {
     await syncing(puller(
-      methods: const [
-        {'id': 5, 'name': 'InstaPay', 'is_cash_count': false, 'journal_id': [12, 'Bank']},
-      ],
       journals: const [
         {'id': 12, 'name': 'Bank CIB', 'type': 'bank'},
       ],
     )).refresh(force: true);
 
     final saved = cat.paymentMethods();
-    expect(saved.map((m) => m.name), ['InstaPay']);
+    expect(saved.map((m) => m.name), ['Bank CIB']);
     // The journal survives the round trip through the till's own storage, so the
     // settings list can still say what the tender books to with the line down.
-    expect(saved.single.journalName, 'Bank CIB');
+    expect(saved.single.id, -12);
+    expect(saved.single.journalId, 12);
     expect(saved.single.journalType, 'bank');
   });
 }

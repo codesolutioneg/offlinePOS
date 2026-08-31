@@ -259,4 +259,39 @@ void main() {
       expect(find.byKey(const Key('backup-result')), findsNothing);
     });
   });
+
+  testWidgets('a till on the whole chain menu says so', (t) async {
+    // The fallback is right and silent, and silence is why nobody could answer
+    // "why does this branch see the other shop dishes".
+    await t.pumpWidget(app());
+    expect(find.byKey(const Key('diag-branch-filter-off')), findsNothing);
+
+    sync.branchFilterUnavailable = true;
+    await t.pumpWidget(app());
+    expect(find.byKey(const Key('diag-branch-filter-off')), findsOneWidget);
+  });
+
+  testWidgets('a branch the server has no products for is not a broken sync',
+      (t) async {
+    // An answered pull with nothing in it is refused, which is right and looks
+    // exactly like a sync that never ran. The two need different people.
+    await t.pumpWidget(app());
+    expect(find.byKey(const Key('diag-no-products')), findsNothing);
+
+    sync.serverSentNoProducts = true;
+    await t.pumpWidget(app());
+    expect(find.byKey(const Key('diag-no-products')), findsOneWidget);
+  });
+
+  testWidgets('the add-on the item options came from is named', (t) async {
+    // With both add-ons installed nothing said which one was in use, so a support
+    // call started by guessing which screen the shop should be editing.
+    await t.pumpWidget(app());
+    expect(find.byKey(const Key('diag-modifiers-model')), findsNothing);
+
+    sync.modifierModel = 'pos.product.modifier';
+    await t.pumpWidget(app());
+    expect(t.widget<Text>(find.byKey(const Key('diag-modifiers-model'))).data,
+        'pos.product.modifier');
+  });
 }

@@ -248,4 +248,64 @@ void main() {
     expect(pull.groups.single.modifiers.single.name, 'Cheese');
     expect(pull.groups.single.autoAdd, isFalse);
   });
+
+  test('the pull names the add-on the modifiers actually came from', () async {
+    // Two unrelated add-ons hold modifiers in the same database and a shop can have
+    // both installed. Nothing anywhere said which one a till was reading, so a
+    // support call about an option that will not appear began by guessing.
+    final legacy = await puller().pull();
+    expect(legacy.modifierModel, 'product.modifier.category');
+
+    final current = await OdooPuller(
+      call: (model, method, args, kwargs) async => switch (model) {
+        'product.product' => [
+            {'id': 10, 'display_name': 'Margherita', 'lst_price': 250,
+             'pos_categ_ids': [1], 'active': true,
+             'product_tmpl_id': [90, 'Margherita']},
+          ],
+        'pos.product.modifier' => [
+            {'id': 100, 'name': 'Size', 'sequence': 1, 'product_tmpl_id': [90, 'M'],
+             'required': true, 'min_selection': 1, 'max_selection': 1,
+             'display_type': 'radio'},
+          ],
+        'pos.modifier.option' => [
+            {'id': 1000, 'name': 'Large', 'modifier_id': [100, 'Size'],
+             'price_extra': 20, 'sequence': 1, 'product_id': false},
+          ],
+        _ => const <Map<String, dynamic>>[],
+      },
+    ).pull();
+    expect(current.modifierModel, 'pos.product.modifier');
+
+    final none = await OdooPuller(
+      call: (model, method, args, kwargs) async => const <Map<String, dynamic>>[],
+    ).pull();
+    expect(none.modifierModel, isNull,
+        reason: 'neither pair had a row, so neither is the one in use');
+  });
+
+  test('the point of sale is read at the moment it is asked, not at build time',
+      () async {
+    // The puller is built once at startup and a manager can move the till to
+    // another point of sale afterwards, which is why the branch is a reader. This
+    // one is read the same way rather than off a static the class also holds.
+    int? pointOfSale = 7;
+    final asked = <Object?>[];
+    final p = OdooPuller(
+      restaurantId: () => pointOfSale,
+      call: (model, method, args, kwargs) async {
+        if (model == 'pos.config') {
+          asked.add(((args.first as List).first as List).last);
+          return [
+            {'id': pointOfSale, 'limit_categories': false}
+          ];
+        }
+        return const <Map<String, dynamic>>[];
+      },
+    );
+    await p.searchProducts('');
+    pointOfSale = 9;
+    await p.searchProducts('');
+    expect(asked, [7, 9]);
+  });
 }

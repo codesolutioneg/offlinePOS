@@ -189,6 +189,31 @@ class SyncService {
   /// screen.
   bool modifiersUnavailable = false;
 
+  /// Which Odoo model the shop's modifiers actually came from on the last refresh,
+  /// null when neither add-on had one to give. Two of them can sit in the same
+  /// database and only one is in use, so without this a support call about a
+  /// missing option starts by guessing which screen the shop should be editing.
+  String? modifierModel;
+
+  /// True when the last refresh asked for this till's branch menu and had to take
+  /// the whole one because the server has no branches field.
+  ///
+  /// Falling back is right: a till showing a few extra dishes can still trade and a
+  /// till showing none cannot. It is also silent, and it is the answer to "why does
+  /// this branch see the other shop's menu", so it is said out loud here the way a
+  /// refused modifier read is.
+  bool branchFilterUnavailable = false;
+
+  /// True when the last refresh reached the server, was answered, and the answer
+  /// held no products at all.
+  ///
+  /// The pull is then refused rather than written, which is right and looks exactly
+  /// like a sync that never happened. It is not one: the server was there and had
+  /// nothing filed for this till, which is a menu somebody has to configure rather
+  /// than a line somebody has to fix. A pull that genuinely failed throws instead
+  /// and lands in [lastError].
+  bool serverSentNoProducts = false;
+
   Timer? _timer;
   SyncState _state = SyncState.idle;
   String? lastError;
@@ -324,6 +349,20 @@ class SyncService {
           ? (groups: pull.groups, productGroupIds: pull.productGroupIds)
           : _catalogue.odooModifierGroups();
 
+  /// What a finished pull said about itself, kept for the diagnostics screen.
+  ///
+  /// Recorded from both pulls rather than one, because the timer's refresh and the
+  /// close's batch are the same question asked at different moments and support
+  /// should not get a different answer depending on which ran last.
+  void _noteCatalogue(CataloguePull pull) {
+    modifiersUnavailable = !pull.groupsRead;
+    // A pull with no groups in it leaves the till selling the ones it had, so the
+    // model that produced those is still the one support wants named.
+    modifierModel = pull.modifierModel ?? modifierModel;
+    branchFilterUnavailable = pull.branchFilterUnavailable;
+    serverSentNoProducts = !pull.isUsable;
+  }
+
   /// A read-only pass: check reachability and refresh the catalogue if it is stale.
   /// Never drains the outbox, so it never pushes an order. This is what the timer
   /// runs, keeping the badge and prices current without booking anything.
@@ -345,7 +384,7 @@ class SyncService {
     }
     try {
       final pull = await _puller.pull();
-      modifiersUnavailable = !pull.groupsRead;
+      _noteCatalogue(pull);
       if (pull.isUsable) {
         final groups = _groupsFrom(pull);
         _catalogue.replaceAll(
@@ -399,7 +438,7 @@ class SyncService {
       }
       if (_puller != null && catalogueNeedsRefresh) {
         final pull = await _puller.pull();
-        modifiersUnavailable = !pull.groupsRead;
+        _noteCatalogue(pull);
         // Never overwrite a working catalogue with an empty pull.
         if (pull.isUsable) {
           final groups = _groupsFrom(pull);

@@ -695,6 +695,10 @@ class Order {
         'modifiers': const [],
       });
     }
+    // Each tender restated for the server rather than sent as it is held here: the
+    // till keeps one id for a tender whichever space it came from, and the wire has
+    // to say which model that id belongs to. See [OrderPayment.toWireMap].
+    m['payments'] = payments.map((p) => p.toWireMap()).toList();
     // What the till charged, stated so the server can hold its own arithmetic to
     // it. The module totals the sale from the lines and settles it from the
     // payments; if either drifts from this the sale books for the wrong money, and
@@ -757,19 +761,53 @@ class Order {
 /// concept travelling through the payload.
 const String kOnAccountLabel = 'On account';
 
-/// One tender against a sale: which Odoo payment method, how much, and any tip
+/// One tender against a sale: which tender took the money, how much, and any tip
 /// taken on that tender. Several of these on one order is a split payment.
 class OrderPayment {
   const OrderPayment({required this.methodId, required this.amount, this.label});
+
+  /// The [PaymentMethod] this was taken on, in that class's id space: negative for
+  /// an `account.journal`, positive for a `pos.payment.method` from before the till
+  /// offered journals. Stored as it was rung, so a sale sitting in the outbox when
+  /// the till updated still books the way it was taken.
   final int methodId;
   final double amount;
 
-  /// The method's display name, kept so the receipt and reports can show "Card"
+  /// The tender's display name, kept so the receipt and reports can show "Card"
   /// without a second catalogue lookup.
   final String? label;
 
+  /// Whether this tender names a journal rather than a point-of-sale method.
+  bool get isJournal => methodId < 0;
+
+  /// The `account.journal` the money landed in, or null on a tender from the old id
+  /// space, where the server reads the journal off the method instead.
+  int? get journalId => isJournal ? -methodId : null;
+
+  /// Whether this is the tender that means the guest signed rather than paid.
+  bool get isOnAccount =>
+      label?.trim().toLowerCase() == kOnAccountLabel.toLowerCase();
+
   Map<String, dynamic> toMap() =>
       {'method_id': methodId, 'amount': amount, 'label': label};
+
+  /// What this tender says on the wire.
+  ///
+  /// A journal tender names the journal and never `method_id`: the server resolves
+  /// that against `pos.payment.method`, so a journal id put there would browse a
+  /// different table and settle the money into whatever it happened to find. A
+  /// tender from the old id space names its method exactly as it always did, which
+  /// is what keeps a night already in the outbox booking the way it was rung.
+  ///
+  /// An on-account tender names neither. Nothing was banked, the label is the whole
+  /// statement, and naming a journal here could only invite a server to register a
+  /// payment for money the guest has so far only signed for.
+  Map<String, dynamic> toWireMap() => {
+        if (!isJournal) 'method_id': methodId,
+        if (isJournal && !isOnAccount) 'journal_id': journalId,
+        'amount': amount,
+        'label': label,
+      };
   factory OrderPayment.fromMap(Map<String, dynamic> m) => OrderPayment(
         methodId: m['method_id'] as int,
         amount: (m['amount'] as num).toDouble(),

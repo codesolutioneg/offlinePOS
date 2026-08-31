@@ -111,6 +111,10 @@ class OdooSender {
 
   bool get isAuthenticated => _uid != null;
 
+  /// Who this till is logged in as, or null before it has authenticated. The one
+  /// thing the catalogue pull needs to ask what this user is allowed to be paid on.
+  int? get uid => _uid;
+
   /// An [OutboxSender] for 'order.push' entries.
   OutboxSender get orderSender => (OutboxEntry entry) async {
         if (!isAuthenticated) {

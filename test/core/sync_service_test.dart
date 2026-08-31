@@ -538,4 +538,77 @@ void main() {
     expect(till.sync.retryArmed, isTrue);
     expect(till.sync.retryAttempts, 0);
   });
+
+  test('a branch with no products is told apart from a sync that failed', () async {
+    // Refusing an empty pull is right: writing it would leave the till unable to
+    // sell. It also looks exactly like a sync that never happened, and the two
+    // want different people. One is a menu nobody filed against this branch, the
+    // other is a line somebody has to fix.
+    final empty = serviceWith(puller: pullerWith(const []));
+    expect(await empty.refresh(), RefreshOutcome.unchanged);
+    expect(empty.serverSentNoProducts, isTrue);
+    expect(empty.lastError, isNull, reason: 'the server answered, it just had none');
+
+    final broken = serviceWith(
+      puller: OdooPuller(call: (a, b, c, d) async => throw Exception('down')),
+    );
+    expect(await broken.refresh(), RefreshOutcome.failed);
+    expect(broken.serverSentNoProducts, isFalse,
+        reason: 'nothing was answered, so nothing can be said about the branch');
+    expect(broken.lastError, isNotNull);
+
+    final ok = serviceWith(
+      puller: pullerWith(const [Product(id: 1, name: 'A', price: 5)]),
+    );
+    await ok.refresh();
+    expect(ok.serverSentNoProducts, isFalse);
+  });
+
+  test('the whole-chain menu fallback reaches the diagnostics screen', () async {
+    // A branch till that had to take the whole menu can still trade, which is why
+    // it is quiet. Quiet is also why nobody could answer "why does this shop see
+    // the other one dishes".
+    final s = serviceWith(
+      puller: OdooPuller(
+        branchId: () => 3,
+        call: (model, method, args, kwargs) async {
+          if (model != 'product.product') return const [];
+          final domain = (args.first as List);
+          if (domain.any((c) => c is List && '${c.first}'.contains('branch_ids'))) {
+            throw Exception('Invalid field product.template.branch_ids');
+          }
+          return [
+            {'id': 1, 'display_name': 'A', 'lst_price': 1, 'active': true}
+          ];
+        },
+      ),
+    );
+    await s.refresh();
+    expect(s.branchFilterUnavailable, isTrue);
+  });
+
+  test('the add-on the modifiers came from is recorded for support', () async {
+    final s = serviceWith(
+      puller: OdooPuller(
+        call: (model, method, args, kwargs) async => switch (model) {
+          'product.product' => [
+              {'id': 1, 'display_name': 'A', 'lst_price': 1, 'active': true,
+               'product_tmpl_id': [9, 'A']},
+            ],
+          'pos.product.modifier' => [
+              {'id': 100, 'name': 'Size', 'sequence': 1, 'product_tmpl_id': [9, 'A'],
+               'required': false, 'min_selection': 0, 'max_selection': 1,
+               'display_type': 'radio'},
+            ],
+          'pos.modifier.option' => [
+              {'id': 1000, 'name': 'Large', 'modifier_id': [100, 'Size'],
+               'price_extra': 5, 'sequence': 1, 'product_id': false},
+            ],
+          _ => const <Map<String, dynamic>>[],
+        },
+      ),
+    );
+    await s.refresh();
+    expect(s.modifierModel, 'pos.product.modifier');
+  });
 }

@@ -232,11 +232,23 @@ class ReceiptBuilder {
       // header + modifiers - discount reconciles to what the customer pays.
       // With prices hidden the slip becomes a packing list: names and quantities
       // still print, the amount column does not.
+      //
+      // An option that replaced the dish's price rather than adding to it is folded
+      // into the header instead of printing its own amount. The sheet the cashier
+      // taps quotes the menu price for those, because that is the figure the
+      // customer was given: a small coffee is 15, and printing "Small -5.00" under a
+      // header of 20 shows a number nobody was ever quoted. Folding it up prints the
+      // 15, and the parts still add up because the amount only moved. Only a
+      // negative one can be recognised here, since a line carries the money a
+      // modifier is worth and not the mode it was priced in, and nothing that adds
+      // to a price is ever negative.
+      final replaced =
+          l.modifiers.where((m) => m.total < 0).fold(0.0, (s, m) => s + m.total);
       p.row('${_qty(l.quantity)} x ${l.name}',
-          showItemPrice ? formatAmount(l.quantity * l.unitPrice) : '');
+          showItemPrice ? formatAmount(l.quantity * (l.unitPrice + replaced)) : '');
       for (final m in l.modifiers) {
         final amount =
-            (!showItemPrice || m.unitPrice == 0) ? '' : formatAmount(l.quantity * m.total);
+            (!showItemPrice || m.total <= 0) ? '' : formatAmount(l.quantity * m.total);
         p.row('   + ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}', amount);
       }
       if (l.discountPercent > 0) {

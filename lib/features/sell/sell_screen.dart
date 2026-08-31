@@ -2585,7 +2585,20 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Widget _categoryStrip() {
-    final cats = s.catalogue.categories();
+    // A category with nothing filed under it on this till is left off the strip.
+    // Tapping one can only ever show an empty grid, and on a branch till that is
+    // most of them: the menu is filtered by branch and the categories are not, so
+    // the chain's whole list arrives whatever this shop sells. The categories are
+    // still pulled and still stored, because they cost nothing and one that is
+    // empty here today may not be tomorrow; only the tab is held back, and it
+    // comes back by itself on the refresh that brings the first dish.
+    final stocked = s.catalogue.categoryIdsWithProducts();
+    final cats = s.catalogue
+        .categories()
+        // The one being shown always stays, so a category that empties under a
+        // cashier does not take its own chip away and leave them with no way back.
+        .where((c) => stocked.contains(c.id) || c.id == _categoryId)
+        .toList();
     return ListView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 8),

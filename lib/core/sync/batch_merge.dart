@@ -94,7 +94,7 @@ MergeOutcome mergeOrderPushes(
 
   final lines = <Map<String, dynamic>>[];
   final orders = <Map<String, dynamic>>[];
-  final tenders = <int, Map<String, dynamic>>{};
+  final tenders = <String, Map<String, dynamic>>{};
   var delivery = 0.0;
   var tip = 0.0;
   var discount = 0.0;
@@ -116,9 +116,25 @@ MergeOutcome mergeOrderPushes(
     for (final raw in (p['payments'] as List? ?? const [])) {
       final pay = (raw as Map).cast<String, dynamic>();
       final method = (pay['method_id'] as num?)?.toInt();
-      if (method == null) continue;
+      final journal = (pay['journal_id'] as num?)?.toInt();
+      // A tender names one or the other, never both, and the merged batch has to
+      // group them apart: a journal and a point-of-sale method that happen to share
+      // a number are two different drawers. A tender that names neither is the one
+      // the guest signed for, and folding those together by label keeps the money
+      // it stands for on the batch instead of dropping it.
+      final key = journal != null
+          ? 'journal:$journal'
+          : method != null
+              ? 'method:$method'
+              : 'label:${pay['label']}';
       final at = tenders.putIfAbsent(
-          method, () => {'method_id': method, 'amount': 0.0, 'label': pay['label']});
+          key,
+          () => {
+                'method_id': ?method,
+                'journal_id': ?journal,
+                'amount': 0.0,
+                'label': pay['label'],
+              });
       at['amount'] = (at['amount'] as double) + _num(pay['amount']);
     }
     delivery += _num(p['delivery_cost']);

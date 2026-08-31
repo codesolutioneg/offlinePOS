@@ -259,6 +259,21 @@ class CatalogueStore {
       .map(_category)
       .toList();
 
+  /// The categories that actually have something to sell under them on this till.
+  ///
+  /// A chain filters its menu by branch and its categories not at all, because a
+  /// category costs nothing to carry and one that is empty in this shop today may
+  /// not be tomorrow. That leaves a branch with tabs behind which there is nothing,
+  /// which reads on the counter as a till that failed to load. The grid asks this
+  /// and leaves those tabs off instead, so the strip follows the menu each refresh
+  /// without anything having to be filtered on the server.
+  Set<int> categoryIdsWithProducts() => {
+        for (final r in _db.raw.select(
+            'SELECT DISTINCT category_id FROM products '
+            'WHERE active = 1 AND category_id IS NOT NULL'))
+          r['category_id'] as int,
+      };
+
   Category? categoryById(int id) {
     final rows = _db.raw.select('SELECT * FROM categories WHERE id = ?', [id]);
     return rows.isEmpty ? null : _category(rows.first);

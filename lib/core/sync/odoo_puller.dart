@@ -23,7 +23,41 @@ class CataloguePullOptions {
 /// The counterpart to [OdooSender]. Runs on a schedule and never on the path of a
 /// sale, so a slow or absent server delays a refresh but never a customer.
 class OdooPuller {
-  OdooPuller({required this.call, this.withImages, this.branchId});
+  OdooPuller({
+    required this.call,
+    this.withImages,
+    this.branchId,
+    this.userId,
+    int? Function()? restaurantId,
+    int? Function()? companyId,
+  })  : restaurantId = restaurantId ?? (() => OdooSite.shared.restaurantId),
+        companyId = companyId ?? (() => OdooSite.shared.branchId);
+
+  /// The company this till's money belongs to, which is what a journal is scoped by.
+  ///
+  /// Read off the published [OdooSite] like [restaurantId], and deliberately not off
+  /// [branchId]: that one narrows the *menu* and is a branch record, while a journal
+  /// is company-scoped and jouma runs a company per branch. Null asks for every
+  /// journal the login can see, which is what a single-company shop wants.
+  final int? Function() companyId;
+
+  /// The point of sale this till sells through, which narrows the pick lists a
+  /// manager links a local dish or category against.
+  ///
+  /// A reader for the same reason [branchId] and [userId] are: everything a manager
+  /// can change after startup is read at the moment it is used, not captured when
+  /// the puller was built. It falls back to the published [OdooSite] so a caller
+  /// that names no reader still asks the question the whole app answers it with.
+  final int? Function() restaurantId;
+
+  /// The Odoo user this till is logged in as, so the tender list can be narrowed to
+  /// the journals that user is allowed to take money on.
+  ///
+  /// A reader for the same reason [branchId] is one: the puller is built before the
+  /// endpoint is configured, and the login can change under it. Null, or a null
+  /// answer, narrows nothing, which is what a till that has not authenticated yet
+  /// and a test with a stubbed server both want.
+  final int? Function()? userId;
 
   /// The branch this till sells for, so a chain's other menus stay off it.
   ///
@@ -101,19 +135,25 @@ class OdooPuller {
   /// which is soon enough for something that happens once.
   bool? _branchFieldMissing;
 
-  /// Whether a failure is Odoo saying it has never heard of the field, as opposed
-  /// to the network or the server having a bad moment.
+  /// Whether a failure is Odoo saying it has never heard of the branches field, as
+  /// opposed to the network or the server having a bad moment.
   ///
-  /// Matched on the message because that is all a JSON-RPC fault gives us. Read
-  /// conservatively: anything unrecognised is treated as a passing failure, so the
-  /// worst an unfamiliar wording costs is asking again next refresh.
-  static bool _readsAsUnknownField(Object error) {
-    final text = error.toString().toLowerCase();
-    return text.contains('branch_ids') ||
-        text.contains('invalid field') ||
-        text.contains('unknown field') ||
-        text.contains('does not exist');
-  }
+  /// Matched on the message because that is all a JSON-RPC fault gives us, and both
+  /// halves have to be in it: a complaint about a field, and our field named in the
+  /// same breath. Either half alone latches the whole chain's menu onto a branch
+  /// till over something else entirely. "Does not exist" is how Odoo reports a
+  /// record deleted under a read, which is a passing failure and says nothing about
+  /// the addon; and any fault that carries a traceback quotes back the domain we
+  /// sent, `branch_ids` and all, whatever actually went wrong.
+  ///
+  /// Read conservatively: anything unrecognised is treated as a passing failure, so
+  /// the worst an unfamiliar wording costs is asking again next refresh.
+  static final _unknownBranchField = RegExp(
+      r'(invalid field|unknown field|no such field|has no attribute)'
+      r'[^\n]{0,80}branch_ids');
+
+  static bool _readsAsUnknownField(Object error) =>
+      _unknownBranchField.hasMatch(error.toString().toLowerCase());
 
   Future<CataloguePull> pull() async {
     final categories = await _searchRead(
@@ -148,35 +188,18 @@ class OdooPuller {
     }
     final modifiers = await _modifiers(templateToProducts);
 
-    // Payment methods for the tender screen. Optional: an Odoo that does not
-    // expose them just leaves the till on its cash default. Whether the read
-    // happened at all is carried separately, because a server that refused the
-    // question ("the integration user is not a Point of Sale user") and a shop that
-    // genuinely has no method look identical from here, and only one of them is a
-    // reason to forget the tenders this till already had.
-    List<Map<String, dynamic>> methods = const [];
-    var methodsRead = false;
-    var journals = const <int, ({String name, String type})>{};
+    // The tenders for the payment sheet. Optional: an Odoo that will not answer
+    // leaves the till on the tenders it already has. Whether the read happened at
+    // all is carried separately, because a server that refused the question and a
+    // shop that genuinely has none look identical from here, and only one of them is
+    // a reason to forget the tenders this till is selling with.
+    var tenders = const <PaymentMethod>[];
+    var tendersRead = false;
     try {
-      // The journal rides along because it is where the money actually lands, and
-      // it is asked for as an extra so an Odoo that will not give it still gives up
-      // the tenders. What the till sends on the wire is untouched: still the
-      // `pos.payment.method` id, which is the only thing the booking module can
-      // resolve.
-      methods = await _searchReadOptional(
-        'pos.payment.method',
-        ['id', 'name', 'is_cash_count'],
-        ['journal_id'],
-        [
-          ['active', '=', true]
-        ],
-      );
-      methodsRead = true;
-      methods = await _onlyThisPointOfSale(methods);
-      journals = await _journals();
-      methods = _onlyBankAndCash(methods, journals);
+      tenders = await _tenders();
+      tendersRead = true;
     } catch (_) {
-      methods = const [];
+      tenders = const [];
     }
 
     // Customers for attaching a guest to a sale. Bounded so a large partner list
@@ -229,18 +252,13 @@ class OdooPuller {
       groups: modifiers.groups,
       productGroupIds: modifiers.productGroupIds,
       groupsRead: modifiers.read,
-      paymentMethods: methods.map((m) {
-        final journal = journals[_id(m['journal_id'])];
-        return PaymentMethod(
-          id: m['id'] as int,
-          name: (m['name'] ?? '') as String,
-          isCash: m['is_cash_count'] == true,
-          journalId: _id(m['journal_id']),
-          journalName: journal?.name,
-          journalType: journal?.type,
-        );
-      }).toList(),
-      paymentMethodsRead: methodsRead,
+      modifierModel: modifiers.model,
+      // Only worth reporting on a till that asked to be filtered. A single-shop
+      // till has no branch, so the field being absent costs it nothing.
+      branchFilterUnavailable:
+          branchId?.call() != null && _branchFieldMissing == true,
+      paymentMethods: tenders,
+      paymentMethodsRead: tendersRead,
       customers: partners
           .map((c) => Customer(
                 id: c['id'] as int,
@@ -267,6 +285,11 @@ class OdooPuller {
   /// A model that is not installed makes the read throw, which is why every read
   /// here degrades to no modifiers rather than losing the catalogue: products and
   /// categories are the part a till cannot sell without.
+  ///
+  /// Which pair answered is carried out with the groups. A shop with both add-ons
+  /// installed shows nothing on the screen to say which one the options came from,
+  /// so a support call about an option that will not appear starts by guessing at
+  /// the wrong model.
   Future<_PulledModifiers> _modifiers(
       Map<int, List<int>> templateToProducts) async {
     final current = await _posModifiers(templateToProducts);
@@ -386,7 +409,7 @@ class OdooPuller {
         byProduct.putIfAbsent(pid, () => []).add(gid);
       }
     }
-    return _PulledModifiers(mapped, byProduct);
+    return _PulledModifiers(mapped, byProduct, model: 'pos.product.modifier');
   }
 
   /// The older `product.modifier.category` / `product.modifier` pair.
@@ -452,91 +475,99 @@ class OdooPuller {
         }
       }
     }
-    return _PulledModifiers(mapped, byProduct);
+    return _PulledModifiers(mapped, byProduct, model: 'product.modifier.category');
   }
 
-  /// Narrow the tenders to the point of sale this till sells through.
+  /// The tenders this till offers: the journals a sale's money can land in.
   ///
-  /// A method that is not on the shop's own `pos.config` cannot settle a sale there:
-  /// the booking module matches each tender against that config's methods and
-  /// quietly falls back to cash for anything else, so offering the rest of the
-  /// company's methods puts a tender in the payment mix that Odoo never books.
-  /// Only asked when the shop named its point of sale, and never allowed to answer
-  /// "none": a till with no tender at all is worse than an over-long list.
-  Future<List<Map<String, dynamic>>> _onlyThisPointOfSale(
-      List<Map<String, dynamic>> methods) async {
-    final configId = OdooSite.shared.restaurantId;
-    if (configId == null || methods.isEmpty) return methods;
-    try {
-      final configs = await _searchRead('pos.config', ['id', 'payment_method_ids'], [
-        ['id', '=', configId]
-      ]);
-      if (configs.isEmpty) return methods;
-      final allowed = _ids(configs.first['payment_method_ids']).toSet();
-      final mine = methods.where((m) => allowed.contains(m['id'])).toList();
-      return mine.isEmpty ? methods : mine;
-    } catch (_) {
-      return methods;
+  /// The shop's other till reads its payment list straight off `account.journal`,
+  /// and this one now does the same, so the two agree on what the shop can be paid
+  /// with. A manager narrows it per user on `res.users.payment_method_ids`, and a
+  /// user with none named is allowed all of them: that is what the field itself
+  /// says, so an empty list widens rather than narrows.
+  ///
+  /// Two narrowings, each dropped when it would leave nothing, because a till that
+  /// can name no tender cannot take money. The branch's company comes first, since
+  /// a chain books each branch in a company of its own; a journal that names no
+  /// company is unknown rather than disqualified and is kept, for the same reason a
+  /// chain's till must not lose a tender it simply cannot see.
+  ///
+  /// Throws when the journals cannot be read at all, which is the one answer that
+  /// means "ask again later" rather than "the shop has none".
+  Future<List<PaymentMethod>> _tenders() async {
+    // Sequence is asked for as an extra so an Odoo that will not give it still
+    // gives up the tenders; without it they come back in the order Odoo listed
+    // them, which is the order the other till shows too.
+    final rows = await _searchReadOptional(
+      'account.journal',
+      ['id', 'name', 'type', 'company_id'],
+      ['sequence'],
+      [
+        ['type', 'in', ['bank', 'cash']]
+      ],
+    );
+    var kept = rows;
+
+    final company = companyId();
+    if (company != null) {
+      final mine = [
+        for (final r in kept)
+          if (_id(r['company_id']) == null || _id(r['company_id']) == company) r,
+      ];
+      if (mine.isNotEmpty) kept = mine;
     }
+
+    final allowed = await _allowedJournalIds();
+    if (allowed.isNotEmpty) {
+      final mine = [
+        for (final r in kept)
+          if (allowed.contains(r['id'])) r,
+      ];
+      if (mine.isNotEmpty) kept = mine;
+    }
+
+    final sorted = [...kept]..sort((a, b) {
+        final bySequence =
+            ((a['sequence'] as num?) ?? 0).compareTo((b['sequence'] as num?) ?? 0);
+        return bySequence != 0
+            ? bySequence
+            : ((a['name'] ?? '') as String).compareTo((b['name'] ?? '') as String);
+      });
+    return [
+      for (final r in sorted)
+        PaymentMethod.journal(
+          journalId: r['id'] as int,
+          name: (r['name'] ?? '') as String,
+          type: (r['type'] ?? '') as String,
+        ),
+    ];
   }
 
-  /// The account journals by id, or empty for "the server would not say".
+  /// The journals this till's Odoo user may take money on, or empty for "nobody
+  /// said".
   ///
-  /// Read whole rather than narrowed to bank and cash, because a method pointing at
-  /// a journal missing from a narrowed read would be indistinguishable from one
-  /// pointing at a journal this login cannot see, and those two want opposite
-  /// answers. A database holds a few dozen journals, so asking for all of them
-  /// costs nothing next to the catalogue.
-  ///
-  /// Never throws: the caller has already recorded that the tenders were read, and
-  /// an exception escaping here would empty a list the till is still selling with.
-  Future<Map<int, ({String name, String type})>> _journals() async {
+  /// Empty is never a refusal to sell. The field means every journal when it is left
+  /// empty, an Odoo without the field says nothing about who may take what, and a
+  /// till that has not authenticated yet has no user to ask about. All three land
+  /// here as no narrowing, which is the answer that keeps a till trading.
+  Future<Set<int>> _allowedJournalIds() async {
+    final uid = userId?.call();
+    if (uid == null) return const {};
     try {
-      final rows =
-          await _searchRead('account.journal', ['id', 'name', 'type'], const []);
-      return {
-        for (final r in rows)
-          r['id'] as int: (
-            name: (r['name'] ?? '') as String,
-            type: (r['type'] ?? '') as String,
-          ),
-      };
+      final rows = await _searchReadOptional(
+        'res.users',
+        ['id'],
+        ['payment_method_ids'],
+        [
+          ['id', '=', uid]
+        ],
+      );
+      if (rows.isEmpty) return const {};
+      return _ids(rows.first['payment_method_ids']).toSet();
     } catch (_) {
       return const {};
     }
   }
-
-  /// Keep the tenders that settle into a bank or cash journal, plus the pay-later
-  /// one that has no journal at all.
-  ///
-  /// A method booking to a sale or miscellaneous journal is not money over the
-  /// counter, and offering it puts a tender on the payment sheet the shop cannot
-  /// reconcile against anything. The two guards are the ones [_onlyThisPointOfSale]
-  /// already carries: with no journals read nothing is narrowed, and a narrowing
-  /// that leaves nothing is dropped, because a till that can name no tender at all
-  /// cannot take money.
-  ///
-  /// Only a journal this login could actually read is judged. A journal that was
-  /// not in the answer is unknown, not disqualified, and the difference decides
-  /// whether a shop can take a card: journals are company-scoped, so a chain's till
-  /// sees its own branch's and none of the others'. Dropping the unknown ones would
-  /// take the card tender off that till while cash survived, which is quiet, wrong,
-  /// and would not even trip the empty-list guard below. Offering one tender too
-  /// many is the lesser mistake by a distance.
-  List<Map<String, dynamic>> _onlyBankAndCash(List<Map<String, dynamic>> methods,
-      Map<int, ({String name, String type})> journals) {
-    if (journals.isEmpty || methods.isEmpty) return methods;
-    const overTheCounter = {'bank', 'cash'};
-    final kept = [
-      for (final m in methods)
-        if (_id(m['journal_id']) == null ||
-            !journals.containsKey(_id(m['journal_id'])) ||
-            overTheCounter.contains(journals[_id(m['journal_id'])]?.type))
-          m,
-    ];
-    return kept.isEmpty ? methods : kept;
-  }
-
   /// Partners matching [term] by name or phone, straight from the server.
   ///
   /// The pull above is bounded at 500 partners, which is a menu-sized list and not
@@ -629,7 +660,7 @@ class OdooPuller {
   /// The POS categories this till's point of sale is limited to, or empty for "no
   /// narrowing is possible", which every failure here answers with.
   Future<List<int>> _posCategoryScope() async {
-    final configId = OdooSite.shared.restaurantId;
+    final configId = restaurantId();
     if (configId == null) return const [];
     try {
       final configs = await _searchRead(
@@ -768,7 +799,8 @@ class OdooPuller {
 /// One add-on's answer about modifiers: the groups, which products they hang on,
 /// and whether the question was answered at all.
 class _PulledModifiers {
-  const _PulledModifiers(this.groups, this.productGroupIds, {this.read = true});
+  const _PulledModifiers(this.groups, this.productGroupIds,
+      {this.read = true, this.model});
 
   /// Nothing, because the models could not be read. Distinct from an answer of
   /// no groups, which is a fact about the shop rather than about the server.
@@ -778,6 +810,11 @@ class _PulledModifiers {
   final List<ModifierGroup> groups;
   final Map<int, List<int>> productGroupIds;
   final bool read;
+
+  /// The Odoo model these groups came out of, or null when none of them answered
+  /// with a row. Two add-ons can be installed at once and only one of them is in
+  /// use, so this is what a support call needs before anybody edits anything.
+  final String? model;
 }
 
 /// One Odoo record a manager can point a local menu row at.
@@ -799,6 +836,8 @@ class CataloguePull {
     required this.groups,
     required this.productGroupIds,
     this.groupsRead = false,
+    this.modifierModel,
+    this.branchFilterUnavailable = false,
     this.paymentMethods = const [],
     this.paymentMethodsRead = false,
     this.customers = const [],
@@ -815,6 +854,18 @@ class CataloguePull {
   /// nothing about the shop: the till keeps the modifiers it already had. The same
   /// distinction [paymentMethodsRead] draws, and for the same reason.
   final bool groupsRead;
+
+  /// The Odoo model the modifier groups came from, null when neither add-on had a
+  /// row to give. Two of them can be installed side by side, so support cannot tell
+  /// which one a shop is actually editing without being told.
+  final String? modifierModel;
+
+  /// Whether this till asked for its branch's menu and had to take the whole one
+  /// because the server has no branches field. The menu is right enough to trade on
+  /// and wrong enough to explain a chain seeing another shop's dishes, and nothing
+  /// said so anywhere before.
+  final bool branchFilterUnavailable;
+
   final List<PaymentMethod> paymentMethods;
 
   /// Whether the server actually answered the tender question. False means it
@@ -830,5 +881,12 @@ class CataloguePull {
 
   /// A pull with no products is refused rather than written: replacing a working
   /// catalogue with an empty one would leave the till unable to sell.
+  ///
+  /// Refusing it is right and hides which of two very different things happened. A
+  /// pull that could not finish throws, so a pull that gets this far did reach the
+  /// server and was answered: an empty one means this till's branch has nothing
+  /// filed against it, which is a job for whoever configures the menu and not for
+  /// whoever fixes the network. [SyncService] keeps the two apart on the
+  /// diagnostics screen.
   bool get isUsable => products.isNotEmpty;
 }

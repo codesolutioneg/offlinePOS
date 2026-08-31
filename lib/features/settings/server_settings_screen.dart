@@ -72,10 +72,20 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   OdooSiteChoices _choices = const OdooSiteChoices();
   bool _loadingChoices = false;
 
-  /// True once a fetch came back with nothing to add. The screen says so and then
-  /// leaves every saved id exactly where it was: an unreachable server is not a
-  /// reason to reconfigure a till.
-  bool _choicesUnavailable = false;
+  /// Which of the three fetches came back with nothing to add. The screen says so
+  /// and then leaves every saved id exactly where it was: an unreachable server is
+  /// not a reason to reconfigure a till.
+  ///
+  /// One flag each, because the puller reads the three models separately and lets
+  /// each fail on its own: a login that may not read `stock.warehouse` still gets
+  /// its branches and its points of sale, and telling a manager all three are gone
+  /// sends them looking for a fault in two lists that are sitting right there.
+  bool _branchesUnread = false;
+  bool _pointsOfSaleUnread = false;
+  bool _warehousesUnread = false;
+
+  bool get _allChoicesUnread =>
+      _branchesUnread && _pointsOfSaleUnread && _warehousesUnread;
 
   @override
   void initState() {
@@ -133,13 +143,18 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       setState(() {
         _choices = merged;
         _loadingChoices = false;
-        _choicesUnavailable = fresh.isEmpty;
+        _branchesUnread = fresh.branches.isEmpty;
+        _pointsOfSaleUnread = fresh.pointsOfSale.isEmpty;
+        _warehousesUnread = fresh.warehouses.isEmpty;
       });
     } catch (_) {
       if (!mounted) return;
+      // Nothing was asked at all, so nothing can be reported as read.
       setState(() {
         _loadingChoices = false;
-        _choicesUnavailable = true;
+        _branchesUnread = true;
+        _pointsOfSaleUnread = true;
+        _warehousesUnread = true;
       });
     }
   }
@@ -259,7 +274,10 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
                       style: Theme.of(context).textTheme.bodySmall),
                 ]),
               ),
-            if (_choicesUnavailable)
+            // All three gone is one fact and gets one line. One or two gone is a
+            // different fact and belongs under the picker it is about, where a
+            // manager is looking when they find it empty.
+            if (_allChoicesUnread)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
@@ -276,6 +294,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
               options: _choices.branches,
               value: _branchId,
               onPicked: (v) => _branchId = v,
+              unread: _branchesUnread && !_allChoicesUnread,
             ),
             _picker(
               name: 'restaurant',
@@ -284,6 +303,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
               value: _restaurantId,
               onPicked: (v) => _restaurantId = v,
               withinBranch: _branchId,
+              unread: _pointsOfSaleUnread && !_allChoicesUnread,
             ),
             _picker(
               name: 'warehouse',
@@ -292,6 +312,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
               value: _warehouseId,
               onPicked: (v) => _warehouseId = v,
               withinBranch: _branchId,
+              unread: _warehousesUnread && !_allChoicesUnread,
             ),
             _field(
                 _discountProduct,
@@ -397,6 +418,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     required int? value,
     required void Function(int?) onPicked,
     int? withinBranch,
+    bool unread = false,
   }) {
     final offered = _offer(options, value, withinBranch);
     // Kept rather than cleared when the branch changes under it, because silently
@@ -430,6 +452,16 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
             ],
             onChanged: (v) => setState(() => onPicked(v)),
           ),
+          if (unread)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 12),
+              child: Text(
+                tr(context, 'Odoo would not give this list. What is saved here '
+                    'still stands and still travels on every sale.'),
+                key: Key('unread-$name'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
           if (elsewhere)
             Padding(
               padding: const EdgeInsets.only(top: 4, left: 12),

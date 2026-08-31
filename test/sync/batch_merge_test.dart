@@ -106,6 +106,44 @@ void main() {
     expect(payloadBalances(batch.payload), isTrue);
   });
 
+  test('a journal tender is summed as a journal, not folded into a method', () {
+    // The two ids are the same number in two different spaces: journal 2 and
+    // point-of-sale method 2 are not the same drawer, so they must not add up.
+    final journal = paidSale(price: 100, methodId: -2);
+    final alsoJournal = paidSale(price: 250, methodId: -2);
+    final method = paidSale(price: 40, methodId: 2);
+    final batch = mergeOrderPushes(
+            [entryFor(journal), entryFor(alsoJournal), entryFor(method)],
+            batchUuid: 'shift')
+        .batch!;
+
+    final payments = (batch.payload['payments'] as List).cast<Map>();
+    expect(payments, hasLength(2));
+    expect(payments.firstWhere((p) => p['journal_id'] == 2)['amount'],
+        closeTo(350, 0.01));
+    expect(payments.firstWhere((p) => p['method_id'] == 2)['amount'],
+        closeTo(40, 0.01));
+    expect(payloadBalances(batch.payload), isTrue,
+        reason: 'a tender the merge cannot key is a tender the merge drops, and '
+            'that is money missing off a whole night');
+  });
+
+  test('a tab folded into a batch keeps the money it stands for', () {
+    // An on-account tender names neither a journal nor a method, because nothing
+    // was banked. It still has to reach the merged document.
+    final tab = paidSale(price: 100, methodId: -2)
+      ..payments = [const OrderPayment(methodId: -2, amount: 100, label: kOnAccountLabel)];
+    final other = paidSale(price: 100, methodId: -2)
+      ..payments = [const OrderPayment(methodId: -2, amount: 100, label: kOnAccountLabel)];
+    final batch =
+        mergeOrderPushes([entryFor(tab), entryFor(other)], batchUuid: 'shift').batch!;
+
+    final payments = (batch.payload['payments'] as List).cast<Map>();
+    expect(payments, hasLength(1));
+    expect(payments.single['label'], kOnAccountLabel);
+    expect(payments.single['amount'], closeTo(200, 0.01));
+  });
+
   test('delivery charges and tips are summed and still declared', () {
     final a = paidSale(delivery: 25, tip: 10);
     final b = paidSale(delivery: 30);

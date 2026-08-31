@@ -259,4 +259,52 @@ void main() {
     expect(s, contains('TOTAL'));
     expect(s, contains('5.00'));
   });
+
+  group('an option that replaced the dish price', () {
+    // The sheet the cashier taps quotes the menu price for a size, because that is
+    // the figure the customer was given. The receipt used to print the difference
+    // from the dish's own price underneath it, so choosing a small coffee showed
+    // "Small -5.00" under a header of 20 and neither number was the one quoted.
+    Order smallCoffee({double quantity = 1}) =>
+        Order(deviceId: 'till-1', cashierId: 'sara', lines: [
+          OrderLine(
+              productId: 1,
+              name: 'Coffee',
+              quantity: quantity,
+              unitPrice: 20,
+              modifiers: [
+                OrderModifier(
+                    modifierId: 1, name: 'Small', quantity: 1, unitPrice: -5),
+              ]),
+        ]);
+
+    test('prints the menu price on the item and no amount of its own', () {
+      final lines = render(smallCoffee()).split('\n');
+      final item = lines.firstWhere((l) => l.contains('Coffee'));
+      expect(item, contains('15.00'), reason: 'the price the customer was quoted');
+      expect(item, isNot(contains('20.00')));
+      expect(lines.firstWhere((l) => l.contains('Small')).trimRight(),
+          '   + Small');
+    });
+
+    test('never prints a negative under the line', () {
+      expect(render(smallCoffee()), isNot(contains('-5.00')));
+    });
+
+    test('the printed parts still add up to the total', () {
+      // A paid extra on the same line keeps its own amount, so the receipt still
+      // reconciles line by line: 2 x 15 folded into the header, plus 2 x 3.
+      final o = Order(deviceId: 'till-1', cashierId: 'sara', lines: [
+        OrderLine(productId: 1, name: 'Coffee', quantity: 2, unitPrice: 20, modifiers: [
+          OrderModifier(modifierId: 1, name: 'Small', quantity: 1, unitPrice: -5),
+          OrderModifier(modifierId: 2, name: 'Extra shot', quantity: 1, unitPrice: 3),
+        ]),
+      ]);
+      final lines = render(o).split('\n');
+      expect(lines.firstWhere((l) => l.contains('Coffee')), contains('30.00'));
+      expect(lines.firstWhere((l) => l.contains('Extra shot')), contains('6.00'));
+      expect(o.total, 36);
+      expect(render(o), contains('36.00'));
+    });
+  });
 }

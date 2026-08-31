@@ -594,6 +594,21 @@ const Map<String, String> _ar = {
   "Finishing a failed close": "استكمال إقفال لم يكتمل",
   "Last sync attempt": "آخر محاولة مزامنة",
   "Item options": "إضافات الصنف",
+  "Item options come from": "إضافات الأصناف مصدرها",
+  "Branch menu": "قائمة الفرع",
+  "This server has no branch field, so the till is showing the whole menu. "
+          "Install the branch add-on to narrow it.":
+      "لا يوجد حقل الفرع على هذا الخادم، لذا تعرض الكاشير القائمة كاملة. ثبّت "
+          "إضافة الفروع لتضييقها.",
+  "Menu from the server": "القائمة من الخادم",
+  "The server answered with no products for this till, so it kept the menu it "
+          "had. Check the branch this till is set to.":
+      "ردّ الخادم بلا أصناف لهذه الكاشير، فاحتفظت بالقائمة الموجودة لديها. راجع "
+          "الفرع المضبوطة عليه هذه الكاشير.",
+  "Odoo would not give this list. What is saved here still stands and still "
+          "travels on every sale.":
+      "لم يعطِ أودو هذه القائمة. ما هو محفوظ هنا ما زال ساريًا وما زال يُرسل مع "
+          "كل عملية بيع.",
   "The server would not send them. The till kept the ones it had.":
       "لم يرسلها الخادم. احتفظت الكاشير بالإضافات الموجودة لديها.",
   "Save changes": "حفظ التعديلات",

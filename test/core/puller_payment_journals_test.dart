@@ -2,32 +2,30 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/sync/odoo_puller.dart';
 import 'package:offline_pos/core/sync/odoo_site.dart';
 
-/// Which tenders reach the payment sheet once the journal behind each one is
-/// known.
+/// Which tenders reach the payment sheet.
 ///
-/// The shop asked for the methods whose journal is a bank or a cash journal. The
-/// narrowing happens here and only here: what the till puts on the wire is still a
-/// `pos.payment.method` id, because that is the model the booking side resolves,
-/// and sending it a journal id would book every card sale into the cash drawer.
+/// The shop asked to be paid from the account journals of type bank and cash, which
+/// is what its other till has always done. So the tender list is journals: the ones
+/// the till's Odoo user is allowed to take money on when the shop named any, and
+/// every bank and cash journal of the branch's company when it did not.
 void main() {
   final asked = <String>[];
 
-  /// The company's methods, one per journal type Odoo can give a shop, plus the
-  /// pay-later tender that has no journal at all.
-  const allMethods = [
-    {'id': 1, 'name': 'Cash', 'is_cash_count': true, 'journal_id': [11, 'Cash']},
-    {'id': 2, 'name': 'Card', 'is_cash_count': false, 'journal_id': [12, 'Bank']},
-    {'id': 3, 'name': 'Voucher', 'is_cash_count': false, 'journal_id': [13, 'Misc']},
-    {'id': 4, 'name': 'Customer account', 'is_cash_count': false, 'journal_id': false},
-  ];
-
+  /// A company's treasuries, plus one journal that is not money over the counter and
+  /// one belonging to another branch.
   const allJournals = [
-    {'id': 11, 'name': 'Cash drawer', 'type': 'cash'},
-    {'id': 12, 'name': 'Bank CIB', 'type': 'bank'},
-    {'id': 13, 'name': 'Miscellaneous', 'type': 'general'},
+    {'id': 11, 'name': 'Cash drawer', 'type': 'cash', 'sequence': 5,
+      'company_id': [3, 'Branch A']},
+    {'id': 12, 'name': 'Bank CIB', 'type': 'bank', 'sequence': 10,
+      'company_id': [3, 'Branch A']},
+    {'id': 13, 'name': 'InstaPay', 'type': 'bank', 'sequence': 10,
+      'company_id': false},
+    {'id': 14, 'name': 'Bank Misr', 'type': 'bank', 'sequence': 20,
+      'company_id': [4, 'Branch B']},
   ];
 
-  OdooPuller puller({Object? methods, Object? journals}) => OdooPuller(
+  OdooPuller puller({Object? journals, Object? user, int? userId}) => OdooPuller(
+        userId: userId == null ? null : () => userId,
         call: (model, method, args, kwargs) async {
           asked.add(model);
           switch (model) {
@@ -43,12 +41,12 @@ void main() {
                   'product_tmpl_id': [90, 'Margherita'],
                 }
               ];
-            case 'pos.payment.method':
-              if (methods is Exception) throw methods;
-              return methods ?? allMethods;
             case 'account.journal':
               if (journals is Exception) throw journals;
               return journals ?? allJournals;
+            case 'res.users':
+              if (user is Exception) throw user;
+              return user ?? const [];
             default:
               return const [];
           }
@@ -61,97 +59,114 @@ void main() {
   });
   tearDown(() => OdooSite.shared = const OdooSite());
 
-  test('only the bank and cash backed methods are offered', () async {
+  test('the journals are the tenders', () async {
     final pull = await puller().pull();
+
+    expect(pull.paymentMethodsRead, isTrue);
     expect(pull.paymentMethods.map((m) => m.name),
-        ['Cash', 'Card', 'Customer account'],
-        reason: 'a voucher booking to a miscellaneous journal is not money over '
-            'the counter, so offering it puts a tender on the sheet the shop '
-            'cannot reconcile');
+        ['Cash drawer', 'Bank CIB', 'InstaPay', 'Bank Misr'],
+        reason: 'in sequence then name, which is the order the other till in the '
+            'same shop shows them in');
     expect(asked, contains('account.journal'));
+    expect(asked, isNot(contains('pos.payment.method')),
+        reason: 'a journal the shop never mirrored as a point-of-sale method is '
+            'still money it takes, and asking about the mirror is what used to '
+            'leave those journals unsellable');
   });
 
-  test('a method with no journal is kept, as pay later', () async {
+  test('a journal carries what it is and where it books', () async {
     final pull = await puller().pull();
-    final onAccount =
-        pull.paymentMethods.singleWhere((m) => m.name == 'Customer account');
-    expect(onAccount.isPayLater, isTrue);
-    expect(onAccount.journalId, isNull);
-    expect(onAccount.isBankOrCash, isFalse,
-        reason: 'nothing is banked when the customer settles later, and the '
-            'module treats it as an on-account tender rather than a drawer');
-  });
+    final cash = pull.paymentMethods.singleWhere((m) => m.name == 'Cash drawer');
+    final card = pull.paymentMethods.singleWhere((m) => m.name == 'Bank CIB');
 
-  test('the journal a tender books to comes down with it', () async {
-    final pull = await puller().pull();
-    final card = pull.paymentMethods.singleWhere((m) => m.name == 'Card');
+    expect(cash.isCash, isTrue, reason: 'a cash journal is the drawer, and the '
+        'shift count and the drawer kick both read that');
+    expect(card.isCash, isFalse);
     expect(card.journalId, 12);
     expect(card.journalName, 'Bank CIB');
     expect(card.journalType, 'bank');
-    expect(card.isBankOrCash, isTrue);
-    // Still the pos.payment.method id, which is the one the wire carries.
-    expect(card.id, 2);
+    expect(card.isJournal, isTrue);
+    expect(card.id, -12,
+        reason: 'the sign is what keeps a journal and a point-of-sale method that '
+            'share a number from being read as one another');
+    expect(card.isPayLater, isFalse);
   });
 
-  test('a refused journal read narrows nothing', () async {
+  test('the user narrows the list when the shop named any journals', () async {
+    final pull = await puller(
+      userId: 7,
+      user: const [
+        {'id': 7, 'payment_method_ids': [11, 13]}
+      ],
+    ).pull();
+
+    expect(pull.paymentMethods.map((m) => m.name), ['Cash drawer', 'InstaPay']);
+  });
+
+  test('a user with no journals named is allowed all of them', () async {
+    final pull = await puller(
+      userId: 7,
+      user: const [
+        {'id': 7, 'payment_method_ids': <int>[]}
+      ],
+    ).pull();
+
+    expect(pull.paymentMethods, hasLength(4),
+        reason: "the field's own help says an empty list means show all methods, "
+            'so it widens rather than narrows');
+  });
+
+  test('a user whose journals are all elsewhere is not left unable to sell',
+      () async {
+    final pull = await puller(
+      userId: 7,
+      user: const [
+        {'id': 7, 'payment_method_ids': [99]}
+      ],
+    ).pull();
+
+    expect(pull.paymentMethods, hasLength(4),
+        reason: 'a narrowing that leaves nothing is dropped, because a till that '
+            'can name no tender cannot take money');
+  });
+
+  test('an Odoo that will not answer for the user narrows nothing', () async {
     final pull =
-        await puller(journals: Exception('Access denied')).pull();
+        await puller(userId: 7, user: Exception('Access denied')).pull();
+
     expect(pull.paymentMethodsRead, isTrue);
-    expect(pull.paymentMethods.map((m) => m.id), [1, 2, 3, 4],
-        reason: 'a server that will not answer the journal question must not '
-            'cost the till the tenders it was already selling with');
-    expect(pull.paymentMethods.first.journalType, isNull);
+    expect(pull.paymentMethods, hasLength(4));
   });
 
-  test('a refused tender read is still not a shop with no tenders', () async {
-    final pull = await puller(methods: Exception('Access denied')).pull();
+  test("the branch's company narrows it, and an unscoped journal survives",
+      () async {
+    OdooSite.shared = const OdooSite(branchId: 3);
+    final pull = await puller().pull();
+
+    expect(pull.paymentMethods.map((m) => m.name),
+        ['Cash drawer', 'Bank CIB', 'InstaPay'],
+        reason: 'another branch keeps its own treasuries, and a journal that '
+            'names no company is unknown rather than disqualified');
+  });
+
+  test('a company that matches no journal at all leaves the list alone', () async {
+    OdooSite.shared = const OdooSite(branchId: 99);
+    final pull = await puller(journals: const [
+      {'id': 11, 'name': 'Cash drawer', 'type': 'cash', 'company_id': [3, 'A']},
+      {'id': 14, 'name': 'Bank Misr', 'type': 'bank', 'company_id': [4, 'B']},
+    ]).pull();
+
+    expect(pull.paymentMethods, hasLength(2),
+        reason: 'offering one tender too many beats a till that can name none');
+  });
+
+  test('a refused journal read is not a shop with no tenders', () async {
+    final pull = await puller(journals: Exception('Access denied')).pull();
+
     expect(pull.isUsable, isTrue);
     expect(pull.paymentMethods, isEmpty);
-    expect(pull.paymentMethodsRead, isFalse);
-  });
-
-  test('narrowing to nothing leaves the list alone', () async {
-    final pull = await puller(methods: [
-      {'id': 3, 'name': 'Voucher', 'is_cash_count': false, 'journal_id': [13, 'Misc']}
-    ]).pull();
-    expect(pull.paymentMethods, hasLength(1),
-        reason: 'a till that can name no tender at all cannot take money, so an '
-            'empty narrowing is dropped the way the point-of-sale one is');
-  });
-
-  test('the point of sale is narrowed before the journals are', () async {
-    OdooSite.shared = const OdooSite(restaurantId: 7);
-    final puller = OdooPuller(
-      call: (model, method, args, kwargs) async {
-        switch (model) {
-          case 'pos.category':
-            return [
-              {'id': 1, 'name': 'Pizza', 'sequence': 1, 'parent_id': false}
-            ];
-          case 'product.product':
-            return [
-              {
-                'id': 10, 'display_name': 'Margherita', 'lst_price': 250,
-                'pos_categ_ids': [1], 'active': true, 'to_weight': false,
-                'product_tmpl_id': [90, 'Margherita'],
-              }
-            ];
-          case 'pos.payment.method':
-            return allMethods;
-          case 'pos.config':
-            return [
-              {'id': 7, 'payment_method_ids': [1, 3]}
-            ];
-          case 'account.journal':
-            return allJournals;
-          default:
-            return const [];
-        }
-      },
-    );
-    final pull = await puller.pull();
-    expect(pull.paymentMethods.map((m) => m.id), [1],
-        reason: 'this point of sale runs cash and a voucher; the voucher goes to '
-            'a miscellaneous journal, so only the cash tender survives both');
+    expect(pull.paymentMethodsRead, isFalse,
+        reason: 'the caller keeps the tenders the till already had, and only an '
+            'answered question may replace them');
   });
 }

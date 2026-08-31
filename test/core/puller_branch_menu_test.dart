@@ -145,4 +145,52 @@ void main() {
     expect((branchClause(domains.last).last as List).single, 4,
         reason: 'the next refresh is the new menu, not the next restart');
   });
+
+  test('a record deleted under the read is not the branches field missing', () {
+    // "Does not exist" is how Odoo reports a record that went away mid-read, and
+    // matching on it alone latched the whole chain menu onto a branch till over a
+    // failure that has nothing to do with the addon.
+    final p = OdooPuller(
+      branchId: () => 3,
+      call: (model, method, args, kwargs) async {
+        if (model != 'product.product') return const [];
+        throw Exception('MissingError: Record does not exist or has been deleted.');
+      },
+    );
+    return expectLater(p.pull(), throwsA(isA<Exception>()),
+        reason: 'it gives up rather than falling back to the whole menu');
+  });
+
+  test('a fault that only quotes the domain back does not drop the filter', () async {
+    // Any Odoo fault carrying a traceback prints the arguments it was called with,
+    // so the field name appears in the message whatever actually went wrong.
+    domains = [];
+    final p = OdooPuller(
+      branchId: () => 3,
+      call: (model, method, args, kwargs) async {
+        if (model != 'product.product') return const [];
+        domains.add((args.first as List).cast());
+        throw Exception(
+            "Traceback: search_read([['product_tmpl_id.branch_ids', 'in', [3]]]) "
+            'psycopg2.OperationalError: server closed the connection unexpectedly');
+      },
+    );
+    await expectLater(p.pull(), throwsA(isA<Exception>()));
+    expect(domains.every(mentionsBranch), isTrue,
+        reason: 'it never asked for the whole chain menu');
+  });
+
+  test('the pull says out loud when the branch filter had to be dropped', () async {
+    // Trading on the whole chain menu is the right fallback and a silent one, and
+    // it is the answer to "why does this branch see the other shop dishes".
+    final missing = await puller(branch: 3, branchFieldExists: false).pull();
+    expect(missing.branchFilterUnavailable, isTrue);
+
+    final filtered = await puller(branch: 3).pull();
+    expect(filtered.branchFilterUnavailable, isFalse);
+
+    final noBranch = await puller().pull();
+    expect(noBranch.branchFilterUnavailable, isFalse,
+        reason: 'a single-shop till never asked to be filtered');
+  });
 }

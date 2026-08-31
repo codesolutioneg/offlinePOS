@@ -265,11 +265,18 @@ class ModifierGroup {
   }
 }
 
-/// A way a sale can be paid, as configured on the till's point of sale in Odoo.
+/// A way a sale can be paid: one of the shop's bank and cash journals, which is
+/// where the money actually lands.
 ///
-/// Always a `pos.payment.method`, never the journal behind it. The booking module
-/// resolves the id it is sent against that model and reads the journal off it, so a
-/// till that sent a journal id would have its card takings land in the drawer.
+/// Two id spaces meet on [id] and its sign is what tells them apart. A journal
+/// tender holds the `account.journal` id negated; a tender pulled before the till
+/// offered journals holds a positive `pos.payment.method` id and still books
+/// through that method. The sign is the whole rule, so the two can never collide:
+/// a per-tender setting or an order written against one is never read as the other.
+///
+/// Negating rather than adding a field of its own is what lets a sale rung last
+/// night, a printed-name override typed last month and a tender offered tonight all
+/// live in the one int the rest of the app already passes around.
 class PaymentMethod {
   const PaymentMethod({
     required this.id,
@@ -279,9 +286,32 @@ class PaymentMethod {
     this.journalName,
     this.journalType,
   });
+
+  /// The tender a journal is, as the payment sheet offers it.
+  ///
+  /// The journal is the tender, so its name is the tender's name and its type is
+  /// what says whether the money goes in the drawer.
+  factory PaymentMethod.journal({
+    required int journalId,
+    required String name,
+    required String type,
+  }) =>
+      PaymentMethod(
+        id: -journalId,
+        name: name,
+        isCash: type == 'cash',
+        journalId: journalId,
+        journalName: name,
+        journalType: type,
+      );
+
   final int id;
   final String name;
   final bool isCash;
+
+  /// Whether this tender is a journal the shop takes money into, rather than a
+  /// point-of-sale method left on the till from before.
+  bool get isJournal => id < 0;
 
   /// The `account.journal` the money ends up in, carried so a manager can see what
   /// a tender books to. Null on the method Odoo holds no journal against, which is
@@ -295,12 +325,9 @@ class PaymentMethod {
   final String? journalName;
   final String? journalType;
 
-  /// Whether this tender settles into a bank or cash journal, which is the money
-  /// a shop actually takes at the counter.
-  bool get isBankOrCash => journalType == 'bank' || journalType == 'cash';
-
   /// Odoo holds no journal against its pay-later tender, so that is what having
-  /// none means.
+  /// none means. Only a point-of-sale method can be one: a journal tender is the
+  /// journal, so it always has one.
   bool get isPayLater => journalId == null;
 
   Map<String, dynamic> toMap() => {

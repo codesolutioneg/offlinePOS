@@ -116,6 +116,27 @@ void main() {
       expect(journalLine(t, 2), contains('Bank'));
     });
 
+    testWidgets('a journal tender keys its settings on the journal', (t) async {
+      await t.pumpWidget(app(withMethods: [
+        PaymentMethod.journal(journalId: 11, name: 'Cash drawer', type: 'cash'),
+        PaymentMethod.journal(journalId: 12, name: 'Bank CIB', type: 'bank'),
+      ]));
+
+      expect(journalLine(t, -12), contains('Bank CIB'));
+
+      await t.tap(find.byKey(const Key('payment-offered--11')));
+      await t.pumpAndSettle();
+      await t.enterText(
+          find.byKey(const Key('payment-label--12')), 'Visa / Mastercard');
+      await t.tap(find.byKey(const Key('save-payment-labels')));
+      await t.pumpAndSettle();
+
+      expect(settings.paymentMethodLabels, {-12: 'Visa / Mastercard'});
+      expect(settings.disabledPaymentMethodIds, {-11},
+          reason: 'the journal is what the manager turned off, and no '
+              'point-of-sale method that happens to be numbered 11 is touched');
+    });
+
     testWidgets('a method with no journal is named as pay later', (t) async {
       await t.pumpWidget(app(withMethods: const [
         PaymentMethod(id: 4, name: 'Customer account'),

@@ -24,6 +24,7 @@ import 'database.dart';
 /// than a migration. Reads are local and synchronous like the rest of the till.
 class SettingsStore {
   SettingsStore(this._db) {
+    migrateTendersToJournals();
     publishPrintProfile();
     publishBusinessDayRule();
     publishCataloguePullOptions();
@@ -80,6 +81,10 @@ class SettingsStore {
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
   static const _tablePreorders = 'table_preorders';
+
+  /// Set to 'pending' by the schema migration that turned the till's tenders into
+  /// journals, and to 'done' once the settings keyed on the old ids have been moved.
+  static const _tendersFromJournals = 'tenders_from_journals';
 
   // ── generic accessors ────────────────────────────────────────────
   String? getString(String key) {
@@ -737,18 +742,84 @@ class SettingsStore {
 
   // ── letting a customer settle later ──────────────────────────────
 
-  /// The payment method an on-account sale books against, or null when the shop
-  /// does not run accounts. Off by default, and deliberately a nomination rather
-  /// than an invented tender: the wire contract books real methods, so a shop that
-  /// wants "pay later" points it at the method their accounts already use for a
-  /// customer balance (never the cash one, or the drawer would be counted short).
+  /// The tender an on-account sale books against, or null when the shop does not
+  /// run accounts. Off by default, and deliberately a nomination rather than an
+  /// invented tender: the wire contract books tenders the shop already has, so a
+  /// shop that wants "pay later" points it at one of its own (never a cash journal,
+  /// or the drawer would be counted short by every tab).
+  ///
+  /// Only zero is refused. A negative id is a journal, which is what the payment
+  /// sheet now offers, so it is the ordinary case rather than a bad value.
   int? get payLaterMethodId {
     final id = int.tryParse(getString('pay_later_method_id') ?? '');
-    return (id == null || id <= 0) ? null : id;
+    return (id == null || id == 0) ? null : id;
   }
 
   set payLaterMethodId(int? v) =>
-      setString('pay_later_method_id', (v == null || v <= 0) ? null : '$v');
+      setString('pay_later_method_id', (v == null || v == 0) ? null : '$v');
+
+  // ── the till's tenders became journals ───────────────────────────
+
+  /// Move the per-tender settings onto the journal id space, once.
+  ///
+  /// The tender list used to be Odoo's point-of-sale methods and is now the shop's
+  /// bank and cash journals, which are numbered from a different sequence. What a
+  /// manager set here (a printed name, a tender switched off, the one an account
+  /// sale books against) was set against a method, and the only record of which
+  /// journal that method paid into is the catalogue this till already pulled. So the
+  /// mapping is taken from there, at the moment the till updates and before the next
+  /// refresh replaces those rows, which is the last point at which the evidence
+  /// exists.
+  ///
+  /// A key that cannot be mapped is left exactly as it is rather than dropped or
+  /// reinterpreted. The two id spaces have opposite signs, so a leftover method key
+  /// matches nothing on the new payment sheet and can never be read as the journal
+  /// that happens to share its number. That is the whole reason the sign carries the
+  /// space: a setting is either migrated or inert, never silently repointed.
+  ///
+  /// Public so a test can put a till back into the state an update leaves it in.
+  void migrateTendersToJournals() {
+    if (getString(_tendersFromJournals) != 'pending') return;
+    final journalOf = _pulledMethodJournals();
+
+    int? mapped(int id) {
+      // Already a journal, or a method the till never learned a journal for.
+      if (id < 0) return id;
+      final journal = journalOf[id];
+      return journal == null ? null : -journal;
+    }
+
+    disabledPaymentMethodIds = {
+      for (final id in disabledPaymentMethodIds) mapped(id) ?? id,
+    };
+    paymentMethodLabels = {
+      for (final e in paymentMethodLabels.entries) mapped(e.key) ?? e.key: e.value,
+    };
+    final payLater = payLaterMethodId;
+    if (payLater != null) payLaterMethodId = mapped(payLater) ?? payLater;
+
+    setString(_tendersFromJournals, 'done');
+  }
+
+  /// Which journal each point-of-sale method paid into, as the last catalogue pull
+  /// that spoke in methods recorded it. Empty on a till that never pulled one, which
+  /// makes the migration above a no-op rather than a guess.
+  Map<int, int> _pulledMethodJournals() {
+    final rows = _db.raw
+        .select("SELECT value FROM catalogue_meta WHERE key = 'payment_methods'");
+    if (rows.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(rows.first['value'] as String);
+      if (decoded is! List) return const {};
+      return {
+        for (final e in decoded)
+          if (e is Map && e['id'] is int && e['journal_id'] is int)
+            e['id'] as int: e['journal_id'] as int,
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
 
   // ── the shop's mark on the paper ─────────────────────────────────
 

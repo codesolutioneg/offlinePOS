@@ -191,4 +191,38 @@ void main() {
     await save(t);
     expect(settings.odooRestaurantId, 7);
   });
+
+  testWidgets('one refused list does not report the other two as gone', (t) async {
+    // The puller reads the three models separately and lets each fail on its own,
+    // so a login that may not read stock.warehouse still gets its branches and its
+    // points of sale. Saying all three are unavailable sends a manager hunting a
+    // fault in two lists that are sitting right there.
+    await open(t, load: () async => const OdooSiteChoices(
+          branches: [OdooSiteOption(id: 1, name: 'Downtown')],
+          pointsOfSale: [OdooSiteOption(id: 7, name: 'Counter')],
+        ));
+
+    expect(find.byKey(const Key('unread-warehouse')), findsOneWidget);
+    expect(find.byKey(const Key('unread-branch')), findsNothing);
+    expect(find.byKey(const Key('unread-restaurant')), findsNothing);
+    expect(find.byKey(const Key('choices-unavailable')), findsNothing,
+        reason: 'two of the three lists are right there on the screen');
+  });
+
+  testWidgets('a fetch that answered everything reports nothing unavailable',
+      (t) async {
+    await open(t, load: () async => fromOdoo);
+    for (final picker in ['branch', 'restaurant', 'warehouse']) {
+      expect(find.byKey(Key('unread-$picker')), findsNothing);
+    }
+    expect(find.byKey(const Key('choices-unavailable')), findsNothing);
+  });
+
+  testWidgets('all three gone is still said once, not three times', (t) async {
+    await open(t, load: () async => throw Exception('no route to host'));
+    expect(find.byKey(const Key('choices-unavailable')), findsOneWidget);
+    for (final picker in ['branch', 'restaurant', 'warehouse']) {
+      expect(find.byKey(Key('unread-$picker')), findsNothing);
+    }
+  });
 }

@@ -6,12 +6,13 @@ import '../../domain/catalogue.dart';
 
 /// What each tender is called on the printed receipt.
 ///
-/// The methods themselves come down from the server and are not editable here: a
-/// method's id is what a sale books against and what every report counts, so this
-/// screen changes one thing only, the words on the paper. A shop whose accounts call
-/// it "Bank" can print "Visa / Mastercard" without anything downstream noticing.
+/// The tenders themselves come down from the server and are not editable here: they
+/// are the shop's own bank and cash journals, which is where the money lands and
+/// what every report counts, so this screen changes one thing only, the words on the
+/// paper. A shop whose accounts call a journal "Bank" can print "Visa / Mastercard"
+/// without anything downstream noticing.
 ///
-/// Empty the box and the method's own name comes back, so an override is never a
+/// Empty the box and the journal's own name comes back, so an override is never a
 /// one-way door.
 class PaymentMethodsScreen extends StatefulWidget {
   const PaymentMethodsScreen({
@@ -74,9 +75,10 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
 
   /// Where a tender's money ends up, in one line under its name.
   ///
-  /// A method Odoo holds no journal against is its pay-later tender, and it is
-  /// named as that rather than as a gap: the shop settles it on account, so it is
-  /// offered here on purpose and not by oversight.
+  /// A tender left on this till from before it offered journals can be a method Odoo
+  /// holds no journal against, which is its pay-later tender. It is named as that
+  /// rather than as a gap: the shop settles it on account, so it was offered on
+  /// purpose and not by oversight.
   String _booksTo(PaymentMethod m) {
     if (m.isPayLater) return tr(context, 'No journal, so this is pay later');
     final name = m.journalName;
@@ -101,7 +103,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
                 padding: const EdgeInsets.all(24),
                 child: Text(
                   tr(context,
-                      'No payment methods yet. They arrive with the menu on the next sync.'),
+                      'No payment methods yet. The shop\'s bank and cash journals arrive with the menu on the next sync.'),
                   key: const Key('no-payment-methods'),
                   textAlign: TextAlign.center,
                 ),
@@ -112,7 +114,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
               children: [
                 Text(
                   tr(context,
-                      'Only the wording on the receipt changes. Sales and reports keep the method as it is.'),
+                      'Only the wording on the receipt changes. Sales and reports keep the journal as it is.'),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),

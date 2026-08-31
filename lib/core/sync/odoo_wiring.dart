@@ -33,6 +33,10 @@ class OdooWiring {
 
   bool get isConfigured => _endpoint != null;
 
+  /// The Odoo user the till is authenticated as, or null before the first login.
+  /// The catalogue pull reads it to narrow the tenders to what that user may take.
+  int? get uid => _sender?.uid;
+
   /// Point the outbox at [endpoint]. Safe to call again when settings change; it
   /// rebuilds the sender so a new URL or login takes effect without a restart.
   void configure(OdooEndpoint endpoint) {

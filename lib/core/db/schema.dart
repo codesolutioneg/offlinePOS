@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 23;
+  static const int version = 24;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -585,6 +585,24 @@ class Schema {
       // "Which tables are mine" is asked per waiter on every floor build, so it is
       // an indexed lookup rather than a scan of the room.
       'CREATE INDEX idx_table_assignments_cashier ON table_assignments(cashier_id)',
+    ],
+    // v23 -> v24: the till's tenders are the shop's journals.
+    //
+    // A note to the settings store rather than a change of shape. What a manager set
+    // per tender is keyed on an id, the tender list has moved from point-of-sale
+    // methods to bank and cash journals, and the two are numbered from different
+    // sequences. This marks the one moment those settings still have to be moved,
+    // and the store does the moving while the catalogue that says which method paid
+    // into which journal is still on disk. See SettingsStore.migrateTendersToJournals.
+    //
+    // Harmless on a fresh till: there is nothing keyed on the old ids, so the pass
+    // finds nothing to move and marks itself done.
+    [
+      // OR IGNORE rather than an upsert clause: this runs on every build the till
+      // ships with, and the SQLCipher one is not guaranteed to be new enough to
+      // parse ON CONFLICT.
+      "INSERT OR IGNORE INTO app_settings (key, value) "
+          "VALUES ('tenders_from_journals', 'pending')",
     ],
   ];
 }

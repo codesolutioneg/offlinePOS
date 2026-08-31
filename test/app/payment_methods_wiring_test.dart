@@ -37,9 +37,10 @@ class _NoPrinters extends PrinterDiscovery {
   Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async => const [];
 }
 
-/// "Payment needs to come from Odoo": what the tender step shows when the methods
-/// have arrived, what it shows when they never have, and what a refresh the server
-/// half-refuses is allowed to do to the ones the till already had.
+/// "Payment from account journal, which have type bank and cash": what the tender
+/// step shows when the shop's journals have arrived, what it shows when they never
+/// have, and what a refresh the server half-refuses is allowed to do to the ones the
+/// till already had.
 void main() {
   late Db db;
   late OrderStore orders;
@@ -88,11 +89,13 @@ void main() {
                   'pos_categ_ids': const <int>[], 'active': true,
                 }
               ];
-            case 'pos.payment.method':
+            case 'account.journal':
               if (!tendersReadable) throw Exception('Access denied');
+              // Neither of these is mirrored as a pos.payment.method, and neither
+              // needs to be: the journal is the tender.
               return [
-                {'id': 1, 'name': 'Cash', 'is_cash_count': true},
-                {'id': 2, 'name': 'Visa', 'is_cash_count': false},
+                {'id': 11, 'name': 'Cash', 'type': 'cash', 'sequence': 1},
+                {'id': 12, 'name': 'Visa', 'type': 'bank', 'sequence': 2},
               ];
             default:
               return const [];
@@ -169,28 +172,33 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  testWidgets('the tender buttons are the methods Odoo sent', (t) async {
+  testWidgets('the tender buttons are the journals Odoo sent', (t) async {
     tallWindow(t);
-    catalogueOnTheTill(methods: const [
-      PaymentMethod(id: 1, name: 'Cash', isCash: true),
-      PaymentMethod(id: 2, name: 'Visa'),
+    catalogueOnTheTill(methods: [
+      PaymentMethod.journal(journalId: 11, name: 'Cash', type: 'cash'),
+      PaymentMethod.journal(journalId: 12, name: 'Visa', type: 'bank'),
     ]);
     draftOnTheTill();
     await t.pumpWidget(app());
     await signIn(t);
     await openPayment(t);
 
-    expect(find.byKey(const Key('method-1')), findsOneWidget);
-    expect(find.byKey(const Key('method-2')), findsOneWidget);
+    expect(find.byKey(const Key('method--11')), findsOneWidget);
+    expect(find.byKey(const Key('method--12')), findsOneWidget);
     expect(find.byKey(const Key('no-payment-methods')), findsNothing);
 
-    await t.tap(find.byKey(const Key('method-2')));
+    await t.tap(find.byKey(const Key('method--12')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('confirm-payment')));
     await t.pumpAndSettle();
 
-    expect(orders.recent().single.payments.single.methodId, 2,
-        reason: 'the sale books against the Odoo method, not a till-invented one');
+    final sale = orders.recent().single;
+    expect(sale.payments.single.methodId, -12,
+        reason: 'the sale books against the shop\'s own journal, and nothing had '
+            'to mirror that journal as a point-of-sale method first');
+    final tender = (sale.toServerPayload()['payments'] as List).single as Map;
+    expect(tender['journal_id'], 12);
+    expect(tender.containsKey('method_id'), isFalse);
   });
 
   testWidgets('a till that never got any says so, and still takes the money',
@@ -219,10 +227,10 @@ void main() {
   testWidgets('a refresh the server half-refuses keeps the tenders it had',
       (t) async {
     tallWindow(t);
-    // The till pulled its methods yesterday and is selling with them.
-    catalogueOnTheTill(methods: const [
-      PaymentMethod(id: 1, name: 'Cash', isCash: true),
-      PaymentMethod(id: 2, name: 'Visa'),
+    // The till pulled its journals yesterday and is selling with them.
+    catalogueOnTheTill(methods: [
+      PaymentMethod.journal(journalId: 11, name: 'Cash', type: 'cash'),
+      PaymentMethod.journal(journalId: 12, name: 'Visa', type: 'bank'),
     ]);
     draftOnTheTill();
     // Today the integration user lost the group that lets it read them.
@@ -235,6 +243,6 @@ void main() {
     expect(CatalogueStore(db).paymentMethods().map((m) => m.name), ['Cash', 'Visa'],
         reason: 'a refused tender read must not empty the payment sheet');
     await openPayment(t);
-    expect(find.byKey(const Key('method-2')), findsOneWidget);
+    expect(find.byKey(const Key('method--12')), findsOneWidget);
   });
 }
