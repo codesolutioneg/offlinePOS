@@ -12,6 +12,26 @@ import 'outbox.dart';
 
 enum SyncState { idle, working, offline }
 
+/// Where the armed state of a failed batch push survives a restart.
+///
+/// It has to survive one. A close that failed at midnight arms a retry in memory,
+/// and a till switched off for the night comes back with an empty head and a day's
+/// takings still queued, waiting on somebody remembering to tap Sync now. That is
+/// the failure the retry exists to remove, so the arming is written down.
+///
+/// Only the arming is persisted, never "there are sales queued". The difference is
+/// the whole product rule: sales sit on the till all through service and go as one
+/// batch at close, so a till that re-armed on a pending count alone would drain
+/// mid-shift and push them one at a time.
+abstract interface class RetryArmingStore {
+  /// The push still owed to the server, or null when nothing is armed.
+  ({DateTime armedAt, String reason})? read();
+
+  void write(DateTime armedAt, String reason);
+
+  void clear();
+}
+
 /// What one catalogue refresh actually did, so a manual "Refresh menu" can say
 /// something true instead of a hopeful "done".
 enum RefreshOutcome {
@@ -51,6 +71,7 @@ class SyncService {
     Future<bool> Function()? probe,
     this.reconcile,
     this.mergeBatch,
+    RetryArmingStore? arming,
     this.catalogueMaxAge = const Duration(minutes: 30),
     this.retryWindow = const Duration(hours: 12),
     this.retryInterval = const Duration(minutes: 5),
@@ -61,6 +82,7 @@ class SyncService {
         _outboxStore = outboxStore,
         _audit = audit,
         _probe = probe,
+        _arming = arming,
         _now = now ?? DateTime.now;
 
   final Outbox _outbox;
@@ -68,6 +90,10 @@ class SyncService {
   final OdooPuller? _puller;
   final SqliteOutboxStore _outboxStore;
   final AuditLog? _audit;
+
+  /// Null on a build with nowhere to write it, in which case the arming lives only
+  /// as long as the process does and [restoreArming] has nothing to find.
+  final RetryArmingStore? _arming;
 
   /// A cheap reachability check against the configured server. Injected so this
   /// stays testable without a socket. Null on a build with no way to probe, in
@@ -197,6 +223,8 @@ class SyncService {
   /// never starts a push of its own.
   void start({Duration every = const Duration(seconds: 20)}) {
     _timer?.cancel();
+    // Before the first tick, so the pass below already knows a close is owed.
+    restoreArming();
     _timer = Timer.periodic(every, (_) => periodicPass());
     // Probe once at startup so the badge is right before the first tick.
     unawaited(periodicPass());
@@ -382,6 +410,7 @@ class SyncService {
       // Keep the original arming time: the window is meant to expire, and a fresh
       // failure every few minutes would push it out forever.
       _retryArmedReason = reason;
+      _arming?.write(_retryArmedAt!, reason);
       return;
     }
     _retryArmedAt = _now().toUtc();
@@ -389,11 +418,47 @@ class SyncService {
     _retryAttempts = 0;
     _lastRetryAt = null;
     _retryStoppedReason = null;
+    _arming?.write(_retryArmedAt!, reason);
   }
 
   void _disarmRetry(String why) {
     _retryArmedAt = null;
     _retryStoppedReason = why;
+    // Cleared on the way down as well as on delivery. A window that closed is
+    // finished with, and leaving the record would re-arm it on the next boot and
+    // start the same dead push again every morning.
+    _arming?.clear();
+  }
+
+  /// Pick up a batch push that was still owed when the process last stopped.
+  ///
+  /// Called from [start], so a till rebooted overnight after a failed close carries
+  /// on trying instead of waiting for a person. The original arming time comes back
+  /// with it, which is what makes the window mean anything: twelve hours from the
+  /// close that failed, not twelve more from every restart.
+  void restoreArming() {
+    if (_retryArmedAt != null) return;
+    final saved = _arming?.read();
+    if (saved == null) return;
+    if (pendingSales == 0) {
+      // Delivered by some other route before the record was cleared. Nothing is
+      // owed, so the record goes rather than arming a retry with nothing to send.
+      _arming?.clear();
+      return;
+    }
+    if (_now().toUtc().difference(saved.armedAt) >= retryWindow) {
+      // The window closed while the till was off. Say so, the way a live give-up
+      // says it, instead of silently starting a fresh twelve hours.
+      _retryStoppedReason = 'gave up with $pendingSales sale(s) still queued when '
+          'the retry window closed';
+      _arming?.clear();
+      return;
+    }
+    _retryArmedAt = saved.armedAt;
+    _retryArmedReason = saved.reason;
+    _retryAttempts = 0;
+    _lastRetryAt = null;
+    _retryStoppedReason = null;
   }
 
   /// One bounded catch-up attempt for a batch push that did not deliver.

@@ -48,6 +48,7 @@ import 'core/sync/outbox.dart';
 import 'core/sync/odoo_endpoint.dart';
 import 'core/sync/odoo_puller.dart';
 import 'core/sync/odoo_wiring.dart';
+import 'core/sync/retry_arming.dart';
 import 'core/sync/server_probe.dart';
 import 'core/sync/sync_service.dart';
 import 'core/updates/update_gate.dart';
@@ -274,6 +275,9 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       batchUuid: () => ShiftStore(db).latestShift()?.uuid,
       onOrderBooked: orders.markSynced,
     ).run,
+    // So a close that failed at midnight is still owed in the morning. start()
+    // reads it back before the first tick.
+    arming: SettingsRetryArming(settings),
   )..start();
   // Its timer is running from here, so a later failure has to switch it off:
   // otherwise the till goes on talking to the server behind a screen that says it

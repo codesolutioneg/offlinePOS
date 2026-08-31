@@ -32,6 +32,29 @@ class FlakyServer {
   }
 }
 
+/// The arming record, kept where a second SyncService can read it, which is what
+/// a restart looks like from here.
+class FakeArming implements RetryArmingStore {
+  DateTime? armedAt;
+  String? reason;
+
+  @override
+  ({DateTime armedAt, String reason})? read() =>
+      armedAt == null ? null : (armedAt: armedAt!, reason: reason ?? '');
+
+  @override
+  void write(DateTime at, String why) {
+    armedAt = at;
+    reason = why;
+  }
+
+  @override
+  void clear() {
+    armedAt = null;
+    reason = null;
+  }
+}
+
 void main() {
   late Db db;
   late CatalogueStore cat;
@@ -55,8 +78,10 @@ void main() {
     Duration retryWindow = const Duration(hours: 12),
     Duration retryInterval = const Duration(minutes: 5),
     DateTime Function()? now,
+    RetryArmingStore? arming,
   }) =>
       SyncService(
+        arming: arming,
         outbox: outbox ?? Outbox(store: store, senders: senders),
         catalogue: cat,
         outboxStore: store,
@@ -77,6 +102,7 @@ void main() {
     Duration retryInterval = const Duration(minutes: 5),
     DateTime Function()? now,
     Future<bool> Function()? probe,
+    RetryArmingStore? arming,
   }) async {
     final server = FlakyServer();
     final outbox = Outbox(store: store, senders: {'order.push': server.send});
@@ -87,6 +113,7 @@ void main() {
       retryWindow: retryWindow,
       retryInterval: retryInterval,
       now: now,
+      arming: arming,
     );
     await sync.flush();
     return (sync: sync, outbox: outbox, server: server);
@@ -300,6 +327,77 @@ void main() {
     expect(till.sync.retryArmedAt, isNotNull);
     expect(till.sync.retryArmedReason, isNotNull);
     expect(till.sync.retryAttempts, 0, reason: 'armed, not yet tried');
+  });
+
+  test('a close that failed at midnight is still owed after a reboot', () async {
+    // The armed state used to live only in memory, so a till switched off for the
+    // night came back with the takings queued and nothing chasing them.
+    final saved = FakeArming();
+    var clock = DateTime.utc(2026, 1, 1, 23, 30);
+    final till = await armedTill(arming: saved, now: () => clock);
+    expect(till.sync.retryArmed, isTrue);
+    final armedAt = till.sync.retryArmedAt;
+
+    // Morning, new process, same database and the same sale still queued.
+    clock = DateTime.utc(2026, 1, 2, 8);
+    final after = serviceWith(
+      outbox: till.outbox,
+      arming: saved,
+      now: () => clock,
+      probe: () async => true,
+    );
+    after.restoreArming();
+    expect(after.retryArmed, isTrue);
+    expect(after.retryArmedAt, armedAt,
+        reason: 'the window runs from the close that failed, not from the reboot');
+
+    till.server.down = false;
+    await after.periodicPass();
+    expect(till.server.sends, 1, reason: 'delivered before the shop opened');
+    expect(after.retryArmed, isFalse);
+    expect(saved.armedAt, isNull, reason: 'and the record is cleared');
+  });
+
+  test('a reboot does not arm a retry just because sales are queued', () async {
+    // The rule this protects: sales sit on the till all through service and go as
+    // one batch at close. Re-arming on a pending count would drain them mid-shift.
+    final saved = FakeArming();
+    final server = FlakyServer();
+    final outbox = Outbox(store: store, senders: {'order.push': server.send});
+    await outbox.enqueue('order.push', 'mid-shift', {});
+
+    final s = serviceWith(outbox: outbox, arming: saved, probe: () async => true);
+    s.restoreArming();
+    expect(s.retryArmed, isFalse);
+    server.down = false;
+    await s.periodicPass();
+    expect(server.sends, 0, reason: 'the timer pass must never push a sale');
+    expect(store.pendingSalesCount, 1);
+  });
+
+  test('an arming whose window closed while the till was off gives up', () async {
+    final saved = FakeArming();
+    var clock = DateTime.utc(2026, 1, 1, 23);
+    final till = await armedTill(
+      arming: saved,
+      now: () => clock,
+      retryWindow: const Duration(hours: 12),
+    );
+    expect(till.sync.retryArmed, isTrue);
+
+    // Back on three days later. The window is long past.
+    clock = DateTime.utc(2026, 1, 4, 9);
+    final after = serviceWith(
+      outbox: till.outbox,
+      arming: saved,
+      now: () => clock,
+      retryWindow: const Duration(hours: 12),
+    );
+    after.restoreArming();
+    expect(after.retryArmed, isFalse);
+    expect(after.retryStoppedReason, contains('gave up'),
+        reason: 'support has to be told it stopped, not left to assume it is trying');
+    expect(saved.armedAt, isNull);
   });
 
   test('a timer pass drains the armed retry once the server is back', () async {
