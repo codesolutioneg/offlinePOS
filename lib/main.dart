@@ -255,7 +255,12 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     audit: audit,
     deviceId: deviceId,
     appVersion: appVersion,
-    puller: OdooPuller(call: odoo.catalogueCall),
+    // The branch is read at the moment of each pull, so a till moved to another
+    // branch has the right menu on its next refresh rather than its next restart.
+    puller: OdooPuller(
+      call: odoo.catalogueCall,
+      branchId: () => settings.odooBranchId,
+    ),
     probe: probeOnline,
     // Re-queue any paid sale that is not on the wire before a batch push. The
     // outbox is unique on (kind, uuid), so this never double-books.

@@ -23,7 +23,16 @@ class CataloguePullOptions {
 /// The counterpart to [OdooSender]. Runs on a schedule and never on the path of a
 /// sale, so a slow or absent server delays a refresh but never a customer.
 class OdooPuller {
-  OdooPuller({required this.call, this.withImages});
+  OdooPuller({required this.call, this.withImages, this.branchId});
+
+  /// The branch this till sells for, so a chain's other menus stay off it.
+  ///
+  /// A reader rather than a value because the puller is built once at startup and
+  /// a manager can move the till to another branch at any point after that. Read
+  /// at the moment of the pull, the next refresh is already the new menu. Null, or
+  /// a null answer, pulls everything, which is what a single-shop till wants and
+  /// what every till did before branches existed.
+  final int? Function()? branchId;
 
   /// Performs one Odoo `call_kw`. Injected so this is testable without a socket.
   final Future<dynamic> Function(String model, String method, List<dynamic> args,
@@ -35,6 +44,55 @@ class OdooPuller {
 
   bool get _wantsImages => withImages ?? CataloguePullOptions.shared.images;
 
+  /// The menu this till should show: everything sold in its branch, plus
+  /// everything nobody restricted to a branch at all.
+  ///
+  /// A chain lists a product against the branches that sell it, and an empty list
+  /// means every branch, which is the convention Odoo's own company_id already
+  /// uses and the reason installing branches hides nothing that was visible
+  /// yesterday.
+  ///
+  /// Two ways this asks for less than it wants, both deliberate. With no branch
+  /// configured it asks for the whole menu, because a single-shop till has no
+  /// branch to filter by and never had one. And an Odoo without the branches field
+  /// answers the filtered read with an error rather than an empty menu, so that is
+  /// caught and the whole menu pulled instead: a till showing a few extra dishes is
+  /// a nuisance, and a till showing none cannot trade.
+  Future<List<Map<String, dynamic>>> _productsForBranch() async {
+    const fields = ['id', 'display_name', 'lst_price', 'pos_categ_ids', 'barcode',
+        'active', 'to_weight', 'taxes_id', 'product_tmpl_id'];
+    final extras = ['standard_price', if (_wantsImages) 'image_128'];
+    const inPos = ['available_in_pos', '=', true];
+
+    final branch = branchId?.call();
+    if (branch != null && _branchFieldMissing != true) {
+      try {
+        final byBranch =
+            await _searchReadOptional('product.product', fields, extras, [
+          inPos,
+          '|',
+          ['product_tmpl_id.branch_ids', '=', false],
+          ['product_tmpl_id.branch_ids', 'in', [branch]],
+        ]);
+        _branchFieldMissing = false;
+        return byBranch;
+      } catch (_) {
+        // Remembered, because the retry inside the read above probes each optional
+        // field before it gives up. Asking an Odoo without the field on every
+        // refresh would spend a handful of failing calls each time to learn the
+        // same thing.
+        _branchFieldMissing = true;
+      }
+    }
+    return _searchReadOptional('product.product', fields, extras, [inPos]);
+  }
+
+  /// Whether this Odoo has the branches field, learned by asking once. Null until
+  /// the first attempt. Held for the life of the puller rather than persisted: an
+  /// addon installed while the till is running is picked up at its next restart,
+  /// which is soon enough for something that happens once.
+  bool? _branchFieldMissing;
+
   Future<CataloguePull> pull() async {
     final categories = await _searchRead(
       'pos.category',
@@ -44,15 +102,7 @@ class OdooPuller {
     // The cost and the picture are asked for as extras: an Odoo that will not give
     // one of them still gives up the menu, which is the only part a till cannot sell
     // without. Pictures are asked for only when the shop shows them.
-    final products = await _searchReadOptional(
-      'product.product',
-      ['id', 'display_name', 'lst_price', 'pos_categ_ids', 'barcode', 'active', 'to_weight',
-       'taxes_id', 'product_tmpl_id'],
-      ['standard_price', if (_wantsImages) 'image_128'],
-      [
-        ['available_in_pos', '=', true]
-      ],
-    );
+    final products = await _productsForBranch();
     // Odoo links modifier groups to product *templates*; the till sells variants.
     // Map the template ids onto the product ids we actually loaded, or a product
     // with modifiers upstream would arrive with none here.
