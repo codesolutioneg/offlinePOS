@@ -65,8 +65,23 @@ build_script:
           /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
           .\build\windows\x64\runner\Release\offline_pos.exe
         if ($LASTEXITCODE -ne 0) { throw "signing failed" }
-        & $signtool verify /pa .\build\windows\x64\runner\Release\offline_pos.exe
-        if ($LASTEXITCODE -ne 0) { throw "signature did not verify" }
+        # Checked with Get-AuthenticodeSignature rather than `signtool verify /pa`,
+        # and the difference matters. /pa asks whether the chain is trusted BY THIS
+        # MACHINE, and a build agent has never heard of our own certificate, so a
+        # self-signed release would fail here having signed perfectly well. What is
+        # worth failing on is a signature that is missing or does not match the
+        # bytes; whether a root is trusted is the till's question, answered by
+        # install-till.ps1, not the build's.
+        $sig = Get-AuthenticodeSignature .\build\windows\x64\runner\Release\offline_pos.exe
+        "Signature status: $($sig.Status)"
+        if ($sig.Status -eq 'NotSigned' -or $sig.Status -eq 'HashMismatch') {
+          throw "signature did not verify: $($sig.Status)"
+        }
+        if ($sig.Status -ne 'Valid') {
+          # Expected while the certificate is our own. A bought one reads Valid.
+          "Signed, and the root is not trusted on this agent, which is expected for a self-signed certificate."
+        }
+        "Signed by: $($sig.SignerCertificate.Subject)"
         Remove-Item $pfx -Force
       } else {
         "No signing certificate configured, shipping unsigned."
