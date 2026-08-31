@@ -1170,14 +1170,25 @@ const Map<String, String> _ar = {
   'Move / merge': 'نقل / دمج',
   // Shop identity and how sales reach Odoo.
   'Where this till books in Odoo': 'أين تُسجَّل مبيعات هذه الكاشير في أودو',
-  'Odoo record numbers, taken from the address bar of each record. '
-          'Leave a box empty to let Odoo decide. Every sale this till sends '
-          'carries them.':
-      'أرقام السجلات في أودو، تُؤخذ من شريط العنوان لكل سجل. اترك الخانة فارغة '
-          'ليقرر أودو بنفسه. كل عملية بيع ترسلها الكاشير تحمل هذه الأرقام.',
-  'Branch id (company)': 'رقم الفرع (الشركة)',
-  'Restaurant id (point of sale)': 'رقم المطعم (نقطة البيع)',
-  'Warehouse id': 'رقم المخزن',
+  'Pick these from what Odoo has. Leave one on "Let Odoo decide" if the shop '
+          'has only one of that thing. Every sale this till sends carries them.':
+      'اخترها مما هو موجود في أودو. اترك الخيار على "دع أودو يقرر" إذا كان لدى '
+          'المحل واحد فقط من هذا النوع. كل عملية بيع ترسلها الكاشير تحمل هذه '
+          'الاختيارات.',
+  'Reading the lists from Odoo...': 'جارٍ قراءة القوائم من أودو...',
+  'The lists could not be read from Odoo. What is saved below still stands and '
+          'still travels on every sale.':
+      'تعذّرت قراءة القوائم من أودو. ما هو محفوظ بالأسفل ما زال ساريًا وما زال '
+          'يُرسل مع كل عملية بيع.',
+  'Branch (company)': 'الفرع (الشركة)',
+  'Restaurant (point of sale)': 'المطعم (نقطة البيع)',
+  'Warehouse': 'المخزن',
+  'Let Odoo decide': 'دع أودو يقرر',
+  'not in the list': 'غير موجود في القائمة',
+  'Books to': 'يُسجَّل في',
+  'Journal': 'دفتر اليومية',
+  'Bank': 'بنك',
+  'No journal, so this is pay later': 'بدون دفتر يومية، لذا يُعد دفعًا آجلًا',
   'Discount product id (a service product)': 'رقم صنف الخصم (صنف خدمي)',
   'With a product here, a discounted sale reaches Odoo at full '
           'menu prices plus one discount line, so it can be reported on '
