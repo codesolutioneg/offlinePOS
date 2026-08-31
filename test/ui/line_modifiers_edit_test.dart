@@ -226,6 +226,47 @@ void main() {
     expect(audit.recent(event: 'line.modifiers_changed'), isEmpty);
   });
 
+  test('an option nobody changed keeps the price it was rung at', () {
+    // A percentage or a size option is priced against the dish it hangs on. If
+    // the dish's own price is overridden afterwards, repricing every option on
+    // save would move the bill because somebody opened the sheet and confirmed a
+    // choice they did not touch.
+    const half = Modifier(
+      id: 1002,
+      groupId: 100,
+      name: 'Half portion',
+      price: 50,
+      priceType: ModifierPriceType.percentage,
+    );
+    session.addProduct(pizza, chosen: const [ChosenModifier(half)]);
+    final line = session.current.lines.single;
+    final rungAt = line.modifiers.single.unitPrice;
+
+    session.setLinePrice(line.uuid, line.unitPrice / 2);
+    // Same option, same quantity, nothing about it changed.
+    session.setLineModifiers(line.uuid, const [ChosenModifier(half)]);
+
+    expect(line.modifiers.single.unitPrice, rungAt,
+        reason: 'confirming a choice is not a reason to reprice it');
+  });
+
+  test('a choice added after a price override is priced from where the line is', () {
+    const half = Modifier(
+      id: 1002,
+      groupId: 100,
+      name: 'Half portion',
+      price: 50,
+      priceType: ModifierPriceType.percentage,
+    );
+    session.addProduct(pizza, chosen: const []);
+    final line = session.current.lines.single;
+    session.setLinePrice(line.uuid, 80);
+    session.setLineModifiers(line.uuid, const [ChosenModifier(half)]);
+
+    expect(line.modifiers.single.unitPrice, 40,
+        reason: 'a new choice prices against the dish as it stands now');
+  });
+
   test('the session itself refuses to restate a fired line', () {
     session.addProduct(pizza, chosen: [
       const ChosenModifier(Modifier(id: 1000, groupId: 100, name: 'Large', price: 20)),

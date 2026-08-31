@@ -266,6 +266,15 @@ class PosSession {
     if (idx < 0) return;
     final line = current.lines[idx];
     if (line.printedToKitchen || line.firedStations.isNotEmpty) return;
+    // What each option was already charged at. An option that is still selected
+    // keeps that figure rather than being priced again, because the price it was
+    // captured at is the one the customer was quoted. Repricing here would move a
+    // percentage or a size option every time somebody opened the sheet and pressed
+    // save on a line whose own price had since been overridden, so confirming a
+    // choice nobody changed would change the bill.
+    final captured = {
+      for (final m in line.modifiers) (m.modifierId, m.quantity): m.unitPrice,
+    };
     final next = [
       for (final c in chosen)
         OrderModifier(
@@ -273,7 +282,10 @@ class PosSession {
           productId: c.modifier.productId,
           name: c.modifier.name,
           quantity: c.quantity.toDouble(),
-          unitPrice: c.modifier.priceFor(line.unitPrice),
+          // Only a choice that was not already on the line at this quantity is
+          // priced from where the line stands now.
+          unitPrice: captured[(c.modifier.id, c.quantity.toDouble())] ??
+              c.modifier.priceFor(line.unitPrice),
         ),
     ];
     if (_sameModifiers(line.modifiers, next)) return;

@@ -110,7 +110,13 @@ void main() {
       },
     );
 
-    await p.pull();
+    // The failed pull gives up rather than falling back to the whole menu: a
+    // stale correct menu beats a fresh wrong one, and the catalogue is only
+    // replaced by a pull that finished.
+    await expectLater(p.pull(), throwsA(isA<Exception>()));
+    expect(domains.every(mentionsBranch), isTrue,
+        reason: 'it never asked for the whole chain menu');
+
     failNext = false;
     domains = [];
     await p.pull();
