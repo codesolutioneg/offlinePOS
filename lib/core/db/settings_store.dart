@@ -1240,6 +1240,28 @@ class SettingsStore {
   set mergeBatchIntoOneSaleOrder(bool v) =>
       setBool('merge_batch_one_sale_order', v);
 
+  /// The branches, points of sale and warehouses this till last saw in Odoo, so
+  /// the three pickers still show names on a till with no line.
+  ///
+  /// A cache and never authority. What a sale books against is the id saved beside
+  /// it, and that id stands whether or not this can be refreshed: a shop must not
+  /// lose its configuration because a list could not be fetched. Written as JSON
+  /// into the same key-value table as everything else here, so it costs no
+  /// migration.
+  OdooSiteChoices get odooSiteChoices {
+    final v = getString('odoo_site_choices');
+    if (v == null) return const OdooSiteChoices();
+    try {
+      return OdooSiteChoices.fromMap(
+          (jsonDecode(v) as Map).cast<String, dynamic>());
+    } catch (_) {
+      return const OdooSiteChoices();
+    }
+  }
+
+  set odooSiteChoices(OdooSiteChoices v) =>
+      setString('odoo_site_choices', jsonEncode(v.toMap()));
+
   /// An Odoo id is a positive integer. Anything else (a blank, a typo, a leftover
   /// zero) reads as "not set" rather than travelling and pointing the sale at a
   /// record that does not exist.

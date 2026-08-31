@@ -89,11 +89,27 @@ void main() {
   /// An Odoo that books whatever it is handed, and keeps every request.
   Future<HttpReply> fakeOdoo(
       Uri url, Map<String, String> headers, String body) async {
-    calls.add(jsonDecode(body) as Map<String, dynamic>);
+    final request = jsonDecode(body) as Map<String, dynamic>;
+    calls.add(request);
     if (url.path.endsWith('/authenticate')) {
       return HttpReply(200, jsonEncode({'result': {'uid': 2}}),
           headers: const {'set-cookie': 'session_id=abc; Path=/'});
     }
+    // The three ids are picked off Odoo's own lists now, so the lists have to be
+    // there to pick from.
+    final site = switch ((request['params'] as Map?)?['model']) {
+      'res.company' => [
+          {'id': 3, 'name': 'Downtown'}
+        ],
+      'pos.config' => [
+          {'id': 7, 'name': 'Counter', 'company_id': false}
+        ],
+      'stock.warehouse' => [
+          {'id': 2, 'name': 'Main', 'company_id': false}
+        ],
+      _ => null,
+    };
+    if (site != null) return HttpReply(200, jsonEncode({'result': site}));
     return HttpReply(200, jsonEncode({'result': [{'status': 'created', 'id': 9}]}));
   }
 
@@ -186,15 +202,33 @@ void main() {
     await t.pumpAndSettle();
   }
 
+  /// Choose one of the three ids off its picker, the way a manager does now that
+  /// they are lists rather than boxes to guess a number into.
+  Future<void> pickSite(WidgetTester t, String picker, String option) async {
+    await t.ensureVisible(find.byKey(Key('pick-$picker')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(Key('pick-$picker')));
+    await t.pumpAndSettle();
+    // The chosen row is drawn in the field as well as in the open menu.
+    await t.tap(find.text(option).last);
+    await t.pumpAndSettle();
+  }
+
   /// Point the till at the fake server and name the shop, the way a manager does.
   Future<void> setTheShopUp(WidgetTester t, {bool merge = false}) async {
     await openServerSettings(t);
     await t.enterText(find.byKey(const Key('field-url')), 'https://shop.example.com');
     await t.enterText(find.byKey(const Key('field-db')), 'shop');
     await t.enterText(find.byKey(const Key('field-login')), 'till@example.com');
-    await t.enterText(find.byKey(const Key('field-branch')), '3');
-    await t.enterText(find.byKey(const Key('field-restaurant')), '7');
-    await t.enterText(find.byKey(const Key('field-warehouse')), '2');
+    // Saved once first: a till with no address has nowhere to read the pickers'
+    // lists from.
+    await t.ensureVisible(find.byKey(const Key('save-server')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('save-server')));
+    await t.pumpAndSettle();
+    await pickSite(t, 'branch', 'Downtown (3)');
+    await pickSite(t, 'restaurant', 'Counter (7)');
+    await pickSite(t, 'warehouse', 'Main (2)');
     if (merge) {
       await t.ensureVisible(find.byKey(const Key('merge-batch')));
       await t.pumpAndSettle();

@@ -40,3 +40,71 @@ class OdooSite {
         if (warehouseId != null) 'warehouse_id': warehouseId,
       };
 }
+
+/// One record a manager can point this till at: a branch, a point of sale or a
+/// warehouse, with the name Odoo calls it by.
+///
+/// Names are a convenience for the person choosing and never authority. Nobody
+/// knows their warehouse's database id, so a picker has to show something else;
+/// what travels on a sale is still [OdooSite], which is ids alone.
+class OdooSiteOption {
+  const OdooSiteOption({required this.id, required this.name, this.companyId});
+
+  final int id;
+  final String name;
+
+  /// The company this record belongs to, where Odoo holds one. Null means the
+  /// record does not say, and a record that does not say is never hidden from a
+  /// shop that has chosen a branch.
+  final int? companyId;
+
+  Map<String, dynamic> toMap() =>
+      {'id': id, 'name': name, 'company_id': companyId};
+
+  factory OdooSiteOption.fromMap(Map<String, dynamic> m) => OdooSiteOption(
+        id: m['id'] as int,
+        name: (m['name'] ?? '') as String,
+        companyId: m['company_id'] is int ? m['company_id'] as int : null,
+      );
+}
+
+/// What Odoo has to offer behind the three pickers on the server screen.
+///
+/// Cached on the till after one successful read, so a manager on a till with no
+/// line still sees names instead of bare numbers. A list that came back empty
+/// means the question was not answered, never that the shop has none: the caller
+/// keeps what it had rather than emptying a picker.
+class OdooSiteChoices {
+  const OdooSiteChoices({
+    this.branches = const [],
+    this.pointsOfSale = const [],
+    this.warehouses = const [],
+  });
+
+  final List<OdooSiteOption> branches;
+  final List<OdooSiteOption> pointsOfSale;
+  final List<OdooSiteOption> warehouses;
+
+  bool get isEmpty =>
+      branches.isEmpty && pointsOfSale.isEmpty && warehouses.isEmpty;
+
+  Map<String, dynamic> toMap() => {
+        'branches': [for (final o in branches) o.toMap()],
+        'points_of_sale': [for (final o in pointsOfSale) o.toMap()],
+        'warehouses': [for (final o in warehouses) o.toMap()],
+      };
+
+  factory OdooSiteChoices.fromMap(Map<String, dynamic> m) => OdooSiteChoices(
+        branches: _list(m['branches']),
+        pointsOfSale: _list(m['points_of_sale']),
+        warehouses: _list(m['warehouses']),
+      );
+
+  static List<OdooSiteOption> _list(Object? raw) => raw is! List
+      ? const []
+      : [
+          for (final e in raw)
+            if (e is Map && e['id'] is int)
+              OdooSiteOption.fromMap(e.cast<String, dynamic>()),
+        ];
+}

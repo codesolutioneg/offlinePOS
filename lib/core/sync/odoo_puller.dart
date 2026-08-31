@@ -84,12 +84,25 @@ class OdooPuller {
     // reason to forget the tenders this till already had.
     List<Map<String, dynamic>> methods = const [];
     var methodsRead = false;
+    var journals = const <int, ({String name, String type})>{};
     try {
-      methods = await _searchRead('pos.payment.method', ['id', 'name', 'is_cash_count'], [
-        ['active', '=', true]
-      ]);
+      // The journal rides along because it is where the money actually lands, and
+      // it is asked for as an extra so an Odoo that will not give it still gives up
+      // the tenders. What the till sends on the wire is untouched: still the
+      // `pos.payment.method` id, which is the only thing the booking module can
+      // resolve.
+      methods = await _searchReadOptional(
+        'pos.payment.method',
+        ['id', 'name', 'is_cash_count'],
+        ['journal_id'],
+        [
+          ['active', '=', true]
+        ],
+      );
       methodsRead = true;
       methods = await _onlyThisPointOfSale(methods);
+      journals = await _journals();
+      methods = _onlyBankAndCash(methods, journals);
     } catch (_) {
       methods = const [];
     }
@@ -144,13 +157,17 @@ class OdooPuller {
       groups: modifiers.groups,
       productGroupIds: modifiers.productGroupIds,
       groupsRead: modifiers.read,
-      paymentMethods: methods
-          .map((m) => PaymentMethod(
-                id: m['id'] as int,
-                name: (m['name'] ?? '') as String,
-                isCash: m['is_cash_count'] == true,
-              ))
-          .toList(),
+      paymentMethods: methods.map((m) {
+        final journal = journals[_id(m['journal_id'])];
+        return PaymentMethod(
+          id: m['id'] as int,
+          name: (m['name'] ?? '') as String,
+          isCash: m['is_cash_count'] == true,
+          journalId: _id(m['journal_id']),
+          journalName: journal?.name,
+          journalType: journal?.type,
+        );
+      }).toList(),
       paymentMethodsRead: methodsRead,
       customers: partners
           .map((c) => Customer(
@@ -362,6 +379,54 @@ class OdooPuller {
     }
   }
 
+  /// The account journals by id, or empty for "the server would not say".
+  ///
+  /// Read whole rather than narrowed to bank and cash, because a method pointing at
+  /// a journal missing from a narrowed read would be indistinguishable from one
+  /// pointing at a journal this login cannot see, and those two want opposite
+  /// answers. A database holds a few dozen journals, so asking for all of them
+  /// costs nothing next to the catalogue.
+  ///
+  /// Never throws: the caller has already recorded that the tenders were read, and
+  /// an exception escaping here would empty a list the till is still selling with.
+  Future<Map<int, ({String name, String type})>> _journals() async {
+    try {
+      final rows =
+          await _searchRead('account.journal', ['id', 'name', 'type'], const []);
+      return {
+        for (final r in rows)
+          r['id'] as int: (
+            name: (r['name'] ?? '') as String,
+            type: (r['type'] ?? '') as String,
+          ),
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// Keep the tenders that settle into a bank or cash journal, plus the pay-later
+  /// one that has no journal at all.
+  ///
+  /// A method booking to a sale or miscellaneous journal is not money over the
+  /// counter, and offering it puts a tender on the payment sheet the shop cannot
+  /// reconcile against anything. The two guards are the ones [_onlyThisPointOfSale]
+  /// already carries: with no journals read nothing is narrowed, and a narrowing
+  /// that leaves nothing is dropped, because a till that can name no tender at all
+  /// cannot take money.
+  List<Map<String, dynamic>> _onlyBankAndCash(List<Map<String, dynamic>> methods,
+      Map<int, ({String name, String type})> journals) {
+    if (journals.isEmpty || methods.isEmpty) return methods;
+    const overTheCounter = {'bank', 'cash'};
+    final kept = [
+      for (final m in methods)
+        if (_id(m['journal_id']) == null ||
+            overTheCounter.contains(journals[_id(m['journal_id'])]?.type))
+          m,
+    ];
+    return kept.isEmpty ? methods : kept;
+  }
+
   /// Partners matching [term] by name or phone, straight from the server.
   ///
   /// The pull above is bounded at 500 partners, which is a menu-sized list and not
@@ -468,6 +533,46 @@ class OdooPuller {
     } catch (_) {
       // An older point of sale without the field, or a server that refused the
       // read. Either way the shop still gets a pick list.
+      return const [];
+    }
+  }
+
+  /// What Odoo has for the three ids that say where this till books: the branches,
+  /// the points of sale and the warehouses, each with the name it is known by.
+  ///
+  /// Nobody knows their warehouse's database id, so the alternative to this is a
+  /// manager guessing a number and a till quietly booking into the wrong place.
+  ///
+  /// Off every selling path, like [searchCustomers] and [searchProducts]: it fills
+  /// a picker on a settings screen, and a caller with no line gets empty lists to
+  /// fall back from rather than a wait. Each model degrades on its own, because
+  /// half a set of names is more use to a manager than none.
+  Future<OdooSiteChoices> siteChoices() async => OdooSiteChoices(
+        branches: await _siteOptions('res.company'),
+        pointsOfSale: await _siteOptions('pos.config', byCompany: true),
+        warehouses: await _siteOptions('stock.warehouse', byCompany: true),
+      );
+
+  /// One picker's rows. [byCompany] asks for the owning company as an optional
+  /// field, so a model that will not give it still gives up its names and the
+  /// screen simply narrows nothing.
+  Future<List<OdooSiteOption>> _siteOptions(String model,
+      {bool byCompany = false}) async {
+    try {
+      final rows = await _searchReadOptional(model, ['id', 'name'],
+          [if (byCompany) 'company_id'], const []);
+      return [
+        for (final r in rows)
+          if (r['id'] is int)
+            OdooSiteOption(
+              id: r['id'] as int,
+              name: (r['name'] ?? '') as String,
+              companyId: _id(r['company_id']),
+            ),
+      ];
+    } catch (_) {
+      // A model this login may not read leaves its own picker on whatever the till
+      // cached, rather than taking the other two down with it.
       return const [];
     }
   }

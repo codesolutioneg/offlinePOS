@@ -3036,6 +3036,11 @@ class _PosAppState extends State<PosApp> {
         // pointed at a server drains its queue without a restart.
         onSaved: widget.odoo.configure,
         check: widget.checkServer,
+        // So the three ids are picked from what Odoo actually has rather than
+        // guessed. Read through the same call_kw the catalogue uses, and only ever
+        // from this screen.
+        loadChoices: () =>
+            OdooPuller(call: widget.odoo.catalogueCall).siteChoices(),
       ),
     ));
   }

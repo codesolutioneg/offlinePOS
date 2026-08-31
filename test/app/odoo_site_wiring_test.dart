@@ -87,13 +87,37 @@ void main() {
   });
 
   /// Answers like an Odoo that accepts everything, and keeps what it was asked.
+  ///
+  /// The three site models answer properly, because the ids are picked off those
+  /// lists now rather than typed: a manager who does not know their warehouse's
+  /// database id cannot type it.
   Future<HttpReply> fakeOdoo(
       Uri url, Map<String, String> headers, String body) async {
-    calls.add(jsonDecode(body) as Map<String, dynamic>);
+    final request = jsonDecode(body) as Map<String, dynamic>;
+    calls.add(request);
     if (url.path.endsWith('/authenticate')) {
       return HttpReply(200, jsonEncode({'result': {'uid': 2}}),
           headers: const {'set-cookie': 'session_id=abc; Path=/'});
     }
+    final model = (request['params'] as Map?)?['model'];
+    // No company on the points of sale and warehouses, so nothing is narrowed and
+    // the test stays about the wiring rather than about the narrowing.
+    final site = switch (model) {
+      'res.company' => [
+          {'id': 1, 'name': 'Downtown'},
+          {'id': 3, 'name': 'Riverside'},
+        ],
+      'pos.config' => [
+          {'id': 4, 'name': 'Terrace', 'company_id': false},
+          {'id': 7, 'name': 'Counter', 'company_id': false},
+        ],
+      'stock.warehouse' => [
+          {'id': 2, 'name': 'Main', 'company_id': false},
+          {'id': 5, 'name': 'Cold store', 'company_id': false},
+        ],
+      _ => null,
+    };
+    if (site != null) return HttpReply(200, jsonEncode({'result': site}));
     return HttpReply(
         200,
         jsonEncode({
@@ -164,8 +188,22 @@ void main() {
     }
   }
 
+  /// Choose one of the three ids off its picker. Null leaves it on "let Odoo
+  /// decide", which is how a shop with one of that thing says so.
+  Future<void> pickSite(WidgetTester t, String picker, String option) async {
+    await t.ensureVisible(find.byKey(Key('pick-$picker')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(Key('pick-$picker')));
+    await t.pumpAndSettle();
+    // The chosen row is drawn in the field as well as in the open menu.
+    await t.tap(find.text(option).last);
+    await t.pumpAndSettle();
+  }
+
   Future<void> setTheShopUp(WidgetTester t,
-      {String branch = '3', String restaurant = '7', String warehouse = '2'}) async {
+      {String? branch = 'Riverside (3)',
+      String? restaurant = 'Counter (7)',
+      String? warehouse = 'Main (2)'}) async {
     await t.tap(find.byType(DrawerButton));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-settings')));
@@ -177,9 +215,17 @@ void main() {
     await t.enterText(find.byKey(const Key('field-url')), 'https://shop.example.com');
     await t.enterText(find.byKey(const Key('field-db')), 'shop');
     await t.enterText(find.byKey(const Key('field-login')), 'till@example.com');
-    await t.enterText(find.byKey(const Key('field-branch')), branch);
-    await t.enterText(find.byKey(const Key('field-restaurant')), restaurant);
-    await t.enterText(find.byKey(const Key('field-warehouse')), warehouse);
+    // Saved once first: a till with no address has nowhere to read the lists from,
+    // so the pickers fill in only after it knows where the server is.
+    await t.ensureVisible(find.byKey(const Key('save-server')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('save-server')));
+    await t.pumpAndSettle();
+    if (branch != null) await pickSite(t, 'branch', branch);
+    if (restaurant != null) await pickSite(t, 'restaurant', restaurant);
+    if (warehouse != null) await pickSite(t, 'warehouse', warehouse);
+    await t.ensureVisible(find.byKey(const Key('save-server')));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('save-server')));
     await t.pumpAndSettle();
     // Back to the sell screen the way a manager leaves the settings: the server
@@ -236,7 +282,10 @@ void main() {
     // Rung first, named after: exactly the week-of-outage case, where the manager
     // only sets the shop up once the line is back.
     await ringItUp(t);
-    await setTheShopUp(t, branch: '1', restaurant: '4', warehouse: '5');
+    await setTheShopUp(t,
+        branch: 'Downtown (1)',
+        restaurant: 'Terrace (4)',
+        warehouse: 'Cold store (5)');
 
     expect(await outbox.drain(), greaterThan(0));
     final payload = bookedOrder();
@@ -250,7 +299,8 @@ void main() {
     await boot(t);
     // The point of sale named, the rest left blank: a shop with one company and
     // one warehouse should not have to type them.
-    await setTheShopUp(t, branch: '', restaurant: '7', warehouse: '');
+    await setTheShopUp(t,
+        branch: null, restaurant: 'Counter (7)', warehouse: null);
     await ringItUp(t);
 
     expect(await outbox.drain(), greaterThan(0));
