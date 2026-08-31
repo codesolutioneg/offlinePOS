@@ -6,6 +6,32 @@ import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 
+/// A wall-clock time on today or tomorrow, as UTC. Null when it is not a time.
+///
+/// A time that has already gone today is read as the next time the clock shows it,
+/// the way an alarm does. A kitchen serving past midnight takes a booking at 23:50
+/// for 00:10, and filing that as ten past midnight this morning puts it most of a
+/// day in the past: it never appears on the floor, never comes due, and the guests
+/// arrive to a table nobody held. Nobody books a table for a time that has been and
+/// gone, so there is no other reading to lose. The tomorrow toggle still means
+/// tomorrow, for a booking taken in the afternoon for the next evening.
+///
+/// Top level so the rule can be tested without a clock. The screen it belongs to
+/// reads the time through it.
+DateTime? reservationTimeFrom(String raw, DateTime now, {required bool tomorrow}) {
+  final parts = raw.trim().split(':');
+  if (parts.length != 2) return null;
+  final h = int.tryParse(parts[0]);
+  final m = int.tryParse(parts[1]);
+  if (h == null || m == null || h < 0 || h > 23 || m < 0 || m > 59) return null;
+  final day = tomorrow ? now.add(const Duration(days: 1)) : now;
+  var when = DateTime(day.year, day.month, day.day, h, m);
+  if (!tomorrow && when.isBefore(now)) {
+    when = when.add(const Duration(days: 1));
+  }
+  return when.toUtc();
+}
+
 /// The book: who is coming, when, and where they are being put.
 ///
 /// A local list and nothing else. Taking a booking over the phone must work with
@@ -240,16 +266,8 @@ class _ReservationsScreenState extends State<ReservationsScreen> {
     );
   }
 
-  /// A wall-clock time on today or tomorrow, as UTC. Null when it is not a time.
-  static DateTime? _parseTime(String raw, DateTime now, {required bool tomorrow}) {
-    final parts = raw.trim().split(':');
-    if (parts.length != 2) return null;
-    final h = int.tryParse(parts[0]);
-    final m = int.tryParse(parts[1]);
-    if (h == null || m == null || h < 0 || h > 23 || m < 0 || m > 59) return null;
-    final day = tomorrow ? now.add(const Duration(days: 1)) : now;
-    return DateTime(day.year, day.month, day.day, h, m).toUtc();
-  }
+  static DateTime? _parseTime(String raw, DateTime now, {required bool tomorrow}) =>
+      reservationTimeFrom(raw, now, tomorrow: tomorrow);
 
   static String _hhmm(DateTime local) =>
       '${local.hour.toString().padLeft(2, '0')}:'
