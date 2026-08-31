@@ -140,9 +140,11 @@ class PosSession {
 
   /// An existing line the freshly built [line] can fold into, or null. Identical
   /// means same product and modifiers, no note/line-discount/seat, and not yet
-  /// printed to the kitchen.
-  OrderLine? _mergeableLineFor(OrderLine line) {
+  /// printed to the kitchen. [exceptUuid] skips one row, so a line already in the
+  /// cart being re-tested after an edit cannot match itself.
+  OrderLine? _mergeableLineFor(OrderLine line, {String? exceptUuid}) {
     for (final l in current.lines) {
+      if (l.uuid == exceptUuid) continue;
       // Every captured field must match, not just the id: a catalogue refresh can
       // change a product's tax, category or name while its price holds, and merging
       // across that would book the new units under the old line's stale metadata.
@@ -233,6 +235,77 @@ class PosSession {
     audit.record(cashierId, 'line.price_override',
         detail: '${current.uuid}|${line.name}|$was|$price');
   }
+
+  /// Replace what a line in the cart was ordered with, repriced from the new
+  /// selection. [chosen] is the whole answer, so an empty list clears the line's
+  /// modifiers. This is the correction path for "wrong size, no cheese": without it
+  /// the only remedy is to void the line and ring it again.
+  ///
+  /// Refused once the kitchen holds the line. Food on the pass is being cooked to the
+  /// ticket that was sent, so changing what it says here would leave the till and the
+  /// kitchen describing two different dishes with nothing printed to reconcile them.
+  /// That is the same restriction the inline quantity edit and the trash already
+  /// carry, and taking the item off still goes through Void, which gates, prints a
+  /// cancel slip and audits. The sell screen says so rather than greying the entry
+  /// out, because a cashier who is told to void and re-ring can act on that.
+  ///
+  /// A percentage option is priced against this line's own unit price: that is the
+  /// parent it is being attached to now. A price override on the line therefore
+  /// reaches a choice made after it, while the choices already on the line keep what
+  /// they were captured at, exactly as [setLinePrice] promises.
+  ///
+  /// The merge rule is the one a freshly rung line gets, through the same
+  /// [_mergeableLineFor] test: if the edit has made this line identical to another
+  /// plain line, it folds into it the way a repeat tap would, because the cart has no
+  /// way left to tell the two rows apart and showing both is how a cashier ends up
+  /// double-checking a bill. A line the cashier has marked out (a note, a line
+  /// discount, a seat, a fire timer) or that the kitchen already holds folds neither
+  /// way, so anything deliberately kept separate stays separate.
+  void setLineModifiers(String lineUuid, List<ChosenModifier> chosen) {
+    final idx = current.lines.indexWhere((l) => l.uuid == lineUuid);
+    if (idx < 0) return;
+    final line = current.lines[idx];
+    if (line.printedToKitchen || line.firedStations.isNotEmpty) return;
+    final next = [
+      for (final c in chosen)
+        OrderModifier(
+          modifierId: c.modifier.id,
+          productId: c.modifier.productId,
+          name: c.modifier.name,
+          quantity: c.quantity.toDouble(),
+          unitPrice: c.modifier.priceFor(line.unitPrice),
+        ),
+    ];
+    if (_sameModifiers(line.modifiers, next)) return;
+    final was = _modifierSummary(line.modifiers);
+    line.modifiers
+      ..clear()
+      ..addAll(next);
+    final now = _modifierSummary(line.modifiers);
+    if (line.note == null &&
+        line.discountPercent == 0 &&
+        line.seat == null &&
+        line.fireAt == null) {
+      final match = _mergeableLineFor(line, exceptUuid: line.uuid);
+      if (match != null) {
+        match.quantity += line.quantity;
+        current.lines.removeAt(idx);
+      }
+    }
+    orders.save(current);
+    // A modifier carries money, so the change is traced like a line discount or a
+    // price override is: what it was and what it became.
+    audit.record(cashierId, 'line.modifiers_changed',
+        detail: '${current.uuid}|${line.name}|$was|$now');
+  }
+
+  /// A line's modifiers as one readable string for the audit trail.
+  static String _modifierSummary(List<OrderModifier> mods) => mods.isEmpty
+      ? 'none'
+      : mods
+          .map((m) =>
+              m.quantity > 1 ? '${m.name} x${m.quantity.toStringAsFixed(0)}' : m.name)
+          .join(', ');
 
   void setLineNote(String lineUuid, String? note) {
     current.lines.firstWhere((l) => l.uuid == lineUuid).note =

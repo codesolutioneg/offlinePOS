@@ -752,6 +752,10 @@ class _SellScreenState extends State<SellScreen> {
   // ── per-line actions: note, discount, void with reason ───────────
 
   Future<void> _lineActions(OrderLine line) async {
+    // Only an item that actually carries choices offers the entry; on anything else
+    // it would be a row that opens an empty sheet.
+    final modifierGroups = s.catalogue.modifierGroupsFor(line.productId);
+    final kitchenHasLine = line.printedToKitchen || line.firedStations.isNotEmpty;
     final action = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -759,6 +763,20 @@ class _SellScreenState extends State<SellScreen> {
         // Scrollable so the menu never overflows a short sheet as options grow.
         child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (modifierGroups.isNotEmpty)
+            ListTile(
+              key: const Key('line-modifiers'),
+              leading: const Icon(Icons.tune),
+              title: Text(tr(ctx, 'Modifiers')),
+              // On a fired line the entry stays and carries the reason. A greyed-out
+              // row tells a cashier nothing; this one tells them what to do instead.
+              subtitle: Text(kitchenHasLine
+                  ? tr(ctx, 'The kitchen already has this. Void it and ring it again.')
+                  : line.modifiers.isEmpty
+                      ? tr(ctx, 'Nothing chosen yet')
+                      : line.modifiers.map((m) => m.name).join(', ')),
+              onTap: () => Navigator.pop(ctx, 'modifiers'),
+            ),
           ListTile(
             key: const Key('line-note'),
             leading: const Icon(Icons.sticky_note_2_outlined),
@@ -820,6 +838,9 @@ class _SellScreenState extends State<SellScreen> {
         ),
       ),
     );
+    if (action == 'modifiers') {
+      await _lineModifiers(line, modifierGroups, kitchenHasLine);
+    }
     if (action == 'note') await _lineNote(line);
     if (action == 'price') await _linePrice(line);
     if (action == 'discount') await _lineDiscount(line);
@@ -827,6 +848,36 @@ class _SellScreenState extends State<SellScreen> {
     if (action == 'split-units') _changed(() => s.splitLineToUnits(line.uuid));
     if (action == 'timer') await _setFireTiming(lineUuid: line.uuid);
     if (action == 'void') await _voidLine(line);
+  }
+
+  /// Reopen the picker on a line already in the cart, prefilled with what it
+  /// carries, so a wrong or unwanted choice is corrected in place rather than voided
+  /// and rung again. The sheet enforces the same minimums and ceilings it does while
+  /// ringing, so an edit cannot leave a required group unanswered.
+  Future<void> _lineModifiers(
+      OrderLine line, List<ModifierGroup> groups, bool kitchenHasLine) async {
+    if (kitchenHasLine) {
+      showToast(context,
+          tr(context, 'The kitchen already has this. Void it and ring it again.'),
+          kind: ToastKind.info);
+      return;
+    }
+    // The menu row this line was rung from, for the sheet's heading. Gone only if the
+    // item was deleted since, and then there is nothing left to choose against.
+    final product = s.catalogue.byId(line.productId);
+    if (product == null) return;
+    final chosen = await showModalBottomSheet<List<ChosenModifier>>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => ModifierSheet(
+        product: product,
+        groups: groups,
+        formatAmount: widget.formatAmount,
+        initial: line.modifiers,
+        confirmLabel: tr(context, 'Save changes'),
+      ),
+    );
+    if (chosen != null) _changed(() => s.setLineModifiers(line.uuid, chosen));
   }
 
   /// Minutes from now until [at], as a short "14m" / "now" label.

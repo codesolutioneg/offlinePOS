@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../app/pos_session.dart';
 import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
+import '../../domain/order.dart';
 
 /// Modifier picker.
 ///
@@ -14,11 +15,22 @@ class ModifierSheet extends StatefulWidget {
     required this.product,
     required this.groups,
     required this.formatAmount,
+    this.initial = const [],
+    this.confirmLabel,
   });
 
   final Product product;
   final List<ModifierGroup> groups;
   final String Function(double) formatAmount;
+
+  /// What the line already carries, so reopening the sheet on a line in the cart
+  /// shows the current choices instead of a blank sheet. Empty while ringing, which
+  /// is what a fresh line has.
+  final List<OrderModifier> initial;
+
+  /// The confirm button's wording. Null reads "Add to order", which is what ringing
+  /// a line does; editing one passes its own.
+  final String? confirmLabel;
 
   @override
   State<ModifierSheet> createState() => _ModifierSheetState();
@@ -27,6 +39,24 @@ class ModifierSheet extends StatefulWidget {
 class _ModifierSheetState extends State<ModifierSheet> {
   /// group id -> modifier id -> quantity
   final Map<int, Map<int, int>> _picked = {};
+
+  @override
+  void initState() {
+    super.initState();
+    // Prefill from the line, matched on the option id through the groups on screen.
+    // A choice the catalogue has since dropped is therefore simply not carried back
+    // in: the sheet can only offer what the menu still has, and pretending otherwise
+    // would show the cashier a row they cannot see or clear.
+    final have = {for (final m in widget.initial) m.modifierId: m};
+    for (final g in widget.groups) {
+      for (final m in g.modifiers) {
+        final on = have[m.id];
+        if (on == null) continue;
+        final n = on.quantity.round();
+        (_picked[g.id] ??= {})[m.id] = n < 1 ? 1 : n;
+      }
+    }
+  }
 
   int _countIn(ModifierGroup g) =>
       (_picked[g.id] ?? const {}).values.fold(0, (a, b) => a + b);
@@ -182,7 +212,7 @@ class _ModifierSheetState extends State<ModifierSheet> {
                 FilledButton(
                   key: const Key('confirm-modifiers'),
                   onPressed: _valid ? _confirm : null,
-                  child: Text(tr(context, 'Add to order')),
+                  child: Text(widget.confirmLabel ?? tr(context, 'Add to order')),
                 ),
               ]),
             ),
