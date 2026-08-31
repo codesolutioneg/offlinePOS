@@ -102,6 +102,22 @@ class WindowsZipInstaller {
       );
     }
 
+    // A handoff that failed AFTER this process exited leaves the old build
+    // running and the same manifest still newer, so the next check would hand off
+    // again half a minute later: close the till, fail, restart, repeat, all night
+    // over quiet hours. The script names the build it failed on, and that is what
+    // stops the loop. A different build is not blocked, because the thing that
+    // failed was this one.
+    final failure = await _previousFailureFor(stagedZipPath);
+    if (failure != null) {
+      throw FileSystemException(
+        'this build already failed to install and was not retried: $failure. '
+        'The till is running the build it had. Fix what the install hit, or '
+        'delete $reportFileName in the updates folder to let it try again',
+        stagedZipPath,
+      );
+    }
+
     final script = await _writeScript(stagedZipPath);
 
     // Detached, so it survives the exit below. If it cannot even be started there
@@ -142,6 +158,29 @@ class WindowsZipInstaller {
     }
   }
 
+  /// The recorded failure of this exact build, or null when there is none.
+  ///
+  /// Only a failure counts. "installed" is spent and "still running" means the
+  /// till was busy, which is a reason to try later rather than a reason to stop.
+  Future<String?> _previousFailureFor(String stagedZipPath) async {
+    final report = File(
+        '${stagingDirectory.path}${Platform.pathSeparator}$reportFileName');
+    try {
+      if (!await report.exists()) return null;
+      final text = (await report.readAsString()).trim();
+      final prefix = 'failed ${_buildNameOf(stagedZipPath)}';
+      if (!text.startsWith(prefix)) return null;
+      return text.substring(prefix.length).replaceFirst(RegExp(r'^:\s*'), '');
+    } catch (_) {
+      // An unreadable report is not evidence of a failure, and refusing to
+      // update on it would strand a till on an old build over a corrupt file.
+      return null;
+    }
+  }
+
+  static String _buildNameOf(String stagedZipPath) =>
+      stagedZipPath.split(RegExp(r'[\\/]')).last;
+
   Future<File> _writeScript(String stagedZipPath) async {
     await stagingDirectory.create(recursive: true);
     final script = File(
@@ -164,6 +203,7 @@ class WindowsZipInstaller {
         '${stagingDirectory.path}${Platform.pathSeparator}$unpackedDirName');
     final report = _quote(
         '${stagingDirectory.path}${Platform.pathSeparator}$reportFileName');
+    final buildName = _quote(_buildNameOf(stagedZipPath));
 
     return '''
 \$ErrorActionPreference = 'Stop'
@@ -179,6 +219,9 @@ class WindowsZipInstaller {
 \$unpackedDir = $unpacked
 \$reportPath = $report
 \$selfPath = $self
+# The build being installed, named in the report so the app can tell a failure of
+# this one from a failure of the build before it.
+\$buildName = $buildName
 
 # Wait for the till to let go of its own exe and dlls. Unpacking over a live
 # install fails part way through and leaves a mix of two builds behind.
@@ -218,11 +261,14 @@ try {
   if (\$LASTEXITCODE -ge 8) { throw "robocopy failed with \$LASTEXITCODE" }
   \$global:LASTEXITCODE = 0
 
-  'installed' | Set-Content -LiteralPath \$reportPath
+  "installed \$buildName" | Set-Content -LiteralPath \$reportPath
 } catch {
   # Recorded for the next launch to find. The exit code cannot say anything: this
   # is detached, so nobody is waiting for it.
-  "failed: \$(\$_.Exception.Message)" | Set-Content -LiteralPath \$reportPath
+  # Named with the build it was installing, so the app can refuse to hand this
+  # same one off again. Without that it would close the till, fail, restart, and
+  # be offered the identical build half a minute later, all night.
+  "failed \$buildName: \$(\$_.Exception.Message)" | Set-Content -LiteralPath \$reportPath
 } finally {
   # Unconditional on purpose. Whether the mirror finished, failed, or failed half
   # way, the till comes back up: worst case on a mixed directory, where the app's

@@ -140,6 +140,54 @@ void main() {
     expect(exits, isEmpty, reason: 'and the till stayed up');
   });
 
+  test('a build that already failed is not handed off again', () async {
+    // The loop this prevents: the handoff fails after the app exited, the script
+    // restarts the old build, the manifest is still newer, and the next check
+    // half a minute later closes the till to try the same thing again. All night.
+    final zip = '${staging.path}${Platform.pathSeparator}update-1.1.0-7.zip';
+    File('${staging.path}${Platform.pathSeparator}'
+            '${WindowsZipInstaller.reportFileName}')
+        .writeAsStringSync('failed update-1.1.0-7.zip: robocopy failed with 16');
+
+    final launcher = FakeLauncher();
+    final exits = <String>[];
+    await expectLater(
+      installerFor(launcher, exits: exits).install(zip),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(launcher.calls, isEmpty);
+    expect(exits, isEmpty, reason: 'the till stays up rather than cycling');
+  });
+
+  test('a different build is still allowed after one failed', () async {
+    File('${staging.path}${Platform.pathSeparator}'
+            '${WindowsZipInstaller.reportFileName}')
+        .writeAsStringSync('failed update-1.1.0-7.zip: robocopy failed with 16');
+
+    final launcher = FakeLauncher();
+    final exits = <String>[];
+    await installerFor(launcher, exits: exits)
+        .install('${staging.path}${Platform.pathSeparator}update-1.2.0-9.zip');
+    expect(launcher.calls, hasLength(1), reason: 'the fix for it is a new build');
+    expect(exits, ['exit']);
+  });
+
+  test('a report from a finished or busy run does not block anything', () async {
+    final report = File('${staging.path}${Platform.pathSeparator}'
+        '${WindowsZipInstaller.reportFileName}');
+    final zip = '${staging.path}${Platform.pathSeparator}update-1.1.0-7.zip';
+
+    for (final text in [
+      'installed update-1.1.0-7.zip',
+      'still running after 120 seconds, install not attempted',
+    ]) {
+      report.writeAsStringSync(text);
+      final launcher = FakeLauncher();
+      await installerFor(launcher, exits: []).install(zip);
+      expect(launcher.calls, hasLength(1), reason: 'not a failure of this build');
+    }
+  });
+
   test('a bad archive never touches the working install', () async {
     // Expanding straight over the install directory means a truncated download
     // half replaces the build and leaves a mix of two behind.
@@ -202,8 +250,11 @@ void main() {
         .buildScript(stagedZipPath: r'C:\u.zip', scriptPath: r'C:\s.ps1');
 
     expect(text, contains(WindowsZipInstaller.reportFileName));
-    expect(text, contains("'installed' | Set-Content"));
-    expect(text, contains(r'"failed: $($_.Exception.Message)"'));
+    expect(text, contains(r'"installed $buildName"'));
+    // Named with the build, so the app can refuse to hand off the one that
+    // already failed without refusing the next one.
+    expect(text, contains(r'"failed $buildName: $($_.Exception.Message)"'));
+    expect(text, contains(r"$buildName = 'u.zip'"));
     expect(text, contains('install not attempted'));
   });
 
