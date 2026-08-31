@@ -593,6 +593,12 @@ const Map<String, String> _ar = {
   "Last error": "آخر خطأ",
   "Finishing a failed close": "استكمال إقفال لم يكتمل",
   "Last sync attempt": "آخر محاولة مزامنة",
+  "Item options": "إضافات الصنف",
+  "The server would not send them. The till kept the ones it had.":
+      "لم يرسلها الخادم. احتفظت الكاشير بالإضافات الموجودة لديها.",
+  "Save changes": "حفظ التعديلات",
+  "The kitchen already has this. Void it and ring it again.":
+      "المطبخ استلم هذا الصنف بالفعل. ألغِ الصنف ثم أضفه من جديد.",
   "Line-level discounts": "خصومات على مستوى الصنف",
   "Login": "تسجيل الدخول",
   "Looking...": "جارٍ البحث...",
