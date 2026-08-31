@@ -41,6 +41,37 @@ build_script:
       "Using sqlite: $env:SQLITE3_DLL"
       flutter test;                    if ($LASTEXITCODE -ne 0) { throw "tests failed" }
       flutter build windows --release --build-name=$buildName --build-number=$buildNumber --dart-define=APP_VERSION="$appVersion"; if ($LASTEXITCODE -ne 0) { throw "windows build failed" }
+
+      # Authenticode signing. Windows calls an unsigned build "Unknown publisher"
+      # and SmartScreen blocks it on first run, so the exe is signed whenever a
+      # certificate is configured. Inert without one: a fork or a first-time build
+      # still produces a working, merely unsigned, app rather than failing.
+      #
+      # CODESIGN_PFX_BASE64 and CODESIGN_PASSWORD are AppVeyor secure variables.
+      # Never commit either. Encrypt them at
+      # https://ci.appveyor.com/tools/encrypt and set them on the project, so the
+      # values never appear in this file or in a build log.
+      if ($env:CODESIGN_PFX_BASE64) {
+        "Signing as $env:CODESIGN_PUBLISHER"
+        $pfx = Join-Path $env:TEMP "codesign.pfx"
+        [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CODESIGN_PFX_BASE64))
+        $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+                     Sort-Object FullName | Select-Object -Last 1).FullName
+        if (-not $signtool) { throw "signtool not found" }
+        # The timestamp is what keeps the signature valid after the certificate
+        # expires. Without it every installed till starts failing its signature
+        # check on the day the cert runs out.
+        & $signtool sign /f $pfx /p $env:CODESIGN_PASSWORD `
+          /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+          .\build\windows\x64\runner\Release\offline_pos.exe
+        if ($LASTEXITCODE -ne 0) { throw "signing failed" }
+        & $signtool verify /pa .\build\windows\x64\runner\Release\offline_pos.exe
+        if ($LASTEXITCODE -ne 0) { throw "signature did not verify" }
+        Remove-Item $pfx -Force
+      } else {
+        "No signing certificate configured, shipping unsigned."
+      }
+
       7z a offlinePOS-windows.zip .\build\windows\x64\runner\Release\*
       if ($LASTEXITCODE -ne 0) { throw "packaging failed" }
 

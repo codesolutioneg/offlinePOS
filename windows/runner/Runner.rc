@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "eg.codesolution" "\0"
-            VALUE "FileDescription", "offline_pos" "\0"
+            VALUE "CompanyName", "Code Solution" "\0"
+            VALUE "FileDescription", "Offline POS" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "offline_pos" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 eg.codesolution. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Code Solution. All rights reserved." "\0"
             VALUE "OriginalFilename", "offline_pos.exe" "\0"
-            VALUE "ProductName", "offline_pos" "\0"
+            VALUE "ProductName", "Offline POS" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
