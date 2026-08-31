@@ -32,7 +32,127 @@ OdooPuller puller({List<Map<String, dynamic>>? products}) => OdooPuller(
       },
     );
 
+/// One product, and nothing said about modifiers by anybody.
+List<Map<String, dynamic>> _theMenu(String model) => switch (model) {
+      'product.product' => [
+          {'id': 10, 'display_name': 'Margherita', 'lst_price': 250,
+           'pos_categ_ids': [1], 'active': true, 'to_weight': false,
+           'product_tmpl_id': [90, 'Margherita']},
+        ],
+      _ => const [],
+    };
+
+/// The models the shops actually run on: a group hung on a product template, with
+/// its options underneath and its default named on the group.
+List<Map<String, dynamic>> _posModifiers(String model) => switch (model) {
+      'pos.product.modifier' => [
+          {'id': 5, 'name': 'Size', 'sequence': 1,
+           'product_tmpl_id': [90, 'Margherita'], 'required': true,
+           'min_selection': 0, 'max_selection': 0, 'display_type': 'radio',
+           'auto_add': false, 'default_option_id': [51, 'Large']},
+        ],
+      'pos.modifier.option' => [
+          {'id': 50, 'name': 'Small', 'modifier_id': [5, 'Size'],
+           'price_extra': 0, 'sequence': 1, 'product_id': false,
+           'is_default': false},
+          {'id': 51, 'name': 'Large', 'modifier_id': [5, 'Size'],
+           'price_extra': 12, 'sequence': 2, 'product_id': [99, 'Large cup'],
+           'is_default': false},
+        ],
+      _ => const [],
+    };
+
 void main() {
+  test('the modifiers the shop really has come down and reach their product',
+      () async {
+    final pull = await OdooPuller(
+      call: (model, method, args, kwargs) async =>
+          [..._theMenu(model), ..._posModifiers(model)],
+    ).pull();
+
+    final group = pull.groups.single;
+    expect(group.name, 'Size');
+    expect(group.required, isTrue);
+    expect(pull.productGroupIds[10], [5],
+        reason: 'the group hangs on template 90, and product 10 is its variant');
+    expect(pull.groupsRead, isTrue);
+
+    final large = group.modifiers.firstWhere((m) => m.name == 'Large');
+    expect(large.price, 12, reason: 'price_extra is what the option costs');
+    expect(large.productId, 99);
+    expect(large.isDefault, isTrue,
+        reason: 'the group named it as its default, not the option itself');
+    expect(group.modifiers.firstWhere((m) => m.name == 'Small').isDefault, isFalse);
+  });
+
+  test('a single-choice group cannot be answered twice', () async {
+    final pull = await OdooPuller(
+      call: (model, method, args, kwargs) async =>
+          [..._theMenu(model), ..._posModifiers(model)],
+    ).pull();
+    // The server holds 0 (no ceiling) because it only enforces its own limits for
+    // a checkbox. Taken at face value, a radio "Size" would let a cashier ring
+    // Small and Large on the same dish.
+    expect(pull.groups.single.maxSelection, 1);
+    expect(pull.groups.single.isSatisfiedBy(2), isFalse);
+  });
+
+  test('the models the shop uses win over the older ones', () async {
+    final pull = await OdooPuller(
+      call: (model, method, args, kwargs) async => [
+        ..._theMenu(model),
+        ..._posModifiers(model),
+        ...switch (model) {
+          'product.modifier.category' => [
+              {'id': 100, 'name': 'Toppings', 'sequence': 1, 'min_selection': 0,
+               'max_selection': 3, 'selection_type': 'optional',
+               'product_template_ids': [90]},
+            ],
+          'product.modifier' => [
+              {'id': 1000, 'name': 'Cheese', 'category_id': [100, 'Toppings'],
+               'price': 7, 'price_type': 'fixed', 'sequence': 1,
+               'product_id': false},
+            ],
+          _ => const <Map<String, dynamic>>[],
+        },
+      ],
+    ).pull();
+    // Both add-ons are installed and both have rows. They number their groups from
+    // separate sequences, so one set has to win outright rather than be merged.
+    expect(pull.groups.map((g) => g.name), ['Size']);
+    expect(pull.productGroupIds[10], [5]);
+  });
+
+  test('a shop on the older add-on still gets its modifiers', () async {
+    // The current models answer with nothing, which is what an Odoo without that
+    // add-on looks like. The till must fall back rather than show no options.
+    final pull = await puller().pull();
+    expect(pull.groups.single.name, 'Toppings');
+    expect(pull.productGroupIds[10], [100]);
+    expect(pull.groupsRead, isTrue);
+  });
+
+  test('a refused modifier read is not a shop with no modifiers', () async {
+    final pull = await OdooPuller(
+      call: (model, method, args, kwargs) async {
+        if (model.contains('modifier')) throw Exception('Access denied');
+        return _theMenu(model);
+      },
+    ).pull();
+    expect(pull.groups, isEmpty);
+    expect(pull.groupsRead, isFalse,
+        reason: 'a refused read must not read as an answer of none');
+    expect(pull.isUsable, isTrue, reason: 'and the menu still comes down');
+  });
+
+  test('a shop that genuinely has no modifiers says so', () async {
+    final pull = await OdooPuller(
+      call: (model, method, args, kwargs) async => _theMenu(model),
+    ).pull();
+    expect(pull.groups, isEmpty);
+    expect(pull.groupsRead, isTrue);
+  });
+
   test('maps products, unwrapping many2one and false', () async {
     final pull = await puller().pull();
     final p = pull.products.single;

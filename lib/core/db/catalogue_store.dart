@@ -326,33 +326,67 @@ class CatalogueStore {
       'WHERE pg.product_id = ? ORDER BY g.sequence, g.name',
       [productId],
     );
-    return groups.map((g) {
-      final gid = g['id'] as int;
-      final mods = _db.raw
-          .select('SELECT * FROM modifiers WHERE group_id = ? ORDER BY sequence, name', [gid])
-          .map((m) => Modifier(
-                id: m['id'] as int,
-                groupId: gid,
-                name: m['name'] as String,
-                price: (m['price'] as num).toDouble(),
-                priceType: ModifierPriceType.values.byName(m['price_type'] as String),
-                sequence: m['sequence'] as int,
-                productId: m['product_id'] as int?,
-                isDefault: (m['is_default'] as int? ?? 0) == 1,
-              ))
-          .toList();
-      return ModifierGroup(
-        id: gid,
-        name: g['name'] as String,
-        sequence: g['sequence'] as int,
-        minSelection: g['min_selection'] as int,
-        maxSelection: g['max_selection'] as int,
-        required: (g['required'] as int) == 1,
-        autoAdd: (g['auto_add'] as int? ?? 0) == 1,
-        source: CatalogueSource.fromName(g['source'] as String?),
-        modifiers: mods,
-      );
-    }).toList();
+    return groups.map(_group).toList();
+  }
+
+  ModifierGroup _group(Map<String, Object?> g, {bool pulledOnly = false}) {
+    final gid = g['id'] as int;
+    return ModifierGroup(
+      id: gid,
+      name: g['name'] as String,
+      sequence: g['sequence'] as int,
+      minSelection: g['min_selection'] as int,
+      maxSelection: g['max_selection'] as int,
+      required: (g['required'] as int) == 1,
+      autoAdd: (g['auto_add'] as int? ?? 0) == 1,
+      source: CatalogueSource.fromName(g['source'] as String?),
+      modifiers: _modifiersIn(gid, pulledOnly: pulledOnly),
+    );
+  }
+
+  /// [pulledOnly] leaves out an option a manager added to a pulled group, which is
+  /// the till's row and must not be handed back to a writer that would stamp it as
+  /// the server's.
+  List<Modifier> _modifiersIn(int groupId, {bool pulledOnly = false}) => _db.raw
+      .select(
+          'SELECT * FROM modifiers WHERE group_id = ?'
+          "${pulledOnly ? " AND source = 'odoo'" : ''}"
+          ' ORDER BY sequence, name',
+          [groupId])
+      .map((m) => Modifier(
+            id: m['id'] as int,
+            groupId: groupId,
+            name: m['name'] as String,
+            price: (m['price'] as num).toDouble(),
+            priceType: ModifierPriceType.values.byName(m['price_type'] as String),
+            sequence: m['sequence'] as int,
+            productId: m['product_id'] as int?,
+            isDefault: (m['is_default'] as int? ?? 0) == 1,
+          ))
+      .toList();
+
+  /// The pull-owned modifier groups exactly as they sit on disk, with the products
+  /// they hang on, ready to be handed straight back to [replaceAll].
+  ///
+  /// Wanted for one case: a refresh whose modifier read the server refused.
+  /// [replaceAll] takes the catalogue whole, so keeping those groups through such a
+  /// refresh means writing them again, and reading them here is what lets the caller
+  /// do that without holding a copy of the last good pull.
+  ({List<ModifierGroup> groups, Map<int, List<int>> productGroupIds})
+      odooModifierGroups() {
+    final groups = _db.raw
+        .select("SELECT * FROM modifier_groups WHERE source = 'odoo' "
+            'ORDER BY sequence, name')
+        .map((g) => _group(g, pulledOnly: true))
+        .toList();
+    final links = <int, List<int>>{};
+    for (final r in _db.raw.select('SELECT product_id, group_id FROM '
+        "product_modifier_groups WHERE source = 'odoo'")) {
+      links
+          .putIfAbsent(r['product_id'] as int, () => [])
+          .add(r['group_id'] as int);
+    }
+    return (groups: groups, productGroupIds: links);
   }
 
   /// How many modifier groups each product carries, and whether any of them has to

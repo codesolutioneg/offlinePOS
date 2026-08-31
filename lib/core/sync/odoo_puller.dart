@@ -53,6 +53,14 @@ class OdooPuller {
         ['available_in_pos', '=', true]
       ],
     );
+    // Odoo links modifier groups to product *templates*; the till sells variants.
+    // Map the template ids onto the product ids we actually loaded, or a product
+    // with modifiers upstream would arrive with none here.
+    final templateToProducts = <int, List<int>>{};
+    for (final p in products) {
+      final tmpl = _id(p['product_tmpl_id']) ?? p['id'] as int;
+      templateToProducts.putIfAbsent(tmpl, () => []).add(p['id'] as int);
+    }
     // Resolve each product's tax to a percent, so the till can show a tax
     // breakdown. Optional: an Odoo that refuses account.tax simply leaves tax at
     // zero rather than losing the catalogue.
@@ -66,33 +74,7 @@ class OdooPuller {
     } catch (_) {
       // no tax data; taxRate stays empty
     }
-    // Modifiers come from an optional add-on. On an Odoo without it, asking for
-    // these models errors; degrade to no modifiers rather than losing the whole
-    // catalogue (products and categories must still load).
-    List<Map<String, dynamic>> groups = const [];
-    List<Map<String, dynamic>> modifiers = const [];
-    try {
-      groups = await _searchReadOptional(
-        'product.modifier.category',
-        ['id', 'name', 'sequence', 'min_selection', 'max_selection', 'selection_type',
-         'product_template_ids'],
-        ['auto_add'],
-        [
-          ['active', '=', true]
-        ],
-      );
-      modifiers = await _searchReadOptional(
-        'product.modifier',
-        ['id', 'name', 'category_id', 'price', 'price_type', 'sequence', 'product_id'],
-        ['is_default'],
-        [
-          ['active', '=', true]
-        ],
-      );
-    } catch (_) {
-      groups = const [];
-      modifiers = const [];
-    }
+    final modifiers = await _modifiers(templateToProducts);
 
     // Payment methods for the tender screen. Optional: an Odoo that does not
     // expose them just leaves the till on its cash default. Whether the read
@@ -127,52 +109,6 @@ class OdooPuller {
       partners = const [];
     }
 
-    final byGroup = <int, List<Modifier>>{};
-    for (final m in modifiers) {
-      final gid = _id(m['category_id']);
-      if (gid == null) continue;
-      byGroup.putIfAbsent(gid, () => []).add(Modifier(
-            id: m['id'] as int,
-            groupId: gid,
-            name: (m['name'] ?? '') as String,
-            price: _num(m['price']),
-            priceType: _priceType(m['price_type']),
-            sequence: (m['sequence'] ?? 0) as int,
-            productId: _id(m['product_id']),
-            isDefault: m['is_default'] == true,
-          ));
-    }
-
-    // Odoo links groups to product *templates*; the till sells variants. Map the
-    // template ids onto the product ids we actually loaded, or a product with
-    // modifiers upstream would arrive with none here.
-    final templateToProducts = <int, List<int>>{};
-    for (final p in products) {
-      final tmpl = _id(p['product_tmpl_id']) ?? p['id'] as int;
-      templateToProducts.putIfAbsent(tmpl, () => []).add(p['id'] as int);
-    }
-
-    final productGroupIds = <int, List<int>>{};
-    final mappedGroups = <ModifierGroup>[];
-    for (final g in groups) {
-      final gid = g['id'] as int;
-      mappedGroups.add(ModifierGroup(
-        id: gid,
-        name: (g['name'] ?? '') as String,
-        sequence: (g['sequence'] ?? 0) as int,
-        minSelection: (g['min_selection'] ?? 0) as int,
-        maxSelection: (g['max_selection'] ?? 0) as int,
-        required: g['selection_type'] == 'required',
-        autoAdd: g['auto_add'] == true,
-        modifiers: byGroup[gid] ?? const [],
-      ));
-      for (final tmplId in _ids(g['product_template_ids'])) {
-        for (final pid in templateToProducts[tmplId] ?? const <int>[]) {
-          productGroupIds.putIfAbsent(pid, () => []).add(gid);
-        }
-      }
-    }
-
     return CataloguePull(
       categories: categories
           .map((c) => Category(
@@ -205,8 +141,9 @@ class OdooPuller {
       productImages: {
         for (final p in products) (p['id'] as int): ?_image(p['image_128']),
       },
-      groups: mappedGroups,
-      productGroupIds: productGroupIds,
+      groups: modifiers.groups,
+      productGroupIds: modifiers.productGroupIds,
+      groupsRead: modifiers.read,
       paymentMethods: methods
           .map((m) => PaymentMethod(
                 id: m['id'] as int,
@@ -225,6 +162,179 @@ class OdooPuller {
               ))
           .toList(),
     );
+  }
+
+  /// The shop's modifier groups, from whichever add-on this database actually
+  /// holds them in.
+  ///
+  /// Two unrelated add-ons put modifiers in the same database under different
+  /// models, and a till cannot know which one a given shop installed. The
+  /// `pos.product.modifier` pair is asked first because it is what the shops
+  /// running today are on; the older `product.modifier.category` pair answers only
+  /// when the first came back with nothing. Whichever set answers is used whole and
+  /// the two are never merged: they number their groups from separate sequences, so
+  /// mixing them would put two different groups on one id.
+  ///
+  /// A model that is not installed makes the read throw, which is why every read
+  /// here degrades to no modifiers rather than losing the catalogue: products and
+  /// categories are the part a till cannot sell without.
+  Future<_PulledModifiers> _modifiers(
+      Map<int, List<int>> templateToProducts) async {
+    final current = await _posModifiers(templateToProducts);
+    if (current.groups.isNotEmpty) return current;
+    final legacy = await _legacyModifiers(templateToProducts);
+    if (legacy.groups.isNotEmpty) return legacy;
+    // Neither had a row to give. Whether either could be read at all is still
+    // worth carrying: an empty answer and a refused question look identical from
+    // here, and only one of them is a reason to forget the groups the till has.
+    return _PulledModifiers(const [], const {},
+        read: current.read || legacy.read);
+  }
+
+  /// The `pos.product.modifier` / `pos.modifier.option` pair.
+  Future<_PulledModifiers> _posModifiers(
+      Map<int, List<int>> templateToProducts) async {
+    final List<Map<String, dynamic>> groups;
+    final List<Map<String, dynamic>> options;
+    try {
+      groups = await _searchReadOptional(
+        'pos.product.modifier',
+        ['id', 'name', 'sequence', 'product_tmpl_id', 'required', 'min_selection',
+         'max_selection', 'display_type'],
+        ['auto_add', 'default_option_id'],
+        [
+          ['active', '=', true]
+        ],
+      );
+      options = await _searchReadOptional(
+        'pos.modifier.option',
+        ['id', 'name', 'modifier_id', 'price_extra', 'sequence', 'product_id'],
+        ['is_default'],
+        [
+          ['active', '=', true]
+        ],
+      );
+    } catch (_) {
+      return _PulledModifiers.unread;
+    }
+
+    // A group names its default either on the option or on the group itself, and
+    // shops have both, so an option is a default when either of them says so.
+    final namedDefaults = <int>{};
+    for (final g in groups) {
+      final id = _id(g['default_option_id']);
+      if (id != null) namedDefaults.add(id);
+    }
+    final byGroup = <int, List<Modifier>>{};
+    for (final o in options) {
+      final gid = _id(o['modifier_id']);
+      if (gid == null) continue;
+      byGroup.putIfAbsent(gid, () => []).add(Modifier(
+            id: o['id'] as int,
+            groupId: gid,
+            name: (o['name'] ?? '') as String,
+            price: _num(o['price_extra']),
+            // Every option here is a flat amount: this add-on has no percentage
+            // option, and its "this price replaces the dish's" mode is not
+            // something a line that prices the dish plus its extras can express.
+            sequence: (o['sequence'] ?? 0) as int,
+            productId: _id(o['product_id']),
+            isDefault:
+                o['is_default'] == true || namedDefaults.contains(o['id']),
+          ));
+    }
+
+    final mapped = <ModifierGroup>[];
+    final byProduct = <int, List<int>>{};
+    for (final g in groups) {
+      final gid = g['id'] as int;
+      mapped.add(ModifierGroup(
+        id: gid,
+        name: (g['name'] ?? '') as String,
+        sequence: (g['sequence'] ?? 0) as int,
+        minSelection: (g['min_selection'] ?? 0) as int,
+        // A radio group is one choice by construction, and the server only holds
+        // its own min/max to account for a checkbox, so a radio arrives as 0/0 and
+        // would read here as "take as many as you like".
+        maxSelection: g['display_type'] == 'radio'
+            ? 1
+            : (g['max_selection'] ?? 0) as int,
+        required: g['required'] == true,
+        autoAdd: g['auto_add'] == true,
+        modifiers: byGroup[gid] ?? const [],
+      ));
+      for (final pid
+          in templateToProducts[_id(g['product_tmpl_id'])] ?? const <int>[]) {
+        byProduct.putIfAbsent(pid, () => []).add(gid);
+      }
+    }
+    return _PulledModifiers(mapped, byProduct);
+  }
+
+  /// The older `product.modifier.category` / `product.modifier` pair.
+  Future<_PulledModifiers> _legacyModifiers(
+      Map<int, List<int>> templateToProducts) async {
+    final List<Map<String, dynamic>> groups;
+    final List<Map<String, dynamic>> modifiers;
+    try {
+      groups = await _searchReadOptional(
+        'product.modifier.category',
+        ['id', 'name', 'sequence', 'min_selection', 'max_selection', 'selection_type',
+         'product_template_ids'],
+        ['auto_add'],
+        [
+          ['active', '=', true]
+        ],
+      );
+      modifiers = await _searchReadOptional(
+        'product.modifier',
+        ['id', 'name', 'category_id', 'price', 'price_type', 'sequence', 'product_id'],
+        ['is_default'],
+        [
+          ['active', '=', true]
+        ],
+      );
+    } catch (_) {
+      return _PulledModifiers.unread;
+    }
+
+    final byGroup = <int, List<Modifier>>{};
+    for (final m in modifiers) {
+      final gid = _id(m['category_id']);
+      if (gid == null) continue;
+      byGroup.putIfAbsent(gid, () => []).add(Modifier(
+            id: m['id'] as int,
+            groupId: gid,
+            name: (m['name'] ?? '') as String,
+            price: _num(m['price']),
+            priceType: _priceType(m['price_type']),
+            sequence: (m['sequence'] ?? 0) as int,
+            productId: _id(m['product_id']),
+            isDefault: m['is_default'] == true,
+          ));
+    }
+
+    final mapped = <ModifierGroup>[];
+    final byProduct = <int, List<int>>{};
+    for (final g in groups) {
+      final gid = g['id'] as int;
+      mapped.add(ModifierGroup(
+        id: gid,
+        name: (g['name'] ?? '') as String,
+        sequence: (g['sequence'] ?? 0) as int,
+        minSelection: (g['min_selection'] ?? 0) as int,
+        maxSelection: (g['max_selection'] ?? 0) as int,
+        required: g['selection_type'] == 'required',
+        autoAdd: g['auto_add'] == true,
+        modifiers: byGroup[gid] ?? const [],
+      ));
+      for (final tmplId in _ids(g['product_template_ids'])) {
+        for (final pid in templateToProducts[tmplId] ?? const <int>[]) {
+          byProduct.putIfAbsent(pid, () => []).add(gid);
+        }
+      }
+    }
+    return _PulledModifiers(mapped, byProduct);
   }
 
   /// Narrow the tenders to the point of sale this till sells through.
@@ -440,6 +550,21 @@ class OdooPuller {
       };
 }
 
+/// One add-on's answer about modifiers: the groups, which products they hang on,
+/// and whether the question was answered at all.
+class _PulledModifiers {
+  const _PulledModifiers(this.groups, this.productGroupIds, {this.read = true});
+
+  /// Nothing, because the models could not be read. Distinct from an answer of
+  /// no groups, which is a fact about the shop rather than about the server.
+  static const unread =
+      _PulledModifiers(<ModifierGroup>[], <int, List<int>>{}, read: false);
+
+  final List<ModifierGroup> groups;
+  final Map<int, List<int>> productGroupIds;
+  final bool read;
+}
+
 /// One Odoo record a manager can point a local menu row at.
 class OdooRef {
   const OdooRef({required this.id, required this.name, this.reference});
@@ -458,6 +583,7 @@ class CataloguePull {
     required this.products,
     required this.groups,
     required this.productGroupIds,
+    this.groupsRead = false,
     this.paymentMethods = const [],
     this.paymentMethodsRead = false,
     this.customers = const [],
@@ -468,6 +594,12 @@ class CataloguePull {
   final List<Product> products;
   final List<ModifierGroup> groups;
   final Map<int, List<int>> productGroupIds;
+
+  /// Whether the server actually answered the modifier question. False means no
+  /// model it was asked about could be read, and an empty [groups] then says
+  /// nothing about the shop: the till keeps the modifiers it already had. The same
+  /// distinction [paymentMethodsRead] draws, and for the same reason.
+  final bool groupsRead;
   final List<PaymentMethod> paymentMethods;
 
   /// Whether the server actually answered the tender question. False means it

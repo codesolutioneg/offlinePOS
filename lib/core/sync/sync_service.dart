@@ -180,6 +180,15 @@ class SyncService {
   /// Who is signed in, folded into the heartbeat so support can see it.
   String? cashierId;
 
+  /// True when the last catalogue refresh could not read the shop's modifiers.
+  ///
+  /// Keeping the old groups through a refused read is the right thing and a silent
+  /// thing, and silence is what let this run for months: a shop whose new options
+  /// never appear on the till has no way to tell a server that will not answer the
+  /// question from a till that lost them. Support reads it off the diagnostics
+  /// screen.
+  bool modifiersUnavailable = false;
+
   Timer? _timer;
   SyncState _state = SyncState.idle;
   String? lastError;
@@ -302,6 +311,19 @@ class SyncService {
   List<PaymentMethod> _tendersFrom(CataloguePull pull) =>
       pull.paymentMethodsRead ? pull.paymentMethods : _catalogue.paymentMethods();
 
+  /// The modifier groups to write with a fresh catalogue.
+  ///
+  /// Guarded exactly as the tenders are and for the same reason. The modifier read
+  /// is optional, a server that refuses it looks from here like a shop with no
+  /// modifiers, and taking that at face value deletes the options the till has been
+  /// selling with every half hour until somebody notices. So an unanswered question
+  /// keeps the old answer, which is why they are read back off the till here.
+  ({List<ModifierGroup> groups, Map<int, List<int>> productGroupIds}) _groupsFrom(
+          CataloguePull pull) =>
+      pull.groupsRead
+          ? (groups: pull.groups, productGroupIds: pull.productGroupIds)
+          : _catalogue.odooModifierGroups();
+
   /// A read-only pass: check reachability and refresh the catalogue if it is stale.
   /// Never drains the outbox, so it never pushes an order. This is what the timer
   /// runs, keeping the badge and prices current without booking anything.
@@ -323,12 +345,14 @@ class SyncService {
     }
     try {
       final pull = await _puller.pull();
+      modifiersUnavailable = !pull.groupsRead;
       if (pull.isUsable) {
+        final groups = _groupsFrom(pull);
         _catalogue.replaceAll(
           categories: pull.categories,
           products: pull.products,
-          groups: pull.groups,
-          productGroupIds: pull.productGroupIds,
+          groups: groups.groups,
+          productGroupIds: groups.productGroupIds,
           paymentMethods: _tendersFrom(pull),
           customers: pull.customers,
           productImages: pull.productImages,
@@ -375,13 +399,15 @@ class SyncService {
       }
       if (_puller != null && catalogueNeedsRefresh) {
         final pull = await _puller.pull();
+        modifiersUnavailable = !pull.groupsRead;
         // Never overwrite a working catalogue with an empty pull.
         if (pull.isUsable) {
+          final groups = _groupsFrom(pull);
           _catalogue.replaceAll(
             categories: pull.categories,
             products: pull.products,
-            groups: pull.groups,
-            productGroupIds: pull.productGroupIds,
+            groups: groups.groups,
+            productGroupIds: groups.productGroupIds,
             paymentMethods: _tendersFrom(pull),
             customers: pull.customers,
             productImages: pull.productImages,

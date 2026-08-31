@@ -283,6 +283,14 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           _row(tr(context, 'Prices updated'), _age(s.catalogueRefreshedAt == null
               ? null
               : DateTime.now().toUtc().difference(s.catalogueRefreshedAt!))),
+          // A refused modifier read leaves the till selling the options it already
+          // had, which is right and invisible. This is the line that tells support
+          // the shop's new options are stuck on the server rather than lost here.
+          if (widget.sync.modifiersUnavailable)
+            _row(tr(context, 'Item options'),
+                tr(context,
+                    'The server would not send them. The till kept the ones it had.'),
+                keyName: 'modifiers-unread', bad: true),
           if (s.lastError != null)
             _row(tr(context, 'Last error'), s.lastError!, keyName: 'last-error', bad: true),
           if (widget.printError != null)

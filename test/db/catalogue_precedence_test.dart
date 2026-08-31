@@ -1,6 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/catalogue_store.dart';
 import 'package:offline_pos/core/db/database.dart';
+import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
+import 'package:offline_pos/core/sync/odoo_puller.dart';
+import 'package:offline_pos/core/sync/outbox.dart';
+import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 
 import 'sqlite_loader.dart';
@@ -141,6 +145,87 @@ void main() {
 
     pull();
     expect(store.modifierGroupsFor(1), isEmpty);
+  });
+
+  /// The test above states the store's rule: what a pull carries is what the till
+  /// holds. It cannot say anything about the case that matters, because it hands
+  /// the store an empty pull directly and a store cannot tell a shop with no
+  /// modifiers from a server that refused to say. That distinction is made one
+  /// level up, so it is proved there: through a real refresh against a server that
+  /// answers about the menu and not about the modifiers.
+  ///
+  /// Which is the failure that shipped: the refused read arrived as no groups, and
+  /// every refresh deleted the options the shop was selling with.
+  SyncService syncAgainst({required bool modifiersReadable}) {
+    final outbox = Outbox(store: SqliteOutboxStore(db), senders: {});
+    return SyncService(
+      outbox: outbox,
+      catalogue: store,
+      outboxStore: SqliteOutboxStore(db),
+      deviceId: 'till-1',
+      appVersion: 'test',
+      puller: OdooPuller(
+        call: (model, method, args, kwargs) async {
+          // What an integration user without the Point of Sale group looks like:
+          // the menu comes down, the modifier models do not.
+          if (model.contains('modifier')) {
+            if (!modifiersReadable) throw Exception('Access denied');
+            return const [];
+          }
+          return switch (model) {
+            'product.product' => [
+                {'id': 1, 'display_name': 'Pizza', 'lst_price': 10,
+                 'pos_categ_ids': const <int>[], 'active': true,
+                 'to_weight': false, 'product_tmpl_id': [90, 'Pizza']},
+              ],
+            _ => const [],
+          };
+        },
+      ),
+    );
+  }
+
+  void aGroupOnTheTill() {
+    pull(groups: const [
+      ModifierGroup(
+        id: 100,
+        name: 'Sauce',
+        maxSelection: 1,
+        modifiers: [Modifier(id: 1000, groupId: 100, name: 'Tomato', price: 0)],
+      )
+    ], productGroupIds: const {
+      1: [100]
+    });
+    expect(store.modifierGroupsFor(1), hasLength(1));
+  }
+
+  test('a refresh whose modifier read is refused keeps the groups the till had',
+      () async {
+    aGroupOnTheTill();
+    final sync = syncAgainst(modifiersReadable: false);
+
+    await sync.refresh(force: true);
+
+    final after = store.modifierGroupsFor(1).single;
+    expect(after.name, 'Sauce',
+        reason: 'the server said nothing about modifiers, so nothing about them '
+            'changed on the till');
+    expect(after.modifiers.single.name, 'Tomato');
+    expect(sync.modifiersUnavailable, isTrue,
+        reason: 'and support can see why the shop\'s new options never arrived');
+  });
+
+  test('a refresh of a shop that genuinely has no modifiers clears them',
+      () async {
+    aGroupOnTheTill();
+    final sync = syncAgainst(modifiersReadable: true);
+
+    await sync.refresh(force: true);
+
+    expect(store.modifierGroupsFor(1), isEmpty,
+        reason: 'an answered question is a licence to remove what it no longer '
+            'names');
+    expect(sync.modifiersUnavailable, isFalse);
   });
 
   test('the grid marks come from one read and say whether a group must be answered',
