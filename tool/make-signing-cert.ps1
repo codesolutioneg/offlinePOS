@@ -4,8 +4,8 @@
 #
 # What this gets you: the till stops saying "Unknown publisher" and says
 # Code Solution instead, on any machine that has been given the .cer by
-# trust-signing-cert.ps1. That is the right trade for tills we install
-# ourselves and it costs nothing.
+# install-till.ps1, which trusts it as part of installing. That is the right
+# trade for tills we install ourselves and it costs nothing.
 #
 # What it does NOT get you: a stranger downloading the app still sees the
 # SmartScreen warning, because this certificate chains to itself rather than to
@@ -65,8 +65,16 @@ Write-Host "       CODESIGN_PFX_BASE64  = contents of $b64Path"
 Write-Host "       CODESIGN_PASSWORD    = the password given to this script"
 Write-Host "       CODESIGN_PUBLISHER   = $Publisher"
 Write-Host "  2. Push. The build signs the exe and verifies the signature."
-Write-Host "  3. On each till, once, as administrator:"
-Write-Host "       .\tool\trust-signing-cert.ps1 -CerPath <path to the .cer>"
+Write-Host "  3. Put the build zip and $cerPath on the same stick, and on each till"
+Write-Host "     run this, as the cashier, not as administrator. It asks for"
+Write-Host "     administrator itself for the certificate step only:"
+Write-Host "       powershell -ExecutionPolicy Bypass -File .\install-till.ps1 -ExpectedThumbprint $($cert.Thumbprint)" -ForegroundColor Cyan
+Write-Host ""
+# Named up front, because a till that is told which certificate to expect can
+# refuse the wrong one. Left to ask instead, all it can do is describe a
+# thumbprint to somebody with nothing to compare it against.
+Write-Host "     Keep that line with the stick. Without the thumbprint the till has to" -ForegroundColor Yellow
+Write-Host "     stop and ask an operator to vouch for a certificate by eye." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Keep the pfx and its password somewhere durable. Losing them means" -ForegroundColor Yellow
 Write-Host "a new certificate, and every till has to be given the new .cer." -ForegroundColor Yellow
