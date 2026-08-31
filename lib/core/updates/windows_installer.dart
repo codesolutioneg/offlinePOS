@@ -25,6 +25,14 @@ typedef ExitRequest = Future<void> Function();
 /// `Expand-Archive`) and neither exists in cmd without shipping another tool onto
 /// the till.
 ///
+/// The order matters, because once this process has exited nobody is left to fix
+/// anything: the archive is opened beside the zip first so a bad download cannot
+/// half replace a working install, the install is written only once the whole
+/// archive is on disk, and the app is started again unconditionally, including
+/// after a failure. A shop staring at a machine that will not open is worse than a
+/// shop running last week's build. What went wrong is written next to the zip,
+/// because a detached script's exit code goes nowhere.
+///
 /// Nothing here decides whether installing is safe or whether the build is
 /// trustworthy. `UpdateService` has already verified the signature and re-checked
 /// the digest against this exact file, and asked the gate again.
@@ -109,6 +117,10 @@ class WindowsZipInstaller {
     final target = _quote(installDirectory.path);
     final exe = _quote(executablePath);
     final self = _quote(scriptPath);
+    final unpacked = _quote(
+        '${stagingDirectory.path}${Platform.pathSeparator}$unpackedDirName');
+    final report = _quote(
+        '${stagingDirectory.path}${Platform.pathSeparator}$reportFileName');
 
     return '''
 \$ErrorActionPreference = 'Stop'
@@ -123,17 +135,49 @@ for (\$i = 0; \$i -lt $_waitSeconds; \$i++) {
 if (Get-Process -Id \$tillPid -ErrorAction SilentlyContinue) {
   # Still running, so the files are still locked. Leaving the install untouched
   # means the till keeps the build it has and the next pass tries again.
+  'still running after $_waitSeconds seconds, install not attempted' |
+    Set-Content -LiteralPath $report
   exit 1
 }
 
-Expand-Archive -LiteralPath $zip -DestinationPath $target -Force
-Start-Process -FilePath $exe -WorkingDirectory $target
+# From here the till is not running, so every path below has to end with it
+# running again. A shop left staring at a machine that will not open is worse
+# than a shop running last week's build.
+try {
+  # Unpacked beside the zip first, never straight over the install. A truncated
+  # or unreadable archive then fails with the working build untouched, instead
+  # of half replacing it and leaving a mix of two.
+  if (Test-Path -LiteralPath $unpacked) {
+    Remove-Item -LiteralPath $unpacked -Recurse -Force
+  }
+  Expand-Archive -LiteralPath $zip -DestinationPath $unpacked -Force
+
+  # Only once the whole archive is on disk does the install get touched.
+  Copy-Item -Path (Join-Path $unpacked '*') -Destination $target -Recurse -Force
+
+  'installed' | Set-Content -LiteralPath $report
+} catch {
+  # Recorded for the next launch to find. The exit code cannot say anything: this
+  # is detached, so nobody is waiting for it.
+  "failed: \$(\$_.Exception.Message)" | Set-Content -LiteralPath $report
+} finally {
+  # Unconditional on purpose. Whether the copy finished, failed, or failed half
+  # way, the till comes back up: worst case on a mixed directory, where the app's
+  # own startup guard reports what it found.
+  Start-Process -FilePath $exe -WorkingDirectory $target
+  Remove-Item -LiteralPath $unpacked -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # Best effort: the shell may still hold this file open, and a leftover copy is
 # overwritten by the next install anyway.
 Remove-Item -LiteralPath $self -Force -ErrorAction SilentlyContinue
 ''';
   }
+
+  /// Where the archive is expanded before anything in the install directory is
+  /// touched, and where the outcome is left for the next launch to find.
+  static const String unpackedDirName = 'update-unpacked';
+  static const String reportFileName = 'install-report.txt';
 
   /// How long the script waits for this process to go away before giving up.
   static const int _waitSeconds = 120;

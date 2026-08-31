@@ -99,7 +99,7 @@ void main() {
 
     final text = script.readAsStringSync();
     expect(text, contains("-LiteralPath '$zip'"));
-    expect(text, contains("-DestinationPath 'C:\\Program Files\\Offline POS'"));
+    expect(text, contains("-Destination 'C:\\Program Files\\Offline POS'"));
     expect(
         text,
         contains(
@@ -116,8 +116,56 @@ void main() {
   test('a path containing a quote cannot break out of its literal', () async {
     final text = installerFor(FakeLauncher(), exits: [], install: r"C:\o'brien")
         .buildScript(stagedZipPath: r"C:\o'brien\u.zip", scriptPath: 'x.ps1');
-    expect(text, contains(r"-DestinationPath 'C:\o''brien'"));
+    expect(text, contains(r"-Destination 'C:\o''brien'"));
     expect(text, contains(r"-LiteralPath 'C:\o''brien\u.zip'"));
+  });
+
+  test('a bad archive never touches the working install', () async {
+    // Expanding straight over the install directory means a truncated download
+    // half replaces the build and leaves a mix of two behind.
+    final text = installerFor(FakeLauncher(), exits: [])
+        .buildScript(stagedZipPath: r'C:\u.zip', scriptPath: r'C:\s.ps1');
+
+    final expand = RegExp(r'Expand-Archive[^\n]*').stringMatch(text)!;
+    expect(expand, contains(WindowsZipInstaller.unpackedDirName));
+    expect(expand, isNot(contains('Program Files')),
+        reason: 'the archive is opened beside the zip, not over the install');
+    // The install is only written once the whole archive is on disk.
+    expect(text.indexOf('Expand-Archive'), lessThan(text.indexOf('Copy-Item')));
+  });
+
+  test('the till is brought back up even when the install failed', () async {
+    // The one outcome worse than a failed update: the process was stopped to let
+    // the files be replaced, the replacing threw, and nothing started again. A
+    // shop is then staring at a machine that will not open, with no running app
+    // left to retry.
+    final text = installerFor(FakeLauncher(), exits: [])
+        .buildScript(stagedZipPath: r'C:\u.zip', scriptPath: r'C:\s.ps1');
+
+    expect(text, contains('} catch {'));
+    expect(text, contains('} finally {'));
+
+    final relaunch = text.indexOf('Start-Process');
+    final finallyAt = text.indexOf('} finally {');
+    expect(finallyAt, greaterThan(-1));
+    expect(relaunch, greaterThan(finallyAt),
+        reason: 'the relaunch is unconditional, not the last step of the happy path');
+
+    // And the copy is inside the guarded block, so a throw reaches the finally.
+    expect(text.indexOf('try {'), lessThan(text.indexOf('Copy-Item')));
+    expect(text.indexOf('Copy-Item'), lessThan(finallyAt));
+  });
+
+  test('the outcome is left where the next launch can read it', () async {
+    // A detached script's exit code goes nowhere, so a failure that is not
+    // written down looks exactly like a build that stages forever.
+    final text = installerFor(FakeLauncher(), exits: [])
+        .buildScript(stagedZipPath: r'C:\u.zip', scriptPath: r'C:\s.ps1');
+
+    expect(text, contains(WindowsZipInstaller.reportFileName));
+    expect(text, contains("'installed' | Set-Content"));
+    expect(text, contains(r'"failed: $($_.Exception.Message)"'));
+    expect(text, contains('install not attempted'));
   });
 
   test('the script waits for this process before it unpacks anything', () async {
