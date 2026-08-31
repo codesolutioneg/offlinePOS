@@ -397,13 +397,27 @@ phone, time, covers, state) + due-soon badge on the floor tile + a
 5. ~~**AppVeyor**~~ CONFIRMED green: build 1.0.101 on `f95e68a`, which runs
    `flutter analyze`, the full `flutter test` including the socket-binding suites
    that cannot run in a sandbox, and the Windows release build.
-6. **Which jouma branch is production.** Found while tracing the batch question and
-   listed here because it is upstream of it. `pos_offline_sync` on jouma `main` is
-   still the old `pos.order` variant (18.0.1.0.0, `models/pos_order.py`); only
-   `Staging_final` and `Staging_osam` carry the `sale.order` cascade this till
-   actually calls (18.0.3.0.0, `models/sale_order.py`). A till pointed at a jouma
-   running `main` gets `AttributeError` on `sale.order.create_from_offline_pos` and
-   books nothing. Establish what is deployed before shipping anything.
+6. **The till books into the staging build, and that is a bridge with an expiry
+   date.** Settled: for now the target is the Odoo.sh **Staging** branch
+   `Staging_final`, which carries `pos_offline_sync` 18.0.3.0.0 with the
+   `sale.order` cascade the till calls. Verified reachable.
+
+   What that leaves open, in the order it will bite:
+   - **The build is scheduled for deletion on 18 September 2026.** Odoo.sh gives the
+     latest staging build about 30 days and garbage-collects older ones. When it
+     goes, the hostname stops resolving and the till has nowhere to book. Sales are
+     not lost, because the outbox is durable and idempotent, but nothing clears
+     until a live endpoint exists again.
+   - **Production still cannot take this till.** The Production branch is `main`,
+     and `pos_offline_sync` there is the old `pos.order` variant (18.0.1.0.0,
+     `models/pos_order.py`). A till pointed at production gets `AttributeError` on
+     `sale.order.create_from_offline_pos` and books nothing. Going live in a real
+     shop means landing 18.0.3.0.0 on `main` first.
+   - **A staging rebuild is a fresh copy of production data.** Odoo.sh starts
+     staging builds from production, so the integration user, its groups and its
+     email address have to be recreated after one, and anything the till booked
+     into the previous build is gone. That is fine for acceptance testing and is
+     not a place to accumulate real takings.
 
 ---
 
