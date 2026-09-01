@@ -97,6 +97,10 @@ abstract final class AppTheme {
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
+        // A fixed width, centred: a toast that spans the whole bottom edge sits
+        // on the Pay button now that the order panel reaches the true bottom.
+        // Centred at 400 it hovers over the product grid instead.
+        width: 400,
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(radiusSmall)),
       ),

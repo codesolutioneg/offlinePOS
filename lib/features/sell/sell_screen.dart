@@ -2659,7 +2659,22 @@ class _SellScreenState extends State<SellScreen> {
     );
   }
 
-  Widget _orderPanel() => Column(
+  Widget _orderPanel() => Theme(
+        // The whole panel runs dense: chips and buttons shed Material's 48px
+        // minimum tap padding, which is what let three rows of context chips
+        // and the type strip stop crowding the bill out of its own panel.
+        data: Theme.of(context).copyWith(
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          chipTheme: Theme.of(context).chipTheme.copyWith(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                labelStyle: Theme.of(context)
+                    .chipTheme
+                    .labelStyle
+                    ?.copyWith(fontSize: 12.5),
+              ),
+        ),
+        child: Column(
         children: [
           _orderTypeStrip(),
           _contextBar(),
@@ -2693,10 +2708,18 @@ class _SellScreenState extends State<SellScreen> {
           // The totals give way and scroll rather than clip: a total a cashier
           // cannot read is worse than one they have to nudge into view. The action
           // buttons below stay put, because a Pay button that scrolls away is not a
-          // Pay button.
-          Flexible(child: SingleChildScrollView(child: _totals())),
+          // Pay button. A hard cap rather than a Flexible, deliberately: a loose
+          // flex child is granted a share of the free space whether it uses it or
+          // not, and the unused share came out as a dead band under Pay instead of
+          // going to the item list.
+          ConstrainedBox(
+            constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.35),
+            child: SingleChildScrollView(child: _totals()),
+          ),
           _actions(),
         ],
+      ),
       );
 
   /// Where the sale is served. Changing it reshapes what the context bar asks for
@@ -2707,13 +2730,13 @@ class _SellScreenState extends State<SellScreen> {
             .surfaceContainerHighest
             .withValues(alpha: 0.4),
         child: SizedBox(
-          height: 48,
+          height: 40,
           // Scrolls rather than overflows: the chips do not all fit a narrow till
           // panel, and a clipped selector is worse than a scrollable one.
           child: ListView(
             key: const Key('order-type-strip'),
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             children: [
               // Only the types this role rings, plus whatever the order in hand
               // already is: a tab handed over from another till has to stay
@@ -2775,8 +2798,8 @@ class _SellScreenState extends State<SellScreen> {
           ),
         ),
       Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Wrap(spacing: 8, runSpacing: 4, children: [
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        child: Wrap(spacing: 6, runSpacing: 3, children: [
           // A named customer is not a delivery-only idea: a takeaway regular and a
           // dine-in booking are both worth booking against the partner rather than
           // as an anonymous sale. First in the row, where delivery puts its own
@@ -2856,7 +2879,7 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Widget _totals() => Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
         child: Column(
           children: [
             if (s.current.discountPercent > 0 ||
@@ -2884,7 +2907,7 @@ class _SellScreenState extends State<SellScreen> {
               Text(widget.formatAmount(s.total),
                   key: const Key('total'),
                   style: TextStyle(
-                      fontSize: 26,
+                      fontSize: 23,
                       fontWeight: FontWeight.w800,
                       color: Theme.of(context).colorScheme.primary)),
             ]),
@@ -2932,7 +2955,7 @@ class _SellScreenState extends State<SellScreen> {
     final unsent = s.current.lines.where((l) => !l.printedToKitchen).length;
     final canFire = s.hasLines && widget.onSendToKitchen != null && unsent > 0;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
       child: Column(children: [
         Row(children: [
           // Where a waiter looks when the table asks for the bill. It lives with the
@@ -2941,7 +2964,7 @@ class _SellScreenState extends State<SellScreen> {
           // Nothing to bill on an empty order, so it stays away until there is.
           if (widget.onPrintBill != null && s.hasLines) ...[
             SizedBox(
-              height: 52,
+              height: 46,
               child: OutlinedButton(
                 key: const Key('print-bill'),
                 onPressed: _printBill,
@@ -2952,7 +2975,7 @@ class _SellScreenState extends State<SellScreen> {
           ],
           Expanded(
             child: SizedBox(
-              height: 52,
+              height: 46,
               child: OutlinedButton(
                 key: const Key('send-kitchen'),
                 // Reads its state by colour and count: blue with "(N)" when there is
@@ -2984,7 +3007,7 @@ class _SellScreenState extends State<SellScreen> {
           const SizedBox(width: 8),
           Expanded(
             child: SizedBox(
-              height: 52,
+              height: 46,
               child: OutlinedButton(
                 key: const Key('hold'),
                 style: OutlinedButton.styleFrom(
@@ -3004,18 +3027,18 @@ class _SellScreenState extends State<SellScreen> {
             ),
           ),
         ]),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         SizedBox(
           width: double.infinity,
-          height: 68,
+          height: 56,
           child: FilledButton.icon(
             key: const Key('pay'),
             style: FilledButton.styleFrom(
               backgroundColor: AppColors.primary,
-              textStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              textStyle: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
             ),
             onPressed: s.hasLines ? _pay : null,
-            icon: const Icon(Icons.payments, size: 26),
+            icon: const Icon(Icons.payments, size: 24),
             label: Text('${tr(context, 'Pay')}  ${widget.formatAmount(s.total)}'),
           ),
         ),
@@ -3348,92 +3371,141 @@ class _LineTile extends StatelessWidget {
     final kitchenHasIt = line.printedToKitchen || line.firedStations.isNotEmpty;
     final edge = sent ? AppColors.sent : AppColors.draft;
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
         border: Border(left: BorderSide(color: edge, width: 4)),
       ),
-      child: ListTile(
-        // The wash is the tile's own, not a box painted behind it: a ListTile draws
-        // its background and its ink on the nearest Material, so a coloured box
-        // around it hides the tap ripple, which newer Flutter refuses outright.
-        tileColor: sent ? AppColors.sent.withValues(alpha: 0.05) : null,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        onTap: onTapLine,
-        contentPadding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
-        title: Row(children: [
-          if (line.seat != null) ...[
-            _tag('G${line.seat}', AppColors.info, key: Key('seat-badge-${line.uuid}')),
-            const SizedBox(width: 6),
-          ],
-          Text('$_qtyText×',
-              style: TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.primary)),
-          const SizedBox(width: 6),
-          Expanded(
-              child: Text(line.name,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600))),
-          if (sent) ...[
-            StatusChip(tr(context, 'Sent'), AppColors.sent, icon: Icons.check),
-            const SizedBox(width: 6),
-          ] else if (line.isTimed) ...[
-            StatusChip(_fireCountdown(line.fireAt!), AppColors.pending,
-                icon: Icons.timer_outlined),
-            const SizedBox(width: 6),
-          ],
-          Text(amount, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-        ]),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (final m in line.modifiers)
-              Text(
-                  '   + ${m.name}${m.quantity > 1 ? ' ×${m.quantity.toStringAsFixed(0)}' : ''}'
-                  '${m.unitPrice == 0 ? '  (${tr(context, 'free')})' : '  ${format(m.total * line.quantity)}'}',
-                  style: TextStyle(
-                      fontSize: 13,
-                      color: m.unitPrice == 0 ? AppColors.modifierFree : AppColors.modifierPaid)),
-            if (line.discountPercent > 0)
-              Text('   -${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
-                  style: const TextStyle(fontSize: 13, color: AppColors.warning)),
-            if (line.note != null)
-              Text('   ${line.note}',
-                  style: const TextStyle(fontSize: 13, fontStyle: FontStyle.italic)),
-            if (!kitchenHasIt)
-              Row(children: [
-                IconButton(
-                    icon: const Icon(Icons.remove_circle_outline, size: 28),
-                    color: AppColors.error,
-                    onPressed: () => onQty(line.quantity - 1)),
+      // The wash is the Material's own so the tap ripple stays visible on it.
+      child: Material(
+        color: sent ? AppColors.sent.withValues(alpha: 0.05) : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTapLine,
+          child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(6, 4, 2, 4),
+            child: Row(children: [
+              // The quantity controls sit where the quantity is read, so a simple
+              // item costs the bill one line, not a strip of three: on a small
+              // panel that is the difference between seeing two items and six.
+              if (!kitchenHasIt) ...[
+                _step(Icons.remove_circle_outline, AppColors.error,
+                    () => onQty(line.quantity - 1)),
                 Container(
-                  constraints: const BoxConstraints(minWidth: 32),
+                  constraints: const BoxConstraints(minWidth: 22),
                   alignment: Alignment.center,
                   child: Text(_qtyText,
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      style: const TextStyle(
+                          fontSize: 14.5, fontWeight: FontWeight.w800)),
                 ),
+                _step(Icons.add_circle_outline, AppColors.success,
+                    () => onQty(line.quantity + 1)),
+                const SizedBox(width: 4),
+              ] else ...[
+                const SizedBox(width: 4),
+                Text('$_qtyText×',
+                    style: TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.primary)),
+                const SizedBox(width: 6),
+              ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      if (line.seat != null) ...[
+                        _tag('G${line.seat}', AppColors.info,
+                            key: Key('seat-badge-${line.uuid}')),
+                        const SizedBox(width: 5),
+                      ],
+                      Expanded(
+                        child: Text(line.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 14.5, fontWeight: FontWeight.w600)),
+                      ),
+                      if (sent) ...[
+                        const SizedBox(width: 4),
+                        StatusChip(tr(context, 'Sent'), AppColors.sent,
+                            icon: Icons.check),
+                      ] else if (line.isTimed) ...[
+                        const SizedBox(width: 4),
+                        StatusChip(_fireCountdown(line.fireAt!), AppColors.pending,
+                            icon: Icons.timer_outlined),
+                      ],
+                    ]),
+                    for (final m in line.modifiers)
+                      Text(
+                          '+ ${m.name}${m.quantity > 1 ? ' ×${m.quantity.toStringAsFixed(0)}' : ''}'
+                          '${m.unitPrice == 0 ? '  (${tr(context, 'free')})' : '  ${format(m.total * line.quantity)}'}',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: m.unitPrice == 0
+                                  ? AppColors.modifierFree
+                                  : AppColors.modifierPaid)),
+                    if (line.discountPercent > 0)
+                      Text(
+                          '-${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.warning)),
+                    if (line.note != null)
+                      Text(line.note!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12, fontStyle: FontStyle.italic)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(amount,
+                  style: const TextStyle(
+                      fontSize: 14.5, fontWeight: FontWeight.w700)),
+              // A sent line shows the Void affordance instead of a free trash:
+              // removing it is a permissioned, audited, slip-printing action,
+              // not a silent delete.
+              if (kitchenHasIt)
                 IconButton(
-                    icon: const Icon(Icons.add_circle_outline, size: 28),
-                    color: AppColors.success,
-                    onPressed: () => onQty(line.quantity + 1)),
-              ]),
-          ],
+                    key: Key('line-void-inline-${line.uuid}'),
+                    icon: const Icon(Icons.remove_circle_outline, size: 22),
+                    color: AppColors.error,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 36, minHeight: 36),
+                    visualDensity: VisualDensity.compact,
+                    tooltip: tr(context, 'Void this line'),
+                    onPressed: onVoid)
+              else
+                IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 22),
+                    color: AppColors.error,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 36, minHeight: 36),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: onRemove),
+            ]),
+          ),
         ),
-        // A sent line shows the Void affordance instead of a free trash: removing it
-        // is a permissioned, audited, slip-printing action, not a silent delete.
-        trailing: kitchenHasIt
-            ? IconButton(
-                key: Key('line-void-inline-${line.uuid}'),
-                icon: const Icon(Icons.remove_circle_outline, size: 26),
-                color: AppColors.error,
-                tooltip: tr(context, 'Void this line'),
-                onPressed: onVoid)
-            : IconButton(
-                icon: const Icon(Icons.delete_outline, size: 26),
-                color: AppColors.error,
-                onPressed: onRemove),
       ),
     );
   }
+
+  /// One compact quantity key. An InkWell rather than an IconButton so the tap
+  /// target stays a tight 32px square instead of Material's 48px minimum, which
+  /// is what let the stepper move up into the line itself.
+  Widget _step(IconData icon, Color color, VoidCallback onTap) => InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(5),
+          child: Icon(icon, size: 22, color: color),
+        ),
+      );
 
   /// A short "in 14m" / "due" label for a course-timed line.
   static String _fireCountdown(DateTime at) {
