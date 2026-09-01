@@ -230,7 +230,9 @@ class TableFloorScreen extends StatefulWidget {
 class _TableFloorScreenState extends State<TableFloorScreen> {
   // A table occupies one whole slot on the grid; the drag snaps to this so two
   // tables can never end up half-overlapping.
-  static const double _cell = 110;
+  // 132 rather than the old 110: the table tile is the most-tapped control of a
+  // waiter's day, and the room has the space to draw it big.
+  static const double _cell = 132;
 
   // The fine grid painted in edit mode, purely visual: it is what tells the
   // manager the floor is laid out on a grid rather than free-floating.
@@ -1630,8 +1632,8 @@ class _TableTile extends StatelessWidget {
     final tile = Container(
       // A rectangle is short rather than extra-wide so it still fits one grid slot
       // and cannot overlap the table snapped into the next cell.
-      width: 100,
-      height: wide ? 60 : 100,
+      width: 120,
+      height: wide ? 72 : 120,
       margin: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.15),

@@ -2745,11 +2745,14 @@ class _SellScreenState extends State<SellScreen> {
                 if (widget.allowedOrderTypes.contains(t) || s.current.type == t) ...[
                 ChoiceChip(
                   key: Key('order-type-${t.name.toLowerCase()}'),
+                  // Tight enough that all four kinds fit a 360px panel at once,
+                  // so no order type hides behind a scroll.
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 2),
                   label: Text(tr(context, t.label)),
                   selected: s.current.type == t,
                   onSelected: (_) => _changed(() => s.setOrderType(t)),
                 ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 4),
               ],
             ],
           ),
@@ -2965,22 +2968,31 @@ class _SellScreenState extends State<SellScreen> {
           if (widget.onPrintBill != null && s.hasLines) ...[
             SizedBox(
               height: 46,
+              width: 48,
               child: OutlinedButton(
                 key: const Key('print-bill'),
+                style: OutlinedButton.styleFrom(
+                    padding: EdgeInsets.zero, minimumSize: const Size(48, 46)),
                 onPressed: _printBill,
-                child: const Icon(Icons.receipt_long_outlined),
+                child: const Icon(Icons.receipt_long_outlined, size: 20),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
           ],
           Expanded(
+            flex: 3,
             child: SizedBox(
               height: 46,
               child: OutlinedButton(
                 key: const Key('send-kitchen'),
                 // Reads its state by colour and count: blue with "(N)" when there is
-                // food to fire, muted once everything is already in the kitchen.
+                // food to fire, muted once everything is already in the kitchen. The
+                // tight padding is what keeps the count on screen in a 360px panel:
+                // "Kitc..." tells a cashier nothing about what has not been fired.
                 style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  textStyle:
+                      const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                   foregroundColor: canFire ? AppColors.info : Colors.grey,
                   side: BorderSide(
                       color: canFire ? AppColors.info : Colors.grey.shade400),
@@ -2991,8 +3003,8 @@ class _SellScreenState extends State<SellScreen> {
                     ? _resendToKitchen
                     : null,
                 child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(unsent > 0 ? Icons.soup_kitchen : Icons.check_circle, size: 20),
-                  const SizedBox(width: 6),
+                  Icon(unsent > 0 ? Icons.soup_kitchen : Icons.check_circle, size: 18),
+                  const SizedBox(width: 4),
                   Flexible(
                     child: Text(
                         unsent > 0
@@ -3004,20 +3016,24 @@ class _SellScreenState extends State<SellScreen> {
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
+            flex: 2,
             child: SizedBox(
               height: 46,
               child: OutlinedButton(
                 key: const Key('hold'),
                 style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  textStyle:
+                      const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                   foregroundColor: AppColors.held,
                   side: BorderSide(color: AppColors.held.withValues(alpha: 0.6)),
                 ),
                 onPressed: s.hasLines ? _hold : null,
                 child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  const Icon(Icons.pause_circle_outline, size: 20),
-                  const SizedBox(width: 6),
+                  const Icon(Icons.pause_circle_outline, size: 18),
+                  const SizedBox(width: 4),
                   Flexible(
                     child: Text(tr(context, 'Hold'),
                         maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -3430,7 +3446,7 @@ class _LineTile extends StatelessWidget {
                       ],
                       Expanded(
                         child: Text(line.name,
-                            maxLines: 1,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 fontSize: 14.5, fontWeight: FontWeight.w600)),

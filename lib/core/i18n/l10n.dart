@@ -569,6 +569,7 @@ const Map<String, String> _ar = {
   'Paid': 'المدفوع',
   'balance': 'المتبقي',
   'Search your name': 'ابحث عن اسمك',
+  'Tap your name, then enter your PIN': 'اضغط على اسمك ثم أدخل الرقم السري',
   'Signing in as': 'تسجيل الدخول باسم',
   ", then enrol the real roster. This code is new on every launch and stops appearing once staff are enrolled.": "، ثم سجّل الطاقم الحقيقي. هذا الرمز جديد عند كل تشغيل ويختفي بمجرد تسجيل الموظفين.",
   "4 to 6 digits": "من 4 إلى 6 أرقام",

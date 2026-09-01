@@ -195,16 +195,25 @@ class _LoginScreenState extends State<LoginScreen> {
 
   /// The typed PIN as dots the customer side of the counter cannot read. One Text
   /// so its length is checkable, sized to be legible from the cashier's arm's
-  /// length; the reserved height stops the pad jumping as digits land.
+  /// length; the reserved height stops the pad jumping as digits land. Until a
+  /// name is picked the same row explains the greyed pad instead of sitting
+  /// empty, so a new cashier is told the order of things rather than left to
+  /// poke dead keys.
   Widget _pinDots(BuildContext context) => SizedBox(
         height: 32,
         child: Center(
-          child: Text('•' * _pin.length,
-              key: const Key('pin-dots'),
-              style: TextStyle(
-                  fontSize: 26,
-                  letterSpacing: 8,
-                  color: Theme.of(context).colorScheme.primary)),
+          child: _selected == null
+              ? Text(tr(context, 'Tap your name, then enter your PIN'),
+                  key: const Key('pick-name-hint'),
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant))
+              : Text('•' * _pin.length,
+                  key: const Key('pin-dots'),
+                  style: TextStyle(
+                      fontSize: 26,
+                      letterSpacing: 8,
+                      color: Theme.of(context).colorScheme.primary)),
         ),
       );
 
@@ -301,7 +310,7 @@ class _LoginScreenState extends State<LoginScreen> {
       onTap: () => _choose(c),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 120),
-        width: 86,
+        width: 108,
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
         decoration: BoxDecoration(
           color: selected
@@ -323,10 +332,12 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           const SizedBox(height: 5),
           Text(c.name,
-              maxLines: 1,
+              maxLines: 2,
+              textAlign: TextAlign.center,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                   fontSize: 12.5,
+                  height: 1.15,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
         ]),
       ),
