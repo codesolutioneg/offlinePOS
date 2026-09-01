@@ -204,6 +204,10 @@ void main() {
       {String? branch = 'Riverside (3)',
       String? restaurant = 'Counter (7)',
       String? warehouse = 'Main (2)'}) async {
+    // Let any toast from the step before expire first: the floating snackbar
+    // hovers over the lower middle of the screen, where the settings tiles sit.
+    await t.pump(const Duration(seconds: 4));
+    await t.pumpAndSettle();
     await t.tap(find.byType(DrawerButton));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-settings')));
