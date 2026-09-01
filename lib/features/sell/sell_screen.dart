@@ -3371,20 +3371,27 @@ class _LineTile extends StatelessWidget {
     final kitchenHasIt = line.printedToKitchen || line.firedStations.isNotEmpty;
     final edge = sent ? AppColors.sent : AppColors.draft;
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
         border: Border(left: BorderSide(color: edge, width: 4)),
       ),
-      // The wash is the Material's own so the tap ripple stays visible on it.
+      // The wash is the Material's own so the tap ripple stays visible on it. A
+      // quiet fill either way, so each item reads as its own card with room for
+      // its modifiers and note under the name.
       child: Material(
-        color: sent ? AppColors.sent.withValues(alpha: 0.05) : Colors.transparent,
+        color: sent
+            ? AppColors.sent.withValues(alpha: 0.06)
+            : Theme.of(context)
+                .colorScheme
+                .surfaceContainerHighest
+                .withValues(alpha: 0.35),
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTapLine,
           child: Padding(
-            padding: const EdgeInsetsDirectional.fromSTEB(6, 4, 2, 4),
+            padding: const EdgeInsetsDirectional.fromSTEB(6, 7, 2, 7),
             child: Row(children: [
               // The quantity controls sit where the quantity is read, so a simple
               // item costs the bill one line, not a strip of three: on a small
@@ -3439,25 +3446,34 @@ class _LineTile extends StatelessWidget {
                       ],
                     ]),
                     for (final m in line.modifiers)
-                      Text(
-                          '+ ${m.name}${m.quantity > 1 ? ' ×${m.quantity.toStringAsFixed(0)}' : ''}'
-                          '${m.unitPrice == 0 ? '  (${tr(context, 'free')})' : '  ${format(m.total * line.quantity)}'}',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: m.unitPrice == 0
-                                  ? AppColors.modifierFree
-                                  : AppColors.modifierPaid)),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Text(
+                            '+ ${m.name}${m.quantity > 1 ? ' ×${m.quantity.toStringAsFixed(0)}' : ''}'
+                            '${m.unitPrice == 0 ? '  (${tr(context, 'free')})' : '  ${format(m.total * line.quantity)}'}',
+                            style: TextStyle(
+                                fontSize: 12.5,
+                                color: m.unitPrice == 0
+                                    ? AppColors.modifierFree
+                                    : AppColors.modifierPaid)),
+                      ),
                     if (line.discountPercent > 0)
-                      Text(
-                          '-${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
-                          style: const TextStyle(
-                              fontSize: 12, color: AppColors.warning)),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Text(
+                            '-${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
+                            style: const TextStyle(
+                                fontSize: 12.5, color: AppColors.warning)),
+                      ),
                     if (line.note != null)
-                      Text(line.note!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12, fontStyle: FontStyle.italic)),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Text(line.note!,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12.5, fontStyle: FontStyle.italic)),
+                      ),
                   ],
                 ),
               ),
