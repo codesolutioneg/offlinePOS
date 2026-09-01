@@ -517,6 +517,18 @@ class OdooPuller {
       if (mine.isNotEmpty) kept = mine;
     }
 
+    // The branch's own word sits between the company's and the user's: a shop
+    // that filled in `branch.pos.config` named exactly the tenders this branch
+    // offers, and the rest of its company's journals stay off the till.
+    final named = await _branchNamedJournalIds();
+    if (named.isNotEmpty) {
+      final mine = [
+        for (final r in kept)
+          if (named.contains(r['id'])) r,
+      ];
+      if (mine.isNotEmpty) kept = mine;
+    }
+
     final allowed = await _allowedJournalIds();
     if (allowed.isNotEmpty) {
       final mine = [
@@ -541,6 +553,54 @@ class OdooPuller {
           type: (r['type'] ?? '') as String,
         ),
     ];
+  }
+
+  /// Whether this Odoo carries `branch.pos.config`, learned by asking once and
+  /// held for the life of the puller, for the same reason [_branchFieldMissing]
+  /// is: asking an Odoo without the addon on every refresh spends a failing
+  /// call each time to learn the same thing.
+  bool? _branchConfigMissing;
+
+  /// Whether a failure is Odoo saying it has never heard of the branch POS
+  /// configuration model, as opposed to a bad moment on the wire. Matched on
+  /// the message because that is all a JSON-RPC fault carries, and the model's
+  /// own name has to be in it so an unrelated fault cannot latch the flag.
+  static final _unknownConfigModel = RegExp(
+      r"branch\.pos\.config[^\n]{0,80}(doesn't exist|does not exist)|"
+      r'(object|model|keyerror)[^\n]{0,80}branch\.pos\.config');
+
+  static bool _readsAsMissingConfigModel(Object error) =>
+      _unknownConfigModel.hasMatch(error.toString().toLowerCase());
+
+  /// The journals the shop named for this branch on `branch.pos.config`, or
+  /// empty for "the shop named none", which callers read as no narrowing.
+  ///
+  /// The till's branch is a company (jouma books each branch in a company of
+  /// its own), so the configuration is found by that company. Errors land here
+  /// as empty rather than failing the refresh, unlike the menu's branch filter:
+  /// the company narrowing above already keeps other branches' journals off
+  /// this till, so the worst a bad moment costs is the branch's own unnamed
+  /// journals showing for one refresh. An Odoo that plainly says it has no
+  /// such model is remembered so it is not asked again until the next launch.
+  Future<Set<int>> _branchNamedJournalIds() async {
+    final company = companyId();
+    if (company == null || _branchConfigMissing == true) return const {};
+    try {
+      final rows = await _searchRead(
+        'branch.pos.config',
+        ['payment_journal_ids'],
+        [
+          ['company_id', '=', company]
+        ],
+      );
+      _branchConfigMissing = false;
+      return {
+        for (final r in rows) ..._ids(r['payment_journal_ids']),
+      };
+    } catch (e) {
+      if (_readsAsMissingConfigModel(e)) _branchConfigMissing = true;
+      return const {};
+    }
   }
 
   /// The journals this till's Odoo user may take money on, or empty for "nobody
