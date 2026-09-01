@@ -20,13 +20,16 @@ void main() {
     );
   }
 
-  Widget card(List<Order> orders, {int? openTables}) => MaterialApp(
+  Widget card(List<Order> orders,
+          {int? openTables, Set<int> cashTenderIds = const {}}) =>
+      MaterialApp(
         home: Scaffold(
           body: TodayGlanceCard(
             allOrders: orders,
             formatAmount: (v) => v.toStringAsFixed(2),
             openTables: openTables,
             now: now,
+            cashTenderIds: cashTenderIds,
           ),
         ),
       );
@@ -70,5 +73,33 @@ void main() {
   testWidgets('no floor means no tables tile', (t) async {
     await t.pumpWidget(card(const []));
     expect(find.byKey(const Key('glance-tables')), findsNothing);
+  });
+
+  testWidgets('a cash journal that is not called Cash is still cash', (t) async {
+    // The tenders are the shop's own journals now, so the one that takes the
+    // notes is called "Cash drawer", or its name is in Arabic. A card matching on
+    // the word would report a whole night's takings as card.
+    final o = Order(deviceId: 'till-1', cashierId: 'sara')
+      ..lines.add(OrderLine(
+          productId: 1, name: 'Tea', quantity: 1, unitPrice: 100))
+      ..payments = [
+        const OrderPayment(methodId: -7, amount: 100, label: 'Cash drawer'),
+      ]
+      ..state = OrderState.paid;
+
+    await t.pumpWidget(card([o], cashTenderIds: const {-7}));
+    expect(valueOf(t, 'glance-cash'), '100.00');
+    expect(valueOf(t, 'glance-other'), '0.00');
+  });
+
+  testWidgets('a till that has never pulled still reads the label', (t) async {
+    final o = Order(deviceId: 'till-1', cashierId: 'sara')
+      ..lines.add(OrderLine(
+          productId: 1, name: 'Tea', quantity: 1, unitPrice: 40))
+      ..payments = [const OrderPayment(methodId: 1, amount: 40, label: 'Cash')]
+      ..state = OrderState.paid;
+
+    await t.pumpWidget(card([o]));
+    expect(valueOf(t, 'glance-cash'), '40.00');
   });
 }

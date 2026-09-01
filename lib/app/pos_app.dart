@@ -1695,6 +1695,12 @@ class _PosAppState extends State<PosApp> {
   void _openReports(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => ReportsHubScreen(
+        // Which tenders are cash, from Odoo rather than from their names: a
+        // journal called "Cash drawer" is still cash.
+        cashTenderIds: {
+          for (final m in widget.catalogue.paymentMethods())
+            if (m.isCash) m.id,
+        },
         allOrders: widget.orders.recent(limit: 1000),
         categories: widget.catalogue.categories(),
         formatAmount: PosApp.money,

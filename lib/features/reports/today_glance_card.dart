@@ -17,6 +17,7 @@ class TodayGlanceCard extends StatelessWidget {
     required this.formatAmount,
     this.openTables,
     this.now,
+    this.cashTenderIds = const {},
   });
 
   /// Every order the hub knows about; this card windows them to today itself.
@@ -38,10 +39,22 @@ class TodayGlanceCard extends StatelessWidget {
         .toList();
   }
 
-  /// Cash is decided by the tender label, not by the payment-method config the
-  /// hub does not have: an untendered sale is booked to cash the same way the
-  /// shift read and the payment-mix report book it.
-  static bool _isCash(String label) => label.toLowerCase() == 'cash';
+  /// The tenders that are cash, by id. Empty falls back to reading the label,
+  /// which is what this card did before it was given them.
+  ///
+  /// The label stopped being enough when the tenders became the shop's own
+  /// journals: a journal is called "Cash drawer", or its name is in Arabic, and a
+  /// card matching the word "cash" then reports a night's takings as card. Odoo
+  /// says which journals are cash and the till already pulls that, so this asks
+  /// the record rather than reading the name.
+  final Set<int> cashTenderIds;
+
+  bool _isCash(OrderPayment p) {
+    if (cashTenderIds.isNotEmpty) return cashTenderIds.contains(p.methodId);
+    // Nothing pulled yet, on a till that has never synced. The old reading is
+    // still better than calling everything card.
+    return (p.label ?? 'Cash').toLowerCase() == 'cash';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +67,7 @@ class TodayGlanceCard extends StatelessWidget {
         cash += o.total;
       } else {
         for (final p in o.payments) {
-          if (_isCash(p.label ?? 'Cash')) cash += p.amount;
+          if (_isCash(p)) cash += p.amount;
         }
       }
     }

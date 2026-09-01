@@ -49,6 +49,7 @@ class ReportsHubScreen extends StatefulWidget {
   const ReportsHubScreen({
     super.key,
     required this.allOrders,
+    this.cashTenderIds = const {},
     required this.categories,
     required this.formatAmount,
     required this.audit,
@@ -64,6 +65,10 @@ class ReportsHubScreen extends StatefulWidget {
 
   /// The shop the exported reports are headed with, and the cashier who ran them.
   /// Empty simply leaves that line off the header.
+  /// The tenders Odoo says are cash, so the glance card can total them without
+  /// reading their names. Empty on a till that has never pulled.
+  final Set<int> cashTenderIds;
+
   final String shopName;
   final String ranBy;
 
@@ -365,6 +370,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
             allOrders: widget.allOrders,
             formatAmount: widget.formatAmount,
             openTables: widget.openTables,
+            cashTenderIds: widget.cashTenderIds,
           ),
           Padding(
             padding: const EdgeInsets.all(8),
