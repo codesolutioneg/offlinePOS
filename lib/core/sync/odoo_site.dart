@@ -41,6 +41,26 @@ class OdooSite {
       };
 }
 
+/// The branch Odoo itself says this till belongs to, resolved from the login
+/// rather than picked by hand: the shop lists its people on the branch record,
+/// and the till adopts whichever branch names its user.
+class OdooBoundSite {
+  const OdooBoundSite({
+    required this.name,
+    required this.companyId,
+    this.warehouseId,
+  });
+
+  /// The branch's display name, for the audit trail and the settings screen.
+  final String name;
+
+  /// The branch's company, which is what the till stores as its branch id.
+  final int companyId;
+
+  /// The branch's warehouse, when the shop set one on the branch record.
+  final int? warehouseId;
+}
+
 /// One record a manager can point this till at: a branch, a point of sale or a
 /// warehouse, with the name Odoo calls it by.
 ///

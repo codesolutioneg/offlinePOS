@@ -738,6 +738,42 @@ class OdooPuller {
     }
   }
 
+  /// The branch Odoo says this till's login belongs to, or null when Odoo has
+  /// no say: no login authenticated yet, no branch addon on the server, no
+  /// branch naming this user, or several of them (a floater's login decides
+  /// nothing). Null always means "keep what the till has", never "clear it".
+  ///
+  /// This is what stops a chain's till sitting on the wrong branch: the shop
+  /// lists its people once on the branch record in Odoo, and every till they
+  /// sign into adopts that branch on its next sync, whatever was picked by
+  /// hand on the device.
+  Future<OdooBoundSite?> boundSite() async {
+    final uid = userId?.call();
+    if (uid == null) return null;
+    try {
+      final rows = await _searchReadOptional(
+        'branch.simple',
+        ['id', 'name', 'company_id'],
+        ['warehouse_id'],
+        [
+          ['user_ids', 'in', [uid]]
+        ],
+      );
+      if (rows.length != 1) return null;
+      final company = _id(rows.first['company_id']);
+      if (company == null) return null;
+      return OdooBoundSite(
+        name: (rows.first['name'] ?? '') as String,
+        companyId: company,
+        warehouseId: _id(rows.first['warehouse_id']),
+      );
+    } catch (_) {
+      // No addon, no read rights, or a bad moment on the wire: all of them mean
+      // Odoo has no say today, and the till keeps the ids it has.
+      return null;
+    }
+  }
+
   /// What Odoo has for the three ids that say where this till books: the branches,
   /// the points of sale and the warehouses, each with the name it is known by.
   ///

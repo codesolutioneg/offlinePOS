@@ -456,9 +456,14 @@ class _PosAppState extends State<PosApp> {
     // opening the till at 08:00 sells this morning's prices, not last night's.
     // Never awaited: read-only, off the selling path, and a till with no line
     // just carries on with what it has.
-    unawaited(widget.sync.refresh(force: true).then((_) {
+    unawaited(() async {
+      await widget.sync.refresh(force: true);
+      // The refresh authenticated the login, so Odoo can now say whose branch
+      // this till is; adopting after it and pulling again costs a second pull
+      // only on the day the answer changes.
+      if (await _adoptOdooBranch()) await widget.sync.refresh(force: true);
       if (mounted) setState(() {});
-    }));
+    }());
     _publishActivity();
     _nudgeShift();
   }
@@ -1071,6 +1076,42 @@ class _PosAppState extends State<PosApp> {
           ],
         ),
       );
+
+  /// Adopt the branch Odoo binds this till's login to, answering whether
+  /// anything changed.
+  ///
+  /// The server's word beats the picker's: the ids a manager typed on the
+  /// device hold only until the next sign-in, so pointing every till of a
+  /// branch at the right place is done once on the branch record in Odoo
+  /// rather than by hand on each device, and changing one on the till does
+  /// not survive the shift change. Odoo staying silent changes nothing.
+  Future<bool> _adoptOdooBranch() async {
+    try {
+      final bound = await OdooPuller(
+        call: widget.odoo.catalogueCall,
+        userId: () => widget.odoo.uid,
+      ).boundSite();
+      if (bound == null) return false;
+      final s = widget.settings;
+      var changed = false;
+      if (s.odooBranchId != bound.companyId) {
+        s.odooBranchId = bound.companyId;
+        changed = true;
+      }
+      if (bound.warehouseId != null && s.odooWarehouseId != bound.warehouseId) {
+        s.odooWarehouseId = bound.warehouseId;
+        changed = true;
+      }
+      if (changed) {
+        widget.audit.record('system', 'site.bound',
+            detail: '${bound.name} (${bound.companyId})');
+      }
+      return changed;
+    } catch (_) {
+      // Odoo has no say today; the till keeps the ids it has.
+      return false;
+    }
+  }
 
   /// Customers the till never pulled, asked for while the cashier types in the
   /// picker. The catalogue pull is bounded at 500 partners, which a shop with a
