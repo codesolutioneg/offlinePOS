@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/db/reservation_store.dart';
 import '../../core/db/settings_store.dart';
@@ -267,6 +268,14 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   // target is visible before the manager lets go.
   ({int x, int y})? _hoverCell;
 
+  /// The table the editor bar is working on. Set by dropping or adding one, so
+  /// the fine controls appear exactly when a manager has just placed something
+  /// roughly and wants to nudge it into line. Cleared with the mode.
+  String? _selectedId;
+
+  PosTable? get _selected =>
+      _selectedId == null ? null : widget.store.byId(_selectedId!);
+
   @override
   void initState() {
     super.initState();
@@ -324,30 +333,50 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   Future<void> _addTable() async {
     final result = await _tableDialog(title: tr(context, 'Add table'));
     if (result == null) return;
-    widget.store.add(
+    final spot = _firstFreeCell();
+    final added = widget.store.add(
       name: result.name,
       seats: result.seats,
       section: _activeSection,
       shape: result.shape,
-      // Drop a new table at the top-left; the manager drags it into place.
-      x: 0,
-      y: 0,
+      x: spot.x.toDouble(),
+      y: spot.y.toDouble(),
     );
+    // Selected on arrival, so the arrows are already under the manager's thumb
+    // and the new tile does not have to be hunted for.
+    _selectedId = added.id;
     _reload();
+  }
+
+  /// The first grid cell in this section nothing sits on, scanned row by row,
+  /// so a new table lands in open space instead of stacking on the last one.
+  ({int x, int y}) _firstFreeCell() {
+    final taken = {
+      for (final t in widget.store.inSection(_activeSection))
+        (x: t.x.round(), y: t.y.round()),
+    };
+    for (var y = 0; y < 30; y++) {
+      for (var x = 0; x < 8; x++) {
+        if (!taken.contains((x: x, y: y))) return (x: x, y: y);
+      }
+    }
+    return (x: 0, y: 0);
   }
 
   /// Drop a wall/divider bar on the floor. It is a `pos_tables` row like any
   /// other so it lives in the same section, drags on the same grid, and is
   /// deleted the same way, but it seats nobody and is never opened for an order.
   void _addDivider() {
-    widget.store.add(
+    final spot = _firstFreeCell();
+    final added = widget.store.add(
       name: widget.store.uniqueName('Wall'),
       seats: 0,
       section: _activeSection,
       shape: TableShape.divider,
-      x: 0,
-      y: 0,
+      x: spot.x.toDouble(),
+      y: spot.y.toDouble(),
     );
+    _selectedId = added.id;
     _reload();
   }
 
@@ -583,14 +612,102 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   void _hover(Offset globalOffset) {
     final cell = _cellAt(globalOffset);
-    if (cell != _hoverCell) setState(() => _hoverCell = cell);
+    if (cell != _hoverCell) {
+      // A tick per snapped cell, so the drag can be felt landing on the grid
+      // without watching the highlight.
+      unawaited(HapticFeedback.selectionClick());
+      setState(() => _hoverCell = cell);
+    }
   }
 
   void _dropAt(PosTable t, Offset globalOffset) {
     final cell = _cellAt(globalOffset);
     _hoverCell = null;
     if (cell == null) return;
+    unawaited(HapticFeedback.lightImpact());
     widget.store.upsert(t.copyWith(x: cell.x.toDouble(), y: cell.y.toDouble()));
+    // Selected where it landed: a rough drag is finished with the arrows, not
+    // with another drag.
+    _selectedId = t.id;
+    _reload();
+  }
+
+  /// Move the selected table one cell. The whole reason dragging stopped being
+  /// the only way to place a table: a tap per cell cannot miss, cannot fight
+  /// the pan gesture, and animates so the eye follows it.
+  void _nudge(int dx, int dy) {
+    final t = _selected;
+    if (t == null) return;
+    final nx = (t.x.round() + dx).clamp(0, 30);
+    final ny = (t.y.round() + dy).clamp(0, 30);
+    if (nx == t.x.round() && ny == t.y.round()) return;
+    unawaited(HapticFeedback.selectionClick());
+    widget.store.upsert(t.copyWith(x: nx.toDouble(), y: ny.toDouble()));
+    _reload();
+  }
+
+  /// One more of the selected table, dropped on the next free cell and made the
+  /// selection, so a row of identical tables is one Add and a run of taps.
+  void _duplicate(PosTable t) {
+    final spot = _firstFreeCell();
+    final added = widget.store.add(
+      name: widget.store.uniqueName(t.name),
+      seats: t.seats,
+      section: t.section,
+      shape: t.shape,
+      x: spot.x.toDouble(),
+      y: spot.y.toDouble(),
+    );
+    final moved = widget.store.byId(added.id);
+    if (moved != null && t.isDivider) {
+      widget.store.upsert(moved.copyWith(vertical: t.vertical, span: t.span));
+    }
+    _selectedId = added.id;
+    _reload();
+  }
+
+  /// Step the selected table's seat count without opening the dialog.
+  void _seatsDelta(PosTable t, int delta) {
+    final seats = (t.seats + delta).clamp(1, 30);
+    if (seats == t.seats) return;
+    widget.store.upsert(t.copyWith(seats: seats));
+    _reload();
+  }
+
+  /// Send the selected table to another room.
+  Future<void> _moveToSection(PosTable t) async {
+    final target = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(shrinkWrap: true, children: [
+          ListTile(
+            title: Text(tr(ctx, 'Move to section'),
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          for (final s in _sections.where((s) => s != t.section))
+            ListTile(
+              key: Key('move-section-${s.toLowerCase()}'),
+              leading: const Icon(Icons.meeting_room_outlined),
+              title: Text(s),
+              onTap: () => Navigator.pop(ctx, s),
+            ),
+        ]),
+      ),
+    );
+    if (target == null || !mounted) return;
+    widget.store.upsert(t.copyWith(section: target));
+    _selectedId = null;
+    _reload();
+    if (!mounted) return;
+    showToast(context, '${t.name} → $target', kind: ToastKind.success);
+  }
+
+  /// Delete from the editor bar, through the same confirmation the dialog uses.
+  Future<void> _deleteSelected(PosTable t) async {
+    final confirmed = await _confirmDeleteTable(t.name);
+    if (confirmed != true || !mounted) return;
+    widget.store.remove(t.id);
+    _selectedId = null;
     _reload();
   }
 
@@ -668,6 +785,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               onPressed: () => setState(() {
                 _editing = !_editing;
                 _assigning = false;
+                _selectedId = null;
               }),
             ),
             if (widget.settings != null ||
@@ -691,28 +809,6 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               onPressed: () => unawaited(_assignSection()),
               icon: const Icon(Icons.groups_2_outlined),
               label: Text(tr(context, 'Whole section')),
-            )
-          : _editing && !widget.pickMode
-          ? Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                FloatingActionButton.extended(
-                  key: const Key('add-divider'),
-                  heroTag: null,
-                  onPressed: _addDivider,
-                  icon: const Icon(Icons.horizontal_rule),
-                  label: Text(tr(context, 'Divider')),
-                ),
-                const SizedBox(height: 8),
-                FloatingActionButton.extended(
-                  key: const Key('add-table'),
-                  heroTag: null,
-                  onPressed: _addTable,
-                  icon: const Icon(Icons.add),
-                  label: Text(tr(context, 'Table')),
-                ),
-              ],
             )
           : null,
       body: Column(
@@ -761,8 +857,147 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             ),
           ),
           if (!widget.pickMode && !_editing) _tablelessRow(),
+          if (!widget.pickMode && _editing) _editBar(),
         ],
       ),
+    );
+  }
+
+  /// The floor editor's own toolbar, pinned where thumbs live. With nothing
+  /// selected it adds things; with a table selected it becomes that table's
+  /// controls: arrows to walk it cell by cell, seats, duplicate, room, delete.
+  Widget _editBar() {
+    final scheme = Theme.of(context).colorScheme;
+    final t = _selected;
+    return Material(
+      key: const Key('floor-edit-bar'),
+      color: scheme.surfaceContainerHigh,
+      elevation: 8,
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 64,
+          child: t == null ? _editBarAdd() : _editBarSelected(t),
+        ),
+      ),
+    );
+  }
+
+  Widget _editBarAdd() => ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        children: [
+          FilledButton.icon(
+            key: const Key('add-table'),
+            onPressed: _addTable,
+            icon: const Icon(Icons.add),
+            label: Text(tr(context, 'Table')),
+          ),
+          const SizedBox(width: 10),
+          FilledButton.tonalIcon(
+            key: const Key('add-divider'),
+            onPressed: _addDivider,
+            icon: const Icon(Icons.horizontal_rule),
+            label: Text(tr(context, 'Wall')),
+          ),
+          const SizedBox(width: 16),
+          Center(
+            child: Text(
+              tr(context, 'Hold a table to drag it. Tap it for details.'),
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      );
+
+  Widget _editBarSelected(PosTable t) {
+    final scheme = Theme.of(context).colorScheme;
+    Widget arrow(Key key, IconData icon, int dx, int dy) =>
+        IconButton.filledTonal(
+          key: key,
+          visualDensity: VisualDensity.compact,
+          icon: Icon(icon, size: 20),
+          onPressed: () => _nudge(dx, dy),
+        );
+    return ListView(
+      key: const Key('floor-selected-bar'),
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      children: [
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Text(t.name,
+                style: TextStyle(
+                    fontWeight: FontWeight.w800, color: scheme.primary)),
+          ),
+        ),
+        arrow(const Key('nudge-left'), Icons.arrow_back, -1, 0),
+        arrow(const Key('nudge-up'), Icons.arrow_upward, 0, -1),
+        arrow(const Key('nudge-down'), Icons.arrow_downward, 0, 1),
+        arrow(const Key('nudge-right'), Icons.arrow_forward, 1, 0),
+        const SizedBox(width: 8),
+        if (!t.isDivider) ...[
+          Center(
+            child: Row(children: [
+              IconButton(
+                key: const Key('seats-minus'),
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.remove_circle_outline, size: 20),
+                onPressed: () => _seatsDelta(t, -1),
+              ),
+              Text('${t.seats}',
+                  key: const Key('seats-count'),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              IconButton(
+                key: const Key('seats-plus'),
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.add_circle_outline, size: 20),
+                onPressed: () => _seatsDelta(t, 1),
+              ),
+            ]),
+          ),
+          const SizedBox(width: 4),
+        ],
+        IconButton(
+          key: const Key('selected-duplicate'),
+          visualDensity: VisualDensity.compact,
+          tooltip: tr(context, 'Duplicate'),
+          icon: const Icon(Icons.copy_all_outlined, size: 20),
+          onPressed: () => _duplicate(t),
+        ),
+        if (_sections.length > 1)
+          IconButton(
+            key: const Key('selected-move-section'),
+            visualDensity: VisualDensity.compact,
+            tooltip: tr(context, 'Move to section'),
+            icon: const Icon(Icons.meeting_room_outlined, size: 20),
+            onPressed: () => unawaited(_moveToSection(t)),
+          ),
+        IconButton(
+          key: const Key('selected-edit'),
+          visualDensity: VisualDensity.compact,
+          tooltip: tr(context, 'Details'),
+          icon: const Icon(Icons.tune, size: 20),
+          onPressed: () => unawaited(_editTable(t)),
+        ),
+        IconButton(
+          key: const Key('selected-delete'),
+          visualDensity: VisualDensity.compact,
+          tooltip: tr(context, 'Delete'),
+          icon: const Icon(Icons.delete_outline, size: 20),
+          color: AppColors.error,
+          onPressed: () => unawaited(_deleteSelected(t)),
+        ),
+        IconButton(
+          key: const Key('selected-close'),
+          visualDensity: VisualDensity.compact,
+          tooltip: tr(context, 'Done'),
+          icon: const Icon(Icons.close, size: 20),
+          onPressed: () => setState(() => _selectedId = null),
+        ),
+      ],
     );
   }
 
@@ -1413,17 +1648,29 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       if (right > width) width = right;
       if (bottom > height) height = bottom;
     }
+    final scheme = Theme.of(context).colorScheme;
     final canvas = SizedBox(
       key: _canvasKey,
       width: width,
       height: height,
       child: Stack(
         children: [
-          // A light grid so the manager can see the floor is laid out on a grid,
-          // not just told so; it is what makes the drag-to-place feel exact.
-          if (_editing) Positioned.fill(child: CustomPaint(painter: _GridPainter())),
+          // A dot at every slot corner instead of graph paper: enough to place
+          // by, quiet enough that the room still reads as a room.
+          if (_editing)
+            Positioned.fill(
+                child: CustomPaint(
+                    painter: _GridPainter(
+              minor: scheme.onSurface.withValues(alpha: 0.06),
+              major: scheme.onSurface.withValues(alpha: 0.18),
+            ))),
           for (final t in tables)
-            Positioned(
+            // Animated, so a drop, a nudge and a duplicate all glide into their
+            // cell instead of teleporting; the eye keeps track of what moved.
+            AnimatedPositioned(
+              key: ValueKey('pos-${t.id}'),
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
               left: t.x * _cell,
               top: t.y * _cell,
               child: _tile(t),
@@ -1439,9 +1686,16 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                   height: _cell,
                   margin: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
-                    border: Border.all(color: AppColors.primary, width: 2),
-                    borderRadius: BorderRadius.circular(12),
-                    color: AppColors.primary.withValues(alpha: 0.08),
+                    border: Border.all(color: scheme.primary, width: 2),
+                    borderRadius: BorderRadius.circular(14),
+                    color: scheme.primary.withValues(alpha: 0.10),
+                    boxShadow: [
+                      BoxShadow(
+                        color: scheme.primary.withValues(alpha: 0.25),
+                        blurRadius: 18,
+                        spreadRadius: 1,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1511,19 +1765,63 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         child: tile,
       );
     }
-    // A long-press start (rather than an immediate drag) keeps the tile drag
-    // from fighting the canvas's own pan/zoom gesture, which is what made moving
-    // a table feel hard before: the two gestures were competing for the touch.
+    // A short-hold start (rather than an immediate drag) keeps the tile drag
+    // from fighting the canvas's own pan/zoom gesture; the haptic on lift is
+    // what tells the hand the hold has landed and the tile is now carried.
+    final scheme = Theme.of(context).colorScheme;
+    final isSelected = t.id == _selectedId;
     return LongPressDraggable<PosTable>(
       key: Key('table-drag-${t.id}'),
       data: t,
       delay: const Duration(milliseconds: 150),
-      feedback: Material(color: Colors.transparent, child: tile),
-      childWhenDragging: Opacity(opacity: 0.3, child: tile),
+      onDragStarted: () {
+        unawaited(HapticFeedback.mediumImpact());
+        setState(() => _selectedId = t.id);
+      },
+      onDraggableCanceled: (_, _) => setState(() => _hoverCell = null),
+      feedback: Transform.scale(
+        scale: 1.06,
+        child: Material(
+          color: Colors.transparent,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.30),
+                  blurRadius: 22,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: tile,
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.25, child: tile),
       child: InkWell(
         key: Key('table-edit-${t.id}'),
         onTap: () => _editTable(t),
-        child: tile,
+        // The ring says which table the editor bar below is talking about.
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isSelected ? scheme.primary : Colors.transparent,
+              width: 2.5,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: scheme.primary.withValues(alpha: 0.25),
+                      blurRadius: 14,
+                    ),
+                  ]
+                : const [],
+          ),
+          child: tile,
+        ),
       ),
     );
   }
@@ -1555,36 +1853,36 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       );
 }
 
-/// Paints the edit-mode floor grid: fine lines every [_TableFloorScreenState._gridStep]
-/// so the surface reads as graph paper, and a darker line every table-slot cell
-/// so a placed table's alignment is obvious at a glance.
+/// Paints the edit-mode floor as a field of dots: a fine dot every
+/// [_TableFloorScreenState._gridStep] and a heavier one on every table-slot
+/// corner, so alignment is readable without the graph-paper noise lines make.
+/// Colours come from the theme so the dark till gets dots it can see.
 class _GridPainter extends CustomPainter {
-  const _GridPainter();
+  const _GridPainter({required this.minor, required this.major});
 
-  static const double _minor = _TableFloorScreenState._gridStep;
-  static const double _major = _TableFloorScreenState._cell;
+  final Color minor;
+  final Color major;
+
+  static const double _fine = _TableFloorScreenState._gridStep;
+  static const double _slot = _TableFloorScreenState._cell;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final minorPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.04)
-      ..strokeWidth = 1;
-    final majorPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.10)
-      ..strokeWidth = 1;
-
-    for (double x = 0; x <= size.width; x += _minor) {
-      final isMajor = (x % _major).abs() < 0.5;
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), isMajor ? majorPaint : minorPaint);
-    }
-    for (double y = 0; y <= size.height; y += _minor) {
-      final isMajor = (y % _major).abs() < 0.5;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), isMajor ? majorPaint : minorPaint);
+    final minorPaint = Paint()..color = minor;
+    final majorPaint = Paint()..color = major;
+    for (double x = 0; x <= size.width; x += _fine) {
+      final xMajor = (x % _slot).abs() < 0.5;
+      for (double y = 0; y <= size.height; y += _fine) {
+        final isSlotCorner = xMajor && (y % _slot).abs() < 0.5;
+        canvas.drawCircle(Offset(x, y), isSlotCorner ? 2.5 : 1.0,
+            isSlotCorner ? majorPaint : minorPaint);
+      }
     }
   }
 
   @override
-  bool shouldRepaint(covariant _GridPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _GridPainter oldDelegate) =>
+      oldDelegate.minor != minor || oldDelegate.major != major;
 }
 
 class _TableTile extends StatelessWidget {

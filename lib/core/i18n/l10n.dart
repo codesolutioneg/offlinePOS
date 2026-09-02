@@ -260,6 +260,13 @@ const Map<String, String> _ar = {
   'Cashier': 'كاشير',
   // tables
   'Rename section': 'إعادة تسمية القسم',
+  // floor editor bar
+  'Wall': 'حائط',
+  'Duplicate': 'تكرار',
+  'Move to section': 'نقل إلى قسم',
+  'Details': 'التفاصيل',
+  'Hold a table to drag it. Tap it for details.':
+      'اضغط مطولًا على الطاولة لسحبها، واضغط عليها لعرض التفاصيل.',
   'Delete section and its tables': 'حذف القسم وطاولاته',
   'No tables yet': 'لا توجد طاولات بعد',
   'Set up the floor': 'إعداد الصالة',

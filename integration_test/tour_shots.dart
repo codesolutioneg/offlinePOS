@@ -344,6 +344,25 @@ void main() {
     await shoot(t, '17-payment-dark');
   });
 
+  testWidgets('the floor editor', (t) async {
+    await t.pumpWidget(RepaintBoundary(key: shotKey, child: app()));
+    await signIn(t);
+    await t.tap(find.byKey(const Key('toggle-edit')));
+    await settle(t);
+    await shoot(t, '20-floor-editor');
+
+    // Drag one table a cell over: the drop selects it and the fine controls
+    // appear on the bar.
+    final gesture = await t
+        .startGesture(t.getCenter(find.byKey(Key('table-edit-${floor[1].id}'))));
+    await t.pump(const Duration(milliseconds: 400));
+    await gesture.moveBy(const Offset(140, 140));
+    await t.pump();
+    await gesture.up();
+    await settle(t);
+    await shoot(t, '21-floor-editor-selected');
+  });
+
   // The shop runs the till in Arabic too, so the two busiest screens are
   // photographed under RTL.
   testWidgets('the tour, in Arabic', (t) async {
