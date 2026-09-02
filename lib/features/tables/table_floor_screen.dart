@@ -320,7 +320,12 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   /// Open [name] and tell the shell, which is what remembers it while the counter
   /// is up. Null means "whichever section is first", the resting state.
   void _setSection(String? name) {
-    setState(() => _section = name);
+    setState(() {
+      _section = name;
+      // The editor bar's table lives on the floor being left; carrying the
+      // selection over would let its controls move a table nobody can see.
+      _selectedId = null;
+    });
     widget.onSectionChanged?.call(name);
   }
 
