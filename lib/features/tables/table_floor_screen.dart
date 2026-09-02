@@ -356,10 +356,19 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   /// The first grid cell in this section nothing sits on, scanned row by row,
   /// so a new table lands in open space instead of stacking on the last one.
   ({int x, int y}) _firstFreeCell() {
-    final taken = {
-      for (final t in widget.store.inSection(_activeSection))
-        (x: t.x.round(), y: t.y.round()),
-    };
+    final taken = <({int x, int y})>{};
+    for (final t in widget.store.inSection(_activeSection)) {
+      final cx = t.x.round(), cy = t.y.round();
+      taken.add((x: cx, y: cy));
+      // A lengthened wall lies across several cells, not just the one it
+      // starts in; a new table must not land on its far end.
+      if (t.isDivider) {
+        final cells = (t.span / _cell).ceil();
+        for (var i = 1; i < cells; i++) {
+          taken.add(t.vertical ? (x: cx, y: cy + i) : (x: cx + i, y: cy));
+        }
+      }
+    }
     for (var y = 0; y < 30; y++) {
       for (var x = 0; x < 8; x++) {
         if (!taken.contains((x: x, y: y))) return (x: x, y: y);
