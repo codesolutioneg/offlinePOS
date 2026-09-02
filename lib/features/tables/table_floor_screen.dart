@@ -355,9 +355,9 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   /// The first grid cell in this section nothing sits on, scanned row by row,
   /// so a new table lands in open space instead of stacking on the last one.
-  ({int x, int y}) _firstFreeCell() {
+  ({int x, int y}) _firstFreeCell([String? section]) {
     final taken = <({int x, int y})>{};
-    for (final t in widget.store.inSection(_activeSection)) {
+    for (final t in widget.store.inSection(section ?? _activeSection)) {
       final cx = t.x.round(), cy = t.y.round();
       taken.add((x: cx, y: cy));
       // A lengthened wall lies across several cells, not just the one it
@@ -709,7 +709,12 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       ),
     );
     if (target == null || !mounted) return;
-    widget.store.upsert(t.copyWith(section: target));
+    // Landed on open space in the destination room, exactly as Add and
+    // Duplicate land here: keeping its old spot could stack it on a table
+    // that room already has there.
+    final spot = _firstFreeCell(target);
+    widget.store.upsert(t.copyWith(
+        section: target, x: spot.x.toDouble(), y: spot.y.toDouble()));
     _selectedId = null;
     _reload();
     if (!mounted) return;
