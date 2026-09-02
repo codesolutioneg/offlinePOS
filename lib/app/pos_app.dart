@@ -415,6 +415,10 @@ class _PosAppState extends State<PosApp> {
     // table stays open (draft), and its delayed lines must still fire on time.
     final orders = <Order>[
       if (_session != null) _session!.current,
+      // The draft outlives its session: the idle lock signs the cashier out
+      // over a half-rung bill, and any course-timed lines on it still owe the
+      // kitchen their food whoever is standing at the till.
+      ...widget.orders.drafts(),
       ...widget.orders.held(),
       ...widget.orders.awaitingSync(),
     ];
