@@ -168,7 +168,12 @@ Future<double?> promptNumber(
                 onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
             FilledButton(
               key: const Key('keypad-ok'),
-              onPressed: () => Navigator.pop(ctx, double.tryParse(text)),
+              // The display reads 0 while nothing is typed, so OK must mean
+              // that 0: parsing the empty text used to answer null, and a
+              // cashier opening a shift with no float had to type the zero
+              // the dialog was already showing.
+              onPressed: () =>
+                  Navigator.pop(ctx, double.tryParse(text.isEmpty ? '0' : text)),
               child: Text(confirmLabel ?? tr(ctx, 'OK')),
             ),
           ],
