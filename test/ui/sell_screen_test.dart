@@ -146,6 +146,92 @@ void main() {
     expect(session.total, 105);
   });
 
+  testWidgets('a quantity group takes a count of each item up to its total',
+      (t) async {
+    // "Choose 3 from the list": a box that is filled by the count of each option,
+    // one option capped at two of itself.
+    cat.replaceAll(
+      categories: const [],
+      products: const [Product(id: 30, name: 'Box', price: 100)],
+      groups: const [
+        ModifierGroup(
+          id: 300,
+          name: 'Pick 3',
+          minSelection: 3,
+          maxSelection: 3,
+          modifiers: [
+            Modifier(id: 3000, groupId: 300, name: 'Chicken', price: 0, maxQuantity: 2),
+            Modifier(id: 3001, groupId: 300, name: 'Beef', price: 0),
+          ],
+        ),
+      ],
+      productGroupIds: const {30: [300]}, refreshedAt: DateTime.now().toUtc(),
+    );
+    await t.pumpWidget(app());
+    await t.tap(find.byKey(const Key('product-30')));
+    await t.pumpAndSettle();
+    // The stepper is on the row from the start, before anything is ticked: the
+    // cashier sets how many of the item, not just whether to take it.
+    expect(find.byKey(const Key('mod-3000-plus')), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('mod-3000-plus')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('mod-3000-plus')));
+    await t.pumpAndSettle();
+    // Chicken caps at two of itself; a third tap does nothing.
+    expect(t.widget<IconButton>(find.byKey(const Key('mod-3000-plus'))).onPressed,
+        isNull);
+
+    // Two chosen, one short of the box: the order cannot be confirmed yet.
+    expect(t.widget<FilledButton>(find.byKey(const Key('confirm-modifiers'))).onPressed,
+        isNull);
+
+    await t.tap(find.byKey(const Key('mod-3001-plus')));
+    await t.pumpAndSettle();
+    // The box is full at three, so every plus is now frozen.
+    expect(t.widget<IconButton>(find.byKey(const Key('mod-3001-plus'))).onPressed,
+        isNull);
+
+    await t.tap(find.byKey(const Key('confirm-modifiers')));
+    await t.pumpAndSettle();
+    final mods = session.current.lines.single.modifiers;
+    expect(mods.firstWhere((m) => m.name == 'Chicken').quantity, 2);
+    expect(mods.firstWhere((m) => m.name == 'Beef').quantity, 1);
+  });
+
+  testWidgets('a checkbox group refuses a tick past its cap', (t) async {
+    // "Choose two" must actually stop at two: the third tick does nothing rather
+    // than being taken and only failing at the confirm button.
+    cat.replaceAll(
+      categories: const [],
+      products: const [Product(id: 40, name: 'Plate', price: 100)],
+      groups: const [
+        ModifierGroup(id: 400, name: 'Sides', maxSelection: 2, modifiers: [
+          Modifier(id: 4000, groupId: 400, name: 'Rice', price: 0),
+          Modifier(id: 4001, groupId: 400, name: 'Fries', price: 0),
+          Modifier(id: 4002, groupId: 400, name: 'Salad', price: 0),
+        ]),
+      ],
+      productGroupIds: const {40: [400]}, refreshedAt: DateTime.now().toUtc(),
+    );
+    await t.pumpWidget(app());
+    await t.tap(find.byKey(const Key('product-40')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('mod-4000')));
+    await t.tap(find.byKey(const Key('mod-4001')));
+    await t.pumpAndSettle();
+    // The cap is reached; the third option cannot be added at all.
+    expect(t.widget<IconButton>(find.byKey(const Key('mod-4002-plus'))).onPressed,
+        isNull);
+    await t.tap(find.byKey(const Key('mod-4002')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-modifiers')));
+    await t.pumpAndSettle();
+    final mods = session.current.lines.single.modifiers;
+    expect(mods.length, 2);
+    expect(mods.any((m) => m.name == 'Salad'), isFalse);
+  });
+
   testWidgets('payment clears the order and queues it', (t) async {
     await t.pumpWidget(app());
     await t.tap(find.byKey(const Key('product-11')));

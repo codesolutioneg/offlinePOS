@@ -86,7 +86,14 @@ class _ModifierSheetState extends State<ModifierSheet> {
       }
       // A single-choice group swaps rather than stacking, which is what a cashier
       // means when they tap a second size.
-      if (g.maxSelection == 1) sel.clear();
+      if (g.maxSelection == 1) {
+        sel.clear();
+      } else if (g.maxSelection > 0 && _countIn(g) >= g.maxSelection) {
+        // A capped group ("choose two") refuses the one that would overrun it,
+        // rather than letting the cashier tick a third and only then find the
+        // order will not confirm.
+        return;
+      }
       sel[m.id] = 1;
     });
   }
@@ -94,7 +101,14 @@ class _ModifierSheetState extends State<ModifierSheet> {
   void _bump(ModifierGroup g, Modifier m, int delta) {
     setState(() {
       final sel = _picked.putIfAbsent(g.id, () => {});
-      final next = (sel[m.id] ?? 0) + delta;
+      final cur = sel[m.id] ?? 0;
+      if (delta > 0) {
+        // A group with a cap does not take more than it allows, whichever item the
+        // extra one is put on; and an option with its own cap does not go past it.
+        if (g.maxSelection > 0 && _countIn(g) >= g.maxSelection) return;
+        if (m.maxQuantity > 0 && cur >= m.maxQuantity) return;
+      }
+      final next = cur + delta;
       if (next <= 0) {
         sel.remove(m.id);
       } else {
@@ -183,32 +197,67 @@ class _ModifierSheetState extends State<ModifierSheet> {
                       Builder(builder: (context) {
                         final qty = (_picked[g.id] ?? const {})[m.id] ?? 0;
                         final selected = qty > 0;
-                        // Multi-select options can be taken more than once ("2x
-                        // extra cheese"): show a stepper once selected. Single-choice
-                        // groups stay a plain checkbox.
-                        final canRepeat = g.maxSelection != 1;
-                        return CheckboxListTile(
+                        // A single-choice group is a tick that swaps to the newly
+                        // tapped option.
+                        if (g.maxSelection == 1) {
+                          return CheckboxListTile(
+                            key: Key('mod-${m.id}'),
+                            dense: true,
+                            value: selected,
+                            onChanged: (_) => _toggle(g, m),
+                            title: Text(m.name),
+                            secondary: Text(_label(m)),
+                          );
+                        }
+                        // A multi-choice group lets the cashier say how many of each
+                        // item (two of this sauce, ten from the box), so the count is
+                        // set right on every row. Tapping the row is a quick +1; the
+                        // group's total cap and the option's own cap each freeze the
+                        // plus once reached.
+                        final atMax = (g.maxSelection > 0 &&
+                                _countIn(g) >= g.maxSelection) ||
+                            (m.maxQuantity > 0 && qty >= m.maxQuantity);
+                        return ListTile(
                           key: Key('mod-${m.id}'),
                           dense: true,
-                          value: selected,
-                          onChanged: (_) => _toggle(g, m),
-                          title: Text(m.name),
-                          subtitle: (selected && canRepeat)
-                              ? Row(mainAxisSize: MainAxisSize.min, children: [
-                                  IconButton(
-                                    key: Key('mod-${m.id}-minus'),
-                                    icon: const Icon(Icons.remove_circle_outline, size: 26),
-                                    onPressed: () => _bump(g, m, -1),
-                                  ),
-                                  Text('$qty'),
-                                  IconButton(
-                                    key: Key('mod-${m.id}-plus'),
-                                    icon: const Icon(Icons.add_circle_outline, size: 26),
-                                    onPressed: () => _bump(g, m, 1),
-                                  ),
-                                ])
-                              : null,
-                          secondary: Text(_label(m)),
+                          onTap: atMax ? null : () => _bump(g, m, 1),
+                          title: Text(m.name,
+                              style: TextStyle(
+                                  fontWeight:
+                                      selected ? FontWeight.w700 : null)),
+                          subtitle:
+                              _label(m).isEmpty ? null : Text(_label(m)),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                key: Key('mod-${m.id}-minus'),
+                                icon: const Icon(Icons.remove_circle_outline,
+                                    size: 26),
+                                onPressed:
+                                    selected ? () => _bump(g, m, -1) : null,
+                              ),
+                              SizedBox(
+                                width: 28,
+                                child: Text('$qty',
+                                    key: Key('mod-${m.id}-qty'),
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                        color: selected
+                                            ? null
+                                            : Theme.of(context)
+                                                .disabledColor)),
+                              ),
+                              IconButton(
+                                key: Key('mod-${m.id}-plus'),
+                                icon: const Icon(Icons.add_circle_outline,
+                                    size: 26),
+                                onPressed: atMax ? null : () => _bump(g, m, 1),
+                              ),
+                            ],
+                          ),
                         );
                       }),
                   ],
