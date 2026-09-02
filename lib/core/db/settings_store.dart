@@ -639,6 +639,15 @@ class SettingsStore {
   bool get tableSecurity => getBool('table_security');
   set tableSecurity(bool v) => setBool('table_security', v);
 
+  /// Minutes of no touch before the till locks back to the PIN screen; 0 turns
+  /// it off. Five by default, because an unattended till that stays signed in
+  /// is a drawer and a menu anyone passing can play with. The draft on the
+  /// counter survives the lock and is back the moment its cashier signs in.
+  int get idleLockMinutes =>
+      int.tryParse(getString('idle_lock_minutes') ?? '') ?? 5;
+  set idleLockMinutes(int v) =>
+      setString('idle_lock_minutes', '${v.clamp(0, 120)}');
+
   /// Receipt paper width in characters: 42 for 80mm (default), 32 for 58mm.
   int get receiptColumns => int.tryParse(getString('receipt_columns') ?? '') ?? 42;
   set receiptColumns(int n) => setString('receipt_columns', '$n');

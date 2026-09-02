@@ -34,6 +34,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late int _cutoverHour;
   late Set<OrderType> _offered;
   late bool _sectionsSide;
+  late int _idleLock;
   late final TextEditingController _cashVariance;
 
   @override
@@ -49,6 +50,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _cutoverHour = widget.settings.businessDayCutoverHour;
     _offered = widget.settings.shopOrderTypes;
     _sectionsSide = widget.settings.floorSectionsSide;
+    _idleLock = widget.settings.idleLockMinutes;
     _cashVariance = TextEditingController(
         text: widget.settings.cashVarianceTolerance.toStringAsFixed(2));
   }
@@ -84,6 +86,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.businessDayCutoverHour = _cutoverHour;
     widget.settings.shopOrderTypes = _offered;
     widget.settings.floorSectionsSide = _sectionsSide;
+    widget.settings.idleLockMinutes = _idleLock;
     // Unreadable or blank reads as zero, which is the strict default: the drawer
     // has to match to the cent.
     widget.settings.cashVarianceTolerance =
@@ -155,6 +158,28 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             value: _askSessionStaff,
             onChanged: (v) => setState(() => _askSessionStaff = v),
           ),
+          const SizedBox(height: 12),
+          // The idle lock: an unattended till drops back to the PIN screen, so
+          // nobody passing can play with the drawer or the menu. The draft on
+          // the counter survives and is back at the next sign-in.
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Lock the till when idle')),
+            subtitle: Text(
+                tr(context, 'Back to the PIN screen after this long untouched')),
+          ),
+          Wrap(spacing: 8, children: [
+            for (final m in const [0, 2, 5, 10, 15])
+              ChoiceChip(
+                key: Key('idle-lock-$m'),
+                label: Text(m == 0
+                    ? tr(context, 'Off')
+                    : '$m ${tr(context, 'min')}'),
+                selected: _idleLock == m,
+                onSelected: (_) => setState(() => _idleLock = m),
+              ),
+          ]),
           const SizedBox(height: 12),
           // What this shop sells at all, above whatever each role may ring: a shop
           // that does not deliver has nobody who takes a delivery.

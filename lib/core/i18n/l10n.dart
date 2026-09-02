@@ -260,6 +260,10 @@ const Map<String, String> _ar = {
   'Cashier': 'كاشير',
   // tables
   'Rename section': 'إعادة تسمية القسم',
+  // idle lock
+  'Lock the till when idle': 'قفل الجهاز عند عدم الاستخدام',
+  'Back to the PIN screen after this long untouched':
+      'العودة إلى شاشة الرقم السري بعد هذه المدة دون لمس',
   // floor editor bar
   'Wall': 'حائط',
   'Duplicate': 'تكرار',

@@ -127,7 +127,12 @@ class PosApp extends StatefulWidget {
     this.emailer,
     this.reservations,
     this.assignments,
+    this.nowFn = DateTime.now,
   });
+
+  /// The clock the idle lock reads. Injectable for the tests, exactly as the
+  /// floor's booking badges inject theirs; production reads the real one.
+  final DateTime Function() nowFn;
 
   /// Tables booked ahead. Null on a shop that does not take bookings and in the
   /// suites that predate them, and then the floor reads exactly as it did.
@@ -280,6 +285,11 @@ class _PosAppState extends State<PosApp> {
   /// when the shift is in order. Cleared when they act on it or wave it away.
   ShiftNudge? _nudge;
 
+  /// The last moment anybody touched the till, for the idle lock. Stamped by
+  /// every pointer-down and by every change to the open order, so a till worked
+  /// entirely by barcode scanner counts as busy too.
+  late DateTime _lastTouch = widget.nowFn();
+
   /// The bill that was just parked, for the line the floor says about it, or null
   /// when there is nothing to say. The table is null on a bill that was never
   /// seated.
@@ -382,6 +392,7 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _catchUp() async {
+    _lockIfIdle();
     _fireDueTimedLines();
     if (_receiptPrinter.hasSpooled) await _receiptPrinter.flush();
     // A Z report queued while the line was down goes out on its own, rather than
@@ -418,6 +429,7 @@ class _PosAppState extends State<PosApp> {
   }
 
   void _signedIn(Cashier cashier) {
+    _lastTouch = widget.nowFn();
     setState(() {
       final session = _session = PosSession(
         catalogue: widget.catalogue,
@@ -618,8 +630,33 @@ class _PosAppState extends State<PosApp> {
   /// Tells the update gate whether a customer is standing at the counter. Lines on
   /// screen is the honest signal: the order is already on disk, but replacing the
   /// binary underneath a half-rung sale is exactly what the gate exists to stop.
-  void _publishActivity() =>
-      widget.activity?.saleInProgress = _session?.hasLines ?? false;
+  void _publishActivity() {
+    // Every order change is somebody working the till, whatever input it came
+    // through, so it holds the idle lock off exactly as a touch does.
+    _lastTouch = widget.nowFn();
+    widget.activity?.saleInProgress = _session?.hasLines ?? false;
+  }
+
+  /// Lock the till once nobody has touched it for the shop's idle window.
+  ///
+  /// Locking is the sign-out the till already knows: the draft on the counter
+  /// is durable and lands back on screen at the next sign-in, so nothing is
+  /// lost, and the PIN screen is the lock. Ridden on the 30-second background
+  /// tick rather than its own timer, so the wait is the setting give or take
+  /// half a minute, which is what an idle lock needs to be.
+  void _lockIfIdle() {
+    final session = _session;
+    if (session == null) return;
+    final minutes = widget.settings.idleLockMinutes;
+    if (minutes <= 0) return;
+    if (widget.nowFn().difference(_lastTouch).inMinutes < minutes) return;
+    widget.audit
+        .record(session.cashierId, 'till.locked', detail: 'idle ${minutes}m');
+    // Whatever is stacked over home comes down first: a lock screen underneath
+    // an open settings page or dialog would not be locking anything.
+    _navigator.currentState?.popUntil((r) => r.isFirst);
+    _signOut();
+  }
 
   /// Built as printer bytes, never rasterised, and never awaited by the screen that
   /// took the money: the sale is committed before this runs, so a printer that is
@@ -946,13 +983,20 @@ class _PosAppState extends State<PosApp> {
         // one. Nothing else belongs here: this is the app's only chrome.
         builder: (context, navigator) {
           final nudge = _nudge;
-          if (nudge == null || navigator == null) {
-            return navigator ?? const SizedBox.shrink();
-          }
-          return Column(children: [
-            _shiftNudgeBar(context, nudge),
-            Expanded(child: navigator),
-          ]);
+          final content = nudge == null || navigator == null
+              ? (navigator ?? const SizedBox.shrink())
+              : Column(children: [
+                  _shiftNudgeBar(context, nudge),
+                  Expanded(child: navigator),
+                ]);
+          // Above the navigator so every touch on any screen, dialog or sheet
+          // stamps the idle clock. A plain field write: repainting the app on
+          // every tap would be a heavy price for a timestamp.
+          return Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (_) => _lastTouch = widget.nowFn(),
+            child: content,
+          );
         },
         locale: locale,
         supportedLocales: kSupportedLocales,
