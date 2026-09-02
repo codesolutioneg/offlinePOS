@@ -484,6 +484,7 @@ class Order {
   double chargeFor(Iterable<OrderLine> subset,
       {double Function(OrderLine line)? quantityOf}) {
     final f = discountFactor * serviceChargeFactor;
+    final s = serviceChargeFactor;
     var charge = 0.0;
     for (final l in subset) {
       var value = l.total;
@@ -491,8 +492,10 @@ class Order {
         final perUnit = l.total / (l.quantity == 0 ? 1 : l.quantity);
         value = perUnit * quantityOf(l);
       }
-      final net = value * f;
-      charge += net + net * l.taxRate / 100;
+      // The money owed is after the order discount; the tax is not, exactly as
+      // [taxTotal] charges the whole bill, so a guest paying their share pays
+      // their share of the undiscounted tax too.
+      charge += value * f + value * s * l.taxRate / 100;
     }
     return charge;
   }
@@ -512,16 +515,18 @@ class Order {
   /// line is sent at. The two agreeing is what lets the sale state its total and be
   /// refused if the server ever disagrees.
   ///
-  /// The base is the food after every discount, scaled by the service charge, since
-  /// the service rides inside the line prices on the wire and is taxed there too.
-  /// Delivery and tip stay outside it: delivery is exempt on the shop's other till,
-  /// and a tip is not a supply.
+  /// The base is the subtotal scaled by the service charge, and deliberately NOT
+  /// less the order discount: the shop's rule is that a discount is its own
+  /// generosity and the state's share is owed on what was sold. The wire prices
+  /// are shaped so the server books this same figure. Delivery and tip stay
+  /// outside it: delivery is exempt on the shop's other till, and a tip is not a
+  /// supply.
   double get taxTotal {
     var t = 0.0;
     final s = serviceChargeFactor;
     for (final l in lines) {
       if (l.taxRate <= 0) continue;
-      t += l.total * discountFactor * s * l.taxRate / 100;
+      t += l.total * s * l.taxRate / 100;
     }
     return t;
   }
@@ -590,12 +595,14 @@ class Order {
     final s = serviceChargeFactor;
     final f = discountFactor;
     var off = 0.0;
-    // What each line was worth less what it is worth now, rather than a percentage
-    // of the whole: subtracting the two figures the lines are actually sent at is
-    // what keeps the discount line exact to the cent instead of a rounding away.
+    // The ORDER discount alone, in money. A line's own discount is a price cut
+    // that stays inside that line's price on the wire (and thins its tax with
+    // it); the order discount is the shop's generosity on the whole bill, rides
+    // as its own untaxed line, and leaves the tax untouched. Subtracting the two
+    // figures the lines are actually sent at keeps it exact to the cent.
     for (final l in lines) {
-      final gross = l.gross * s;
-      off += gross - gross * l.lineDiscountFactor * f;
+      final discounted = l.gross * s * l.lineDiscountFactor;
+      off += discounted - discounted * f;
     }
     return off;
   }
@@ -657,8 +664,18 @@ class Order {
     if (partnerId != null && partnerId! < 0) m['partner_id'] = null;
     m['lines'] = lines.map((l) {
       // With a discount product the prices stay whole and the discount leaves as a
-      // line of its own; without one it is folded in here as it always was.
-      final lf = discountProduct == null ? l.lineDiscountFactor * f * s : s;
+      // line of its own; without one it is folded in here. The fold on a taxed
+      // line is (f + r) / (1 + r) rather than a flat f: the server applies the
+      // line's tax to the very price it is sent, and this is the one price whose
+      // tax-inclusive value equals the discounted food plus the UNdiscounted tax,
+      // which is what the till now charges. A tax-free line reduces to the flat
+      // fold, exactly as before.
+      final r = l.taxRate / 100;
+      final lf = discountProduct == null
+          ? l.lineDiscountFactor * s * ((f + r) / (1 + r))
+          // The line's own discount stays in its price either way: only the
+          // order discount leaves as the separate line.
+          : l.lineDiscountFactor * s;
       final lm = l.toMap();
       // What this line books against, stated rather than assumed. See
       // [LocalProductBooking]: the link the product had when it was rung, then the

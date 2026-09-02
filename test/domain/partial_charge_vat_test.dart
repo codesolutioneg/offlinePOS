@@ -51,8 +51,9 @@ void main() {
 
   test('the discount and the service both reach a part charge', () {
     final o = bill(service: 12, discount: 10);
-    // 20 -> 18 after the discount -> 20.16 with service -> 22.98 with tax.
-    expect(o.chargeFor([o.lines.last]), closeTo(22.9824, 0.0001));
+    // 20 -> 18 after the discount -> 20.16 with service; the tax stays on the
+    // undiscounted 22.40 of serviced food: 20.16 + 3.136 = 23.296.
+    expect(o.chargeFor([o.lines.last]), closeTo(23.296, 0.0001));
   });
 
   test('a zero-quantity line is worth nothing', () {

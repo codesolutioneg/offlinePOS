@@ -50,9 +50,12 @@ void main() {
     expect(serverTotal(p), o.total);
   });
 
-  test('a line discount counts towards the amount too', () {
+  test('a line discount is a price cut, not part of the discount amount', () {
+    // A line's own discount stays inside that line's price on the wire (and
+    // thins its tax with it). The reported discount is the order discount
+    // alone, so here there is none.
     final o = Order(deviceId: 'd', cashierId: 'c')..lines.add(line(100, off: 25));
-    expect(o.toServerPayload()['discount_amount'], 25);
+    expect(o.toServerPayload()['discount_amount'], 0);
   });
 
   test('a sale with no discount says zero rather than nothing', () {
@@ -79,14 +82,17 @@ void main() {
     expect(serverTotal(p), o.total);
   });
 
-  test('both discounts leave the prices together', () {
+  test('the line discount stays in the price, the order discount is the line',
+      () {
     DiscountBooking.productId = 55;
-    // 100 off 20% on the line, then 10% off the bill: 100 -> 80 -> 72.
+    // 100 off 20% on the line, then 10% off the bill: 100 -> 80 -> 72. The 80
+    // travels as the price (that cut thins the tax base too); the 8 the bill
+    // gave away is the discount line.
     final o = Order(deviceId: 'd', cashierId: 'c', discountPercent: 10)
       ..lines.add(line(100, off: 20));
     final p = o.toServerPayload();
-    expect((p['lines'][0]['unit_price'] as num), 100);
-    expect((p['lines'][1]['unit_price'] as num), -28);
+    expect((p['lines'][0]['unit_price'] as num), 80);
+    expect((p['lines'][1]['unit_price'] as num), -8);
     expect(serverTotal(p), closeTo(72, 0.001));
     expect(o.total, closeTo(72, 0.001));
   });

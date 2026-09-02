@@ -74,12 +74,13 @@ void main() {
     expect(o.total, closeTo(255.36, 0.0001));
   });
 
-  test('a discount reduces the tax with the price', () {
+  test('an order discount leaves the tax on the full subtotal', () {
     final o = sale(discountPercent: 25);
-    // 150 after the discount, so 21 of tax rather than 28: the guest is not taxed
-    // on money they did not pay.
-    expect(o.taxTotal, closeTo(21, 0.0001));
-    expect(o.total, closeTo(171, 0.0001));
+    // The shop's rule: the discount is its own generosity and the state's share
+    // is owed on what was sold. 150 of food after the discount, but still the
+    // full 28 of tax on the 200 that was sold.
+    expect(o.taxTotal, closeTo(28, 0.0001));
+    expect(o.total, closeTo(178, 0.0001));
   });
 
   test('a line discount reduces the tax on that line only', () {
@@ -112,10 +113,17 @@ void main() {
       final o = sale(servicePercent: 12, discountPercent: 10, delivery: 30, tip: 5);
       final sent = o.toServerPayload();
       expect(sent['amount_total'], closeTo(o.total, 0.0001));
-      // And the price the server multiplies out still carries the discount and the
-      // service, so its own arithmetic lands on the same figure.
+      // The folded price is shaped so the server's own tax arithmetic lands on
+      // the same figure the guest paid: price x (1 + r) has to equal the
+      // discounted food plus the UNdiscounted tax, so the fold on a taxed line
+      // is (f + r) / (1 + r) rather than a flat f.
       final line = (sent['lines'] as List).single as Map<String, dynamic>;
-      expect(line['unit_price'], closeTo(100 * 0.9 * 1.12, 0.0001));
+      expect(line['unit_price'],
+          closeTo(100 * 1.12 * (0.9 + 0.14) / 1.14, 0.0001));
+      // And the server's multiplication indeed reproduces the till's food+tax.
+      final unit = line['unit_price'] as double;
+      expect(unit * 2 * 1.14,
+          closeTo(o.subtotal * 0.9 * 1.12 + o.taxTotal, 0.0001));
     });
 
     test('a balance is what is still owed on the taxed total', () {

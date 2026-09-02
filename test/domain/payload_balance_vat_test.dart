@@ -76,12 +76,28 @@ void main() {
     expect(payloadImbalanceReason(payload), isNull);
   });
 
-  test('the declared tax equals the tax the till charged', () {
+  test('with a discount product the declared tax equals the tax the till charged',
+      () {
+    // Folded prices can state the right TOTAL but never the right tax split:
+    // the server taxes the price it is sent, and no single price carries both
+    // the discounted food and the undiscounted tax as separate figures. The
+    // discount product mode is the one that represents the shop's rule
+    // faithfully: full prices, full tax, and the discount as its own untaxed
+    // negative line.
+    DiscountBooking.productId = 999;
+    addTearDown(() => DiscountBooking.productId = null);
     final o = sale(service: 12, orderDiscount: 10, modifierWithProduct: true);
     final payload = paid(o);
-    // The payload is the only thing the server sees, so its arithmetic has to land
-    // on the same figure the guest was shown.
     expect(payloadTaxTotal(payload), closeTo(o.taxTotal, 0.01));
+    expect(payloadImbalanceReason(payload), isNull);
+  });
+
+  test('folded prices still balance to the taxed total the guest paid', () {
+    final o = sale(service: 12, orderDiscount: 10, modifierWithProduct: true);
+    final payload = paid(o);
+    // No discount product: the fold reshapes each taxed price so the server's
+    // own multiplication lands on the till's figure, tax and all.
+    expect(payloadImbalanceReason(payload), isNull);
   });
 
   test('a payment that misses the tax is called out, naming it', () {
