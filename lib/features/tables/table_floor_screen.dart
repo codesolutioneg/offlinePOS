@@ -355,7 +355,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   /// The first grid cell in this section nothing sits on, scanned row by row,
   /// so a new table lands in open space instead of stacking on the last one.
-  ({int x, int y}) _firstFreeCell([String? section]) {
+  ({int x, int y}) _firstFreeCell({String? section, int wide = 1, int tall = 1}) {
     final taken = <({int x, int y})>{};
     for (final t in widget.store.inSection(section ?? _activeSection)) {
       final cx = t.x.round(), cy = t.y.round();
@@ -369,19 +369,37 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         }
       }
     }
+    // The seeker's own footprint has to fit whole: a wall two cells long may
+    // not start beside a table it would lie across.
+    bool fits(int x, int y) {
+      for (var dx = 0; dx < wide; dx++) {
+        for (var dy = 0; dy < tall; dy++) {
+          if (taken.contains((x: x + dx, y: y + dy))) return false;
+        }
+      }
+      return true;
+    }
+
     for (var y = 0; y < 30; y++) {
       for (var x = 0; x < 8; x++) {
-        if (!taken.contains((x: x, y: y))) return (x: x, y: y);
+        if (fits(x, y)) return (x: x, y: y);
       }
     }
     return (x: 0, y: 0);
+  }
+
+  /// How many grid cells [span]/[vertical] cover, for placing a whole wall.
+  ({int wide, int tall}) _dividerFootprint({required int span, required bool vertical}) {
+    final cells = (span / _cell).ceil().clamp(1, 8);
+    return vertical ? (wide: 1, tall: cells) : (wide: cells, tall: 1);
   }
 
   /// Drop a wall/divider bar on the floor. It is a `pos_tables` row like any
   /// other so it lives in the same section, drags on the same grid, and is
   /// deleted the same way, but it seats nobody and is never opened for an order.
   void _addDivider() {
-    final spot = _firstFreeCell();
+    final fp = _dividerFootprint(span: 140, vertical: false);
+    final spot = _firstFreeCell(wide: fp.wide, tall: fp.tall);
     final added = widget.store.add(
       name: widget.store.uniqueName('Wall'),
       seats: 0,
@@ -663,7 +681,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   /// One more of the selected table, dropped on the next free cell and made the
   /// selection, so a row of identical tables is one Add and a run of taps.
   void _duplicate(PosTable t) {
-    final spot = _firstFreeCell();
+    final fp = t.isDivider
+        ? _dividerFootprint(span: t.span, vertical: t.vertical)
+        : (wide: 1, tall: 1);
+    final spot = _firstFreeCell(wide: fp.wide, tall: fp.tall);
     final added = widget.store.add(
       name: widget.store.uniqueName(t.name),
       seats: t.seats,
@@ -712,7 +733,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     // Landed on open space in the destination room, exactly as Add and
     // Duplicate land here: keeping its old spot could stack it on a table
     // that room already has there.
-    final spot = _firstFreeCell(target);
+    final fp = t.isDivider
+        ? _dividerFootprint(span: t.span, vertical: t.vertical)
+        : (wide: 1, tall: 1);
+    final spot = _firstFreeCell(section: target, wide: fp.wide, tall: fp.tall);
     widget.store.upsert(t.copyWith(
         section: target, x: spot.x.toDouble(), y: spot.y.toDouble()));
     _selectedId = null;
