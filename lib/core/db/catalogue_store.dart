@@ -93,10 +93,10 @@ class CatalogueStore {
              g.required ? 1 : 0, g.autoAdd ? 1 : 0]);
         for (final m in g.modifiers) {
           _db.raw.execute(
-              'INSERT INTO modifiers (id, group_id, name, price, price_type, sequence, product_id, is_default, source) '
-              "VALUES (?,?,?,?,?,?,?,?,'odoo')",
+              'INSERT INTO modifiers (id, group_id, name, price, price_type, sequence, product_id, is_default, max_quantity, source) '
+              "VALUES (?,?,?,?,?,?,?,?,?,'odoo')",
               [m.id, g.id, m.name, m.price, m.priceType.name, m.sequence,
-               m.productId, m.isDefault ? 1 : 0]);
+               m.productId, m.isDefault ? 1 : 0, m.maxQuantity]);
         }
       }
       productGroupIds.forEach((productId, groupIds) {
@@ -377,6 +377,7 @@ class CatalogueStore {
             sequence: m['sequence'] as int,
             productId: m['product_id'] as int?,
             isDefault: (m['is_default'] as int? ?? 0) == 1,
+            maxQuantity: m['max_quantity'] as int? ?? 0,
           ))
       .toList();
 

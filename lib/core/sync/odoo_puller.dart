@@ -316,7 +316,13 @@ class OdooPuller {
         // price_mode decides whether an option adds to the dish's price or is it.
         // Optional so an add-on without the field still gives up its groups, and a
         // missing answer means 'add', which is the field's own default.
-        ['auto_add', 'default_option_id', 'price_mode'],
+        //
+        // modifier_type says how a group is meant to be answered, and item_quantity
+        // is how many options an item-selection group expects in total (a box of
+        // ten, or a single sauce). Both optional so an older add-on without them
+        // degrades to its min/max instead of forcing a count.
+        ['auto_add', 'default_option_id', 'price_mode', 'modifier_type',
+         'item_quantity'],
         [
           ['active', '=', true]
         ],
@@ -326,8 +332,9 @@ class OdooPuller {
         ['id', 'name', 'modifier_id', 'price_extra', 'sequence', 'product_id'],
         // An upgrade names its surcharge separately, and that figure is already the
         // difference from the option the dish comes with, so it is what gets
-        // charged rather than the option's own price.
-        ['is_default', 'is_upgrade', 'upgrade_price'],
+        // charged rather than the option's own price. max_quantity caps how many of
+        // this one option a quantity group will take; optional, 0 means no ceiling.
+        ['is_default', 'is_upgrade', 'upgrade_price', 'max_quantity'],
         [
           ['active', '=', true]
         ],
@@ -376,6 +383,7 @@ class OdooPuller {
             productId: _id(o['product_id']),
             isDefault:
                 o['is_default'] == true || namedDefaults.contains(o['id']),
+            maxQuantity: (o['max_quantity'] ?? 0) as int,
           ));
     }
 
@@ -383,11 +391,27 @@ class OdooPuller {
     final byProduct = <int, List<int>>{};
     for (final g in groups) {
       final gid = g['id'] as int;
+      // An item-selection group ("choose N from the list", down to a single sauce)
+      // is bounded by its item count, not by min/max: item_quantity is the whole
+      // rule, and the reason a "choose one sauce" group has to stop the cashier
+      // taking two. A quantity display is the same idea shown as counters. Either
+      // way item_quantity is the ceiling; with none of this set the group falls
+      // back to its own min/max like any other.
+      final display = g['display_type'];
+      final modType = g['modifier_type'];
+      final itemQty = (g['item_quantity'] ?? 0) as int;
+      final countBound =
+          (modType == 'item_selection' || display == 'quantity') && itemQty > 0;
+      final requiredGroup = g['required'] == true;
       mapped.add(ModifierGroup(
         id: gid,
         name: (g['name'] ?? '') as String,
         sequence: (g['sequence'] ?? 0) as int,
-        minSelection: (g['min_selection'] ?? 0) as int,
+        // A count-bound group that must be answered wants exactly its count; one
+        // that is optional allows up to it. A plain group keeps its own minimum.
+        minSelection: countBound
+            ? (requiredGroup ? itemQty : 0)
+            : (g['min_selection'] ?? 0) as int,
         // A radio group is one choice by construction, and the server only holds
         // its own min/max to account for a checkbox, so a radio arrives as 0/0 and
         // would read here as "take as many as you like".
@@ -397,10 +421,15 @@ class OdooPuller {
         // thing a bill can express: taken twice, the option's difference from the
         // dish is applied twice and the size is charged as though it were an
         // extra, which is the arithmetic this price mode exists to stop.
-        maxSelection: g['display_type'] == 'radio' || replaces.contains(gid)
+        //
+        // A count-bound group's ceiling is its item count: one sauce is one, ten
+        // sandwiches is ten.
+        maxSelection: display == 'radio' || replaces.contains(gid)
             ? 1
-            : (g['max_selection'] ?? 0) as int,
-        required: g['required'] == true,
+            : countBound
+                ? itemQty
+                : (g['max_selection'] ?? 0) as int,
+        required: requiredGroup,
         autoAdd: g['auto_add'] == true,
         modifiers: byGroup[gid] ?? const [],
       ));

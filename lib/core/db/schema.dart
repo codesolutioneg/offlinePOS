@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 24;
+  static const int version = 25;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -603,6 +603,16 @@ class Schema {
       // parse ON CONFLICT.
       "INSERT OR IGNORE INTO app_settings (key, value) "
           "VALUES ('tenders_from_journals', 'pending')",
+    ],
+    // v24 -> v25: how many of one option a line may take.
+    //
+    // A "box of ten" group lets the cashier take several of the same option, and
+    // max_quantity is the most of that one it will take (0 = no ceiling of its own).
+    // The group's own total is its max_selection, which the pull already fills from
+    // Odoo's item count. Defaults to 0, so a till that upgrades is unchanged until
+    // the catalogue brings the value down.
+    [
+      'ALTER TABLE modifiers ADD COLUMN max_quantity INTEGER NOT NULL DEFAULT 0',
     ],
   ];
 }

@@ -155,6 +155,7 @@ class Modifier {
     this.sequence = 0,
     this.productId,
     this.isDefault = false,
+    this.maxQuantity = 0,
     this.source = CatalogueSource.odoo,
   });
 
@@ -168,6 +169,10 @@ class Modifier {
 
   /// The stock item consumed when this modifier is chosen, when there is one.
   final int? productId;
+
+  /// The most of this one option a single line may take, 0 meaning no ceiling of
+  /// its own. Only a quantity group reads it; a checkbox takes each option once.
+  final int maxQuantity;
 
   /// Whether this option is what the dish comes with unless someone says otherwise
   /// (the standard sauce, the regular size). Only meaningful inside a group the
@@ -213,6 +218,9 @@ class ModifierGroup {
   final int minSelection;
 
   /// 0 means no ceiling.
+  ///
+  /// For an item-selection group in Odoo (a single sauce, a box of ten) this holds
+  /// its item count, so the count is enforced here as an ordinary ceiling.
   final int maxSelection;
   final bool required;
 
