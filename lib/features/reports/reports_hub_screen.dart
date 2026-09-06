@@ -12,17 +12,25 @@ import 'attendance_report_screen.dart';
 import 'cashier_report_screen.dart';
 import 'category_report_screen.dart';
 import 'cost_sales_report_screen.dart';
+import 'daily_sales_report_screen.dart';
+import 'detailed_discounts_report_screen.dart';
 import 'discounts_report_screen.dart';
 import 'expenses_report_screen.dart';
+import 'group_sales_report_screen.dart';
+import 'item_sales_report_screen.dart';
 import 'menu_engineering_report_screen.dart';
 import 'modifier_report_screen.dart';
 import 'payment_analysis_report_screen.dart';
 import 'period_comparison_report_screen.dart';
+import 'refunds_summary_report_screen.dart';
 import 'report_export.dart';
 import 'receivables_report_screen.dart';
 import 'refunds_voids_report_screen.dart';
+import 'revenue_center_report_screen.dart';
 import 'sales_by_time_report_screen.dart';
 import 'sales_report_screen.dart';
+import 'session_detail_report_screen.dart';
+import 'session_summary_report_screen.dart';
 import 'tax_report_screen.dart';
 import 'today_glance_card.dart';
 import 'top_products_report_screen.dart';
@@ -200,6 +208,16 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     final endOfToday =
         DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
     return (from: from, to: _windowTo ?? endOfToday);
+  }
+
+  /// The wall-clock hours the chosen window spans, for the session summary's
+  /// sales-per-hour line. Null on an unbounded range ('All'), where that line has
+  /// no meaning and is left off.
+  double? get _rangeHours {
+    final window = _closedWindow;
+    if (window == null) return null;
+    final h = window.to.difference(window.from).inMinutes / 60.0;
+    return h <= 0 ? null : h;
   }
 
   /// The same-length period immediately before the chosen one, with the same
@@ -464,6 +482,49 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                     (o) => SalesReportScreen(orders: o, formatAmount: widget.formatAmount)),
                 _tile(tr(context, 'Tax'), Icons.receipt, 'rep-tax', const Color(0xFF2563EB),
                     (o) => TaxReportScreen(orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Group sales'), Icons.dashboard_customize,
+                    'rep-group-sales', const Color(0xFF6366F1),
+                    (o) => GroupSalesReportScreen(
+                        orders: o,
+                        categories: widget.categories,
+                        costs: widget.costs,
+                        formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Item sales'), Icons.list_alt, 'rep-item-sales',
+                    const Color(0xFF0EA5E9),
+                    (o) => ItemSalesReportScreen(
+                        orders: o,
+                        categories: widget.categories,
+                        costs: widget.costs,
+                        formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Session detail'), Icons.receipt_long,
+                    'rep-session-detail', const Color(0xFF2563EB),
+                    (o) => SessionDetailReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Sales by revenue center'), Icons.storefront,
+                    'rep-revenue-center', const Color(0xFF06B6D4),
+                    (o) => RevenueCenterReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Daily sales'), Icons.calendar_month,
+                    'rep-daily-sales', const Color(0xFF14B8A6),
+                    (o) => DailySalesReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Detailed discounts'), Icons.discount,
+                    'rep-detailed-discounts', AppColors.warning,
+                    (o) => DetailedDiscountsReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Refunds summary'), Icons.assignment_return,
+                    'rep-refunds-summary', AppColors.error,
+                    (o) => RefundsSummaryReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Session summary'), Icons.summarize_outlined,
+                    'rep-session-summary', const Color(0xFF9333EA),
+                    (o) => SessionSummaryReportScreen(
+                        orders: o,
+                        categories: widget.categories,
+                        costs: widget.costs,
+                        formatAmount: widget.formatAmount,
+                        attendance: _attendance,
+                        rangeHours: _rangeHours)),
                 _tile(tr(context, 'Top products'), Icons.star, 'rep-top', const Color(0xFF0EA5E9),
                     (o) => TopProductsReportScreen(orders: o, formatAmount: widget.formatAmount)),
                 _tile(tr(context, 'Category performance'), Icons.category, 'rep-category',
