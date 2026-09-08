@@ -79,6 +79,7 @@ const Map<String, String> _ar = {
   'New order': 'طلب جديد',
   'Open orders': 'الطلبات المفتوحة',
   'Note': 'ملاحظة',
+  'Add note...': 'أضف ملاحظة...',
   'Note added': 'تمت إضافة ملاحظة',
   'Order note': 'ملاحظة الطلب',
   'Guests': 'الضيوف',

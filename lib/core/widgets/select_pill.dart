@@ -4,9 +4,8 @@ import '../theme/app_colors.dart';
 
 /// A selectable order-type / seat pill with guaranteed contrast.
 ///
-/// Material [ChoiceChip] merges theme label colours in a way that can leave
-/// dark text on the navy selected fill — this widget paints the label colour
-/// explicitly so selected = white, unselected = navy.
+/// Selected fill defaults to sky ([AppColors.primary]) to match the Dishflow
+/// sell mock; pass [selectedColor] to override (e.g. navy on the floor).
 class SelectPill extends StatelessWidget {
   const SelectPill({
     super.key,
@@ -14,20 +13,29 @@ class SelectPill extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.compact = false,
+    this.selectedColor = AppColors.primary,
+    this.showCheckmark = false,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
   final bool compact;
+  final Color selectedColor;
+  final bool showCheckmark;
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final bg = selected
-        ? AppColors.secondary
+        ? selectedColor
         : (dark ? AppColors.backgroundLightDark : Colors.white);
     final fg = selected ? Colors.white : AppColors.brandNavy;
+    final border = selected
+        ? selectedColor
+        : (dark
+            ? AppColors.surfaceLightDark
+            : const Color(0xFFE2E8F0));
 
     return Material(
       color: Colors.transparent,
@@ -44,16 +52,11 @@ class SelectPill extends StatelessWidget {
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: selected
-                  ? AppColors.secondary
-                  : AppColors.secondary.withValues(alpha: 0.35),
-              width: 1.2,
-            ),
+            border: Border.all(color: border, width: 1.2),
             boxShadow: selected && !dark
                 ? [
                     BoxShadow(
-                      color: AppColors.brandNavy.withValues(alpha: 0.18),
+                      color: selectedColor.withValues(alpha: 0.28),
                       blurRadius: 6,
                       offset: const Offset(0, 2),
                     ),
@@ -63,7 +66,7 @@ class SelectPill extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (selected) ...[
+              if (selected && showCheckmark) ...[
                 Icon(Icons.check, size: compact ? 14 : 16, color: fg),
                 SizedBox(width: compact ? 4 : 5),
               ],
