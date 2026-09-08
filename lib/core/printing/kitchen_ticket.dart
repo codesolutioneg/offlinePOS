@@ -52,19 +52,20 @@ class KitchenTicketBuilder {
     final p = EscPos(columns: columns)..reset();
     const major = '=';
 
-    // Top breathing room, then ===STATION=== like Dishflow.
+    // Top breathing room, then ===STATION=== centred by the printer (not by
+    // space-padding — padding + align-center drifts double-width text).
     p.feed(4);
     p.align(EscPosAlign.center)
       ..size(doubleWidth: true, doubleHeight: true)
       ..bold(true)
-      ..centred('===${(station ?? 'KITCHEN').toUpperCase()}===')
+      ..line('===${(station ?? 'KITCHEN').toUpperCase()}===')
       ..bold(false)
       ..size();
     if (reprint) {
       for (var i = 0; i < 3; i++) {
         p.size(doubleWidth: true, doubleHeight: true)
             .bold(true)
-            .centred('** RE-PRINT **')
+            .line('** RE-PRINT **')
             .bold(false)
             .size();
       }
@@ -77,7 +78,7 @@ class KitchenTicketBuilder {
       p.align(EscPosAlign.center)
           .size(doubleWidth: true, doubleHeight: true)
           .bold(true)
-          .centred(typeBanner)
+          .line(typeBanner)
           .bold(false)
           .size();
     }
@@ -87,18 +88,18 @@ class KitchenTicketBuilder {
       p.align(EscPosAlign.center)
           .size(doubleWidth: true, doubleHeight: true)
           .bold(true)
-          .centred('#${order.companyOrderNo}')
+          .line('#${order.companyOrderNo}')
           .bold(false)
           .size();
     }
 
-    // Table / seating — large, centred (double-width aware via EscPos.centred).
+    // Same seating wording as the payment receipt: "e - Table 2", centred.
     final tableLine = _tableDisplay(order);
     if (tableLine != null) {
       p.align(EscPosAlign.center)
           .size(doubleWidth: true, doubleHeight: true)
           .bold(true)
-          .centred('* $tableLine *')
+          .line('* $tableLine *')
           .bold(false)
           .size();
     }
@@ -107,7 +108,7 @@ class KitchenTicketBuilder {
     p.align(EscPosAlign.center)
         .size(doubleWidth: true, doubleHeight: true)
         .bold(true)
-        .centred(_time12(order.createdAt))
+        .line(_time12(order.createdAt))
         .bold(false)
         .size();
 
@@ -121,14 +122,14 @@ class KitchenTicketBuilder {
     p.bold(true).row(cust, ord).bold(false);
     p.rule(major);
 
-    // Date + server centred on the paper (not a left/right row).
+    // Date + server centred on the paper.
     p.align(EscPosAlign.center)
         .bold(true)
-        .centred(_dateMdy(order.createdAt))
+        .line(_dateMdy(order.createdAt))
         .bold(false);
     final server = serverNameOf?.call(order.cashierId)?.trim();
     if (server != null && server.isNotEmpty) {
-      p.align(EscPosAlign.center).centred('Server: $server');
+      p.align(EscPosAlign.center).line('Server: $server');
     }
     p.align(EscPosAlign.left);
 
@@ -266,17 +267,16 @@ class KitchenTicketBuilder {
     };
   }
 
+  /// Same wording as the payment receipt banner: `e - Table 2`.
   String? _tableDisplay(Order order) {
     final label = order.tableLabel;
     if (label == null || label.isEmpty) return null;
     final section = sectionOf?.call(label);
-    if (order.type == OrderType.dineIn) {
-      if (section != null && section.isNotEmpty) return '$section $label';
-      return 'Table $label';
-    }
-    // To-go / delivery seated on a floor label: SECTION N or the raw label.
-    if (section != null && section.isNotEmpty) return '$section $label';
-    return label;
+    final parts = <String>[
+      if (section != null && section.isNotEmpty) section,
+      'Table $label',
+    ];
+    return parts.join(' - ');
   }
 
   String? _categoryLabel(OrderLine l) {

@@ -102,6 +102,9 @@ const Map<String, String> _ar = {
   'Settings': 'الإعدادات',
   'Support & printers': 'الدعم والطابعات',
   'Order history': 'سجل الطلبات',
+  'Other till': 'جهاز آخر',
+  'Completed sales will show up here':
+      'المبيعات المكتملة تظهر هنا — بما فيها من الأجهزة الأخرى على الشبكة',
   // tables
   'Kitchen': 'المطبخ',
   'No open tables': 'لا توجد طاولات مفتوحة',
@@ -143,6 +146,9 @@ const Map<String, String> _ar = {
   'Name / number': 'الاسم / الرقم',
   // the shop network
   'Shop network': 'شبكة المتجر',
+  'Join hit a sync bug. Close the app fully, open the '
+          'newest build, Unlink, then Join again.':
+      'فشل الربط بسبب خطأ مزامنة. اقفل التطبيق بالكامل، افتح أحدث نسخة، Unlink، ثم Join من جديد.',
   'Share open tabs, tickets and the floor plan':
       'مشاركة الطلبات المفتوحة وطلبات المطبخ ومخطط الصالة',
   'Share with the other devices': 'المشاركة مع الأجهزة الأخرى',
@@ -491,7 +497,6 @@ const Map<String, String> _ar = {
   'Tap a product to add it to the order': 'اضغط على منتج لإضافته للطلب',
   'Try a different search or category': 'جرّب بحثاً أو قسماً آخر',
   'Orders sent to the kitchen will show up here': 'ستظهر الطلبات المُرسلة للمطبخ هنا',
-  'Completed sales will show up here': 'ستظهر المبيعات المكتملة هنا',
   'Cashier totals will show up once orders come in':
       'ستظهر إجماليات الكاشير عند ورود الطلبات',
   'No categories yet': 'لا توجد أقسام بعد',

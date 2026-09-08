@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/db/catalogue_store.dart';
 import '../../core/db/reservation_store.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/db/table_store.dart';
@@ -11,6 +12,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart' show OrderType, OrderTypeLabel;
 import 'reservations_screen.dart';
+import 'section_settings_sheet.dart';
 import '../../core/theme/table_palette.dart';
 
 /// The floor plan: tables drawn where the shop placed them, tapped to start or
@@ -37,6 +39,7 @@ class TableFloorScreen extends StatefulWidget {
     this.seatTypes = const [OrderType.dineIn],
     this.sectionsAtSide = true,
     this.settings,
+    this.catalogue,
     this.onTransferTables,
     this.onEditPreorders,
     this.authorize,
@@ -175,6 +178,9 @@ class TableFloorScreen extends StatefulWidget {
   /// another cashier picks it up). Null hides the menu that edits them, which is
   /// what the table picker wants.
   final SettingsStore? settings;
+
+  /// Menu catalogue for section category / payment pickers. Null hides those tools.
+  final CatalogueStore? catalogue;
 
   /// Move every tab one cashier is holding to another one, for the manager whose
   /// waiter went home mid-service. Null hides the action.
@@ -1498,6 +1504,14 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             title: Text(tr(ctx, 'Rename section')),
             onTap: () => Navigator.pop(ctx, 'rename'),
           ),
+          if (widget.settings != null && widget.catalogue != null)
+            ListTile(
+              key: const Key('section-settings'),
+              leading: const Icon(Icons.tune),
+              title: Text(tr(ctx, 'Section settings')),
+              subtitle: Text(tr(ctx, 'Categories, payments, staff rules')),
+              onTap: () => Navigator.pop(ctx, 'settings'),
+            ),
           ListTile(
             key: const Key('section-delete'),
             leading: const Icon(Icons.delete_outline, color: Colors.red),
@@ -1530,12 +1544,28 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       if (!mounted) return;
       if (name != null && name.isNotEmpty && name != section) {
         widget.store.renameSection(section, name);
+        widget.settings?.renameSectionSettings(section, name);
         _setSection(name);
       }
+    } else if (action == 'settings') {
+      final settings = widget.settings;
+      final catalogue = widget.catalogue;
+      if (settings == null || catalogue == null) return;
+      await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => SectionSettingsSheet(
+          section: section,
+          settings: settings,
+          catalogue: catalogue,
+          staff: widget.staff,
+        ),
+      );
     } else if (action == 'delete') {
       final confirmed = await _confirmDeleteSection(section);
       if (confirmed != true || !mounted) return;
       widget.store.deleteSection(section);
+      widget.settings?.deleteSectionSettings(section);
       _reload();
     }
   }
@@ -1686,7 +1716,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       onTap: () => _setSection(s),
       // In edit mode a long-press renames or deletes the whole section, exactly as
       // it does on the top strip.
-      onLongPress: _editing ? () => _sectionMenu(s) : null,
+      onLongPress: () => _sectionMenu(s),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
         decoration: BoxDecoration(
@@ -1724,7 +1754,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             for (final s in _sections) ...[
               GestureDetector(
                 // In edit mode a long-press renames or deletes the whole section.
-                onLongPress: _editing ? () => _sectionMenu(s) : null,
+                onLongPress: () => _sectionMenu(s),
                 child: ChoiceChip(
                   key: Key('section-${s.toLowerCase()}'),
                   label: Text(s),

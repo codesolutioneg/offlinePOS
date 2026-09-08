@@ -92,6 +92,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final managers = active.where((u) => u.isManager).toList();
     // Managers unlock the till. Until a manager exists, everyone can (setup).
     final staff = widget.managersOnly && managers.isNotEmpty ? managers : active;
+    final pin = widget.provisioningPin;
     return Scaffold(
       // A quiet wash of the brand colour behind the card, so the lock screen is
       // recognisably the till from across the counter without shouting.
@@ -107,46 +108,61 @@ class _LoginScreenState extends State<LoginScreen> {
             ],
           ),
         ),
-        child: Center(
-          child: SingleChildScrollView(
+        // LayoutBuilder + minHeight keeps the form centred on tall screens and
+        // scrollable from the top on short ones — so the Setup PIN never sits
+        // clipped above the fold (Center alone was hiding it on small laptops).
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+              constraints: BoxConstraints(minHeight: constraints.maxHeight - 48),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 460),
                   child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _brand(context),
-                      const SizedBox(height: 16),
-                      if (widget.provisioningPin != null) ...[
-                        _provisioningCard(context),
-                        const SizedBox(height: 8),
+                      if (pin != null) ...[
+                        _provisioningCard(context, pin),
+                        const SizedBox(height: 16),
                       ],
-                      if (staff.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(tr(context, 'No cashiers on this device yet'),
-                              key: const Key('no-users')),
-                        )
-                      else ...[
-                        _accountSelector(staff),
-                        const SizedBox(height: 12),
-                        _pinDots(context),
-                        if (_message != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(_message!,
-                                key: const Key('login-message'),
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: scheme.error,
-                                    fontWeight: FontWeight.w600)),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _brand(context),
+                              const SizedBox(height: 16),
+                              if (staff.isEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Text(
+                                      tr(context, 'No cashiers on this device yet'),
+                                      key: const Key('no-users')),
+                                )
+                              else ...[
+                                _accountSelector(staff),
+                                const SizedBox(height: 12),
+                                _pinDots(context),
+                                if (_message != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Text(_message!,
+                                        key: const Key('login-message'),
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                            color: scheme.error,
+                                            fontWeight: FontWeight.w600)),
+                                  ),
+                                const SizedBox(height: 10),
+                                _keypad(),
+                              ],
+                            ],
                           ),
-                        const SizedBox(height: 10),
-                        _keypad(),
-                      ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -182,25 +198,35 @@ class _LoginScreenState extends State<LoginScreen> {
     ]);
   }
 
-  Widget _provisioningCard(BuildContext context) => Card(
+  Widget _provisioningCard(BuildContext context, String pin) => Card(
         key: const Key('provisioning'),
-        color: AppColors.warning.withValues(alpha: 0.15),
+        color: AppColors.warning.withValues(alpha: 0.18),
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: AppColors.warning.withValues(alpha: 0.5)),
+          side: BorderSide(color: AppColors.warning.withValues(alpha: 0.6)),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           child: Column(
             children: [
               Text(
-                '${tr(context, 'This till has no staff yet. Sign in as Setup with PIN')} '
-                '${widget.provisioningPin}',
+                tr(context, 'This till has no staff yet. Sign in as Setup with PIN'),
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontWeight: FontWeight.w700),
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
+              SelectableText(
+                pin,
+                key: const Key('provisioning-pin'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 36,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 6,
+                ),
+              ),
+              const SizedBox(height: 10),
               Text(
                 tr(context,
                     'Then open Settings → Staff to add employees, set each role and PIN. Settings → Roles & permissions controls what each role may do.'),

@@ -81,11 +81,19 @@ class SellScreen extends StatefulWidget {
     this.shiftOpen,
     this.onOpenShift,
     this.settings,
+    this.allowedCategoryIds = const [],
+    this.allowedPaymentMethodIds = const [],
   });
 
   /// Reads which payment methods the shop offers at the till. Null (as in some
   /// tests) offers every method the catalogue carries.
   final SettingsStore? settings;
+
+  /// Section (and optional staff) category allow-list. Empty = every category.
+  final List<int> allowedCategoryIds;
+
+  /// Section payment allow-list. Empty = every method still offered globally.
+  final List<int> allowedPaymentMethodIds;
 
   final PosSession session;
   final String Function(double) formatAmount;
@@ -1676,10 +1684,15 @@ class _SellScreenState extends State<SellScreen> {
   List<PaymentMethod> _offeredMethods() {
     final all = s.catalogue.paymentMethods();
     final settings = widget.settings;
-    if (settings == null) return all;
-    final offered =
-        all.where((m) => settings.isPaymentMethodOffered(m.id)).toList();
-    return offered.isEmpty ? all : offered;
+    var offered = settings == null
+        ? all
+        : all.where((m) => settings.isPaymentMethodOffered(m.id)).toList();
+    if (offered.isEmpty) offered = all;
+    final sectionPays = widget.allowedPaymentMethodIds;
+    if (sectionPays.isEmpty) return offered;
+    final filtered =
+        offered.where((m) => sectionPays.contains(m.id)).toList();
+    return filtered.isEmpty ? offered : filtered;
   }
 
   void _pay() {
@@ -2274,6 +2287,27 @@ class _SellScreenState extends State<SellScreen> {
     if (_favesOnly) {
       products = products.where((p) => widget.favourites.contains(p.id)).toList();
     }
+    final allowCats = widget.allowedCategoryIds.isEmpty
+        ? const <int>{}
+        : s.catalogue.expandCategoryAllowList(widget.allowedCategoryIds);
+    if (allowCats.isNotEmpty) {
+      final selected = _categoryId;
+      if (selected != null && !allowCats.contains(selected)) {
+        // Schedule clear — never mutate selection mid-build.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (_categoryId == selected) setState(() => _categoryId = null);
+        });
+        products = s.catalogue.products(search: _search);
+        if (_favesOnly) {
+          products =
+              products.where((p) => widget.favourites.contains(p.id)).toList();
+        }
+      }
+      products = products
+          .where((p) => p.categoryId != null && allowCats.contains(p.categoryId))
+          .toList();
+    }
     final o = s.current;
     final title = o.tableLabel != null
         ? '${tr(context, o.type.label)} - ${o.tableLabel}'
@@ -2598,10 +2632,18 @@ class _SellScreenState extends State<SellScreen> {
   /// Vertical rail of square category tiles on the right (Dishflow side layout).
   Widget _categoryRail() {
     final stocked = s.catalogue.categoryIdsWithProducts();
-    final cats = s.catalogue
-        .categories()
-        .where((c) => stocked.contains(c.id) || c.id == _categoryId)
-        .toList();
+    final allowRaw = widget.allowedCategoryIds;
+    final allow = allowRaw.isEmpty
+        ? const <int>{}
+        : s.catalogue.expandCategoryAllowList(allowRaw);
+    // Keep parent picks visible even when products sit only on children, and keep
+    // any selected id so a stale filter cannot blank the rail.
+    final cats = s.catalogue.categories().where((c) {
+      if (allow.isNotEmpty && !allow.contains(c.id)) return false;
+      return stocked.contains(c.id) ||
+          c.id == _categoryId ||
+          allowRaw.contains(c.id);
+    }).toList();
     return ColoredBox(
       color: AppColors.background,
       child: ListView(

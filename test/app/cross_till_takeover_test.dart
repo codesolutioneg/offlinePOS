@@ -72,11 +72,14 @@ class _Wire extends LanHttpClient {
     required String orderUuid,
     required String deviceId,
     String? cashier,
+    bool asManager = false,
   }) async {
     final protocol = owner;
     if (protocol == null) throw const SocketException('no route to the other till');
-    final body = '{"device_id":"$deviceId","schema":${Schema.version},'
-        '"order_uuid":"$orderUuid"}';
+    final body =
+        '{"device_id":"$deviceId","schema":${Schema.version},'
+        '"order_uuid":"$orderUuid","cashier":${cashier == null ? 'null' : '"$cashier"'},'
+        '"as_manager":$asManager}';
     final reply = protocol.handlePost(
       LanProtocol.claimPath,
       body,
@@ -167,7 +170,10 @@ void main() {
       claims: LanClaimDesk(
         deviceId: 'till-2',
         orders: peerOrders,
-        allowed: () => peerSettings.lanAllowTakeover,
+        mayGrant: ({required order, requesterId, asManager = false}) =>
+            peerSettings.lanAllowTakeover ||
+            asManager ||
+            (requesterId != null && requesterId == order.cashierId),
       ),
     );
 
@@ -209,6 +215,9 @@ void main() {
       orders: orders,
       tables: TableStore(db),
       settings: settings,
+      users: UserStore(db),
+      printers: PrinterRegistry(discovery: _NoPrinters()),
+      endpoints: OdooEndpointStore(db),
       reservations: ReservationStore(db),
       assignments: TableAssignmentStore(db),
       audit: audit,
@@ -232,7 +241,7 @@ void main() {
     return built;
   }
 
-  Widget app(LanNode? lan) {
+  Widget app(LanNode? lan, {bool loginManagersOnly = true}) {
     final outbox = Outbox(store: SqliteOutboxStore(db), senders: {});
     return PosApp(
       auth: AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit),
@@ -261,6 +270,7 @@ void main() {
       attendance: AttendanceStore(db),
       config: const TillConfig(),
       lan: lan,
+      loginManagersOnly: loginManagersOnly,
     );
   }
 
@@ -328,8 +338,11 @@ void main() {
   testWidgets('a till that says no is told apart from one that says nothing',
       (t) async {
     final tab = tabOnTheOtherTill();
-    // The other till answers, and its answer is no.
-    peerSettings.lanAllowTakeover = false;
+    // Peer still answers, but the tab is no longer theirs to hand over.
+    peerOrders.save(
+      Order.fromMap({...tab.toMap(), 'state': OrderState.paid.name}),
+      announce: false,
+    );
     final lan = node();
 
     await t.pumpWidget(app(lan));
@@ -341,7 +354,6 @@ void main() {
     expect(find.textContaining('would not hand the tab over'), findsOneWidget);
     expect(find.textContaining('did not answer'), findsNothing);
     expect(orders.byUuid(tab.uuid)!.deviceId, 'till-2');
-    expect(peerOrders.held().map((o) => o.uuid), [tab.uuid]);
     await lan.dispose();
   });
 
@@ -360,7 +372,37 @@ void main() {
     await lan.dispose();
   });
 
-  testWidgets('with takeovers off the floor still says settle it there', (t) async {
+  testWidgets('with takeovers off a non-opener cashier still settles it there',
+      (t) async {
+    await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
+        .enrol(id: 'ana', name: 'Ana', pin: '4321');
+    WizardStore(db).dismiss(WizardId.firstSale, 'ana');
+    final tab = tabOnTheOtherTill();
+    settings.lanAllowTakeover = false;
+    final lan = node();
+
+    await t.pumpWidget(app(lan, loginManagersOnly: false));
+    await t.tap(find.byKey(const Key('user-ana')));
+    await t.pumpAndSettle();
+    for (final d in '4321'.split('')) {
+      await t.tap(find.byKey(Key('key-$d')));
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('pin-ok')));
+    for (var i = 0; i < 20; i++) {
+      await t.pump(const Duration(milliseconds: 50));
+      if (find.byType(TableFloorScreen).evaluate().isNotEmpty) break;
+    }
+    await t.pumpAndSettle();
+    await tapTableFive(t);
+
+    expect(find.byKey(const Key('confirm-takeover')), findsNothing);
+    expect(find.textContaining('Settle it there'), findsOneWidget);
+    expect(orders.byUuid(tab.uuid)!.deviceId, 'till-2');
+    await lan.dispose();
+  });
+
+  testWidgets('a manager can take over even when takeovers are off', (t) async {
     final tab = tabOnTheOtherTill();
     settings.lanAllowTakeover = false;
     final lan = node();
@@ -369,9 +411,7 @@ void main() {
     await signIn(t);
     await tapTableFive(t);
 
-    expect(find.byKey(const Key('confirm-takeover')), findsNothing);
-    expect(find.textContaining('Settle it there'), findsOneWidget);
-    expect(orders.byUuid(tab.uuid)!.deviceId, 'till-2');
+    expect(find.byKey(const Key('confirm-takeover')), findsOneWidget);
     await lan.dispose();
   });
 
@@ -382,7 +422,7 @@ void main() {
     final tab = tabOnTheOtherTill();
     final lan = node();
 
-    await t.pumpWidget(app(lan));
+    await t.pumpWidget(app(lan, loginManagersOnly: false));
     await t.tap(find.byKey(const Key('user-ana')));
     await t.pumpAndSettle();
     for (final d in '4321'.split('')) {

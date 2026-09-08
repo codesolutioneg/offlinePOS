@@ -39,6 +39,13 @@ class LanTabRefused implements Exception {
 /// The answer to a takeover: the tab, or why not.
 typedef LanClaimResult = ({Order? order, LanClaimRefusal? refusal, String? detail});
 
+/// Whether this till will hand [order] to the requester.
+typedef LanClaimMayGrant = bool Function({
+  required Order order,
+  String? requesterId,
+  bool asManager,
+});
+
 /// The one place a parked tab changes hands between two tills.
 ///
 /// Both halves live here so the rule they share is written once: a tab moves only
@@ -49,10 +56,10 @@ class LanClaimDesk {
   LanClaimDesk({
     required this.deviceId,
     required OrderStore orders,
-    required bool Function() allowed,
+    required LanClaimMayGrant mayGrant,
     LanLog? audit,
   })  : _orders = orders,
-        _allowed = allowed,
+        _mayGrant = mayGrant,
         _audit = audit;
 
   /// This till's id: what it hands out as the new owner, and what it checks a
@@ -61,9 +68,8 @@ class LanClaimDesk {
 
   final OrderStore _orders;
 
-  /// Whether this device lets its tabs be taken over. Read at the moment of the
-  /// request rather than held, so switching it off takes effect on the next ask.
-  final bool Function() _allowed;
+  /// Read at the moment of the ask: shop-wide takeovers, or the opener / a manager.
+  final LanClaimMayGrant _mayGrant;
 
   /// Both sides of a handover land in the audit trail, which is the point: a bill
   /// that moved between tills has to be explainable the morning after from either
@@ -73,17 +79,29 @@ class LanClaimDesk {
   /// The owner's half: give [orderUuid] to [toDeviceId], or say why not.
   ///
   /// Runs on the event loop between taps like every other inbound request, and
-  /// touches nothing but a held order this till owns.
-  LanClaimResult grant(String orderUuid, String toDeviceId, {String? cashier}) {
-    if (!_allowed()) {
+  /// touches nothing but a held (or seated draft) order this till owns.
+  LanClaimResult grant(
+    String orderUuid,
+    String toDeviceId, {
+    String? cashier,
+    bool asManager = false,
+  }) {
+    final order = _orders.byUuid(orderUuid);
+    if (order == null) {
+      _audit?.call('order.claim.refused',
+          '$orderUuid to $toDeviceId: not on this till');
+      return (order: null, refusal: LanClaimRefusal.refused, detail: 'not held here');
+    }
+    if (!_mayGrant(
+        order: order, requesterId: cashier, asManager: asManager)) {
       _audit?.call('order.claim.refused',
           '$orderUuid to $toDeviceId: takeovers are switched off here');
       return (order: null, refusal: LanClaimRefusal.refused, detail: 'not allowed');
     }
     final moved = _orders.handOver(orderUuid, toDeviceId);
     if (moved == null) {
-      // Everything that is not a parked tab of ours: already handed on, already
-      // paid, on the counter, or never here at all.
+      // Everything that is not an open tab of ours: already handed on, already
+      // paid, or never here at all.
       _audit?.call('order.claim.refused',
           '$orderUuid to $toDeviceId: not a parked tab on this till');
       return (order: null, refusal: LanClaimRefusal.refused, detail: 'not held here');

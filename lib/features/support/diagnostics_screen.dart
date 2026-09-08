@@ -110,6 +110,42 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     if (mounted) setState(() => _printerBusy = null);
   }
 
+  Future<void> _discardHeld() async {
+    final spool = widget.spool;
+    if (spool == null || !spool.hasSpooled) return;
+    final n = spool.spooledCount;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Discard held prints?')),
+        content: Text(
+          tr(ctx,
+              'These will not print. Use this after a long outage when the backlog is junk.'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('confirm-discard-spool'),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('${tr(ctx, 'Discard')} ($n)'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _printerBusy = 'spool');
+    final dropped = await spool.clearHeld();
+    if (!mounted) return;
+    setState(() => _printerBusy = null);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(
+          '${tr(context, 'Discarded')} $dropped ${tr(context, 'held print(s)')}'),
+    ));
+  }
+
   /// Take a copy of the till, on demand.
   ///
   /// Manager-gated like every other configuration action here: the file is
@@ -437,6 +473,13 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           onPressed: _printerBusy == null ? _reprint : null,
           icon: const Icon(Icons.print),
           label: Text('${tr(context, 'Reprint')} ${spool.spooledCount} ${tr(context, 'held receipt(s)')}'),
+        ),
+        TextButton.icon(
+          key: const Key('discard-spool'),
+          onPressed: _printerBusy == null ? _discardHeld : null,
+          icon: const Icon(Icons.delete_outline, color: Colors.red),
+          label: Text(
+              '${tr(context, 'Discard')} ${spool.spooledCount} ${tr(context, 'held print(s)')}'),
         ),
         // Which sales have no paper, and why the last attempt failed. A count
         // alone cannot tell support whether the printer is off, out of paper, or

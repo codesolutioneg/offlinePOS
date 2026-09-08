@@ -35,6 +35,7 @@ class SetupChecklist {
     required bool menuDownloaded,
     required bool printerConfigured,
     required bool staffEnrolled,
+    bool deviceRoleChosen = true,
   }) =>
       SetupChecklist([
         SetupStep(
@@ -61,6 +62,13 @@ class SetupChecklist {
           detail:
               'Settings → Staff: create each employee, pick their role, set their PIN.',
           done: staffEnrolled,
+        ),
+        SetupStep(
+          id: 'lan_role',
+          title: 'Choose primary or secondary till',
+          detail:
+              'Settings → Shop network: primary mints join PINs; secondary joins with a PIN.',
+          done: deviceRoleChosen,
         ),
       ]);
 

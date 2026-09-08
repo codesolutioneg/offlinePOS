@@ -141,6 +141,15 @@ class ShiftStore {
     return s;
   }
 
+  /// Close the open shift using expected drawer cash (peer day-close). No-op when
+  /// none is open.
+  Shift? closeOpenQuietly({Set<int> cashMethodIds = const {}}) {
+    final open = currentOpenShift();
+    if (open == null) return null;
+    final expected = summary(open, cashMethodIds: cashMethodIds).expectedCash;
+    return closeShift(countedCash: expected);
+  }
+
   /// The X/Z figures for [shift], with sales read from the orders taken in its
   /// window (paid or already synced, so a close after a sync still counts them).
   ///

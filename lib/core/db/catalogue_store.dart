@@ -274,6 +274,28 @@ class CatalogueStore {
           r['category_id'] as int,
       };
 
+  /// Grow a section allow-list so choosing a parent (e.g. Meals) still admits
+  /// every child category products are filed under.
+  Set<int> expandCategoryAllowList(Iterable<int> allowed) {
+    final seeds = allowed.toSet();
+    if (seeds.isEmpty) return const {};
+    final byParent = <int, List<int>>{};
+    for (final c in categories()) {
+      final p = c.parentId;
+      if (p == null) continue;
+      (byParent[p] ??= []).add(c.id);
+    }
+    final out = {...seeds};
+    final queue = [...seeds];
+    while (queue.isNotEmpty) {
+      final id = queue.removeLast();
+      for (final child in byParent[id] ?? const <int>[]) {
+        if (out.add(child)) queue.add(child);
+      }
+    }
+    return out;
+  }
+
   Category? categoryById(int id) {
     final rows = _db.raw.select('SELECT * FROM categories WHERE id = ?', [id]);
     return rows.isEmpty ? null : _category(rows.first);
@@ -373,7 +395,10 @@ class CatalogueStore {
             groupId: groupId,
             name: m['name'] as String,
             price: (m['price'] as num).toDouble(),
-            priceType: ModifierPriceType.values.byName(m['price_type'] as String),
+            priceType: ModifierPriceType.values.firstWhere(
+              (e) => e.name == '${m['price_type']}',
+              orElse: () => ModifierPriceType.fixed,
+            ),
             sequence: m['sequence'] as int,
             productId: m['product_id'] as int?,
             isDefault: (m['is_default'] as int? ?? 0) == 1,
@@ -598,6 +623,218 @@ class CatalogueStore {
 
   void removeModifier(int id) =>
       _db.raw.execute('DELETE FROM modifiers WHERE id = ?', [id]);
+
+  /// Whole menu as plain data for a LAN join (no product images — those stay
+  /// optional via an Odoo pull after the endpoint is copied).
+  Map<String, dynamic> exportLanSnapshot() {
+    final cats = categories(includeArchived: true);
+    final prods = _db.raw
+        .select('SELECT $_productColumns FROM products ORDER BY name')
+        .map(_product)
+        .toList();
+    final groups = _db.raw
+        .select('SELECT * FROM modifier_groups ORDER BY sequence, name')
+        .map(_group)
+        .toList();
+    final links = <String, List<int>>{};
+    for (final r in _db.raw
+        .select('SELECT product_id, group_id FROM product_modifier_groups')) {
+      links
+          .putIfAbsent('${r['product_id']}', () => <int>[])
+          .add(r['group_id'] as int);
+    }
+    return {
+      'categories': [
+        for (final c in cats)
+          {
+            'id': c.id,
+            'name': c.name,
+            'sequence': c.sequence,
+            'parent_id': c.parentId,
+            'odoo_id': c.odooId,
+            'source': c.source.name,
+            'active': c.active,
+          },
+      ],
+      'products': [
+        for (final p in prods)
+          {
+            'id': p.id,
+            'name': p.name,
+            'price': p.price,
+            'category_id': p.categoryId,
+            'barcode': p.barcode,
+            'active': p.active,
+            'sold_by_weight': p.soldByWeight,
+            'tax_rate': p.taxRate,
+            'cost': p.cost,
+            'odoo_id': p.odooId,
+            'source': p.source.name,
+            'color': p.color,
+          },
+      ],
+      'groups': [
+        for (final g in groups)
+          {
+            'id': g.id,
+            'name': g.name,
+            'sequence': g.sequence,
+            'min_selection': g.minSelection,
+            'max_selection': g.maxSelection,
+            'required': g.required,
+            'auto_add': g.autoAdd,
+            'source': g.source.name,
+            'modifiers': [
+              for (final m in g.modifiers)
+                {
+                  'id': m.id,
+                  'group_id': m.groupId,
+                  'name': m.name,
+                  'price': m.price,
+                  'price_type': m.priceType.name,
+                  'sequence': m.sequence,
+                  'product_id': m.productId,
+                  'is_default': m.isDefault,
+                  'max_quantity': m.maxQuantity,
+                  'source': m.source.name,
+                },
+            ],
+          },
+      ],
+      'product_group_ids': links,
+      'payment_methods': [
+        for (final m in paymentMethods()) m.toMap(),
+      ],
+      'refreshed_at': refreshedAt?.toIso8601String(),
+    };
+  }
+
+  /// Replace this till's menu with a primary's join snapshot (no LAN echo).
+  void applyLanSnapshot(Map<String, dynamic> snap) {
+    int? asInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse('$v');
+    }
+
+    double asDouble(dynamic v, [double fallback = 0]) {
+      if (v is num) return v.toDouble();
+      return double.tryParse('$v') ?? fallback;
+    }
+
+    final categories = <Category>[
+      for (final raw in (snap['categories'] as List? ?? const []))
+        if (raw is Map && asInt(raw['id']) != null)
+          Category(
+            id: asInt(raw['id'])!,
+            name: '${raw['name'] ?? ''}',
+            sequence: asInt(raw['sequence']) ?? 0,
+            parentId: asInt(raw['parent_id']),
+            odooId: asInt(raw['odoo_id']),
+            source: CatalogueSource.fromName(
+                raw['source'] is String ? raw['source'] as String : null),
+            active: raw['active'] != false,
+          ),
+    ];
+    final products = <Product>[
+      for (final raw in (snap['products'] as List? ?? const []))
+        if (raw is Map && asInt(raw['id']) != null && raw['price'] != null)
+          Product(
+            id: asInt(raw['id'])!,
+            name: '${raw['name'] ?? ''}',
+            price: asDouble(raw['price']),
+            categoryId: asInt(raw['category_id']),
+            barcode: raw['barcode'] is String ? raw['barcode'] as String : null,
+            active: raw['active'] != false,
+            soldByWeight: raw['sold_by_weight'] == true,
+            taxRate: asDouble(raw['tax_rate']),
+            cost: asDouble(raw['cost']),
+            odooId: asInt(raw['odoo_id']),
+            source: CatalogueSource.fromName(
+                raw['source'] is String ? raw['source'] as String : null),
+            color: asInt(raw['color']),
+          ),
+    ];
+    final groups = <ModifierGroup>[
+      for (final raw in (snap['groups'] as List? ?? const []))
+        if (raw is Map && asInt(raw['id']) != null)
+          ModifierGroup(
+            id: asInt(raw['id'])!,
+            name: '${raw['name'] ?? ''}',
+            sequence: asInt(raw['sequence']) ?? 0,
+            minSelection: asInt(raw['min_selection']) ?? 0,
+            maxSelection: asInt(raw['max_selection']) ?? 0,
+            required: raw['required'] == true,
+            autoAdd: raw['auto_add'] == true,
+            source: CatalogueSource.fromName(
+                raw['source'] is String ? raw['source'] as String : null),
+            modifiers: [
+              for (final m in (raw['modifiers'] as List? ?? const []))
+                if (m is Map && asInt(m['id']) != null)
+                  Modifier(
+                    id: asInt(m['id'])!,
+                    groupId: asInt(m['group_id']) ?? asInt(raw['id'])!,
+                    name: '${m['name'] ?? ''}',
+                    price: asDouble(m['price']),
+                    priceType: ModifierPriceType.values.firstWhere(
+                      (e) => e.name == '${m['price_type']}',
+                      orElse: () => ModifierPriceType.fixed,
+                    ),
+                    sequence: asInt(m['sequence']) ?? 0,
+                    productId: asInt(m['product_id']),
+                    isDefault: m['is_default'] == true,
+                    maxQuantity: asInt(m['max_quantity']) ?? 0,
+                    source: CatalogueSource.fromName(
+                        m['source'] is String ? m['source'] as String : null),
+                  ),
+            ],
+          ),
+    ];
+    final productGroupIds = <int, List<int>>{};
+    final rawLinks = snap['product_group_ids'];
+    if (rawLinks is Map) {
+      for (final e in rawLinks.entries) {
+        final id = int.tryParse('${e.key}');
+        if (id == null || e.value is! List) continue;
+        productGroupIds[id] = [
+          for (final g in e.value as List)
+            if (g is int) g else int.tryParse('$g') ?? 0,
+        ].where((g) => g != 0).toList();
+      }
+    }
+    final payments = <PaymentMethod>[];
+    for (final raw in (snap['payment_methods'] as List? ?? const [])) {
+      if (raw is! Map) continue;
+      try {
+        payments.add(PaymentMethod.fromMap(raw.cast<String, dynamic>()));
+      } catch (_) {}
+    }
+    final at = snap['refreshed_at'] is String
+        ? DateTime.tryParse(snap['refreshed_at'] as String)?.toUtc()
+        : null;
+
+    // Wipe everything — join must make the secondary match the primary menu.
+    _db.raw.execute('BEGIN');
+    try {
+      _db.raw.execute('DELETE FROM product_modifier_groups');
+      _db.raw.execute('DELETE FROM modifiers');
+      _db.raw.execute('DELETE FROM modifier_groups');
+      _db.raw.execute('DELETE FROM products');
+      _db.raw.execute('DELETE FROM categories');
+      _db.raw.execute('COMMIT');
+    } catch (_) {
+      _db.raw.execute('ROLLBACK');
+      rethrow;
+    }
+    replaceAll(
+      categories: categories,
+      products: products,
+      groups: groups,
+      productGroupIds: productGroupIds,
+      paymentMethods: payments,
+      refreshedAt: at,
+    );
+  }
 
   /// The next id for a row created here.
   ///

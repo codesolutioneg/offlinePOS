@@ -52,13 +52,17 @@ class PosSession {
   /// showed before there was a counter.
   final String Function()? nextOrderNo;
 
-  /// Give [o] its number the first time it leaves the cashier's hands (parked or
-  /// paid). Never re-numbered: a table that is recalled, split or corrected keeps
-  /// the number the guests and the kitchen already have.
+  /// Give [o] its number the first time it leaves the cashier's hands (parked,
+  /// paid, or sent to kitchen). Never re-numbered: a table that is recalled,
+  /// split or corrected keeps the number the guests and the kitchen already have.
   void _stampOrderNo(Order o) {
     if (o.orderNo != null) return;
     o.orderNo = nextOrderNo?.call();
   }
+
+  /// Public stamp so the kitchen fire path can number the bill before paper goes
+  /// out — the KOT and the sale receipt must quote the same searchable sequence.
+  void ensureOrderNo(Order o) => _stampOrderNo(o);
 
   /// Apply the configured category/order-type tax rate to a line, if one is set.
   /// A line whose category is not in the matrix keeps the rate it already has.

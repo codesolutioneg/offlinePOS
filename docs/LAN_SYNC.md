@@ -31,8 +31,29 @@ exists, and every screen keeps reading the local database.
 | `product.availability` | One product marked sold out or put back on | Running out is a fact about the shop, not about a sale. The till nobody shouted at has to refuse the same item |
 | `order.claim` | A parked tab changing hands, sent by the till giving it up | The one ownership change in the fabric. Only the current owner sends it, and it sends it as part of letting go, so the tab still has exactly one owner at every instant |
 | `reservation.upsert` | A table booked ahead, changed or called off | Shared for the same reason the floor plan is: a booking taken at the counter has to reach the handheld, or two people promise one table |
+| `table.assignment` | A table handed to a waiter | Shared so the floor on every till shows the same waiter map |
+| `table.preorders` | What a room or table opens with | Shared because seating on a handheld must ring the same cover charge as the counter |
+| `settings.section_config` | Per-section category / payment / staff rules | Authored by the **primary** till; secondaries apply and do not invent conflicting writes |
 | `shift.lifecycle` | A till saying its trading day is over | So a shop closes as a shop. Strictly advisory: what a device does about it is that device's own policy, and hearing nothing means behaving exactly as before |
 | `cart.display` | What one till has on its counter right now | The one thing here written while an order is being rung, so it is opt-in per till and superseding: the log keeps the latest per device and drops the rest |
+
+## Primary and secondary tills
+
+Devices are still **peers** for orders, tables, 86 and the rest of the fabric. Role
+only governs who may mint join PINs and who owns section-config writes.
+
+| Role | What it does |
+|---|---|
+| **Primary** | Enables LAN, holds the shop key, shows its device id, mints one-time **join PINs**, publishes `settings.section_config` |
+| **Secondary** | Joins with a PIN (`POST /lan/join`, no shop-key stamp), receives a **full shop snapshot** (section configs, shop settings, staff, printers, Odoo endpoint, catalogue, floor tables, open tabs, attendance), shows a first-join progress dialog, then replicates operational events like any peer |
+
+The join snapshot is what makes a new till feel like the same shop on day one: staff
+sign in with the same PINs, roles and payment rules match, section menus match,
+receipt/kitchen printers and Odoo connection are copied, the catalogue (categories /
+products / payments) is transferred, floor tables and open tabs are seeded, and open
+attendance is mirrored. A first-join progress dialog lists each step. After join,
+floor plan, open tabs, 86 board, assignments, preorders, attendance and day-close
+keep aligning through the ordinary fabric events. Per-device print spool stays local.
 
 Replication makes a device show more, never own more. `OrderStore` splits its reads and
 the split is load-bearing:

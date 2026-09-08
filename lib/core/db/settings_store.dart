@@ -1,10 +1,14 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
+import 'dart:math';
+
 import '../../domain/business_day.dart';
 import '../../domain/order.dart'
     show DiscountBooking, LocalProductBooking, OrderType;
 import '../../domain/table_preorder.dart';
+import '../../domain/table_section_config.dart';
 import '../auth/permissions.dart';
 import '../email/smtp_config.dart';
 import '../lan/lan_event.dart';
@@ -81,6 +85,9 @@ class SettingsStore {
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
   static const _tablePreorders = 'table_preorders';
+  static const _sectionConfigs = 'section_configs';
+  static const _deviceRole = 'device_role';
+  static const _joinPinBank = 'lan_join_pin_bank';
 
   /// Set to 'pending' by the schema migration that turned the till's tenders into
   /// journals, and to 'done' once the settings keyed on the old ids have been moved.
@@ -628,6 +635,32 @@ class SettingsStore {
   bool get lanAllowTakeover => getBool('lan_allow_takeover');
   set lanAllowTakeover(bool v) => setBool('lan_allow_takeover', v);
 
+  /// Whether this till is the shop's primary (mints join PINs, owns section
+  /// config writes), a secondary, or not chosen yet.
+  DeviceRole get deviceRole => DeviceRole.fromWire(getString(_deviceRole));
+  set deviceRole(DeviceRole role) =>
+      setString(_deviceRole, role == DeviceRole.unset ? null : role.wire);
+
+  bool get isLanPrimary => deviceRole == DeviceRole.primary;
+
+  /// Shown once on a fresh till until the cashier picks Primary, joins, or skips.
+  bool get lanRolePromptDismissed => getBool('lan_role_prompt_dismissed');
+  set lanRolePromptDismissed(bool v) => setBool('lan_role_prompt_dismissed', v);
+
+  /// Forget this till's place on the shop LAN so it can become primary again or
+  /// re-join with a new PIN. Does not wipe the menu or staff — the next join
+  /// snapshot replaces those; a primary keeps typing its own.
+  void clearLanPairing() {
+    deviceRole = DeviceRole.unset;
+    lanShopKey = null;
+    _writeJoinPins(const []);
+    setString('lan_shift_notices', null);
+    lanRolePromptDismissed = false;
+    // Belt-and-braces: delete even if a setter no-op'd on an already-empty value.
+    setString('lan_shop_key', null);
+    setString(_deviceRole, null);
+  }
+
   // ── the floor with more than one person on it ────────────────────
 
   /// Whether a tab opened by one cashier asks before another one picks it up.
@@ -1149,6 +1182,329 @@ class SettingsStore {
     return (map['sections']?.isNotEmpty ?? false) ||
         (map['tables']?.isNotEmpty ?? false);
   }
+
+  // ── per-section menu / payment rules ─────────────────────────────
+
+  Map<String, TableSectionConfig> get _sectionConfigMap {
+    final v = getString(_sectionConfigs);
+    if (v == null) return {};
+    try {
+      final root = (jsonDecode(v) as Map).cast<String, dynamic>();
+      return {
+        for (final e in root.entries)
+          e.key: TableSectionConfig.fromMap(
+            {...(e.value as Map).cast<String, dynamic>(), 'name': e.key},
+          ),
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  void _writeSectionConfigMap(Map<String, TableSectionConfig> map) =>
+      setString(
+        _sectionConfigs,
+        map.isEmpty
+            ? null
+            : jsonEncode({for (final e in map.entries) e.key: e.value.toMap()}),
+      );
+
+  /// Rules for [section], or a blank unrestricted config when none were saved.
+  TableSectionConfig sectionConfig(String section) =>
+      _sectionConfigMap[section] ?? TableSectionConfig(name: section);
+
+  /// Every stored section config (only sections that were edited).
+  Map<String, TableSectionConfig> allSectionConfigs() =>
+      Map.unmodifiable(_sectionConfigMap);
+
+  static String sectionConfigRecord(String section) => 'sectioncfg:$section';
+
+  void setSectionConfig(TableSectionConfig config) {
+    // Secondaries receive section rules from the primary; local edits would
+    // diverge the shop until the next snapshot.
+    if (deviceRole == DeviceRole.secondary) return;
+    final publish = _publish;
+    announcedWrite(
+      _db,
+      () => _applySectionConfig(config),
+      publish == null || !isLanPrimary
+          ? null
+          : () => publish(
+                LanEventKind.sectionConfig,
+                sectionConfigRecord(config.name),
+                config.toMap(),
+              ),
+    );
+  }
+
+  void applySectionConfig(Map<String, dynamic> payload) {
+    final cfg = TableSectionConfig.fromMap(payload);
+    if (cfg.name.isEmpty) {
+      throw FormatException('section config missing name');
+    }
+    _applySectionConfig(cfg);
+  }
+
+  void _applySectionConfig(TableSectionConfig config) {
+    final map = _sectionConfigMap;
+    final empty = !config.isStaffSection &&
+        config.allowedCategoryIds.isEmpty &&
+        config.allowedPaymentMethodIds.isEmpty &&
+        config.employeeAllowedCategories.isEmpty;
+    if (empty) {
+      map.remove(config.name);
+    } else {
+      map[config.name] = config;
+    }
+    _writeSectionConfigMap(map);
+  }
+
+  /// Move preorders + section config when a floor section is renamed.
+  void renameSectionSettings(String from, String to) {
+    final target = to.trim();
+    if (from == target || target.isEmpty) return;
+    final pre = _preorderMap;
+    final lines = pre['sections']!.remove(from);
+    if (lines != null) {
+      pre['sections']![target] = lines;
+      _writePreorderMap(pre);
+    }
+    final cfgs = _sectionConfigMap;
+    final cfg = cfgs.remove(from);
+    if (cfg != null) {
+      cfgs[target] = cfg.copyWith(name: target);
+      _writeSectionConfigMap(cfgs);
+    }
+  }
+
+  /// Drop preorders + section config when a floor section is deleted.
+  void deleteSectionSettings(String section) {
+    final pre = _preorderMap;
+    if (pre['sections']!.remove(section) != null) {
+      _writePreorderMap(pre);
+    }
+    final cfgs = _sectionConfigMap;
+    if (cfgs.remove(section) != null) {
+      _writeSectionConfigMap(cfgs);
+    }
+  }
+
+  /// Replace every section config from a primary join snapshot (no LAN echo).
+  void applySectionConfigSnapshot(Map<String, dynamic> configs) {
+    final mapped = <String, TableSectionConfig>{
+      for (final e in configs.entries)
+        e.key: TableSectionConfig.fromMap(
+          {...(e.value as Map).cast<String, dynamic>(), 'name': e.key},
+        ),
+    };
+    _writeSectionConfigMap(mapped);
+  }
+
+  /// Shop-wide prefs the primary hands a joining secondary so staff, roles and
+  /// payment rules match without re-entering them.
+  Map<String, dynamic> exportShopBundle() => {
+        'shop_name': shopName,
+        'tax_id': taxId,
+        'receipt_footer': receiptFooter,
+        'receipt_show_tax': receiptShowTax,
+        'quick_comments': quickComments,
+        'discount_reasons': discountReasons,
+        'discount_percents': discountPercents,
+        'max_discount_percent': maxDiscountPercent,
+        'allow_amount_discount': allowAmountDiscount,
+        'custom_roles': customRoles,
+        'role_permissions': {
+          for (final e in _rolePermissionMap.entries) e.key: e.value.toList(),
+        },
+        'role_order_types': getString(_roleOrderTypes),
+        'shop_order_types': getString(_shopOrderTypes),
+        'disabled_payment_methods': disabledPaymentMethodIds.toList(),
+        'table_security': tableSecurity,
+        'ask_guest_count': askGuestCount,
+        'ask_cashier_on_open': askCashierOnOpen,
+        'floor_sections_side': floorSectionsSide,
+        'category_stations': {
+          for (final e in categoryStations.entries) '${e.key}': e.value,
+        },
+        'product_stations': {
+          for (final e in productStations.entries) '${e.key}': e.value,
+        },
+        'odoo_branch_id': odooBranchId,
+        'odoo_restaurant_id': odooRestaurantId,
+        'odoo_warehouse_id': odooWarehouseId,
+        'odoo_discount_product_id': odooDiscountProductId,
+        'odoo_local_product_id': odooLocalProductId,
+      };
+
+  /// Apply a primary's [exportShopBundle] on this till (no LAN echo).
+  void applyShopBundle(Map<String, dynamic> bundle) {
+    if (bundle['shop_name'] != null) shopName = '${bundle['shop_name']}';
+    if (bundle['tax_id'] != null) taxId = '${bundle['tax_id']}';
+    if (bundle['receipt_footer'] != null) {
+      receiptFooter = '${bundle['receipt_footer']}';
+    }
+    if (bundle['receipt_show_tax'] is bool) {
+      receiptShowTax = bundle['receipt_show_tax'] as bool;
+    }
+    if (bundle['quick_comments'] is List) {
+      quickComments = [
+        for (final e in bundle['quick_comments'] as List) '$e',
+      ];
+    }
+    if (bundle['discount_reasons'] is List) {
+      discountReasons = [
+        for (final e in bundle['discount_reasons'] as List) '$e',
+      ];
+    }
+    if (bundle['discount_percents'] is List) {
+      discountPercents = [
+        for (final e in bundle['discount_percents'] as List)
+          if (e is num) e.toDouble() else double.tryParse('$e') ?? 0,
+      ].where((e) => e > 0).toList();
+    }
+    if (bundle['max_discount_percent'] is num) {
+      maxDiscountPercent = (bundle['max_discount_percent'] as num).toDouble();
+    }
+    if (bundle['allow_amount_discount'] is bool) {
+      allowAmountDiscount = bundle['allow_amount_discount'] as bool;
+    }
+    if (bundle['custom_roles'] is List) {
+      setStringList(_customRoles, [
+        for (final e in bundle['custom_roles'] as List) '$e',
+      ]);
+    }
+    if (bundle['role_permissions'] is Map) {
+      final raw = (bundle['role_permissions'] as Map).cast<String, dynamic>();
+      setString(
+        _rolePermissions,
+        jsonEncode({
+          for (final e in raw.entries)
+            e.key: [
+              for (final p in (e.value is List ? e.value as List : const []))
+                '$p',
+            ],
+        }),
+      );
+    }
+    if (bundle['role_order_types'] is String) {
+      setString(_roleOrderTypes, bundle['role_order_types'] as String);
+    }
+    if (bundle['shop_order_types'] is String) {
+      setString(_shopOrderTypes, bundle['shop_order_types'] as String);
+    }
+    if (bundle['disabled_payment_methods'] is List) {
+      disabledPaymentMethodIds = {
+        for (final e in bundle['disabled_payment_methods'] as List)
+          if (e is int)
+            e
+          else if (e is num)
+            e.toInt()
+          else if (int.tryParse('$e') != null)
+            int.parse('$e'),
+      };
+    }
+    if (bundle['table_security'] is bool) {
+      tableSecurity = bundle['table_security'] as bool;
+    }
+    if (bundle['ask_guest_count'] is bool) {
+      askGuestCount = bundle['ask_guest_count'] as bool;
+    }
+    if (bundle['ask_cashier_on_open'] is bool) {
+      askCashierOnOpen = bundle['ask_cashier_on_open'] as bool;
+    }
+    if (bundle['floor_sections_side'] is bool) {
+      floorSectionsSide = bundle['floor_sections_side'] as bool;
+    }
+    if (bundle['category_stations'] is Map) {
+      categoryStations = {
+        for (final e in (bundle['category_stations'] as Map).entries)
+          if (int.tryParse('${e.key}') != null)
+            int.parse('${e.key}'): [
+              for (final s in (e.value is List ? e.value as List : const []))
+                '$s',
+            ],
+      };
+    }
+    if (bundle['product_stations'] is Map) {
+      productStations = {
+        for (final e in (bundle['product_stations'] as Map).entries)
+          if (int.tryParse('${e.key}') != null)
+            int.parse('${e.key}'): [
+              for (final s in (e.value is List ? e.value as List : const []))
+                '$s',
+            ],
+      };
+    }
+    if (bundle['odoo_branch_id'] != null) {
+      odooBranchId = int.tryParse('${bundle['odoo_branch_id']}');
+    }
+    if (bundle['odoo_restaurant_id'] != null) {
+      odooRestaurantId = int.tryParse('${bundle['odoo_restaurant_id']}');
+    }
+    if (bundle['odoo_warehouse_id'] != null) {
+      odooWarehouseId = int.tryParse('${bundle['odoo_warehouse_id']}');
+    }
+    if (bundle['odoo_discount_product_id'] != null) {
+      odooDiscountProductId = int.tryParse('${bundle['odoo_discount_product_id']}');
+    }
+    if (bundle['odoo_local_product_id'] != null) {
+      odooLocalProductId = int.tryParse('${bundle['odoo_local_product_id']}');
+    }
+    publishOdooSite();
+  }
+
+  // ── LAN join PIN bank (primary only) ─────────────────────────────
+
+  List<Map<String, dynamic>> get _joinPins {
+    final v = getString(_joinPinBank);
+    if (v == null) return [];
+    try {
+      return [
+        for (final e in (jsonDecode(v) as List))
+          (e as Map).cast<String, dynamic>(),
+      ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  void _writeJoinPins(List<Map<String, dynamic>> pins) =>
+      setString(_joinPinBank, pins.isEmpty ? null : jsonEncode(pins));
+
+  static String hashJoinPin(String pin) =>
+      sha256.convert(utf8.encode(pin.trim())).toString();
+
+  /// Mint a one-time 6-digit join PIN. Returns the plaintext once; only the hash
+  /// is stored. Null when this till is not primary.
+  String? issueJoinPin({Duration ttl = const Duration(hours: 12)}) {
+    if (!isLanPrimary) return null;
+    final pin = (100000 + Random.secure().nextInt(900000)).toString();
+    final pins = _joinPins;
+    pins.add({
+      'hash': hashJoinPin(pin),
+      'expires_at': DateTime.now().toUtc().add(ttl).toIso8601String(),
+    });
+    _writeJoinPins(pins);
+    return pin;
+  }
+
+  /// Consume a join PIN if it matches and is not expired. True only once.
+  bool consumeJoinPin(String pin) {
+    final hash = hashJoinPin(pin);
+    final now = DateTime.now().toUtc();
+    final pins = _joinPins;
+    final idx = pins.indexWhere((p) {
+      if (p['hash'] != hash) return false;
+      final exp = DateTime.tryParse('${p['expires_at']}');
+      return exp == null || !exp.isBefore(now);
+    });
+    if (idx < 0) return false;
+    pins.removeAt(idx);
+    _writeJoinPins(pins);
+    return true;
+  }
+
+  int get joinPinBankCount => _joinPins.length;
 
   // ── roles the shop invented ──────────────────────────────────────
   // A restaurant is not two job titles. A supervisor who may void and discount but

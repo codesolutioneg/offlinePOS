@@ -346,14 +346,31 @@ class PaymentMethod {
         'journal_name': journalName,
         'journal_type': journalType,
       };
-  factory PaymentMethod.fromMap(Map<String, dynamic> m) => PaymentMethod(
-        id: m['id'] as int,
-        name: (m['name'] ?? '') as String,
-        isCash: m['is_cash'] == true,
-        journalId: m['journal_id'] is int ? m['journal_id'] as int : null,
-        journalName: m['journal_name'] is String ? m['journal_name'] as String : null,
-        journalType: m['journal_type'] is String ? m['journal_type'] as String : null,
-      );
+  factory PaymentMethod.fromMap(Map<String, dynamic> m) {
+    final idRaw = m['id'];
+    final id = idRaw is int
+        ? idRaw
+        : idRaw is num
+            ? idRaw.toInt()
+            : int.tryParse('$idRaw');
+    if (id == null) {
+      throw FormatException('payment method missing id: $m');
+    }
+    return PaymentMethod(
+      id: id,
+      name: '${m['name'] ?? ''}',
+      isCash: m['is_cash'] == true,
+      journalId: m['journal_id'] is int
+          ? m['journal_id'] as int
+          : m['journal_id'] is num
+              ? (m['journal_id'] as num).toInt()
+              : int.tryParse('${m['journal_id'] ?? ''}'),
+      journalName:
+          m['journal_name'] is String ? m['journal_name'] as String : null,
+      journalType:
+          m['journal_type'] is String ? m['journal_type'] as String : null,
+    );
+  }
 }
 
 /// A guest that can be attached to a sale, synced from Odoo res.partner.

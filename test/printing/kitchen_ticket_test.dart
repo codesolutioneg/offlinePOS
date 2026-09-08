@@ -156,5 +156,18 @@ void main() {
       expect(text, contains('4x Extra cheese'));
       expect(text, contains('** no onions **'));
     });
+
+    test('table banner matches payment seating: section - Table N', () {
+      final order = Order(
+        deviceId: 'till-1',
+        cashierId: 'sara',
+        orderNo: '0809-010-050',
+      )..tableLabel = '2';
+      final text = strippedText(KitchenTicketBuilder(
+        sectionOf: (_) => 'e',
+      ).build(order));
+      expect(text, contains('* e - Table 2 *'));
+      expect(text, contains('ORDER:0809-010-050'));
+    });
   });
 }
