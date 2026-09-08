@@ -162,10 +162,16 @@ class KitchenTicketBuilder {
           .line('${_qty(l.quantity)}  ${l.name}')
           .bold(false)
           .size();
+      // Modifiers at normal height with a blank line above so they are not
+      // crushed under the double-height name (looked "مغوط" on paper).
+      if (l.modifiers.isNotEmpty ||
+          (l.note != null && l.note!.isNotEmpty)) {
+        p.feed();
+      }
       for (final m in l.modifiers) {
         final label =
             '    ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}';
-        p.size(doubleHeight: true).line(label).size();
+        p.line(label);
       }
       if (l.note != null && l.note!.isNotEmpty) {
         p.bold(true).line('    ** ${l.note} **').bold(false);

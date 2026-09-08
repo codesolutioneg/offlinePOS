@@ -336,15 +336,14 @@ class ReceiptBuilder {
       if (order.tip > 0) p.row('Tip', formatAmount(order.tip));
     }
     if (showTotals) {
-      // Dishflow classic reverse bar: TOTAL DUE centred, white-on-black.
+      // TOTAL DUE: reverse bar for visibility, but single size — double W+H was
+      // too loud on 80mm paper and ate the foot of the slip.
       p.feed()
           .align(EscPosAlign.center)
           .reverse(true)
-          .size(doubleWidth: true, doubleHeight: true)
           .bold(true)
           .centred('TOTAL DUE: ${formatAmount(order.total)}')
           .bold(false)
-          .size()
           .reverse(false)
           .align(EscPosAlign.left);
     }
@@ -381,11 +380,9 @@ class ReceiptBuilder {
       p.row('Already paid', '-${formatAmount(order.amountPaid)}');
       p.align(EscPosAlign.center)
           .reverse(true)
-          .size(doubleWidth: true, doubleHeight: true)
           .bold(true)
           .centred('BALANCE DUE: ${formatAmount(order.balance)}')
           .bold(false)
-          .size()
           .reverse(false)
           .align(EscPosAlign.left);
     }
