@@ -310,6 +310,27 @@ void main() {
       expect(restored['bar']!.port, 9101);
     });
 
+    test('applyFromMap replaces local printers with a primary join snapshot', () {
+      var changed = 0;
+      final secondary = PrinterRegistry(
+        discovery: StillSubnet(),
+        onChanged: () => changed++,
+      )..remember('old-local', host: '10.0.0.1');
+      changed = 0;
+
+      secondary.applyFromMap({
+        'printers': [
+          {'name': 'kitchen', 'host': '192.168.1.50', 'port': 9100},
+          {'name': 'receipt', 'host': '192.168.1.51'},
+        ],
+      });
+
+      expect(secondary['old-local'], isNull);
+      expect(secondary['kitchen']!.host, '192.168.1.50');
+      expect(secondary['receipt']!.host, '192.168.1.51');
+      expect(changed, 1);
+    });
+
     test('a saved blob that got mangled does not stop the till printing', () async {
       final registry = PrinterRegistry.fromMap(
         {

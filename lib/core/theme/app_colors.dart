@@ -1,12 +1,45 @@
 import 'package:flutter/material.dart';
 
-/// The shared colour language of the till: one brand colour plus a small, honest
-/// set of status colours so a cashier can read an order's state at a glance rather
-/// than from text alone. Kept in one place so the sell screen, the open-tabs list,
-/// the floor and the kitchen board all speak the same colours.
+/// The shared colour language of the till — Dishflow navy + sky brand, plus the
+/// status colours the sell screen, floor, and kitchen board already speak.
 abstract final class AppColors {
-  // Brand.
-  static const primary = Color(0xFF00897B); // teal
+  // Brand — Dishflow navy + sky accent.
+  static const brandNavy = Color(0xFF1B2838);
+  static const brandNavyLight = Color(0xFF243447);
+  static const primary = Color(0xFF0EA5E9); // sky
+  static const primaryLight = Color(0xFF38BDF8);
+  static const primaryDark = Color(0xFF0284C7);
+
+  // Secondary — deep navy (matches Dishflow).
+  static const secondary = Color(0xFF1B2838);
+  static const secondaryLight = Color(0xFF334155);
+  static const secondaryDark = Color(0xFF0F1419);
+
+  static const accent = Color(0xFF3B82F6);
+
+  // Legacy aliases used across screens (Dishflow light surfaces).
+  static const background = Color(0xFFF8FAFC);
+  static const surface = Color(0xFFE2E8F0);
+
+  // ===== DARK THEME (Dishflow) =====
+  static const backgroundDark = Color(0xFF0F1419);
+  static const backgroundLightDark = Color(0xFF1B2838); // cards on dark
+  static const surfaceDark = Color(0xFF243447);
+  static const surfaceLightDark = Color(0xFF334155);
+
+  static const textPrimaryDark = Color(0xFFF8FAFC);
+  static const textSecondaryDark = Color(0xFF94A3B8);
+  static const textMutedDark = Color(0xFF64748B);
+
+  // ===== LIGHT THEME (Dishflow) =====
+  static const backgroundLight = Color(0xFFF8FAFC);
+  static const backgroundLightLight = Color(0xFFFFFFFF); // cards on light
+  static const surfaceLight = Color(0xFFE2E8F0);
+  static const surfaceLightLight = Color(0xFFCBD5E1);
+
+  static const textPrimaryLight = Color(0xFF1B2838);
+  static const textSecondaryLight = Color(0xFF475569);
+  static const textMutedLight = Color(0xFF94A3B8);
 
   // Status.
   static const success = Color(0xFF22C55E); // green  — done / ready / paid
@@ -32,6 +65,7 @@ abstract final class AppColors {
   /// A stable, readable colour for a category tile when the manager has not picked
   /// one, so the grid is never a wall of one colour. Indexed by category id.
   static const categoryPalette = <Color>[
+    Color(0xFF0EA5E9),
     Color(0xFF22C55E),
     Color(0xFF3B82F6),
     Color(0xFFEF4444),
@@ -41,7 +75,6 @@ abstract final class AppColors {
     Color(0xFFEC4899),
     Color(0xFF84CC16),
     Color(0xFFF97316),
-    Color(0xFF14B8A6),
   ];
 
   static Color categoryColor(int categoryId) =>

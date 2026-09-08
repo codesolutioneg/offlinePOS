@@ -43,6 +43,7 @@ import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
 import 'core/printing/printer_registry.dart';
 import 'core/sync/batch_push.dart';
+import 'core/sync/dishflow_wiring.dart';
 import 'core/sync/http_post.dart';
 import 'core/sync/outbox.dart';
 import 'core/sync/odoo_endpoint.dart';
@@ -190,6 +191,12 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     db,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
   );
+  // Staff clock-in across tills: who is on duty is a shop fact.
+  final attendance = AttendanceStore(
+    db,
+    publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+  );
+  final shifts = ShiftStore(db);
   // What the kitchen shouted, told to every device: an item off the menu is a fact
   // about the shop, so the 86 board is shared the same way a parked tab is.
   settings.publish =
@@ -334,24 +341,33 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     odoo.configure(savedEndpoint);
   }
 
+  // Owner mirror into Dishflow Firestore. Separate from Odoo: drains on the
+  // 20s loop when online, never blocks a sale. Apply now so a till that was
+  // already configured starts draining without opening settings again.
+  final dishflow = DishflowWiring(outbox: outbox)..apply(settings);
+
   // Nothing is bound or announced here. The node is only assembled; PosApp starts it
   // behind the first frame, so no part of opening the till waits on a socket, a LAN
   // address or a peer.
   if (lanOn) {
     log.step('assemble the LAN node');
-    // The first till to share invents the shop's key; the others are paired by
-    // copying it across on the shop network screen. Until a device holds the same
-    // key it is turned away, so switching sharing on does not open this till's tabs
-    // to whatever else is on the subnet.
-    settings.lanShopKey ??= LanCredential.newKey();
+    // Pairing secret is owned by settings (Primary mint / Join / paste). Do not
+    // invent-and-persist here: Unlink clears the key, and rewriting it would make
+    // "Unlink" look like a no-op while the till quietly re-pairs on a new secret.
+    // An unpaired till still needs *some* HMAC material so an empty key is not a
+    // shared secret every stranger also has — that throwaway stays in memory only.
+    var unpairedKey = '';
     lan = LanNode.build(
       db: db,
       deviceId: deviceId,
       // Read at the moment of the request, so a manager who rotates the key has
-      // rotated it for the next one instead of at the next restart. Inventing one
-      // again if it is ever cleared keeps the fabric refusing strangers: an empty
-      // key is a key everybody knows.
-      shopKey: () => settings.lanShopKey ??= LanCredential.newKey(),
+      // rotated it for the next one instead of at the next restart.
+      shopKey: () {
+        final held = settings.lanShopKey;
+        if (held != null && held.isNotEmpty) return held;
+        if (unpairedKey.isEmpty) unpairedKey = LanCredential.newKey();
+        return unpairedKey;
+      },
       // Unnamed until a manager names it on the shop network screen. The id is what
       // the other devices show until then, which is honest: two devices that both
       // call themselves "Till" are worse than two ids.
@@ -359,6 +375,12 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       orders: orders,
       tables: tables,
       settings: settings,
+      users: users,
+      printers: printers,
+      endpoints: endpoints,
+      attendance: attendance,
+      catalogue: catalogue,
+      shifts: shifts,
       reservations: reservations,
       assignments: assignments,
       audit: audit,
@@ -383,7 +405,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     printers: printers,
     receiptSpool: SqlitePrintJobStore(db, printer: PosApp.receiptPrinter),
     wizards: WizardStore(db),
-    shifts: ShiftStore(db),
+    shifts: shifts,
     deviceId: deviceId,
     config: config,
     activity: activity,
@@ -399,10 +421,11 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     settings: settings,
     customers: CustomerStore(db),
     delivery: DeliveryStore(db),
-    attendance: AttendanceStore(db),
+    attendance: attendance,
     reservations: reservations,
     assignments: assignments,
     lan: lan,
+    dishflow: dishflow,
     // The Z report by mail. Reads the settings on every attempt, so a password
     // corrected mid-evening is used by the next retry without a restart.
     emailer: EmailService(

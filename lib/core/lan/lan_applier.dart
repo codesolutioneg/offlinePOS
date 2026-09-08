@@ -1,7 +1,9 @@
 import '../../domain/order.dart';
+import '../db/attendance_store.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
+import '../db/shift_store.dart';
 import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
 import 'lan_cart_board.dart';
@@ -36,12 +38,16 @@ class LanApplier {
     required ReservationStore reservations,
     required TableAssignmentStore assignments,
     required LanEventLog log,
+    AttendanceStore? attendance,
+    ShiftStore? shifts,
     LanLog? onRefused,
   })  : _orders = orders,
         _tables = tables,
         _settings = settings,
         _reservations = reservations,
         _assignments = assignments,
+        _attendance = attendance,
+        _shifts = shifts,
         _log = log,
         _onRefused = onRefused;
 
@@ -53,6 +59,8 @@ class LanApplier {
   final SettingsStore _settings;
   final ReservationStore _reservations;
   final TableAssignmentStore _assignments;
+  final AttendanceStore? _attendance;
+  final ShiftStore? _shifts;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -162,7 +170,9 @@ class LanApplier {
         LanEventKind.reservationUpsert => _applyReservation(event),
         LanEventKind.tableAssignment => _applyAssignment(event),
         LanEventKind.tablePreorders => _applyPreorders(event),
+        LanEventKind.sectionConfig => _applySectionConfig(event),
         LanEventKind.shiftLifecycle => _applyShiftNotice(event),
+        LanEventKind.attendanceUpsert => _applyAttendance(event),
         LanEventKind.cartDisplay => _applyCart(event),
       };
       if (!written) return _Landing.refused;
@@ -243,10 +253,18 @@ class LanApplier {
   }
 
   /// A till telling the shop its day is over. Written to the board the floor reads,
-  /// never acted on here: what a device does about it is a policy the device owns,
-  /// and applying an event must not be able to stop anybody selling.
+  /// and the open drawer on this till is closed quietly so a peer cash-up is not
+  /// left hanging as "shift open from an earlier day".
   bool _applyShiftNotice(LanEvent event) {
     LanShiftBoard(_settings).remember(LanShiftNotice.fromMap(event.payload));
+    _shifts?.closeOpenQuietly();
+    return true;
+  }
+
+  bool _applyAttendance(LanEvent event) {
+    final store = _attendance;
+    if (store == null) return false;
+    store.applyRemote(event.payload);
     return true;
   }
 
@@ -282,6 +300,11 @@ class LanApplier {
   /// on a counter.
   bool _applyPreorders(LanEvent event) {
     _settings.applyPreorders(event.payload);
+    return true;
+  }
+
+  bool _applySectionConfig(LanEvent event) {
+    _settings.applySectionConfig(event.payload);
     return true;
   }
 

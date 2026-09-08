@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,6 +11,7 @@ import '../../core/lan/lan_credential.dart';
 import '../../core/lan/lan_peer.dart';
 import '../../core/lan/lan_shift_board.dart';
 import '../../core/lan/lan_wiring.dart';
+import '../../domain/table_section_config.dart';
 
 /// What a device with no fabric has to report: nothing. A real answer rather than a
 /// missing one, so the screen reads the same on a one-till shop as on a till whose
@@ -37,6 +40,7 @@ class LanSettingsScreen extends StatefulWidget {
     this.buildDefault = false,
     this.facts,
     this.onSyncNow,
+    this.onJoinPrimary,
     this.nowFn = DateTime.now,
   });
 
@@ -58,6 +62,14 @@ class LanSettingsScreen extends StatefulWidget {
 
   /// Runs one catch-up pass now. Null when the fabric is not running.
   final Future<void> Function()? onSyncNow;
+
+  /// Secondary presents a PIN to [peer] (the primary). Returns an error message
+  /// or null on success. [onProgress] reports first-join sync steps (0..1).
+  final Future<String?> Function(
+    LanPeer peer,
+    String pin, {
+    void Function(String step, double progress)? onProgress,
+  })? onJoinPrimary;
 
   final DateTime Function() nowFn;
 
@@ -157,15 +169,365 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
         .showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
   }
 
+  void _setRole(DeviceRole role) {
+    widget.settings.deviceRole = role;
+    if (role == DeviceRole.primary) {
+      if (!(widget.settings.lanEnabled(fallback: widget.buildDefault))) {
+        _setEnabled(true);
+      }
+      if ((widget.settings.lanShopKey ?? '').isEmpty) {
+        final made = LanCredential.newKey();
+        widget.settings.lanShopKey = made;
+        _shopKey.text = made;
+      }
+      widget.settings.lanRolePromptDismissed = true;
+    } else if (role == DeviceRole.secondary) {
+      widget.settings.lanRolePromptDismissed = true;
+    }
+    widget.onChanged();
+    setState(() {});
+  }
+
+  Future<void> _clearPairing() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('lan-unlink-confirm'),
+        title: Text(tr(ctx, 'Unlink this till?')),
+        content: Text(tr(
+            ctx,
+            'Clears the shop key and Primary/Secondary role so you can join '
+                'again with a new PIN, or become the primary. Menu and staff '
+                'stay until the next join replaces them.')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+          FilledButton(
+            key: const Key('lan-unlink-confirm-yes'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Unlink')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    widget.settings.clearLanPairing();
+    // Drop any key that was only sitting in the text field — settings no longer
+    // hold one, and Share must not invent a replacement until Primary / Join.
+    _shopKey.text = '';
+    widget.onChanged();
+    setState(() {
+      _shopKey.text = widget.settings.lanShopKey ?? '';
+    });
+    if (!mounted) return;
+    final stillHeld = (widget.settings.lanShopKey ?? '').isNotEmpty ||
+        widget.settings.deviceRole != DeviceRole.unset;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(stillHeld
+          ? tr(context, 'Could not clear pairing. Try again.')
+          : tr(
+              context,
+              'Unlinked. Pick Primary, or Secondary and Join with a new PIN. '
+                  'Restart if Share was already on.')),
+    ));
+  }
+
+  Future<void> _issueJoinPin() async {
+    final pin = widget.settings.issueJoinPin();
+    if (pin == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr(context, 'Only the primary till can mint join PINs.'))));
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Join PIN')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(tr(ctx,
+                'Give this one-time code to the secondary till. It expires in 12 hours.')),
+            const SizedBox(height: 16),
+            SelectableText(
+              pin,
+              key: const Key('lan-issued-pin'),
+              style: Theme.of(ctx).textTheme.headlineMedium,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: pin));
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: Text(tr(ctx, 'Copy')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr(ctx, 'Done')),
+          ),
+        ],
+      ),
+    );
+    setState(() {});
+  }
+
+  Future<void> _joinSelected(LanPeer peer) async {
+    final join = widget.onJoinPrimary;
+    if (join == null) return;
+    final ctrl = TextEditingController();
+    final pin = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Join primary')),
+        content: TextField(
+          key: const Key('lan-join-pin-field'),
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: tr(ctx, 'Join PIN'),
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('lan-join-confirm'),
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: Text(tr(ctx, 'Join')),
+          ),
+        ],
+      ),
+    );
+    if (pin == null || pin.isEmpty || !mounted) return;
+
+    // StatefulBuilder owns progress UI — no ValueNotifier dispose/removeListener
+    // race (that race shows as "Null check operator used on a null value").
+    var cancelled = false;
+    var dialogAlive = true;
+    var stepLabel = tr(context, 'Connecting to primary...');
+    var fraction = 0.02;
+    void Function(void Function())? setProgress;
+
+    final dialogClosed = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: StatefulBuilder(
+          builder: (ctx, setLocal) {
+            setProgress = setLocal;
+            return AlertDialog(
+              key: const Key('lan-join-progress'),
+              title: Text(tr(ctx, 'Syncing from primary')),
+              content: SizedBox(
+                width: 360,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(stepLabel, key: const Key('lan-join-progress-step')),
+                    const SizedBox(height: 16),
+                    LinearProgressIndicator(
+                      value:
+                          fraction <= 0 ? null : fraction.clamp(0.0, 1.0),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      fraction <= 0
+                          ? tr(ctx, 'Working...')
+                          : '${(fraction * 100).clamp(0, 100).round()}%',
+                      textAlign: TextAlign.end,
+                      style: Theme.of(ctx).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  key: const Key('lan-join-progress-cancel'),
+                  onPressed: () {
+                    cancelled = true;
+                    Navigator.of(ctx).pop();
+                  },
+                  child: Text(tr(ctx, 'Cancel')),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    ).whenComplete(() => dialogAlive = false);
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted || cancelled) {
+      if (mounted && !cancelled) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      await dialogClosed;
+      return;
+    }
+
+    String? err;
+    try {
+      err = await join(
+        peer,
+        pin,
+            onProgress: (label, nextFraction) {
+          if (cancelled || !dialogAlive) return;
+          try {
+            setProgress?.call(() {
+              stepLabel = label;
+              fraction = nextFraction;
+            });
+          } catch (_) {}
+        },
+      );
+    } catch (e) {
+      err = e.toString();
+    }
+    if (mounted && !cancelled) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+    await dialogClosed;
+    if (!mounted || cancelled) return;
+    final unreachable = err != null &&
+        (err.contains('TimeoutException') ||
+            err.contains('SocketException') ||
+            err.contains('Connection timed out') ||
+            err.contains('Failed host lookup'));
+    // First line only — runStep prefixes the failing stage; stack stays in logs.
+    final errLine = err?.split('\n').first.trim();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(err == null
+          ? tr(context, 'Joined. This till now shares the primary shop key.')
+          : unreachable
+              ? tr(
+                  context,
+                  'Could not reach the primary. Check both devices are on '
+                      'the same Wi‑Fi, Share is On, and try Join again.',
+                )
+              : (errLine ?? err)),
+      duration: Duration(seconds: err == null ? 4 : 10),
+    ));
+    if (err == null) {
+      setState(() => _shopKey.text = widget.settings.lanShopKey ?? '');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final facts = widget.facts?.call() ?? _noFabric;
     final peers = facts.peers;
+    final role = widget.settings.deviceRole;
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Shop network'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Text(tr(context, 'This till\'s role'),
+              style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text(
+            tr(
+                context,
+                'Primary owns join PINs and section settings. Secondary joins '
+                    'with a PIN from the primary.'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<DeviceRole>(
+            key: const Key('lan-device-role'),
+            segments: [
+              ButtonSegment(
+                  value: DeviceRole.primary,
+                  label: Text(tr(context, 'Primary'))),
+              ButtonSegment(
+                  value: DeviceRole.secondary,
+                  label: Text(tr(context, 'Secondary'))),
+            ],
+            emptySelectionAllowed: true,
+            selected: {
+              if (role == DeviceRole.primary || role == DeviceRole.secondary)
+                role,
+            },
+            onSelectionChanged: (s) {
+              if (s.isEmpty) {
+                _setRole(DeviceRole.unset);
+              } else {
+                _setRole(s.first);
+              }
+            },
+          ),
+          if (role == DeviceRole.primary) ...[
+            const SizedBox(height: 12),
+            _fact(tr(context, 'Primary device id'), widget.deviceId,
+                keyValue: 'lan-primary-id'),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: FilledButton.icon(
+                key: const Key('lan-issue-join-pin'),
+                onPressed: _issueJoinPin,
+                icon: const Icon(Icons.pin),
+                label: Text(tr(context, 'Generate join PIN')),
+              ),
+            ),
+            Text(
+              '${tr(context, 'Unused join PINs')}: ${widget.settings.joinPinBankCount}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          if (role == DeviceRole.secondary &&
+              widget.onJoinPrimary != null &&
+              peers.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(tr(context, 'Join a primary on this network'),
+                style: Theme.of(context).textTheme.titleSmall),
+            for (final peer in peers)
+              ListTile(
+                key: Key('lan-join-peer-${peer.deviceId}'),
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.link),
+                title: Text(peer.name),
+                subtitle: Text(peer.deviceId),
+                trailing: OutlinedButton(
+                  onPressed: () => _joinSelected(peer),
+                  child: Text(tr(context, 'Join')),
+                ),
+              ),
+          ],
+          if (role == DeviceRole.secondary &&
+              widget.onJoinPrimary != null &&
+              peers.isEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              tr(
+                  context,
+                  'Waiting for the primary on this Wi‑Fi… Keep Share On on both '
+                      'devices, then Join when it appears.'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          if (role == DeviceRole.primary || role == DeviceRole.secondary) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: OutlinedButton.icon(
+                key: const Key('lan-unlink'),
+                onPressed: _clearPairing,
+                icon: const Icon(Icons.link_off),
+                label: Text(tr(context, 'Unlink / join again')),
+              ),
+            ),
+          ],
+          const Divider(height: 24),
           SwitchListTile(
             key: const Key('lan-enabled'),
             contentPadding: EdgeInsets.zero,
@@ -370,6 +732,14 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
                     ' / ${Schema.version}'),
               ),
           ],
+          const SizedBox(height: 24),
+          Text(
+            'LAN build 2026-09-08f',
+            key: const Key('lan-build-stamp'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.outline,
+                ),
+          ),
         ],
       ),
     );

@@ -57,11 +57,19 @@ enum LanEventKind {
   /// find out from a customer.
   tablePreorders('table.preorders'),
 
+  /// Per-section category / payment / staff rules. Authored by the primary till;
+  /// secondaries apply and do not invent conflicting writes.
+  sectionConfig('settings.section_config'),
+
   /// A till saying its trading day is over. Carried so the other devices can be
   /// told rather than each closing whenever somebody remembers, and deliberately
   /// only ever advisory: a device that hears nothing sells exactly as it always
   /// did, because a shop must not stop trading when a switch dies.
   shiftLifecycle('shift.lifecycle'),
+
+  /// Staff clock-in / clock-out. Shared so the floor strip and attendance board
+  /// agree across tills: who is on duty is a shop fact, not a per-device one.
+  attendanceUpsert('attendance.upsert'),
 
   /// What one till has on its counter right now, for a customer-facing display.
   ///

@@ -59,6 +59,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
     // Seating here is about what the floor remembers across a trip to the counter,
     // not about the covers, so the guest prompt is off: on by default it would sit in
     // front of every seating below.

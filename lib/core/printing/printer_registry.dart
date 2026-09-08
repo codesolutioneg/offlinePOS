@@ -77,7 +77,7 @@ class ConfiguredPrinter {
     return ConfiguredPrinter(
       name: name,
       host: map['host'] is String ? map['host'] as String : null,
-      port: map['port'] is int ? map['port'] as int : 9100,
+      port: map['port'] is num ? (map['port'] as num).toInt() : 9100,
       identity: map['identity'] is String ? map['identity'] as String : null,
       lastSeenAt: seen is String ? DateTime.tryParse(seen) : null,
       backup: map['backup'] is String && (map['backup'] as String).isNotEmpty
@@ -282,6 +282,22 @@ class PrinterRegistry {
   Map<String, Object?> toMap() => {
         'printers': [for (final printer in _printers.values) printer.toMap()],
       };
+
+  /// Replace this till's printers with a primary's snapshot (same LAN shop).
+  void applyFromMap(Map<String, Object?> saved) {
+    _printers.clear();
+    _sweepFailedAt.clear();
+    _identityAsked.clear();
+    final rows = saved['printers'];
+    if (rows is Iterable) {
+      for (final row in rows) {
+        if (row is! Map) continue;
+        final printer = ConfiguredPrinter.fromMap(row.cast<String, Object?>());
+        if (printer != null) _printers[printer.name] = printer;
+      }
+    }
+    onChanged?.call();
+  }
 
   Future<String?> _locate(String name, {required bool tryLastKnown}) async {
     final printer = _printers[name];

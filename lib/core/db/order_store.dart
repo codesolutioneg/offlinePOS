@@ -101,13 +101,16 @@ class OrderStore {
 
   /// Whether this order is shared state.
   ///
-  /// A draft is not: it is being rung right now on the till in front of the
-  /// cashier, it changes on every tap, and no other device has any use for it.
-  /// Anything committed (held, paid, synced) is what a second till and a kitchen
-  /// screen need. Only the till that created the order ever announces it.
-  bool _isShared(Order order) =>
-      order.state != OrderState.draft &&
-      (ownDeviceId == null || order.deviceId == ownDeviceId);
+  /// Plain drafts (no table) stay local: they change on every tap and no other
+  /// device needs them. A draft seated on a table is shared so the floor on every
+  /// till colours that table busy the moment it is opened, not only after Hold.
+  /// Held / paid / synced always share. Only the owning till announces.
+  bool _isShared(Order order) {
+    if (ownDeviceId != null && order.deviceId != ownDeviceId) return false;
+    if (order.state != OrderState.draft) return true;
+    final table = order.tableLabel;
+    return table != null && table.isNotEmpty;
+  }
 
   /// The single writer for a row, optionally with its fabric event in the same
   /// transaction so an event cannot describe a record that was never committed.
@@ -183,11 +186,29 @@ class OrderStore {
   /// here, which is the whole reason the fabric exists.
   List<Order> heldAnywhere() => _query("state = 'held'");
 
-  /// Parked orders belonging to another till. Empty on a single-till shop and with
-  /// the fabric off.
+  /// Every order that occupies a table in the shop: parked tabs plus live drafts
+  /// that already have a table label (including ones replicated from peers).
+  /// Filtered in memory because older schemas keep the label only inside payload.
+  List<Order> occupyingAnywhere() => [
+        ...heldAnywhere(),
+        ..._query("state = 'draft'").where(
+          (o) => o.tableLabel != null && o.tableLabel!.isNotEmpty,
+        ),
+      ];
+
+  /// Parked or seated-draft orders belonging to another till. Empty on a
+  /// single-till shop and with the fabric off.
   List<Order> heldElsewhere() => ownDeviceId == null
       ? const []
       : _query("state = 'held' AND device_id <> ?", [ownDeviceId]);
+
+  /// Every order that occupies a table elsewhere: parked tabs and live drafts
+  /// with a table label on another till.
+  List<Order> occupyingElsewhere() => ownDeviceId == null
+      ? const []
+      : occupyingAnywhere()
+          .where((o) => o.deviceId != ownDeviceId)
+          .toList();
 
   /// Paid but not yet confirmed by the server.
   ///
@@ -199,7 +220,7 @@ class OrderStore {
   /// Completed sales, newest first, for the history / reprint browser and the
   /// reports. Includes both paid-not-yet-synced and synced, so a sale shows up the
   /// instant it is taken, not only after the server confirms. This till's own: a
-  /// second till's takings are not this till's to report on.
+  /// second till's takings are not this till's to report on or book twice.
   List<Order> recent({int limit = 50}) {
     final own = ownDeviceId;
     return _db.raw
@@ -212,6 +233,19 @@ class OrderStore {
             Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
         .toList();
   }
+
+  /// Every paid/synced sale in the shop, including ones rung on another till and
+  /// replicated here. For the history browser so a cashier can find a receipt
+  /// from any counter. Never feed this into the outbox or cash-up: those stay on
+  /// [recent] / [awaitingSync].
+  List<Order> recentAnywhere({int limit = 50}) => _db.raw
+      .select(
+          "SELECT payload FROM orders WHERE state IN ('paid','synced') "
+          'ORDER BY created_at DESC LIMIT ?',
+          [limit])
+      .map((r) =>
+          Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
+      .toList();
 
   /// [_query] restricted to orders this till rang.
   List<Order> _mine(String where) => ownDeviceId == null
@@ -305,25 +339,29 @@ class OrderStore {
 
   // ── a tab changing hands ─────────────────────────────────────────
 
-  /// Give a parked tab to another till, and say what was handed over.
+  /// Give a parked (or seated draft) tab to another till, and say what was handed
+  /// over.
   ///
-  /// Null is a refusal, and the refusals are the whole point of the method. Only a
-  /// HELD order can move: a draft is being rung by a cashier standing at a counter,
-  /// and a paid one is money this till is going to book. Only the till that owns it
-  /// can give it away, so two devices cannot both hand out the same tab, and the
-  /// giving up and the announcing happen in one transaction, so there is no instant
-  /// where nobody owns it or both do.
-  ///
-  /// The order is rebuilt rather than edited because its device is what identifies
-  /// the till that will settle it: making that field writable would let anything
-  /// anywhere quietly reassign a sale.
+  /// Null is a refusal, and the refusals are the whole point of the method. A
+  /// HELD order can move, and so can a DRAFT that already has a table — seating
+  /// shares occupancy before Hold, and the opener must still be able to settle
+  /// it from another till. A paid one is money this till is going to book. Only
+  /// the till that owns it can give it away.
   Order? handOver(String uuid, String toDeviceId) {
     final order = byUuid(uuid);
     if (order == null) return null;
-    if (order.state != OrderState.held) return null;
+    final seatedDraft = order.state == OrderState.draft &&
+        order.tableLabel != null &&
+        order.tableLabel!.isNotEmpty;
+    if (order.state != OrderState.held && !seatedDraft) return null;
     if (order.deviceId == toDeviceId) return order;
     if (ownDeviceId != null && order.deviceId != ownDeviceId) return null;
-    final moved = _withDevice(order, toDeviceId);
+    final moved = _withDevice(
+      seatedDraft
+          ? (Order.fromMap({...order.toMap(), 'state': OrderState.held.name}))
+          : order,
+      toDeviceId,
+    );
     final publish = _publish;
     _write(
       moved,

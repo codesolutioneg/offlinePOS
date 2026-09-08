@@ -105,6 +105,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
     shifts = ShiftStore(db);
     audit = AuditLog(db);
     TableStore(db)
@@ -134,6 +135,9 @@ void main() {
         orders: orders,
         tables: TableStore(db),
         settings: settings,
+        users: UserStore(db),
+        printers: PrinterRegistry(discovery: _NoPrinters()),
+        endpoints: OdooEndpointStore(db),
         reservations: ReservationStore(db),
         assignments: TableAssignmentStore(db),
         audit: audit,

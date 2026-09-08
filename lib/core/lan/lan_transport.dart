@@ -45,6 +45,12 @@ class LanReply {
 /// The two-request protocol a till serves to its peers: pull to catch up, notify to
 /// keep up. Plain JSON over plain HTTP on the shop LAN.
 ///
+/// Answer a secondary's join PIN. Returns null to refuse with a generic error.
+typedef LanJoinHandler = Map<String, dynamic>? Function({
+  required String pin,
+  required String peerDeviceId,
+});
+
 /// Nothing here reaches a selling path. A request is handled on the event loop
 /// between taps, and every failure is a status code plus a log line.
 class LanProtocol {
@@ -54,6 +60,7 @@ class LanProtocol {
     required LanApplier applier,
     required LanCredential credential,
     LanClaimDesk? claims,
+    this.onJoin,
     this.pageSize = 200,
     LanLog? onRefused,
   })  : _log = log,
@@ -76,6 +83,12 @@ class LanProtocol {
   /// keeps its tab.
   static const String claimPath = '/lan/claim';
 
+  /// A secondary till presenting a one-time join PIN to receive the shop key.
+  ///
+  /// Unauthenticated by design: the PIN is the admission proof before the peer
+  /// holds the shop key. Only the primary answers.
+  static const String joinPath = '/lan/join';
+
   final String deviceId;
   final LanEventLog _log;
   final LanApplier _applier;
@@ -83,6 +96,10 @@ class LanProtocol {
 
   /// Null on a device that hands nothing over (a kitchen screen owns no tabs).
   final LanClaimDesk? _claims;
+
+  /// Null when this till cannot admit secondaries (not primary / no PIN bank).
+  final LanJoinHandler? onJoin;
+
   final int pageSize;
   final LanLog? _onRefused;
 
@@ -113,6 +130,7 @@ class LanProtocol {
   }
 
   LanReply handlePost(String path, String body, {String? auth}) {
+    if (path == joinPath) return _handleJoin(body);
     if (path != notifyPath && path != claimPath) {
       return const LanReply(404, {'error': 'unknown path'});
     }
@@ -158,6 +176,41 @@ class LanProtocol {
     return LanReply(200, {'applied': applied});
   }
 
+  /// Admit a secondary with a one-time PIN; no shop-key stamp required.
+  LanReply _handleJoin(String body) {
+    final gate = onJoin;
+    if (gate == null) {
+      return const LanReply(409, {'error': 'this device does not admit peers'});
+    }
+    Map<String, dynamic> decoded;
+    try {
+      decoded = (jsonDecode(body) as Map).cast<String, dynamic>();
+    } catch (e) {
+      return const LanReply(400, {'error': 'unreadable body'});
+    }
+    final peer = decoded['device_id'];
+    final pin = decoded['pin'];
+    if (peer is! String || peer.isEmpty) {
+      return const LanReply(400, {'error': 'no device_id'});
+    }
+    if (pin is! String || pin.trim().isEmpty) {
+      return const LanReply(400, {'error': 'no pin'});
+    }
+    final refusal = _schemaRefusal(
+        decoded['schema'] is int ? decoded['schema'] as int : null, peer);
+    if (refusal != null) return refusal;
+    final payload = gate(pin: pin.trim(), peerDeviceId: peer);
+    if (payload == null) {
+      _onRefused?.call('lan.join.refused', '$peer presented a bad join PIN');
+      return const LanReply(403, {'error': 'bad pin'});
+    }
+    return LanReply(200, {
+      'device_id': deviceId,
+      'schema': Schema.version,
+      ...payload,
+    });
+  }
+
   /// Hand a parked tab to the peer asking for it, or say no and why.
   ///
   /// A refusal is 409 rather than an error: the peer asked a reasonable question
@@ -174,8 +227,13 @@ class LanProtocol {
       return const LanReply(400, {'error': 'no order_uuid'});
     }
     final cashier = decoded['cashier'];
-    final result =
-        desk.grant(uuid, peer, cashier: cashier is String ? cashier : null);
+    final asManager = decoded['as_manager'] == true;
+    final result = desk.grant(
+      uuid,
+      peer,
+      cashier: cashier is String ? cashier : null,
+      asManager: asManager,
+    );
     final order = result.order;
     if (order == null) {
       return LanReply(409, {'error': result.detail ?? 'refused'});
@@ -401,12 +459,14 @@ class LanHttpClient {
     required String orderUuid,
     required String deviceId,
     String? cashier,
+    bool asManager = false,
   }) async {
     final body = jsonEncode({
       'device_id': deviceId,
       'schema': Schema.version,
       'order_uuid': orderUuid,
       'cashier': ?cashier,
+      'as_manager': asManager,
     });
     final String text;
     try {
@@ -430,15 +490,49 @@ class LanHttpClient {
     return order.cast<String, dynamic>();
   }
 
-  Future<String> _send(String method, Uri url, String? body, String stamp) async {
-    final request = await _client.openUrl(method, url).timeout(timeout);
-    request.headers.set(LanCredential.header, stamp);
+  /// Present a join PIN to [peer] (the primary). No shop-key stamp — the PIN is
+  /// the admission proof. Returns the payload (shop_key, section_configs, …).
+  ///
+  /// Uses a longer timeout than ordinary peer chatter: the first-join snapshot
+  /// carries the menu and open tabs, which can be megabytes on a busy shop.
+  Future<Map<String, dynamic>> join(
+    LanPeer peer, {
+    required String pin,
+    required String deviceId,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'pin': pin,
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.joinPath),
+      body,
+      null,
+      timeout: const Duration(seconds: 60),
+    );
+    return (jsonDecode(text) as Map).cast<String, dynamic>();
+  }
+
+  Future<String> _send(
+    String method,
+    Uri url,
+    String? body,
+    String? stamp, {
+    Duration? timeout,
+  }) async {
+    final limit = timeout ?? this.timeout;
+    final request = await _client.openUrl(method, url).timeout(limit);
+    if (stamp != null) {
+      request.headers.set(LanCredential.header, stamp);
+    }
     if (body != null) {
       request.headers.contentType = ContentType.json;
       request.write(body);
     }
-    final response = await request.close().timeout(timeout);
-    final text = await utf8.decoder.bind(response).join().timeout(timeout);
+    final response = await request.close().timeout(limit);
+    final text = await utf8.decoder.bind(response).join().timeout(limit);
     if (response.statusCode != 200) {
       throw HttpException('${response.statusCode} from $url: $text');
     }

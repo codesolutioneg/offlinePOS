@@ -44,6 +44,7 @@ const Map<String, String> _ar = {
   'Save': 'حفظ',
   'Add': 'إضافة',
   'OK': 'موافق',
+  'Back': 'رجوع',
   'Set': 'تعيين',
   'Apply': 'تطبيق',
   'Confirm': 'تأكيد',
@@ -78,6 +79,7 @@ const Map<String, String> _ar = {
   'New order': 'طلب جديد',
   'Open orders': 'الطلبات المفتوحة',
   'Note': 'ملاحظة',
+  'Add note...': 'أضف ملاحظة...',
   'Note added': 'تمت إضافة ملاحظة',
   'Order note': 'ملاحظة الطلب',
   'Guests': 'الضيوف',
@@ -101,6 +103,9 @@ const Map<String, String> _ar = {
   'Settings': 'الإعدادات',
   'Support & printers': 'الدعم والطابعات',
   'Order history': 'سجل الطلبات',
+  'Other till': 'جهاز آخر',
+  'Completed sales will show up here':
+      'المبيعات المكتملة تظهر هنا — بما فيها من الأجهزة الأخرى على الشبكة',
   // tables
   'Kitchen': 'المطبخ',
   'No open tables': 'لا توجد طاولات مفتوحة',
@@ -142,6 +147,9 @@ const Map<String, String> _ar = {
   'Name / number': 'الاسم / الرقم',
   // the shop network
   'Shop network': 'شبكة المتجر',
+  'Join hit a sync bug. Close the app fully, open the '
+          'newest build, Unlink, then Join again.':
+      'فشل الربط بسبب خطأ مزامنة. اقفل التطبيق بالكامل، افتح أحدث نسخة، Unlink، ثم Join من جديد.',
   'Share open tabs, tickets and the floor plan':
       'مشاركة الطلبات المفتوحة وطلبات المطبخ ومخطط الصالة',
   'Share with the other devices': 'المشاركة مع الأجهزة الأخرى',
@@ -370,12 +378,24 @@ const Map<String, String> _ar = {
   'Print the whole ticket again?': 'طباعة التذكرة كاملة من جديد؟',
   // attendance
   'Attendance': 'الحضور',
+  'Manage': 'إدارة',
+  'Nobody clocked in — roster will be offered':
+      'لا أحد مسجّل حضور — سيُعرض الطاقم كاملًا',
+  'Confirm with PIN': 'تأكيد بالرمز السري',
+  "Enter this person's PIN, or a manager PIN.":
+      'أدخل رمز هذا الشخص، أو رمز المدير.',
+  "Enter this person's PIN": 'أدخل رمز هذا الشخص',
+  'Clock in from Attendance before opening a table':
+      'سجّل الحضور من Attendance قبل فتح طاولة',
+  'Who is opening this table?': 'من يفتح هذه الطاولة؟',
   'No staff yet': 'لا يوجد موظفون بعد',
   'on the clock': 'على رأس العمل',
   'Since': 'منذ',
   'Off the clock': 'خارج الدوام',
   'Clock in': 'تسجيل حضور',
   'Clock out': 'تسجيل انصراف',
+  'Enter PIN to clock in': 'أدخل الرمز السري لتسجيل الحضور',
+  'Enter PIN to clock out': 'أدخل الرمز السري لتسجيل الانصراف',
   // status colours / dine-in visuals
   'Sent': 'أُرسل',
   'All sent': 'تم إرسال الكل',
@@ -478,7 +498,6 @@ const Map<String, String> _ar = {
   'Tap a product to add it to the order': 'اضغط على منتج لإضافته للطلب',
   'Try a different search or category': 'جرّب بحثاً أو قسماً آخر',
   'Orders sent to the kitchen will show up here': 'ستظهر الطلبات المُرسلة للمطبخ هنا',
-  'Completed sales will show up here': 'ستظهر المبيعات المكتملة هنا',
   'Cashier totals will show up once orders come in':
       'ستظهر إجماليات الكاشير عند ورود الطلبات',
   'No categories yet': 'لا توجد أقسام بعد',
@@ -500,6 +519,22 @@ const Map<String, String> _ar = {
   'People & customers': 'الموظفون والعملاء',
   'Server': 'الخادم',
   'Language': 'اللغة',
+  'Dishflow owner mirror': 'مرآة الأونر في ديش فلو',
+  'Show paid sales in owner Flash when online':
+      'عرض المبيعات المدفوعة في فلاش الأونر عند توفر النت',
+  'Mirror paid sales to Dishflow': 'رفع المبيعات المدفوعة إلى ديش فلو',
+  'When online, paid orders appear in owner Flash and reports. Selling never waits on the network.':
+      'عند توفر النت تظهر الطلبات المدفوعة في فلاش وتقارير الأونر. البيع لا ينتظر الشبكة.',
+  'Firebase project id': 'معرّف مشروع Firebase',
+  'Firebase web API key': 'مفتاح Firebase للويب',
+  'Odoo connection id': 'معرّف اتصال أودو',
+  'Must match the branch connection id Dishflow reports filter on.':
+      'لازم يطابق معرّف اتصال الفرع اللي تقارير ديش فلو بتفلتر عليه.',
+  'Branch id (optional)': 'معرّف الفرع (اختياري)',
+  'Branch name (optional)': 'اسم الفرع (اختياري)',
+  'Testing…': 'جاري الاختبار…',
+  'Connected. A ping was written to diagnostics.':
+      'تم الاتصال. اتكتب ping في diagnostics.',
   // customers CRUD
   'Add customer': 'إضافة عميل',
   'No customers': 'لا يوجد عملاء',
@@ -580,7 +615,9 @@ const Map<String, String> _ar = {
   'Paid': 'المدفوع',
   'balance': 'المتبقي',
   'Search your name': 'ابحث عن اسمك',
+  'Select user': 'اختر المستخدم',
   'Tap your name, then enter your PIN': 'اضغط على اسمك ثم أدخل الرقم السري',
+  'Select your name, then enter your PIN': 'اختر اسمك ثم أدخل الرقم السري',
   'Signing in as': 'تسجيل الدخول باسم',
   ", then enrol the real roster. This code is new on every launch and stops appearing once staff are enrolled.": "، ثم سجّل الطاقم الحقيقي. هذا الرمز جديد عند كل تشغيل ويختفي بمجرد تسجيل الموظفين.",
   "4 to 6 digits": "من 4 إلى 6 أرقام",
@@ -673,6 +710,8 @@ const Map<String, String> _ar = {
   "These never reached the server. Fix the cause, then retry.": "هذه لم تصل إلى الخادم. عالج السبب ثم أعد المحاولة.",
   "This ends the shift and syncs the day's sales. It cannot be undone.": "هذا ينهي الوردية ويزامن مبيعات اليوم. لا يمكن التراجع عنه.",
   "This till has no staff yet. Sign in as Setup with PIN": "لا يوجد طاقم على هذا الكاشير بعد. سجّل الدخول كـ Setup بالرمز",
+  "Then open Settings → Staff to add employees, set each role and PIN. Settings → Roles & permissions controls what each role may do.":
+      "بعدها افتح الإعدادات ← الموظفون لإضافة الموظفين وتحديد الدور والرمز السري لكل واحد. الإعدادات ← الأدوار والصلاحيات تتحكم بما يستطيع كل دور فعله.",
   "This till needs attention": "هذا الكاشير يحتاج إلى انتباه",
   "Too many attempts. Try again in": "محاولات كثيرة. أعد المحاولة بعد",
   "Total discount given": "إجمالي الخصم الممنوح",
@@ -927,6 +966,9 @@ const Map<String, String> _ar = {
   'Add your staff': 'أضف الموظفين',
   'Everyone who rings a sale needs their own PIN.':
       'كل من يسجّل بيعًا يحتاج رمزًا خاصًا به.',
+  'Settings → Staff: create each employee, pick their role, set their PIN.':
+      'الإعدادات ← الموظفون: أنشئ كل موظف، اختر دوره، وعيّن الرمز السري.',
+  'Add employees, set role and PIN': 'إضافة موظفين وتحديد الدور والرمز السري',
   'This till is ready to sell': 'هذا الجهاز جاهز للبيع',
   'Everything is stored on the device. You can ring a sale right now, with or without a connection.':
       'كل شيء محفوظ على الجهاز. يمكنك تسجيل بيع الآن، باتصال أو بدونه.',

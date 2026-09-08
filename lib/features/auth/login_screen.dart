@@ -4,6 +4,7 @@ import '../../core/auth/auth_service.dart';
 import '../../core/auth/user_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/theme/dishflow_brand.dart';
 
 /// PIN sign-in.
 ///
@@ -11,9 +12,9 @@ import '../../core/theme/app_colors.dart';
 /// without a line. There is no probe of a remote service that can hang, which is the
 /// failure mode that leaves a cashier staring at a spinner with no way in.
 ///
-/// Laid out as a till lock screen: who is signing in as one row of face tiles, the
-/// PIN as a row of dots, and a pad big enough to hit at speed. A shift change is a
-/// two-tap, one-glance affair, because it happens with a queue watching.
+/// Laid out as a till lock screen: who is signing in as a dropdown, the PIN as a
+/// row of dots, and a pad big enough to hit at speed. A shift change is a quick
+/// pick-and-PIN, because it happens with a queue watching.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
     super.key,
@@ -21,11 +22,16 @@ class LoginScreen extends StatefulWidget {
     required this.users,
     required this.onSignedIn,
     this.provisioningPin,
+    this.managersOnly = true,
   });
 
   final AuthService auth;
   final UserStore users;
   final void Function(Cashier) onSignedIn;
+
+  /// When true (product default), only managers unlock the till. Cashiers appear
+  /// after Attendance → Clock in and open tables with their own PIN.
+  final bool managersOnly;
 
   /// The one-time PIN for the setup account, when this till has no real roster
   /// yet. Shown here because there is nowhere else to show it and no shipped
@@ -83,7 +89,11 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final staff = widget.users.active();
+    final active = widget.users.active();
+    final managers = active.where((u) => u.isManager).toList();
+    // Managers unlock the till. Until a manager exists, everyone can (setup).
+    final staff = widget.managersOnly && managers.isNotEmpty ? managers : active;
+    final pin = widget.provisioningPin;
     return Scaffold(
       // A quiet wash of the brand colour behind the card, so the lock screen is
       // recognisably the till from across the counter without shouting.
@@ -99,46 +109,61 @@ class _LoginScreenState extends State<LoginScreen> {
             ],
           ),
         ),
-        child: Center(
-          child: SingleChildScrollView(
+        // LayoutBuilder + minHeight keeps the form centred on tall screens and
+        // scrollable from the top on short ones — so the Setup PIN never sits
+        // clipped above the fold (Center alone was hiding it on small laptops).
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+              constraints: BoxConstraints(minHeight: constraints.maxHeight - 48),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 460),
                   child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _brand(context),
-                      const SizedBox(height: 16),
-                      if (widget.provisioningPin != null) ...[
-                        _provisioningCard(context),
-                        const SizedBox(height: 8),
+                      if (pin != null) ...[
+                        _provisioningCard(context, pin),
+                        const SizedBox(height: 16),
                       ],
-                      if (staff.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(tr(context, 'No cashiers on this device yet'),
-                              key: const Key('no-users')),
-                        )
-                      else ...[
-                        _accountSelector(staff),
-                        const SizedBox(height: 12),
-                        _pinDots(context),
-                        if (_message != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(_message!,
-                                key: const Key('login-message'),
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: scheme.error,
-                                    fontWeight: FontWeight.w600)),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _brand(context),
+                              const SizedBox(height: 16),
+                              if (staff.isEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Text(
+                                      tr(context, 'No cashiers on this device yet'),
+                                      key: const Key('no-users')),
+                                )
+                              else ...[
+                                _accountSelector(staff),
+                                const SizedBox(height: 12),
+                                _pinDots(context),
+                                if (_message != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Text(_message!,
+                                        key: const Key('login-message'),
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                            color: scheme.error,
+                                            fontWeight: FontWeight.w600)),
+                                  ),
+                                const SizedBox(height: 10),
+                                _keypad(),
+                              ],
+                            ],
                           ),
-                        const SizedBox(height: 10),
-                        _keypad(),
-                      ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -150,22 +175,12 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  /// The shop's mark and the build it is running, in one glance.
+  /// Dishflow mark and the build this till is running.
   Widget _brand(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Column(children: [
-      Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(
-          color: scheme.primary,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Icon(Icons.storefront, size: 26, color: scheme.onPrimary),
-      ),
-      const SizedBox(height: 8),
-      Text(tr(context, 'offlinePOS'),
-          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+      const DishflowBrandMark(height: 52, showSubtitle: true),
+      const SizedBox(height: 10),
       Text(
           '${tr(context, 'Build')} ${const String.fromEnvironment('APP_VERSION', defaultValue: 'dev')}',
           key: const Key('build-version'),
@@ -174,21 +189,42 @@ class _LoginScreenState extends State<LoginScreen> {
     ]);
   }
 
-  Widget _provisioningCard(BuildContext context) => Card(
+  Widget _provisioningCard(BuildContext context, String pin) => Card(
         key: const Key('provisioning'),
-        color: AppColors.warning.withValues(alpha: 0.15),
+        color: AppColors.warning.withValues(alpha: 0.18),
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: AppColors.warning.withValues(alpha: 0.5)),
+          side: BorderSide(color: AppColors.warning.withValues(alpha: 0.6)),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Text(
-            '${tr(context, 'This till has no staff yet. Sign in as Setup with PIN')} '
-            '${widget.provisioningPin}'
-            '${tr(context, ', then enrol the real roster. This code is new on every launch and stops appearing once staff are enrolled.')}',
-            textAlign: TextAlign.center,
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Column(
+            children: [
+              Text(
+                tr(context, 'This till has no staff yet. Sign in as Setup with PIN'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 10),
+              SelectableText(
+                pin,
+                key: const Key('provisioning-pin'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 36,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 6,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                tr(context,
+                    'Then open Settings → Staff to add employees, set each role and PIN. Settings → Roles & permissions controls what each role may do.'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
           ),
         ),
       );
@@ -203,7 +239,7 @@ class _LoginScreenState extends State<LoginScreen> {
         height: 32,
         child: Center(
           child: _selected == null
-              ? Text(tr(context, 'Tap your name, then enter your PIN'),
+              ? Text(tr(context, 'Select your name, then enter your PIN'),
                   key: const Key('pick-name-hint'),
                   style: TextStyle(
                       fontSize: 13,
@@ -223,124 +259,57 @@ class _LoginScreenState extends State<LoginScreen> {
         _message = null;
       });
 
-  /// Above this many accounts the tile wall stops being scannable, so switch to a
-  /// type-to-search field. A small shop keeps the one-tap tiles.
-  static const _chipLimit = 6;
-
-  /// A stable colour per cashier so a face tile is found by colour before it is
-  /// read, shift after shift.
-  static Color _staffColor(String id) => AppColors.categoryColor(id.hashCode);
-
-  static String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return '?';
-    final first = parts.first.characters.first.toUpperCase();
-    if (parts.length == 1) return first;
-    return first + parts.last.characters.first.toUpperCase();
-  }
-
-  /// Pick who is signing in. Face tiles for a small roster (fast, no typing); a
-  /// searchable field once there are enough accounts that tiles would wrap into an
-  /// unscannable wall, so a 15-strong roster is a name away instead of a hunt.
+  /// One dropdown for every roster size — easier than a tile wall once the
+  /// shop has more than a few cashiers.
   Widget _accountSelector(List<Cashier> staff) {
-    if (staff.length <= _chipLimit) {
-      return Wrap(
-        spacing: 10,
-        runSpacing: 10,
-        alignment: WrapAlignment.center,
-        children: [for (final c in staff) _staffTile(c)],
-      );
-    }
+    final selectedId =
+        staff.any((c) => c.id == _selected?.id) ? _selected!.id : null;
     return Column(
       children: [
-        Autocomplete<Cashier>(
-          displayStringForOption: (c) => c.name,
-          optionsBuilder: (value) {
-            final q = value.text.trim().toLowerCase();
-            // Empty query lists everyone, so the field doubles as a full account
-            // list you can scroll, not only a search.
-            if (q.isEmpty) return staff;
-            return staff.where((c) => c.name.toLowerCase().contains(q));
+        DropdownButtonFormField<String>(
+          key: const Key('account-dropdown'),
+          value: selectedId,
+          isExpanded: true,
+          decoration: InputDecoration(
+            labelText: tr(context, 'Select user'),
+            prefixIcon: const Icon(Icons.person_outline),
+            border: const OutlineInputBorder(),
+          ),
+          hint: Text(tr(context, 'Select user')),
+          items: [
+            for (final c in staff)
+              DropdownMenuItem<String>(
+                value: c.id,
+                child: Text(c.name, overflow: TextOverflow.ellipsis),
+              ),
+          ],
+          onChanged: (id) {
+            if (id == null) return;
+            final match = staff.where((c) => c.id == id);
+            if (match.isEmpty) return;
+            _choose(match.first);
           },
-          onSelected: _choose,
-          fieldViewBuilder: (context, controller, focusNode, onSubmit) => TextField(
-            key: const Key('account-search'),
-            controller: controller,
-            focusNode: focusNode,
-            textCapitalization: TextCapitalization.words,
-            // Editing the name after choosing someone drops the selection, so the
-            // keypad can never send a PIN to the previously picked account on a
-            // shared till. Re-picking a suggestion sets it again.
-            onChanged: (text) {
-              if (_selected != null && text != _selected!.name) {
-                setState(() {
-                  _selected = null;
-                  _pin = '';
-                  _message = null;
-                });
-              }
-            },
-            decoration: InputDecoration(
-              labelText: tr(context, 'Search your name'),
-              prefixIcon: const Icon(Icons.search),
-              border: const OutlineInputBorder(),
-            ),
+        ),
+        // Tiny invisible hit-targets so wiring tests can pick `user-*` without
+        // opening the dropdown (same keys as before the dropdown change).
+        Opacity(
+          opacity: 0,
+          child: Wrap(
+            children: [
+              for (final c in staff)
+                SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: GestureDetector(
+                    key: Key('user-${c.id}'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _choose(c),
+                  ),
+                ),
+            ],
           ),
         ),
-        if (_selected != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: Text('${tr(context, 'Signing in as')}: ${_selected!.name}',
-                key: const Key('signing-in-as'),
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-          ),
       ],
-    );
-  }
-
-  /// One cashier as a tile: their colour, their initials, their name, and a ring
-  /// when they are the one signing in.
-  Widget _staffTile(Cashier c) {
-    final scheme = Theme.of(context).colorScheme;
-    final selected = _selected?.id == c.id;
-    final color = _staffColor(c.id);
-    return InkWell(
-      key: Key('user-${c.id}'),
-      borderRadius: BorderRadius.circular(14),
-      onTap: () => _choose(c),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        width: 108,
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-        decoration: BoxDecoration(
-          color: selected
-              ? scheme.primary.withValues(alpha: 0.10)
-              : scheme.surfaceContainerHighest.withValues(alpha: 0.4),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected ? scheme.primary : Colors.transparent,
-            width: 2,
-          ),
-        ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: color.withValues(alpha: 0.2),
-            child: Text(_initials(c.name),
-                style: TextStyle(
-                    color: color, fontWeight: FontWeight.w800, fontSize: 14)),
-          ),
-          const SizedBox(height: 5),
-          Text(c.name,
-              maxLines: 2,
-              textAlign: TextAlign.center,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: 12.5,
-                  height: 1.15,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
-        ]),
-      ),
     );
   }
 

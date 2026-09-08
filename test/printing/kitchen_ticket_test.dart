@@ -102,23 +102,72 @@ void main() {
           lines: [OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100)],
         );
 
-    test('the kitchen ticket carries the number the counter will call', () {
+    test('the kitchen ticket carries the same order number as the receipt', () {
       final text =
           strippedText(KitchenTicketBuilder().build(numbered(orderNo: '1508-007-A1B')));
-      expect(text, contains('#1508-007-A1B'));
+      expect(text, contains('ORDER:1508-007-A1B'));
     });
 
     test('a cancel slip names the same order the kitchen was given', () {
       final order = numbered(orderNo: '1508-007-A1B');
       final text = strippedText(
           KitchenTicketBuilder().buildVoid(order, order.lines.first, 'wrong table'));
-      expect(text, contains('#1508-007-A1B'));
+      expect(text, contains('ORDER:1508-007-A1B'));
+      expect(text, contains('DELETION'));
     });
 
     test('an unnumbered order still prints a reference', () {
       final order = numbered();
       final text = strippedText(KitchenTicketBuilder().build(order));
-      expect(text, contains('#${order.displayNo}'));
+      expect(text, contains('ORDER:${order.displayNo}'));
+    });
+
+    test('Dishflow layout: station banner, table, Cust(s), qty without x', () {
+      final order = Order(
+        deviceId: 'till-1',
+        cashierId: 'sara',
+        orderNo: '1508-007-A1B',
+      )
+        ..tableLabel = '5'
+        ..guestCount = 2
+        ..lines.add(OrderLine(
+          productId: 1,
+          name: 'Pizza',
+          quantity: 2,
+          unitPrice: 100,
+          categoryId: 1,
+          modifiers: [
+            OrderModifier(modifierId: 1, name: 'Extra cheese', quantity: 4, unitPrice: 0),
+          ],
+          note: 'no onions',
+        ));
+      final text = strippedText(KitchenTicketBuilder(
+        categoryNameOf: (_) => 'Food',
+        serverNameOf: (_) => 'Sara',
+      ).build(order, station: 'grill'));
+      expect(text, contains('===GRILL==='));
+      expect(text, contains('* Table 5 *'));
+      expect(text, contains('Cust(s): 2'));
+      expect(text, contains('ORDER:1508-007-A1B'));
+      expect(text, contains('Server: Sara'));
+      expect(text, contains('FOOD'));
+      expect(text, contains('2  Pizza'));
+      expect(text, isNot(contains('2 x Pizza')));
+      expect(text, contains('4x Extra cheese'));
+      expect(text, contains('** no onions **'));
+    });
+
+    test('table banner matches payment seating: section - Table N', () {
+      final order = Order(
+        deviceId: 'till-1',
+        cashierId: 'sara',
+        orderNo: '0809-010-050',
+      )..tableLabel = '2';
+      final text = strippedText(KitchenTicketBuilder(
+        sectionOf: (_) => 'e',
+      ).build(order));
+      expect(text, contains('* e - Table 2 *'));
+      expect(text, contains('ORDER:0809-010-050'));
     });
   });
 }

@@ -89,7 +89,10 @@ class TestTill {
     claims = LanClaimDesk(
       deviceId: deviceId,
       orders: orders,
-      allowed: () => settings.lanAllowTakeover,
+      mayGrant: ({required order, requesterId, asManager = false}) =>
+          settings.lanAllowTakeover ||
+          asManager ||
+          (requesterId != null && requesterId == order.cashierId),
       audit: (event, detail) => audited.add('$event: $detail'),
     );
     protocol = LanProtocol(

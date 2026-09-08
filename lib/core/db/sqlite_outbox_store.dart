@@ -27,12 +27,21 @@ class SqliteOutboxStore implements OutboxStore {
   }
 
   @override
-  Future<List<OutboxEntry>> pending({int limit = 20}) async {
-    final rows = _db.raw.select(
-      'SELECT id, kind, payload_uuid, payload, attempts, last_error '
-      'FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL ORDER BY id ASC LIMIT ?',
-      [limit],
-    );
+  Future<List<OutboxEntry>> pending({int limit = 20, Set<String>? kinds}) async {
+    final filtered = kinds != null && kinds.isNotEmpty;
+    final rows = filtered
+        ? _db.raw.select(
+            'SELECT id, kind, payload_uuid, payload, attempts, last_error '
+            'FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL '
+            'AND kind IN (${List.filled(kinds.length, '?').join(',')}) '
+            'ORDER BY id ASC LIMIT ?',
+            [...kinds, limit],
+          )
+        : _db.raw.select(
+            'SELECT id, kind, payload_uuid, payload, attempts, last_error '
+            'FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL ORDER BY id ASC LIMIT ?',
+            [limit],
+          );
     return rows
         .map((r) => OutboxEntry(
               id: r['id'] as int,
@@ -165,7 +174,14 @@ class SqliteOutboxStore implements OutboxStore {
           "AND dead_at IS NULL AND kind = '$_order'")
       .first['c'] as int;
 
+  /// Paid sales still waiting to reach Dishflow's owner view.
+  int get pendingDishflowCount => _db.raw
+      .select('SELECT COUNT(*) c FROM outbox WHERE sent_at IS NULL '
+          "AND dead_at IS NULL AND kind = '$_dishflow'")
+      .first['c'] as int;
+
   /// Kinds are part of the on-disk contract; see docs/ODOO_SYNC.md.
   static const String _heartbeat = 'device.status';
   static const String _order = 'order.push';
+  static const String _dishflow = 'dishflow.sale.push';
 }

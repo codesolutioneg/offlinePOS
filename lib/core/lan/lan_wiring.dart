@@ -3,12 +3,19 @@ import 'dart:io';
 
 import '../../domain/order.dart';
 import '../audit/audit_log.dart';
+import '../auth/bootstrap_cashier.dart';
+import '../auth/user_store.dart';
+import '../db/attendance_store.dart';
+import '../db/catalogue_store.dart';
 import '../db/database.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
+import '../db/shift_store.dart';
 import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
+import '../printing/printer_registry.dart';
+import '../sync/odoo_endpoint.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
 import 'lan_claim.dart';
@@ -76,6 +83,12 @@ class LanNode {
     required OrderStore orders,
     required TableStore tables,
     required SettingsStore settings,
+    required UserStore users,
+    required PrinterRegistry printers,
+    required OdooEndpointStore endpoints,
+    AttendanceStore? attendance,
+    CatalogueStore? catalogue,
+    ShiftStore? shifts,
     required ReservationStore reservations,
     required TableAssignmentStore assignments,
     required AuditLog audit,
@@ -107,6 +120,8 @@ class LanNode {
       settings: settings,
       reservations: reservations,
       assignments: assignments,
+      attendance: attendance,
+      shifts: shifts,
       log: eventLog,
       onRefused: log,
     );
@@ -115,9 +130,11 @@ class LanNode {
     final claims = LanClaimDesk(
       deviceId: deviceId,
       orders: orders,
-      // Read at the moment of the ask, so a manager who switches takeovers off has
-      // switched them off for the request that arrives a second later.
-      allowed: () => settings.lanAllowTakeover,
+      // Shop-wide switch, or the waiter who opened the tab / a manager.
+      mayGrant: ({required order, requesterId, asManager = false}) =>
+          settings.lanAllowTakeover ||
+          asManager ||
+          (requesterId != null && requesterId == order.cashierId),
       audit: log,
     );
     final fabric = LanFabric(
@@ -129,6 +146,42 @@ class LanNode {
       notify: (peer, events) => http.notify(peer, events, deviceId),
       onError: log,
     );
+    Map<String, dynamic>? joinGate({
+      required String pin,
+      required String peerDeviceId,
+    }) {
+      if (!settings.isLanPrimary) return null;
+      if (!settings.consumeJoinPin(pin)) return null;
+      final key = settings.lanShopKey;
+      if (key == null || key.isEmpty) return null;
+      log('lan.device.joined', peerDeviceId);
+      return {
+        'shop_key': key,
+        'section_configs': {
+          for (final e in settings.allSectionConfigs().entries)
+            e.key: e.value.toMap(),
+        },
+        'shop_bundle': settings.exportShopBundle(),
+        // Real roster only — Setup is a local bootstrap account, never shared.
+        'users': [
+          for (final u in users.all())
+            if (u.id != BootstrapCashier.id) u.toMap(),
+        ],
+        // Same shop LAN → same ESC/POS hosts (receipt / kitchen / stations).
+        'printers': printers.toMap(),
+        // Endpoint so the secondary can refresh later; catalogue so it can sell
+        // immediately even offline / before the first Odoo pull finishes.
+        'odoo_endpoint': endpoints.load()?.toMap(),
+        'attendance_open': attendance?.exportOpen() ?? const [],
+        if (catalogue != null) 'catalogue': catalogue.exportLanSnapshot(),
+        'tables': [for (final t in tables.all()) t.toMap()],
+        'open_orders': [
+          for (final o in orders.occupyingAnywhere())
+            if (o.deviceId == deviceId) o.toMap(),
+        ],
+      };
+    }
+
     return LanNode(
       deviceId: deviceId,
       deviceName: deviceName,
@@ -144,6 +197,7 @@ class LanNode {
           applier: applier,
           credential: credential,
           claims: claims,
+          onJoin: joinGate,
           onRefused: log,
         ),
         port: port,
@@ -249,6 +303,10 @@ class LanNode {
   /// One catch-up pass now, for the Sync now button on the settings screen.
   Future<void> pass() => _fabric.pass();
 
+  /// Present a join PIN to [primary] and return shop_key + section_configs.
+  Future<Map<String, dynamic>> joinWithPrimary(LanPeer primary, String pin) =>
+      _client.join(primary, pin: pin, deviceId: deviceId);
+
   /// Tell the shop this till has closed its trading day.
   ///
   /// Advisory and one-way: nothing waits for an answer, nothing is retried beyond
@@ -286,7 +344,11 @@ class LanNode {
   ///
   /// Never on a selling path: this is a deliberate action behind a manager gate,
   /// and the till it runs on is not mid-sale.
-  Future<LanClaimResult> claim(Order order, {String? cashier}) async {
+  Future<LanClaimResult> claim(
+    Order order, {
+    String? cashier,
+    bool asManager = false,
+  }) async {
     final owner = _peerFor(order.deviceId);
     if (owner == null) {
       return (
@@ -296,8 +358,13 @@ class LanNode {
       );
     }
     try {
-      final payload = await _client.claim(owner,
-          orderUuid: order.uuid, deviceId: deviceId, cashier: cashier);
+      final payload = await _client.claim(
+        owner,
+        orderUuid: order.uuid,
+        deviceId: deviceId,
+        cashier: cashier,
+        asManager: asManager,
+      );
       final taken = _claims.accept(payload, cashier: cashier);
       if (taken == null) {
         return (

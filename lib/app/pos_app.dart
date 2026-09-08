@@ -26,6 +26,7 @@ import '../core/db/table_store.dart';
 import '../core/email/email_service.dart';
 import '../core/lan/lan_cart_board.dart';
 import '../core/lan/lan_claim.dart';
+import '../core/lan/lan_credential.dart';
 import '../core/lan/lan_shift_board.dart';
 import '../core/lan/lan_wiring.dart';
 import '../core/onboarding/setup_checklist.dart';
@@ -33,6 +34,7 @@ import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
 import '../core/widgets/feedback.dart';
+import '../core/widgets/numeric_keypad.dart';
 import '../core/printing/kitchen_ticket.dart';
 import '../core/printing/printer_logo.dart';
 import '../core/printing/printer_registry.dart';
@@ -40,6 +42,8 @@ import '../core/printing/printer_transport.dart';
 import '../core/printing/receipt_builder.dart';
 import '../core/printing/registry_printer.dart';
 import '../core/printing/spool_store.dart';
+import '../core/sync/dishflow_mirror.dart';
+import '../core/sync/dishflow_wiring.dart';
 import '../core/sync/odoo_endpoint.dart';
 import '../core/sync/odoo_puller.dart';
 import '../core/sync/odoo_wiring.dart';
@@ -52,6 +56,7 @@ import '../core/updates/update_service.dart';
 import '../domain/business_day.dart';
 import '../domain/catalogue.dart';
 import '../domain/order.dart';
+import '../domain/table_section_config.dart';
 import '../domain/shift.dart';
 import '../features/admin/attendance_screen.dart';
 import '../features/admin/roles_permissions_screen.dart';
@@ -71,6 +76,7 @@ import '../features/reports/reports_hub_screen.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/delivery_settings_screen.dart';
+import '../features/settings/dishflow_mirror_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
 import '../features/settings/email_settings_screen.dart';
 import '../features/settings/lan_settings_screen.dart';
@@ -127,12 +133,18 @@ class PosApp extends StatefulWidget {
     this.emailer,
     this.reservations,
     this.assignments,
+    this.dishflow,
+    this.loginManagersOnly = true,
     this.nowFn = DateTime.now,
   });
 
   /// The clock the idle lock reads. Injectable for the tests, exactly as the
   /// floor's booking badges inject theirs; production reads the real one.
   final DateTime Function() nowFn;
+
+  /// When true, the lock screen lists managers only. Cashiers clock in from
+  /// Attendance and open tables with their PIN.
+  final bool loginManagersOnly;
 
   /// Tables booked ahead. Null on a shop that does not take bookings and in the
   /// suites that predate them, and then the floor reads exactly as it did.
@@ -141,6 +153,9 @@ class PosApp extends StatefulWidget {
   /// Who works which table this service. Null in the suites that predate it, and
   /// then every table is open to whoever is signed in, exactly as before.
   final TableAssignmentStore? assignments;
+
+  /// Owner-mirror wiring for Dishflow. Null in suites that do not exercise it.
+  final DishflowWiring? dishflow;
 
   final AuthService auth;
   final UserStore users;
@@ -278,6 +293,11 @@ class _PosAppState extends State<PosApp> {
   /// Whether the walkthrough for the provisioning account is up. Only that account
   /// ever sees it: it is the one that stands in front of an unconfigured till.
   bool _firstSignInHelp = false;
+
+  /// Live copy of the Setup PIN so a till that missed it at boot can regenerate
+  /// and show it on the lock screen without a full restart.
+  String? _provisioningPin;
+
   String? _printError;
   Timer? _background;
 
@@ -341,11 +361,24 @@ class _PosAppState extends State<PosApp> {
   @override
   void initState() {
     super.initState();
+    _provisioningPin = widget.provisioningPin;
+    // If Setup is the only account but the PIN did not arrive from boot (or the
+    // lock screen clipped it away), mint again so the cashier is never stranded.
+    if (_provisioningPin == null &&
+        BootstrapCashier.stillNeeded(widget.users.active())) {
+      unawaited(_refreshSetupPin());
+    }
     // The same slow lane the sync timer runs in. Held receipts used to wait for a
     // human to open the support screen and press Reprint, which meant a printer
     // that came back mid-shift printed nothing until somebody noticed.
     _background = Timer.periodic(const Duration(seconds: 30), (_) => _catchUp());
     unawaited(_startLan());
+  }
+
+  Future<void> _refreshSetupPin() async {
+    final pin = await BootstrapCashier.ensure(widget.auth, widget.users);
+    if (!mounted || pin == null) return;
+    setState(() => _provisioningPin = pin);
   }
 
   @override
@@ -452,6 +485,7 @@ class _PosAppState extends State<PosApp> {
         // The number staff and customers actually say out loud. Per till and per
         // trading day, handed out when an order is parked or paid.
         nextOrderNo: () => widget.settings.nextOrderNumber(widget.deviceId),
+        settings: widget.settings,
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
       // The provisioning account is whoever is standing at a till that has just
@@ -482,6 +516,90 @@ class _PosAppState extends State<PosApp> {
     }());
     _publishActivity();
     _nudgeShift();
+    unawaited(_offerLanRoleIfNeeded());
+  }
+
+  /// First install (or after Unlink): ask Primary / Join / Skip once.
+  Future<void> _offerLanRoleIfNeeded() async {
+    if (!mounted) return;
+    if (widget.settings.deviceRole != DeviceRole.unset) return;
+    if (widget.settings.lanRolePromptDismissed) return;
+    final choice = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        key: const Key('lan-role-prompt'),
+        title: Text(tr(ctx, 'Link tills on this network?')),
+        content: Text(tr(
+            ctx,
+            'If another till in the shop is already set up, join it with a PIN. '
+                'If this is the first till, make it the primary.')),
+        actions: [
+          TextButton(
+            key: const Key('lan-role-prompt-skip'),
+            onPressed: () => Navigator.pop(ctx, 'skip'),
+            child: Text(tr(ctx, 'Skip for now')),
+          ),
+          OutlinedButton(
+            key: const Key('lan-role-prompt-primary'),
+            onPressed: () => Navigator.pop(ctx, 'primary'),
+            child: Text(tr(ctx, 'This is the primary')),
+          ),
+          FilledButton(
+            key: const Key('lan-role-prompt-join'),
+            onPressed: () => Navigator.pop(ctx, 'join'),
+            child: Text(tr(ctx, 'Join with a PIN')),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || choice == null) return;
+    widget.settings.lanRolePromptDismissed = true;
+    if (choice == 'skip') return;
+    if (choice == 'primary') {
+      widget.settings.deviceRole = DeviceRole.primary;
+      if (!(widget.settings.lanEnabled(fallback: widget.config.lanDefault))) {
+        widget.settings.setLanEnabled(true);
+      }
+      widget.settings.lanShopKey ??= LanCredential.newKey();
+      unawaited(_reconcileLan());
+      if (mounted) setState(() {});
+      if (widget.lan == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr(
+              context,
+              'Primary saved. Restart the app once so Share can start on the network.')),
+        ));
+      }
+      return;
+    }
+    // Join: open Shop network as secondary so they can pick the primary + PIN.
+    widget.settings.deviceRole = DeviceRole.secondary;
+    if (!(widget.settings.lanEnabled(fallback: widget.config.lanDefault))) {
+      widget.settings.setLanEnabled(true);
+    }
+    unawaited(_reconcileLan());
+    if (!mounted) return;
+    setState(() {});
+    if (widget.lan == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr(
+            context,
+            'Restart the app, then open Shop network and Join with the PIN '
+                'from the primary.')),
+      ));
+      return;
+    }
+    _openLanSettings();
+  }
+
+  void _openLanSettings() {
+    final nav = Navigator.of(context);
+    nav.push(MaterialPageRoute<void>(
+      builder: (_) => _lanScreen(() {
+        if (mounted) setState(() {});
+      }),
+    ));
   }
 
   /// Put the cashier on the counter, for an order they have just started, recalled
@@ -696,6 +814,7 @@ class _PosAppState extends State<PosApp> {
       // The floor plan is on this device, so the slip can say which part of the room
       // the table is in without the printing layer knowing the database exists.
       sectionOf: widget.tables.sectionFor,
+      serverNameOf: (id) => widget.users.byId(id)?.name,
       formatAmount: PosApp.money,
     );
   }
@@ -932,6 +1051,8 @@ class _PosAppState extends State<PosApp> {
         // The provisioning account does not count as a roster: it is the account
         // that exists so a real one can be created.
         staffEnrolled: !BootstrapCashier.stillNeeded(widget.users.active()),
+        deviceRoleChosen:
+            widget.settings.deviceRole != DeviceRole.unset,
       );
 
   /// The walkthrough the provisioning account gets. The last panel is built from
@@ -970,7 +1091,7 @@ class _PosAppState extends State<PosApp> {
     return ValueListenableBuilder<Locale>(
       valueListenable: _locale,
       builder: (context, locale, _) => MaterialApp(
-        title: 'offlinePOS',
+        title: 'Dishflow',
         // Held because this shell sits ABOVE the navigator it builds, so its own
         // context cannot reach one. The shift nudge and the tab recalled from a
         // list that has already closed itself both run from up here.
@@ -1021,7 +1142,8 @@ class _PosAppState extends State<PosApp> {
                         auth: widget.auth,
                         users: widget.users,
                         onSignedIn: _signedIn,
-                        provisioningPin: widget.provisioningPin,
+                        provisioningPin: _provisioningPin,
+                        managersOnly: widget.loginManagersOnly,
                       )
                     : _home(session),
       ),
@@ -1194,6 +1316,31 @@ class _PosAppState extends State<PosApp> {
   Future<List<OdooRef>> _searchOdooCategories(String term) =>
       OdooPuller(call: widget.odoo.catalogueCall).searchCategories(term);
 
+  /// Category allow-list for the table this bill sits on (empty = unrestricted).
+  List<int> _sectionAllowedCategories(Order order) {
+    final label = order.tableLabel;
+    if (label == null || label.isEmpty) return const [];
+    final section = widget.tables.sectionFor(label);
+    if (section == null || section.isEmpty) return const [];
+    final cfg = widget.settings.sectionConfig(section);
+    if (!cfg.isStaffSection) return cfg.allowedCategoryIds;
+    final table = widget.tables.byName(label);
+    final assigneeId =
+        table == null ? null : widget.assignments?.byTable()[table.id];
+    final employeeName = assigneeId == null
+        ? ''
+        : (widget.users.byId(assigneeId)?.name ?? '');
+    return cfg.getCategoriesForEmployee(employeeName);
+  }
+
+  List<int> _sectionAllowedPayments(Order order) {
+    final label = order.tableLabel;
+    if (label == null || label.isEmpty) return const [];
+    final section = widget.tables.sectionFor(label);
+    if (section == null || section.isEmpty) return const [];
+    return widget.settings.sectionConfig(section).allowedPaymentMethodIds;
+  }
+
   /// The counter, opened onto one order. Reached from the floor home by seating a
   /// table, by the table-less buttons, by recalling a parked tab, or by reopening a
   /// paid sale to correct it. Never the resting screen.
@@ -1211,7 +1358,7 @@ class _PosAppState extends State<PosApp> {
           // No per-sale push: orders are held and sent as one batch at shift
           // close, so the shared Odoo login is not hit per order.
           online: widget.sync.online,
-          pendingToSync: () => widget.sync.pendingSales,
+          pendingToSync: () => widget.sync.pendingToSync,
           // Tickets and receipts a printer would not take. They flush themselves,
           // but until they do the kitchen has not seen them.
           spooledJobs: () => _receiptPrinter.spooledCount,
@@ -1268,6 +1415,9 @@ class _PosAppState extends State<PosApp> {
           payLaterMethodId: widget.settings.payLaterMethodId,
           // Lets the payment sheet hide methods the shop switched off in Settings.
           settings: widget.settings,
+          // Floor section (and staff) allow-lists for this table's bill.
+          allowedCategoryIds: _sectionAllowedCategories(session.current),
+          allowedPaymentMethodIds: _sectionAllowedPayments(session.current),
           // Dividers are floor decoration, never a table an order sits at.
           tables: () => widget.tables
               .all()
@@ -1614,7 +1764,11 @@ class _PosAppState extends State<PosApp> {
 
   void _openAttendance(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => AttendanceScreen(users: widget.users, attendance: widget.attendance),
+      builder: (_) => AttendanceScreen(
+            users: widget.users,
+            attendance: widget.attendance,
+            auth: widget.auth,
+          ),
     ));
   }
 
@@ -1685,7 +1839,8 @@ class _PosAppState extends State<PosApp> {
   void _openHistory(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (historyContext) => OrderHistoryScreen(
-        orders: widget.orders.recent(limit: 1000),
+        orders: widget.orders.recentAnywhere(limit: 1000),
+        thisDeviceId: widget.deviceId,
         formatAmount: PosApp.money,
         onReprint: (order) async {
           // Reprinting a receipt is a permissioned action: a cashier without it
@@ -1724,9 +1879,16 @@ class _PosAppState extends State<PosApp> {
       // out of the table, so withdrawing one there would take back a sale that is
       // on its way to being booked. Refuse instead: the answer a moment later is a
       // refund, which is right and reversible, rather than a silent divergence.
-      withdrawPush: (uuid) =>
-          widget.sync.state != SyncState.working &&
-          widget.outboxStore.withdrawPending('order.push', uuid),
+      withdrawPush: (uuid) {
+        if (widget.sync.state == SyncState.working) return false;
+        // Odoo queue is the gate: if that sale is already on the wire, refuse.
+        if (!widget.outboxStore.withdrawPending('order.push', uuid)) {
+          return false;
+        }
+        // Mirror row may not exist (mirror off); pull it when it does.
+        widget.outboxStore.withdrawPending(DishflowMirror.kind, uuid);
+        return true;
+      },
     );
     if (!reopened) {
       if (context.mounted) {
@@ -1767,6 +1929,11 @@ class _PosAppState extends State<PosApp> {
           // and a slip printed for the customer.
           widget.orders.save(refund);
           widget.outbox.enqueue('order.push', refund.uuid, refund.toServerPayload());
+          DishflowMirror.enqueueIfEnabled(
+            outbox: widget.outbox,
+            settings: widget.settings,
+            order: refund,
+          );
           widget.audit.record(refund.cashierId, 'order.refunded',
               detail: '${refund.uuid} of ${original.uuid}');
           unawaited(_printReceipt(refund));
@@ -1852,11 +2019,12 @@ class _PosAppState extends State<PosApp> {
     // Every parked order in the shop, not just this till's. A table busy on the bar
     // till has to read as busy here, or two cashiers seat the same table and the
     // second guest's food goes to a bill nobody is holding.
-    final held = widget.orders.heldAnywhere();
+    final held = widget.orders.occupyingAnywhere();
     final occupied = held.map((o) => o.tableLabel).whereType<String>().toSet();
     final info = <String, ({double total, DateTime since})>{
       for (final o in held)
-        if (o.tableLabel != null) o.tableLabel!: (total: o.total, since: o.createdAt),
+        if (o.tableLabel != null)
+          o.tableLabel!: (total: o.total, since: o.createdAt),
     };
     // The order on screen (not yet held) also occupies its table, or opening the
     // floor and tapping it would start a second order on the same table.
@@ -1995,6 +2163,7 @@ class _PosAppState extends State<PosApp> {
             // The floor's own rules, on the screen a manager already opens to lay the
             // room out.
             settings: widget.settings,
+            catalogue: widget.catalogue,
             onTransferTables: () => unawaited(_transferTables(floorContext)),
             onEditPreorders: () => unawaited(_editPreorders(floorContext)),
             authorize: () => _authorize(Permission.openSettings, floorContext),
@@ -2012,6 +2181,12 @@ class _PosAppState extends State<PosApp> {
               for (final u in widget.users.all())
                 (id: u.id, name: u.name, active: u.active),
             ],
+            onDuty: [
+              for (final e in widget.attendance.onNow())
+                if (widget.users.byId(e.staffId) case final u?)
+                  (id: u.id, name: u.name),
+            ],
+            onOpenAttendance: () => _openAttendance(floorContext),
             myCashierId: session.cashierId,
             // A role that may open anybody's table sees the names and no locks. Read
             // from the role rather than from the account being a manager, so a shop
@@ -2087,18 +2262,25 @@ class _PosAppState extends State<PosApp> {
               final held =
                   widget.orders.held().where((o) => o.tableLabel == t.name).toList();
               if (held.isEmpty) {
-                // Parked on another till. Neither start a second order on the table nor
-                // recall theirs: a tab is settled where it was opened, because that till
-                // is the one that books it.
+                // Parked / seated on another till.
                 final elsewhere = widget.orders
-                    .heldElsewhere()
+                    .occupyingElsewhere()
                     .where((o) => o.tableLabel == t.name)
                     .toList();
                 if (elsewhere.isNotEmpty) {
-                  // Unless the shop runs handhelds and has said a tab may change
-                  // hands, in which case the other till is asked and has to agree.
-                  if (widget.lan != null && widget.settings.lanAllowTakeover) {
-                    unawaited(_takeOverTab(floorContext, session, elsewhere.first));
+                  final tab = elsewhere.first;
+                  final signed = widget.auth.signedIn;
+                  final me = session.cashierId;
+                  final isOpener =
+                      tab.cashierId == me || tab.cashierId == signed?.id;
+                  final isManager = signed?.isManager ?? false;
+                  final canTake = widget.lan != null &&
+                      (widget.settings.lanAllowTakeover ||
+                          isOpener ||
+                          isManager);
+                  if (canTake) {
+                    unawaited(_takeOverTab(floorContext, session, tab,
+                        asOpener: isOpener, asManager: isManager));
                     return;
                   }
                   ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
@@ -2132,25 +2314,24 @@ class _PosAppState extends State<PosApp> {
                 unawaited(_resumeTab(floorContext, session, held.first));
                 return;
               }
+              // Who opens first (attendance + their own PIN), then covers. Asking
+              // guests before the opener made the floor look like seating skipped
+              // attribution entirely.
+              String? openedBy;
+              if (widget.settings.askCashierOnOpen ||
+                  widget.users.active().length > 1) {
+                if (!floorContext.mounted) return;
+                openedBy = await _pickOpenerWithPin(floorContext);
+                if (openedBy == null) return;
+              }
               // Covers belong to a bill that is eaten at the table. A to-go is packed
               // while its guests wait, so it takes the table without taking a count.
               final dineIn = seatAs == OrderType.dineIn;
               int? covers;
               if (dineIn && widget.settings.askGuestCount) {
+                if (!floorContext.mounted) return;
                 covers = await _askGuestCount(floorContext, t.seats);
                 if (covers == null) return;
-              }
-              // On a shared till, ask who is opening the table and assign it to them.
-              // Cancelling the prompt leaves the table unopened, so nobody's tab is
-              // started under the wrong name.
-              String? openedBy;
-              if (widget.assignments != null && widget.settings.askCashierOnOpen) {
-                if (!floorContext.mounted) return;
-                openedBy = await _pickCashier(
-                    floorContext,
-                    tr(floorContext, 'Who is opening this table?'),
-                    widget.users.active().map((u) => u.id).toList());
-                if (openedBy == null) return;
               }
               if (!mounted) return;
               setState(() {
@@ -2165,6 +2346,7 @@ class _PosAppState extends State<PosApp> {
                 // charge is priced per guest, so the count has to be on the order
                 // before the line is rung.
                 if (dineIn) _addPreorders(session, t, guests: seated);
+                if (openedBy != null) session.rebindCashier(openedBy);
                 _onCounter = true;
               });
               // Attribute the table to whoever opened it, using the same assignment
@@ -2296,35 +2478,76 @@ class _PosAppState extends State<PosApp> {
   /// the same question of whoever is standing there; this one names the person it
   /// expects, because a cashier being asked for "a PIN" with no name on it does not
   /// know whose is wanted.
+  ///
+  /// Touch-first: dots + on-screen pad (no OS soft keyboard), same as the lock
+  /// screen. A restaurant till is a fingertip, not a keyboard.
   Future<String?> _promptPin(BuildContext context, String title, String message,
       {required String subject}) {
-    final ctrl = TextEditingController();
+    var pin = '';
     return showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('$subject. $message'),
-          const SizedBox(height: 12),
-          TextField(
-            key: const Key('tab-pin'),
-            controller: ctrl,
-            autofocus: true,
-            obscureText: true,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-                labelText: tr(ctx, 'PIN'), border: const OutlineInputBorder()),
-          ),
-        ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-            key: const Key('tab-pin-ok'),
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: Text(tr(ctx, 'Open tab')),
-          ),
-        ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final scheme = Theme.of(ctx).colorScheme;
+          return AlertDialog(
+            title: Text(title),
+            content: SizedBox(
+              width: 300,
+              child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text('$subject. $message'),
+                  const SizedBox(height: 10),
+                  Container(
+                    key: const Key('tab-pin'),
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color:
+                          scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: scheme.outlineVariant),
+                    ),
+                    child: Text(
+                      pin.isEmpty ? '····' : '•' * pin.length,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 26,
+                        letterSpacing: 8,
+                        fontWeight: FontWeight.w700,
+                        color: pin.isEmpty
+                            ? scheme.onSurfaceVariant
+                            : scheme.primary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  NumericKeypad(
+                    decimal: false,
+                    compact: true,
+                    onKey: (k) {
+                      if (pin.length >= 6) return;
+                      setLocal(() => pin += k);
+                    },
+                    onBackspace: () => setLocal(() => pin =
+                        pin.isEmpty ? pin : pin.substring(0, pin.length - 1)),
+                    onClear: () => setLocal(() => pin = ''),
+                  ),
+                ]),
+              ),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(tr(ctx, 'Cancel'))),
+              FilledButton(
+                key: const Key('tab-pin-ok'),
+                onPressed: pin.isEmpty ? null : () => Navigator.pop(ctx, pin),
+                child: Text(tr(ctx, 'Open tab')),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -2436,6 +2659,13 @@ class _PosAppState extends State<PosApp> {
     final moved = held.where((o) => o.cashierId == from).toList();
     for (final tab in moved) {
       widget.orders.reassignCashier(tab.uuid, to);
+      // Floor ownership follows the tabs, or the next waiter still sees the old
+      // name on the tile after the bills have moved.
+      final label = tab.tableLabel;
+      if (label != null && widget.assignments != null) {
+        final table = widget.tables.byName(label);
+        if (table != null) _assignTable(table, to);
+      }
     }
     widget.audit.record(_session?.cashierId ?? 'system', 'tables.transferred',
         detail: '$from->$to|${moved.length} tab(s)');
@@ -2443,6 +2673,100 @@ class _PosAppState extends State<PosApp> {
     setState(() {});
     showToast(context, '${tr(context, 'Tabs moved')}: ${moved.length}',
         kind: ToastKind.success);
+  }
+
+  /// Staff offered when opening a table: only people on the clock. The manager
+  /// unlocks the till; cashiers appear here after Attendance → Clock in.
+  List<String> _openerCandidates() {
+    final onDuty = widget.attendance.onNow().map((e) => e.staffId).toSet();
+    final active = widget.users.active();
+    final real = active.where((u) => u.id != BootstrapCashier.id).toList();
+    final pool = real.isEmpty ? active : real;
+    return pool.where((u) => onDuty.contains(u.id)).map((u) => u.id).toList();
+  }
+
+  /// Pick who opens the table and verify that person's own PIN.
+  ///
+  /// Manager PIN is not a substitute here: attribution must match who is
+  /// actually opening. Managers elevate elsewhere (resume lock, voids, etc.).
+  Future<String?> _pickOpenerWithPin(BuildContext context) async {
+    final ids = _openerCandidates();
+    if (ids.isEmpty) {
+      if (context.mounted) {
+        showToast(
+          context,
+          tr(context, 'Clock in from Attendance before opening a table'),
+          kind: ToastKind.error,
+        );
+      }
+      return null;
+    }
+    final picked = await _pickOpenerDropdown(
+      context,
+      tr(context, 'Who is opening this table?'),
+      ids,
+    );
+    if (picked == null || !context.mounted) return null;
+    final user = widget.users.byId(picked);
+    final pin = await _promptPin(
+      context,
+      tr(context, 'Confirm with PIN'),
+      tr(context, 'Enter this person\'s PIN'),
+      subject: user?.name ?? picked,
+    );
+    if (pin == null || pin.isEmpty) return null;
+    final ok = await widget.auth.authorizeCashier(picked, pin);
+    if (!ok) {
+      if (context.mounted) {
+        showToast(context, tr(context, 'Incorrect PIN'), kind: ToastKind.error);
+      }
+      return null;
+    }
+    return picked;
+  }
+
+  /// Dropdown of who may open the table (on-duty staff).
+  Future<String?> _pickOpenerDropdown(
+      BuildContext context, String title, List<String> ids) {
+    final byId = {for (final u in widget.users.active()) u.id: u.name};
+    String? selected = ids.length == 1 ? ids.first : null;
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(title),
+          content: DropdownButtonFormField<String>(
+            key: const Key('opener-dropdown'),
+            value: selected,
+            isExpanded: true,
+            decoration: InputDecoration(
+              labelText: tr(ctx, 'Select user'),
+              border: const OutlineInputBorder(),
+            ),
+            items: [
+              for (final id in ids)
+                DropdownMenuItem<String>(
+                  value: id,
+                  child: Text(byId[id] ?? id),
+                ),
+            ],
+            onChanged: (v) => setLocal(() => selected = v),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr(ctx, 'Cancel')),
+            ),
+            FilledButton(
+              key: const Key('opener-ok'),
+              onPressed:
+                  selected == null ? null : () => Navigator.pop(ctx, selected),
+              child: Text(tr(ctx, 'OK')),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Pick one of the staff on this till by name, for the transfer.
@@ -2466,15 +2790,15 @@ class _PosAppState extends State<PosApp> {
   }
 
   /// Take a tab parked on another till, so the counter can settle what a handheld
-  /// opened. Manager-gated, because it moves a bill between two sets of books.
-  ///
-  /// The owning till has to agree and gives the tab up as it agrees, so the tab is
-  /// never open in two places. A till that cannot be reached is therefore a refusal
-  /// and not a wait: it cannot let go, and taking it anyway is how one bill gets
-  /// settled twice. Nothing here is on a selling path; the sale that follows is an
-  /// ordinary local recall.
+  /// opened. The opener may take their own tab; anyone else needs manager approval
+  /// (or shop-wide takeovers switched on).
   Future<void> _takeOverTab(
-      BuildContext context, PosSession session, Order tab) async {
+    BuildContext context,
+    PosSession session,
+    Order tab, {
+    bool asOpener = false,
+    bool asManager = false,
+  }) async {
     final lan = widget.lan;
     if (lan == null) return;
     final confirmed = await showDialog<bool>(
@@ -2498,8 +2822,18 @@ class _PosAppState extends State<PosApp> {
       ),
     );
     if (confirmed != true || !context.mounted) return;
-    if (!await _authorizeManager(context)) return;
-    final result = await lan.claim(tab, cashier: session.cashierId);
+    if (!asOpener) {
+      if (!(widget.auth.signedIn?.isManager ?? false)) {
+        if (!await _authorizeManager(context)) return;
+      }
+    }
+    final result = await lan.claim(
+      tab,
+      cashier: session.cashierId,
+      asManager: asManager ||
+          (widget.auth.signedIn?.isManager ?? false) ||
+          !asOpener,
+    );
     if (!context.mounted) return;
     if (result.order == null) {
       showToast(
@@ -2534,41 +2868,132 @@ class _PosAppState extends State<PosApp> {
     final max = seats > 0 ? (seats > 40 ? 40 : seats) : 8;
     return showDialog<int>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        key: const Key('guest-count-prompt'),
-        title: Text(tr(ctx, 'How many guests?')),
-        content: SizedBox(
-          width: 320,
-          child: DropdownButton<int>(
-            key: const Key('guest-count-dropdown'),
-            // Nothing is preselected: the covers decide the per-guest lines and
-            // every per-head figure in the reports, so the waiter picks rather
-            // than accepts whatever sat at the top of the list.
-            value: null,
-            isExpanded: true,
-            hint: Text(tr(ctx, 'Choose a number')),
-            items: [
-              for (var n = 1; n <= max; n++)
-                DropdownMenuItem<int>(
-                  key: Key('guests-$n'),
-                  value: n,
-                  child: Text('$n'),
+      builder: (ctx) {
+        var otherMode = false;
+        final otherCtrl = TextEditingController();
+        return StatefulBuilder(
+          builder: (ctx, setSt) {
+            Widget square({
+              required Key key,
+              required String label,
+              required VoidCallback onTap,
+              double fontSize = 22,
+            }) {
+              return Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  key: key,
+                  onTap: onTap,
+                  borderRadius: BorderRadius.circular(14),
+                  child: Ink(
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.55),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        label,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: fontSize,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.brandNavy,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-            ],
-            // Picking a number is the answer; there is nothing further to confirm.
-            onChanged: (n) {
-              if (n != null) Navigator.pop(ctx, n);
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            key: const Key('guests-cancel'),
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(tr(ctx, 'Cancel')),
-          ),
-        ],
-      ),
+              );
+            }
+
+            if (otherMode) {
+              return AlertDialog(
+                key: const Key('guest-count-other'),
+                title: Text(tr(ctx, 'How many guests?')),
+                content: TextField(
+                  key: const Key('guests-other-input'),
+                  controller: otherCtrl,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: tr(ctx, 'Number of guests'),
+                    border: const OutlineInputBorder(),
+                  ),
+                  onSubmitted: (v) {
+                    final n = int.tryParse(v.trim());
+                    if (n != null && n > 0) Navigator.pop(ctx, n);
+                  },
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => setSt(() => otherMode = false),
+                    child: Text(tr(ctx, 'Back')),
+                  ),
+                  FilledButton(
+                    key: const Key('guests-other-ok'),
+                    onPressed: () {
+                      final n = int.tryParse(otherCtrl.text.trim());
+                      if (n != null && n > 0) Navigator.pop(ctx, n);
+                    },
+                    child: Text(tr(ctx, 'OK')),
+                  ),
+                ],
+              );
+            }
+
+            return AlertDialog(
+              key: const Key('guest-count-prompt'),
+              title: Text(tr(ctx, 'How many guests?')),
+              content: SizedBox(
+                key: const Key('guest-count-dropdown'),
+                width: 360,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 400),
+                  child: GridView.builder(
+                    shrinkWrap: true,
+                    // Seat numbers + Other.
+                    itemCount: max + 1,
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 4,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 1,
+                    ),
+                    itemBuilder: (_, i) {
+                      if (i == max) {
+                        return square(
+                          key: const Key('guests-other'),
+                          label: tr(ctx, 'Other'),
+                          fontSize: 14,
+                          onTap: () => setSt(() => otherMode = true),
+                        );
+                      }
+                      final n = i + 1;
+                      return square(
+                        key: Key('guests-$n'),
+                        label: '$n',
+                        onTap: () => Navigator.pop(ctx, n),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  key: const Key('guests-cancel'),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(tr(ctx, 'Cancel')),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -2768,6 +3193,23 @@ class _PosAppState extends State<PosApp> {
           if (ok && context.mounted) _openSettings(context);
         },
       ),
+      SettingsEntry(
+        title: 'Dishflow owner mirror',
+        subtitle: 'Show paid sales in owner Flash when online',
+        icon: Icons.cloud_upload_outlined,
+        keyValue: 'set-dishflow',
+        group: 'Server',
+        onTap: () => pushGated(
+            Permission.openSettings,
+            DishflowMirrorSettingsScreen(
+              settings: widget.settings,
+              sender: widget.dishflow?.sender,
+              onChanged: () {
+                widget.dishflow?.apply(widget.settings);
+                refresh();
+              },
+            )),
+      ),
       // Only offered on a build that has a sender: a setting whose switch does
       // nothing is worse than no setting.
       if (widget.emailer != null)
@@ -2835,6 +3277,7 @@ class _PosAppState extends State<PosApp> {
       ),
       SettingsEntry(
         title: 'Staff',
+        subtitle: 'Add employees, set role and PIN',
         icon: Icons.badge_outlined,
         keyValue: 'set-staff',
         group: 'People & customers',
@@ -2976,6 +3419,171 @@ class _PosAppState extends State<PosApp> {
         buildDefault: widget.config.lanDefault,
         facts: widget.lan == null ? null : () => widget.lan!.facts,
         onSyncNow: widget.lan?.pass,
+        onJoinPrimary: widget.lan == null
+            ? null
+            : (peer, pin, {onProgress}) async {
+                // Never call tr(context) after an await here: a deactivated
+                // element makes Localizations.localeOf throw a null-check
+                // FlutterError, which we were surfacing as a join failure.
+                void report(String label, double p) {
+                  try {
+                    onProgress?.call(label, p);
+                  } catch (_) {}
+                }
+
+                Future<String?> runStep(
+                  String name,
+                  double fraction,
+                  FutureOr<void> Function() body,
+                ) async {
+                  report(name, fraction);
+                  try {
+                    await body();
+                    return null;
+                  } catch (e, st) {
+                    return '$name: $e\n$st';
+                  }
+                }
+
+                final lan = widget.lan;
+                if (lan == null) {
+                  return 'LAN is not running. Turn on Share on this network and restart.';
+                }
+
+                // Pairing is applied only after the snapshot lands, so a failed
+                // join cannot leave Secondary + a half-copied shop key stuck on.
+                String? pendingKey;
+                try {
+                  report('Connecting to primary...', 0.05);
+                  final payload = await lan.joinWithPrimary(peer, pin);
+                  final key = payload['shop_key'];
+                  if (key is! String || key.isEmpty) {
+                    return 'Primary answered without a shop key.';
+                  }
+                  pendingKey = key;
+
+                  var err = await runStep('Section settings...', 0.20, () {
+                    final configs = payload['section_configs'];
+                    if (configs is! Map) return;
+                    widget.settings.applySectionConfigSnapshot({
+                      for (final e in configs.entries)
+                        if (e.value is Map)
+                          '${e.key}':
+                              (e.value as Map).cast<String, dynamic>(),
+                    });
+                  });
+                  if (err != null) return err;
+
+                  err = await runStep('Shop settings...', 0.28, () {
+                    final bundle = payload['shop_bundle'];
+                    if (bundle is! Map) return;
+                    widget.settings
+                        .applyShopBundle(bundle.cast<String, dynamic>());
+                  });
+                  if (err != null) return err;
+
+                  err = await runStep('Staff roster...', 0.36, () {
+                    final roster = payload['users'];
+                    if (roster is! List || roster.isEmpty) return;
+                    widget.users.replaceAll([
+                      for (final raw in roster)
+                        if (raw is Map)
+                          Cashier.fromMap(raw.cast<String, dynamic>()),
+                    ]);
+                    _provisioningPin = null;
+                  });
+                  if (err != null) return err;
+
+                  err = await runStep('Printers...', 0.44, () {
+                    final printersPayload = payload['printers'];
+                    if (printersPayload is! Map) return;
+                    widget.printers.applyFromMap(
+                      printersPayload.cast<String, Object?>(),
+                    );
+                  });
+                  if (err != null) return err;
+
+                  err = await runStep('Odoo connection...', 0.52, () {
+                    final odooRaw = payload['odoo_endpoint'];
+                    if (odooRaw is! Map) return;
+                    final endpoint =
+                        OdooEndpoint.fromMap(odooRaw.cast<String, dynamic>());
+                    if (endpoint.isComplete) {
+                      widget.endpoints.save(endpoint);
+                      widget.odoo.configure(endpoint);
+                    }
+                  });
+                  if (err != null) return err;
+
+                  err = await runStep('Menu and categories...', 0.62, () {
+                    final catalogueRaw = payload['catalogue'];
+                    if (catalogueRaw is! Map) return;
+                    widget.catalogue
+                        .applyLanSnapshot(catalogueRaw.cast<String, dynamic>());
+                  });
+                  if (err != null) return err;
+
+                  err = await runStep('Floor plan...', 0.72, () {
+                    final tablesRaw = payload['tables'];
+                    if (tablesRaw is! List) return;
+                    for (final raw in tablesRaw) {
+                      if (raw is! Map) continue;
+                      try {
+                        widget.tables.upsert(
+                          PosTable.fromMap(raw.cast<String, dynamic>()),
+                          announce: false,
+                        );
+                      } catch (_) {}
+                    }
+                  });
+                  if (err != null) return err;
+
+                  err = await runStep('Open tables...', 0.80, () {
+                    final openRaw = payload['open_orders'];
+                    if (openRaw is! List) return;
+                    for (final raw in openRaw) {
+                      if (raw is! Map) continue;
+                      try {
+                        widget.orders.save(
+                          Order.fromMap(raw.cast<String, dynamic>()),
+                          announce: false,
+                        );
+                      } catch (_) {}
+                    }
+                  });
+                  if (err != null) return err;
+
+                  err = await runStep('Staff attendance...', 0.88, () {
+                    final attendanceRaw = payload['attendance_open'];
+                    if (attendanceRaw is! List) return;
+                    widget.attendance.applyOpenSnapshot(attendanceRaw);
+                  });
+                  if (err != null) return err;
+
+                  report('Refreshing menu from server...', 0.94);
+                  if (widget.endpoints.isConfigured) {
+                    try {
+                      await widget.sync.refresh(force: true)
+                          .timeout(const Duration(seconds: 45));
+                    } catch (_) {
+                      // Catalogue from the join snapshot is already applied.
+                    }
+                  }
+
+                  report('Saving shop link...', 0.97);
+                  widget.settings.lanShopKey = pendingKey;
+                  widget.settings.deviceRole = DeviceRole.secondary;
+                  widget.settings.lanRolePromptDismissed = true;
+
+                  report('Done', 1.0);
+                  refresh();
+                  unawaited(_reconcileLan());
+                  if (mounted) setState(() {});
+                  return null;
+                } catch (e, st) {
+                  return 'Join failed: $e\n$st';
+                }
+              },
         onChanged: () {
           refresh();
           unawaited(_reconcileLan());
@@ -2986,47 +3594,86 @@ class _PosAppState extends State<PosApp> {
   /// passes straight through; anyone else must enter a manager PIN.
   Future<bool> _authorizeManager(BuildContext context) async {
     if (widget.auth.signedIn?.isManager ?? false) return true;
-    final ctrl = TextEditingController();
-    final codeCtrl = TextEditingController();
+    var pin = '';
+    var code = '';
     // Only a shop that has enrolled an authenticator is shown the second field, so
     // nothing changes for a till that does not use one.
     final second = widget.auth.managersUseSecondFactor;
     final entered = await showDialog<(String, String)>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(tr(ctx, 'Manager approval')),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(
-            key: const Key('manager-pin'),
-            controller: ctrl,
-            autofocus: true,
-            obscureText: true,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-                labelText: tr(ctx, 'Manager PIN'), border: const OutlineInputBorder()),
-          ),
-          if (second) ...[
-            const SizedBox(height: 10),
-            TextField(
-              key: const Key('manager-code'),
-              controller: codeCtrl,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                  labelText: tr(ctx, 'Authenticator code'),
-                  helperText: tr(ctx, 'Only if this manager set one up'),
-                  border: const OutlineInputBorder()),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final scheme = Theme.of(ctx).colorScheme;
+          return AlertDialog(
+            title: Text(tr(ctx, 'Manager approval')),
+            content: SizedBox(
+              width: 300,
+              child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  key: const Key('manager-pin'),
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Text(
+                    pin.isEmpty ? '····' : '•' * pin.length,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 26,
+                      letterSpacing: 8,
+                      fontWeight: FontWeight.w700,
+                      color: pin.isEmpty
+                          ? scheme.onSurfaceVariant
+                          : scheme.primary,
+                    ),
+                  ),
+                ),
+                if (second) ...[
+                  const SizedBox(height: 10),
+                  TextField(
+                    key: const Key('manager-code'),
+                    keyboardType: TextInputType.number,
+                    onChanged: (v) => setLocal(() => code = v.trim()),
+                    decoration: InputDecoration(
+                        labelText: tr(ctx, 'Authenticator code'),
+                        helperText: tr(ctx, 'Only if this manager set one up'),
+                        border: const OutlineInputBorder()),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                NumericKeypad(
+                  decimal: false,
+                  compact: true,
+                  onKey: (k) {
+                    if (pin.length >= 6) return;
+                    setLocal(() => pin += k);
+                  },
+                  onBackspace: () => setLocal(() =>
+                      pin = pin.isEmpty ? pin : pin.substring(0, pin.length - 1)),
+                  onClear: () => setLocal(() => pin = ''),
+                ),
+              ]),
+              ),
             ),
-          ],
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-            key: const Key('manager-ok'),
-            onPressed: () =>
-                Navigator.pop(ctx, (ctrl.text.trim(), codeCtrl.text.trim())),
-            child: Text(tr(ctx, 'Approve')),
-          ),
-        ],
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(tr(ctx, 'Cancel'))),
+              FilledButton(
+                key: const Key('manager-ok'),
+                onPressed: pin.isEmpty
+                    ? null
+                    : () => Navigator.pop(ctx, (pin, code)),
+                child: Text(tr(ctx, 'Approve')),
+              ),
+            ],
+          );
+        },
       ),
     );
     if (entered == null || entered.$1.isEmpty) return false;
@@ -3073,9 +3720,23 @@ class _PosAppState extends State<PosApp> {
     final lines =
         only ?? order.lines.where((l) => !l.printedToKitchen && l.dueAt(now)).toList();
     if (lines.isEmpty) return KitchenFireResult.sent;
+    // Number the bill before the first kitchen ticket, so the pass and the
+    // receipt quote the same DDMM-SEQ-TAG guests and staff can search for.
+    final session = _session;
+    if (session != null) {
+      session.ensureOrderNo(order);
+      widget.orders.save(order, announce: false);
+    } else if (order.orderNo == null) {
+      order.orderNo = widget.settings.nextOrderNumber(widget.deviceId);
+      widget.orders.save(order, announce: false);
+    }
     // The ticket says which part of the floor the plate is going to, resolved from
     // the floor plan on this device.
-    final builder = KitchenTicketBuilder(sectionOf: widget.tables.sectionFor);
+    final builder = KitchenTicketBuilder(
+      sectionOf: widget.tables.sectionFor,
+      categoryNameOf: (id) => widget.catalogue.categoryById(id)?.name,
+      serverNameOf: (id) => widget.users.byId(id)?.name,
+    );
     // Route each line to its category's station, so a multi-station kitchen sends
     // hot food and bar drinks to different printers. Unmapped categories fall to
     // the single default kitchen.
@@ -3128,8 +3789,11 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _fireVoid(Order order, OrderLine line, String reason) async {
-    final bytes = KitchenTicketBuilder(sectionOf: widget.tables.sectionFor)
-        .buildVoid(order, line, reason);
+    final bytes = KitchenTicketBuilder(
+      sectionOf: widget.tables.sectionFor,
+      categoryNameOf: (id) => widget.catalogue.categoryById(id)?.name,
+      serverNameOf: (id) => widget.users.byId(id)?.name,
+    ).buildVoid(order, line, reason);
     // Void goes to the station(s) this line was actually fired to; only when that
     // was not recorded (older orders) do we fall back to the current routing.
     final stations = line.firedStations.isNotEmpty

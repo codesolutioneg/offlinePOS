@@ -73,8 +73,8 @@ class PosTable {
   /// Throws if the payload is not a table. An unreadable event is refused by the
   /// applier rather than written as a half-built table on the floor.
   factory PosTable.fromMap(Map<String, dynamic> m) => PosTable(
-        id: m['id'] as String,
-        name: m['name'] as String,
+        id: '${m['id']}',
+        name: '${m['name'] ?? ''}',
         section: (m['section'] as String?) ?? 'Main',
         seats: (m['seats'] as num?)?.toInt() ?? 4,
         x: (m['pos_x'] as num?)?.toDouble() ?? 0,

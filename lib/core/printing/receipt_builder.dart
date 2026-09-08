@@ -74,11 +74,12 @@ class ReceiptBuilder {
     this.showPayment = true,
     this.showItemPrice = true,
     this.showTotals = true,
-    this.dividerStyle = 'line',
+    this.dividerStyle = 'equals',
     this.openDrawer = false,
     this.logo,
     this.paymentLabels = const {},
     this.sectionOf,
+    this.serverNameOf,
   });
 
   final String shopName;
@@ -130,6 +131,9 @@ class ReceiptBuilder {
   /// where it stands now, which is the answer a waiter holding the slip wants.
   final String? Function(String tableLabel)? sectionOf;
 
+  /// Cashier id → display name for the Dishflow "Server:" row.
+  final String? Function(String cashierId)? serverNameOf;
+
   /// The printer command that puts the shop's mark above the name, or null for the
   /// text-only slip this always printed. Composed by the caller (see PrinterLogo)
   /// because which of the two logo routes a shop is on depends on its hardware, and
@@ -150,7 +154,11 @@ class ReceiptBuilder {
 
   Uint8List _slip(Order order, {bool reprint = false, bool bill = false}) {
     final p = EscPos(columns: columns)..reset();
-    final divider = _dividerChars[dividerStyle] ?? '-';
+    // Dishflow classic: major rules are '=', minor (before totals) are '-'.
+    // Other designer styles keep one character for every rule.
+    // Unknown styles fall back to a dashed rule rather than printing nothing.
+    final major = _dividerChars[dividerStyle] ?? '-';
+    final minor = dividerStyle == 'equals' ? '-' : major;
 
     p.align(EscPosAlign.center);
     // Above the name, where a customer looks first, and while the printer is still
@@ -175,43 +183,64 @@ class ReceiptBuilder {
     // A sale corrected after it was first tendered says so, so a customer holding
     // the slip from before the correction can see which of the two stands.
     if (order.amended) p.centred('*** AMENDED ***');
-    p.align(EscPosAlign.left).rule(divider);
 
-    // Where the sale was served, so a delivery or table sale reads differently
-    // from a counter one on the same roll.
-    if (showOrderType) p.line(order.type.label);
-    // Section, table and covers, only for a dine-in that actually carries them: a
-    // counter sale must never print "Table null". The section leads because a floor
-    // with a terrace and a first floor can have a "5" on each, and the runner
-    // reading the slip needs to know which building he is walking to.
-    if (showTable && order.type == OrderType.dineIn) {
-      final seating = [
-        if (order.tableLabel != null) ..._seating(order.tableLabel!),
-        if (order.guestCount != null) '${order.guestCount} guests',
-      ].join(' - ');
-      if (seating.isNotEmpty) p.line(seating);
+    // Where the sale was served — Dishflow English labels.
+    if (showOrderType) {
+      p.line(switch (order.type) {
+        OrderType.dineIn => 'DINE IN',
+        OrderType.toGo => 'TO GO',
+        OrderType.takeaway => 'TAKEAWAY',
+        OrderType.delivery => 'DELIVERY',
+      });
     }
-    // Time of sale and the order's own reference, each on its own toggle but sharing
-    // a line when both print.
-    final stamped = [
-      if (showDateTime) _stamp(order.createdAt),
-      if (showNumber) '#${order.displayNo}',
-    ].join('  ');
-    if (stamped.isNotEmpty) p.line(stamped);
-    if (showCashier) p.line('Cashier: ${order.cashierId}');
+
+    p.align(EscPosAlign.left).rule(major);
+
+    // Dishflow classic table banner: * Table N * between equals rules.
+    if (showTable && order.type == OrderType.dineIn && order.tableLabel != null) {
+      final seating = _seating(order.tableLabel!).join(' - ');
+      if (seating.isNotEmpty) {
+        p.align(EscPosAlign.center)
+            .size(doubleWidth: true, doubleHeight: true)
+            .bold(true)
+            .centred('* $seating *')
+            .bold(false)
+            .size();
+        p.align(EscPosAlign.left).rule(major);
+      }
+    }
+
+    // Date/time left (Dishflow MM/DD/YY h:mm AM/PM), ORDER:ref right.
+    if (showDateTime || showNumber) {
+      p.bold(true).row(
+            showDateTime ? _stamp(order.createdAt) : '',
+            showNumber ? 'ORDER:${order.displayNo}' : '',
+          ).bold(false);
+    }
+
+    // Server / covers on one row — Dishflow classic uses Server:, not Cashier:.
+    final name = serverNameOf?.call(order.cashierId)?.trim();
+    final serverTx = showCashier
+        ? 'Server: ${(name != null && name.isNotEmpty) ? name : order.cashierId}'
+        : '';
+    final custTx =
+        order.guestCount != null ? 'Cust: (${order.guestCount})' : '';
+    if (serverTx.isNotEmpty || custTx.isNotEmpty) {
+      p.bold(true).row(serverTx, custTx).bold(false);
+    }
     if (order.customerName != null) p.line('Customer: ${order.customerName}');
     // A delivery slip goes out with the bag, so it has to be enough for the driver
     // to find the door and ring ahead. Name alone is a slip nobody can deliver.
     // Everything here is captured on the till, and prints with the line down.
     if (order.type == OrderType.delivery) {
       if (order.customerPhone != null && order.customerPhone!.isNotEmpty) {
-        p.line('Phone: ${order.customerPhone}');
+        p.bold(true).line('Phone: ${order.customerPhone}').bold(false);
       }
       if (order.customerAddress != null && order.customerAddress!.isNotEmpty) {
         // Wrapped here rather than left to the printer: half an address is no
         // address, and a roll that wraps mid-word is hard to read at a door.
         for (final part in _wrap('Address: ${order.customerAddress}')) {
-          p.line(part);
+          p.bold(true).line(part).bold(false);
         }
       }
       // The aggregator's own reference is what the rider and the call centre quote,
@@ -223,7 +252,7 @@ class ReceiptBuilder {
       if (channel.isNotEmpty) p.line('Channel: $channel');
       if (order.driverName != null) p.line('Driver: ${order.driverName}');
     }
-    p.rule(divider);
+    p.rule(major).feed();
 
     for (final l in order.lines) {
       // The base price is printed on the header and each modifier's amount below it,
@@ -244,12 +273,20 @@ class ReceiptBuilder {
       // to a price is ever negative.
       final replaced =
           l.modifiers.where((m) => m.total < 0).fold(0.0, (s, m) => s + m.total);
-      p.row('${_qty(l.quantity)} x ${l.name}',
+      // Dishflow classic: "2 Pizza" (no "x"), modifiers "  => Nx name".
+      p.row('${_qty(l.quantity)} ${l.name}',
           showItemPrice ? formatAmount(l.quantity * (l.unitPrice + replaced)) : '');
       for (final m in l.modifiers) {
+        final qtyPrefix =
+            m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
+        final label = '  => $qtyPrefix${m.name}';
         final amount =
             (!showItemPrice || m.total <= 0) ? '' : formatAmount(l.quantity * m.total);
-        p.row('   + ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}', amount);
+        if (amount.isEmpty) {
+          p.line(label);
+        } else {
+          p.row(label, amount);
+        }
       }
       if (l.discountPercent > 0) {
         p.row(_discountLabel('   line discount', l.discountPercent),
@@ -258,7 +295,7 @@ class ReceiptBuilder {
       if (l.note != null && l.note!.isNotEmpty) p.line('   ${l.note}');
     }
 
-    p.rule(divider);
+    p.rule(minor);
     // Show the breakdown only when there is one, so a plain sale stays a plain
     // receipt but a discounted delivery with a tip is fully itemised.
     // A taxed sale always gets the breakdown: with the tax added on top, a slip that
@@ -300,10 +337,9 @@ class ReceiptBuilder {
       if (order.tip > 0) p.row('Tip', formatAmount(order.tip));
     }
     if (showTotals) {
-      p.size(doubleHeight: true).bold(true)
-        ..row('TOTAL', formatAmount(order.total))
-        ..bold(false)
-        ..size();
+      // Full-width reverse bar so the black ribbon spans the paper.
+      p.feed().reverseBand('TOTAL DUE: ${formatAmount(order.total)}',
+          doubleHeight: true);
     }
 
     // Tender breakdown and change. A split payment prints one line per tender.
@@ -326,6 +362,7 @@ class ReceiptBuilder {
         p.row('Received', formatAmount(received));
         p.row('Change', formatAmount(received - order.total));
       }
+      p.rule(minor);
     }
 
     // A part-paid tab (an even or per-guest split settled one share at a time) still
@@ -335,10 +372,8 @@ class ReceiptBuilder {
     // nothing left to collect.
     if (bill && order.amountPaid > 0.001 && order.balance > 0.001) {
       p.row('Already paid', '-${formatAmount(order.amountPaid)}');
-      p.size(doubleHeight: true).bold(true)
-        ..row('BALANCE DUE', formatAmount(order.balance))
-        ..bold(false)
-        ..size();
+      p.feed().reverseBand('BALANCE DUE: ${formatAmount(order.balance)}',
+          doubleHeight: true);
     }
 
     if (footer != null) {
@@ -553,9 +588,14 @@ class ReceiptBuilder {
     return double.parse(shown) == percent ? '$head $shown%' : head;
   }
 
+  /// Dishflow classic stamp: `MM/DD/YY h:mm AM/PM` in local time.
   String _stamp(DateTime utc) {
     final d = utc.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
-    return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+    final h24 = d.hour;
+    final ap = h24 >= 12 ? 'PM' : 'AM';
+    final h12 = h24 % 12 == 0 ? 12 : h24 % 12;
+    final yy = (d.year % 100).toString().padLeft(2, '0');
+    return '${two(d.month)}/${two(d.day)}/$yy $h12:${two(d.minute)} $ap';
   }
 }
