@@ -92,13 +92,13 @@ class KitchenTicketBuilder {
           .size();
     }
 
-    // Table / seating — large, centered.
+    // Table / seating — large, centred (double-width aware via EscPos.centred).
     final tableLine = _tableDisplay(order);
     if (tableLine != null) {
       p.align(EscPosAlign.center)
           .size(doubleWidth: true, doubleHeight: true)
           .bold(true)
-          .centred(tableLine)
+          .centred('* $tableLine *')
           .bold(false)
           .size();
     }
@@ -113,19 +113,24 @@ class KitchenTicketBuilder {
 
     p.align(EscPosAlign.left).rule(major);
 
-    // Cust(s): N …… ORDER: short
+    // Cust(s) / ORDER — same displayNo as the customer receipt (no short form).
     final cust = order.guestCount != null
         ? 'Cust(s): ${order.guestCount}'
         : 'Cust(s): -';
-    final ord = 'ORDER: ${_shortOrder(order.displayNo)}';
+    final ord = 'ORDER:${order.displayNo}';
     p.bold(true).row(cust, ord).bold(false);
     p.rule(major);
 
-    // Date …… Server: name
+    // Date + server centred on the paper (not a left/right row).
+    p.align(EscPosAlign.center)
+        .bold(true)
+        .centred(_dateMdy(order.createdAt))
+        .bold(false);
     final server = serverNameOf?.call(order.cashierId)?.trim();
-    final serverTx =
-        (server != null && server.isNotEmpty) ? 'Server: $server' : '';
-    p.bold(true).row(_dateMdy(order.createdAt), serverTx).bold(false);
+    if (server != null && server.isNotEmpty) {
+      p.align(EscPosAlign.center).centred('Server: $server');
+    }
+    p.align(EscPosAlign.left);
 
     // Delivery contact under the header (kitchen needs who/phone, not address).
     if (order.type == OrderType.delivery) {
@@ -162,19 +167,23 @@ class KitchenTicketBuilder {
           .line('${_qty(l.quantity)}  ${l.name}')
           .bold(false)
           .size();
-      // Modifiers at normal height with a blank line above so they are not
-      // crushed under the double-height name (looked "مغوط" on paper).
+      // Modifiers: large + clear, quantity before the name ("4x Cheese").
       if (l.modifiers.isNotEmpty ||
           (l.note != null && l.note!.isNotEmpty)) {
         p.feed();
       }
       for (final m in l.modifiers) {
-        final label =
-            '    ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}';
-        p.line(label);
+        final qtyPrefix =
+            m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
+        final label = '    $qtyPrefix${m.name}';
+        p.size(doubleHeight: true).bold(true).line(label).bold(false).size();
       }
       if (l.note != null && l.note!.isNotEmpty) {
-        p.bold(true).line('    ** ${l.note} **').bold(false);
+        p.size(doubleHeight: true)
+            .bold(true)
+            .line('    ** ${l.note} **')
+            .bold(false)
+            .size();
       }
       p.feed();
     }
@@ -217,7 +226,7 @@ class KitchenTicketBuilder {
           order.guestCount != null
               ? 'Cust(s): ${order.guestCount}'
               : 'Cust(s): -',
-          'ORDER: ${_shortOrder(order.displayNo)}',
+          'ORDER:${order.displayNo}',
         ).bold(false);
     p.rule(major);
     p.align(EscPosAlign.center)
@@ -235,7 +244,8 @@ class KitchenTicketBuilder {
         .bold(false)
         .size();
     for (final m in line.modifiers) {
-      p.line('       ${m.name}');
+      final qtyPrefix = m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
+      p.size(doubleHeight: true).line('       $qtyPrefix${m.name}').size();
     }
     if (line.note != null && line.note!.isNotEmpty) {
       p.bold(true).line('       ** ${line.note} **').bold(false);
@@ -278,17 +288,6 @@ class KitchenTicketBuilder {
 
   String _qty(double q) =>
       q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toStringAsFixed(3);
-
-  /// Dishflow short order: middle segment of DDMM-SEQ-TAG, else digits / raw.
-  static String _shortOrder(String raw) {
-    final parts = raw.split('-');
-    if (parts.length >= 2 && RegExp(r'^\d+$').hasMatch(parts[1])) {
-      return parts[1];
-    }
-    final digits = raw.replaceAll(RegExp(r'\D'), '');
-    if (digits.isNotEmpty) return digits;
-    return raw.isNotEmpty ? raw : '-';
-  }
 
   static String _time12(DateTime utc) {
     final d = utc.toLocal();

@@ -570,11 +570,33 @@ class EscPos {
 
   /// Centre without relying on printer alignment, so it survives being logged
   /// or shown on screen as plain text.
+  ///
+  /// When double-width is on, each character is two cells wide, so padding is
+  /// computed against half the paper columns — otherwise banners drift right.
   EscPos centred(String s) {
-    if (s.length >= columns) return line(s);
-    final pad = (columns - s.length) ~/ 2;
+    final cols = _doubleWidth ? (columns ~/ 2).clamp(1, columns) : columns;
+    if (s.length >= cols) return line(s.substring(0, cols));
+    final pad = (cols - s.length) ~/ 2;
     // The padding is for the byte line only; a rendered band is centred by layout.
     return _emit(' ' * pad + s, rasterText: s, rasterAlign: EscPosAlign.center);
+  }
+
+  /// A full-width reverse (white-on-black) line: pads [s] with spaces to [columns]
+  /// so the black bar spans the whole paper, not only the glyphs.
+  EscPos reverseBand(String s, {bool doubleHeight = false}) {
+    final text = s.length > columns ? s.substring(0, columns) : s;
+    final pad = columns - text.length;
+    final left = pad ~/ 2;
+    final right = pad - left;
+    final filled = '${' ' * left}$text${' ' * right}';
+    return align(EscPosAlign.left)
+        .reverse(true)
+        .size(doubleHeight: doubleHeight)
+        .bold(true)
+        .line(filled)
+        .bold(false)
+        .size()
+        .reverse(false);
   }
 
   EscPos cut() {

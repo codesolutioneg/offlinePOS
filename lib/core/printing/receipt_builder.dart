@@ -201,7 +201,7 @@ class ReceiptBuilder {
       final seating = _seating(order.tableLabel!).join(' - ');
       if (seating.isNotEmpty) {
         p.align(EscPosAlign.center)
-            .size(doubleHeight: true)
+            .size(doubleWidth: true, doubleHeight: true)
             .bold(true)
             .centred('* $seating *')
             .bold(false)
@@ -273,12 +273,13 @@ class ReceiptBuilder {
       // to a price is ever negative.
       final replaced =
           l.modifiers.where((m) => m.total < 0).fold(0.0, (s, m) => s + m.total);
-      // Dishflow classic: "2 Pizza" (no "x"), modifiers as "  => name".
+      // Dishflow classic: "2 Pizza" (no "x"), modifiers "  => Nx name".
       p.row('${_qty(l.quantity)} ${l.name}',
           showItemPrice ? formatAmount(l.quantity * (l.unitPrice + replaced)) : '');
       for (final m in l.modifiers) {
-        final label =
-            '  => ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}';
+        final qtyPrefix =
+            m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
+        final label = '  => $qtyPrefix${m.name}';
         final amount =
             (!showItemPrice || m.total <= 0) ? '' : formatAmount(l.quantity * m.total);
         if (amount.isEmpty) {
@@ -336,18 +337,9 @@ class ReceiptBuilder {
       if (order.tip > 0) p.row('Tip', formatAmount(order.tip));
     }
     if (showTotals) {
-      // TOTAL DUE: reverse bar + double height only (not double width — that
-      // was huge; plain size was too small).
-      p.feed()
-          .align(EscPosAlign.center)
-          .reverse(true)
-          .size(doubleHeight: true)
-          .bold(true)
-          .centred('TOTAL DUE: ${formatAmount(order.total)}')
-          .bold(false)
-          .size()
-          .reverse(false)
-          .align(EscPosAlign.left);
+      // Full-width reverse bar so the black ribbon spans the paper.
+      p.feed().reverseBand('TOTAL DUE: ${formatAmount(order.total)}',
+          doubleHeight: true);
     }
 
     // Tender breakdown and change. A split payment prints one line per tender.
@@ -380,15 +372,8 @@ class ReceiptBuilder {
     // nothing left to collect.
     if (bill && order.amountPaid > 0.001 && order.balance > 0.001) {
       p.row('Already paid', '-${formatAmount(order.amountPaid)}');
-      p.align(EscPosAlign.center)
-          .reverse(true)
-          .size(doubleHeight: true)
-          .bold(true)
-          .centred('BALANCE DUE: ${formatAmount(order.balance)}')
-          .bold(false)
-          .size()
-          .reverse(false)
-          .align(EscPosAlign.left);
+      p.feed().reverseBand('BALANCE DUE: ${formatAmount(order.balance)}',
+          doubleHeight: true);
     }
 
     if (footer != null) {
