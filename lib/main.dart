@@ -43,6 +43,7 @@ import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
 import 'core/printing/printer_registry.dart';
 import 'core/sync/batch_push.dart';
+import 'core/sync/dishflow_wiring.dart';
 import 'core/sync/http_post.dart';
 import 'core/sync/outbox.dart';
 import 'core/sync/odoo_endpoint.dart';
@@ -334,6 +335,11 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     odoo.configure(savedEndpoint);
   }
 
+  // Owner mirror into Dishflow Firestore. Separate from Odoo: drains on the
+  // 20s loop when online, never blocks a sale. Apply now so a till that was
+  // already configured starts draining without opening settings again.
+  final dishflow = DishflowWiring(outbox: outbox)..apply(settings);
+
   // Nothing is bound or announced here. The node is only assembled; PosApp starts it
   // behind the first frame, so no part of opening the till waits on a socket, a LAN
   // address or a peer.
@@ -403,6 +409,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     reservations: reservations,
     assignments: assignments,
     lan: lan,
+    dishflow: dishflow,
     // The Z report by mail. Reads the settings on every attempt, so a password
     // corrected mid-evening is used by the next retry without a restart.
     emailer: EmailService(

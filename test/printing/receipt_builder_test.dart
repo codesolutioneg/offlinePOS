@@ -46,14 +46,14 @@ void main() {
 
   test('modifiers are indented under their line', () {
     final s = render(sample());
-    expect(s, contains('+ Extra Cheese'));
+    expect(s, contains('=> Extra Cheese'));
     final line = s.split('\n').firstWhere((l) => l.contains('Extra Cheese'));
-    expect(line.startsWith('   '), isTrue);
+    expect(line.startsWith('  =>'), isTrue);
   });
 
   test('a free modifier prints no amount', () {
     final line = render(sample()).split('\n').firstWhere((l) => l.contains('Tomato'));
-    expect(line.trimRight(), '   + Tomato');
+    expect(line.trimRight(), '  => Tomato');
   });
 
   test('the total matches the order and scales modifiers by quantity', () {
@@ -65,7 +65,7 @@ void main() {
   test('the reference comes from the order uuid, not a server counter', () {
     final o = sample();
     final expected = o.uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
-    expect(render(o), contains('#$expected'));
+    expect(render(o), contains('ORDER:$expected'));
   });
 
   test('a cash overpayment prints the cash received and the change owed', () {
@@ -99,10 +99,10 @@ void main() {
     expect(render(o), isNot(contains('Change')));
   });
 
-  test('narrow paper still ends flush right', () {
+  test('narrow paper still prints TOTAL DUE with the amount', () {
     final s = render(sample(), columns: 32);
-    final total = s.split('\n').firstWhere((l) => l.contains('TOTAL'));
-    expect(total.trimRight().length, 32);
+    final total = s.split('\n').firstWhere((l) => l.contains('TOTAL DUE'));
+    expect(total, contains('514.00'));
   });
 
   test('the time of sale prints in local time and can be switched off', () {
@@ -122,16 +122,18 @@ void main() {
     final o = sample();
     final ref = o.uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
     final s = render(o, showNumber: false);
-    expect(s, isNot(contains('#$ref')));
+    expect(s, isNot(contains('ORDER:$ref')));
     expect(s, contains('${o.createdAt.toLocal().year}-'));
   });
 
-  test('a dine-in table and its covers print on one line', () {
+  test('a dine-in table prints as a classic banner with covers', () {
     final o = Order(deviceId: 'till-1', cashierId: 'sara')
       ..tableLabel = 'A3'
       ..guestCount = 4
       ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10));
-    expect(render(o), contains('Table A3 - 4 guests'));
+    final s = render(o);
+    expect(s, contains('* Table A3 *'));
+    expect(s, contains('Cust: (4)'));
     expect(render(o, showTable: false), isNot(contains('Table A3')));
   });
 
@@ -155,8 +157,8 @@ void main() {
 
   test('hiding item prices keeps names and quantities but drops the amounts', () {
     final s = render(sample(), showItemPrice: false);
-    expect(s, contains('2 x Pizza'));
-    expect(s, contains('+ Extra Cheese'));
+    expect(s, contains('2 Pizza'));
+    expect(s, contains('=> Extra Cheese'));
     // No per-item amount, but the total still prints: the customer still pays.
     expect(s, isNot(contains('500.00')));
     expect(s, contains('514.00'));
@@ -231,7 +233,7 @@ void main() {
       orderNo: '1508-007-A1B',
       lines: [OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100)],
     );
-    expect(render(order), contains('#1508-007-A1B'));
+    expect(render(order), contains('ORDER:1508-007-A1B'));
   });
 
   test('a customer on a counter sale prints on the slip', () {
@@ -284,7 +286,7 @@ void main() {
       expect(item, contains('15.00'), reason: 'the price the customer was quoted');
       expect(item, isNot(contains('20.00')));
       expect(lines.firstWhere((l) => l.contains('Small')).trimRight(),
-          '   + Small');
+          '  => Small');
     });
 
     test('never prints a negative under the line', () {

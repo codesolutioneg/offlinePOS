@@ -32,24 +32,25 @@ void main() {
   test('the section leads the table', () {
     expect(
       render(dineIn(table: '5'), sectionOf: (_) => 'Terrace'),
-      contains('Terrace - Table 5'),
+      contains('* Terrace - Table 5 *'),
     );
   });
 
   test('the covers still follow both', () {
-    expect(
-      render(dineIn(table: '5', guests: 4), sectionOf: (_) => 'Terrace'),
-      contains('Terrace - Table 5 - 4 guests'),
-    );
+    final s = render(dineIn(table: '5', guests: 4), sectionOf: (_) => 'Terrace');
+    expect(s, contains('* Terrace - Table 5 *'));
+    expect(s, contains('Cust: (4)'));
   });
 
   test('a shop with no floor plan prints what it always printed', () {
-    expect(render(dineIn(table: 'A3', guests: 4)), contains('Table A3 - 4 guests'));
+    final s = render(dineIn(table: 'A3', guests: 4));
+    expect(s, contains('* Table A3 *'));
+    expect(s, contains('Cust: (4)'));
   });
 
   test('a table the floor does not know grows no empty separator', () {
     final text = render(dineIn(table: '9'), sectionOf: (_) => null);
-    expect(text, contains('Table 9'));
+    expect(text, contains('* Table 9 *'));
     expect(text, isNot(contains(' - Table 9')));
   });
 
@@ -57,7 +58,7 @@ void main() {
     // A shop that blanked a section name would otherwise get a slip starting with a
     // dash, which reads as a missing value rather than as an absent one.
     final text = render(dineIn(table: '9'), sectionOf: (_) => '');
-    expect(text, contains('Table 9'));
+    expect(text, contains('* Table 9 *'));
     expect(text, isNot(contains(' - Table 9')));
   });
 

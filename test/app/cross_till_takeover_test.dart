@@ -146,6 +146,7 @@ void main() {
     peerDb = Db.open(':memory:');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
     audit = AuditLog(db);
 
     peerOrders = OrderStore(peerDb, ownDeviceId: 'till-2');

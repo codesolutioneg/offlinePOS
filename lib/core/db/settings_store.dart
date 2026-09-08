@@ -550,7 +550,7 @@ class SettingsStore {
   /// Whether opening a fresh table asks which cashier is opening it, and assigns the
   /// table to them. Off by default: a single-operator till has nobody to choose
   /// between. A shop that shares one screen between waiters turns it on.
-  bool get askCashierOnOpen => getBool('ask_cashier_on_open');
+  bool get askCashierOnOpen => getBool('ask_cashier_on_open', fallback: true);
   set askCashierOnOpen(bool v) => setBool('ask_cashier_on_open', v);
 
   /// Whether opening a shift asks who is working this session and clocks them in.
@@ -636,7 +636,7 @@ class SettingsStore {
   /// between a waiter and their own table is friction for nothing. A shop where
   /// several people share a till and each answers for their own drawer wants the
   /// other answer: the cashier who opened the tab unlocks it, or a manager does.
-  bool get tableSecurity => getBool('table_security');
+  bool get tableSecurity => getBool('table_security', fallback: true);
   set tableSecurity(bool v) => setBool('table_security', v);
 
   /// Minutes of no touch before the till locks back to the PIN screen; 0 turns
@@ -687,7 +687,7 @@ class SettingsStore {
 
   /// Which character the receipt's separator lines are drawn with: 'line',
   /// 'equals', 'dots' or 'stars'.
-  String get receiptDividerStyle => getString('receipt_divider_style') ?? 'line';
+  String get receiptDividerStyle => getString('receipt_divider_style') ?? 'equals';
   set receiptDividerStyle(String v) => setString('receipt_divider_style', v);
 
   // ── what a tender is called on paper ─────────────────────────────
@@ -1549,4 +1549,35 @@ class SettingsStore {
 
   set cashVarianceTolerance(double v) => setString(
       'cash_variance_tolerance', v <= 0 ? null : v.toStringAsFixed(2));
+
+  // ── Dishflow owner mirror ─────────────────────────────────────────
+
+  bool get dishflowMirrorEnabled => getBool('dishflow_mirror_enabled');
+  set dishflowMirrorEnabled(bool v) => setBool('dishflow_mirror_enabled', v);
+
+  String? get dishflowProjectId => getString('dishflow_project_id');
+  set dishflowProjectId(String? v) =>
+      setString('dishflow_project_id', v?.trim());
+
+  String? get dishflowApiKey => getString('dishflow_api_key');
+  set dishflowApiKey(String? v) => setString('dishflow_api_key', v?.trim());
+
+  String? get dishflowOdooConnectionId =>
+      getString('dishflow_odoo_connection_id');
+  set dishflowOdooConnectionId(String? v) =>
+      setString('dishflow_odoo_connection_id', v?.trim());
+
+  String? get dishflowBranchId => getString('dishflow_branch_id');
+  set dishflowBranchId(String? v) => setString('dishflow_branch_id', v?.trim());
+
+  String? get dishflowBranchName => getString('dishflow_branch_name');
+  set dishflowBranchName(String? v) =>
+      setString('dishflow_branch_name', v?.trim());
+
+  /// Switch on, and every field the writer needs is filled in.
+  bool get dishflowMirrorReady =>
+      dishflowMirrorEnabled &&
+      (dishflowProjectId ?? '').isNotEmpty &&
+      (dishflowApiKey ?? '').isNotEmpty &&
+      (dishflowOdooConnectionId ?? '').isNotEmpty;
 }

@@ -56,6 +56,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
     audit = AuditLog(db);
     TableStore(db).add(name: '5');
     final auth =
@@ -110,6 +111,7 @@ void main() {
       settings: settings,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
+      loginManagersOnly: false,
       config: const TillConfig(),
     );
   }
@@ -137,12 +139,16 @@ void main() {
   }
 
   Future<void> enterPin(WidgetTester t, String pin) async {
-    await t.enterText(find.byKey(const Key('tab-pin')), pin);
+    for (final d in pin.split('')) {
+      await t.tap(find.byKey(Key('key-$d')).last);
+      await t.pump();
+    }
     await t.tap(find.byKey(const Key('tab-pin-ok')));
     await t.pumpAndSettle();
   }
 
   testWidgets('with the setting off anyone picks up any tab', (t) async {
+    settings.tableSecurity = false;
     final tab = anasTab();
 
     await t.pumpWidget(app());

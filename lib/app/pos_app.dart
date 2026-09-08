@@ -33,6 +33,7 @@ import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
 import '../core/widgets/feedback.dart';
+import '../core/widgets/numeric_keypad.dart';
 import '../core/printing/kitchen_ticket.dart';
 import '../core/printing/printer_logo.dart';
 import '../core/printing/printer_registry.dart';
@@ -40,6 +41,8 @@ import '../core/printing/printer_transport.dart';
 import '../core/printing/receipt_builder.dart';
 import '../core/printing/registry_printer.dart';
 import '../core/printing/spool_store.dart';
+import '../core/sync/dishflow_mirror.dart';
+import '../core/sync/dishflow_wiring.dart';
 import '../core/sync/odoo_endpoint.dart';
 import '../core/sync/odoo_puller.dart';
 import '../core/sync/odoo_wiring.dart';
@@ -71,6 +74,7 @@ import '../features/reports/reports_hub_screen.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/delivery_settings_screen.dart';
+import '../features/settings/dishflow_mirror_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
 import '../features/settings/email_settings_screen.dart';
 import '../features/settings/lan_settings_screen.dart';
@@ -127,12 +131,18 @@ class PosApp extends StatefulWidget {
     this.emailer,
     this.reservations,
     this.assignments,
+    this.dishflow,
+    this.loginManagersOnly = true,
     this.nowFn = DateTime.now,
   });
 
   /// The clock the idle lock reads. Injectable for the tests, exactly as the
   /// floor's booking badges inject theirs; production reads the real one.
   final DateTime Function() nowFn;
+
+  /// When true, the lock screen lists managers only. Cashiers clock in from
+  /// Attendance and open tables with their PIN.
+  final bool loginManagersOnly;
 
   /// Tables booked ahead. Null on a shop that does not take bookings and in the
   /// suites that predate them, and then the floor reads exactly as it did.
@@ -141,6 +151,9 @@ class PosApp extends StatefulWidget {
   /// Who works which table this service. Null in the suites that predate it, and
   /// then every table is open to whoever is signed in, exactly as before.
   final TableAssignmentStore? assignments;
+
+  /// Owner-mirror wiring for Dishflow. Null in suites that do not exercise it.
+  final DishflowWiring? dishflow;
 
   final AuthService auth;
   final UserStore users;
@@ -452,6 +465,7 @@ class _PosAppState extends State<PosApp> {
         // The number staff and customers actually say out loud. Per till and per
         // trading day, handed out when an order is parked or paid.
         nextOrderNo: () => widget.settings.nextOrderNumber(widget.deviceId),
+        settings: widget.settings,
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
       // The provisioning account is whoever is standing at a till that has just
@@ -1022,6 +1036,7 @@ class _PosAppState extends State<PosApp> {
                         users: widget.users,
                         onSignedIn: _signedIn,
                         provisioningPin: widget.provisioningPin,
+                        managersOnly: widget.loginManagersOnly,
                       )
                     : _home(session),
       ),
@@ -1211,7 +1226,7 @@ class _PosAppState extends State<PosApp> {
           // No per-sale push: orders are held and sent as one batch at shift
           // close, so the shared Odoo login is not hit per order.
           online: widget.sync.online,
-          pendingToSync: () => widget.sync.pendingSales,
+          pendingToSync: () => widget.sync.pendingToSync,
           // Tickets and receipts a printer would not take. They flush themselves,
           // but until they do the kitchen has not seen them.
           spooledJobs: () => _receiptPrinter.spooledCount,
@@ -1614,7 +1629,11 @@ class _PosAppState extends State<PosApp> {
 
   void _openAttendance(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => AttendanceScreen(users: widget.users, attendance: widget.attendance),
+      builder: (_) => AttendanceScreen(
+            users: widget.users,
+            attendance: widget.attendance,
+            auth: widget.auth,
+          ),
     ));
   }
 
@@ -1724,9 +1743,16 @@ class _PosAppState extends State<PosApp> {
       // out of the table, so withdrawing one there would take back a sale that is
       // on its way to being booked. Refuse instead: the answer a moment later is a
       // refund, which is right and reversible, rather than a silent divergence.
-      withdrawPush: (uuid) =>
-          widget.sync.state != SyncState.working &&
-          widget.outboxStore.withdrawPending('order.push', uuid),
+      withdrawPush: (uuid) {
+        if (widget.sync.state == SyncState.working) return false;
+        // Odoo queue is the gate: if that sale is already on the wire, refuse.
+        if (!widget.outboxStore.withdrawPending('order.push', uuid)) {
+          return false;
+        }
+        // Mirror row may not exist (mirror off); pull it when it does.
+        widget.outboxStore.withdrawPending(DishflowMirror.kind, uuid);
+        return true;
+      },
     );
     if (!reopened) {
       if (context.mounted) {
@@ -1767,6 +1793,11 @@ class _PosAppState extends State<PosApp> {
           // and a slip printed for the customer.
           widget.orders.save(refund);
           widget.outbox.enqueue('order.push', refund.uuid, refund.toServerPayload());
+          DishflowMirror.enqueueIfEnabled(
+            outbox: widget.outbox,
+            settings: widget.settings,
+            order: refund,
+          );
           widget.audit.record(refund.cashierId, 'order.refunded',
               detail: '${refund.uuid} of ${original.uuid}');
           unawaited(_printReceipt(refund));
@@ -2012,6 +2043,12 @@ class _PosAppState extends State<PosApp> {
               for (final u in widget.users.all())
                 (id: u.id, name: u.name, active: u.active),
             ],
+            onDuty: [
+              for (final e in widget.attendance.onNow())
+                if (widget.users.byId(e.staffId) case final u?)
+                  (id: u.id, name: u.name),
+            ],
+            onOpenAttendance: () => _openAttendance(floorContext),
             myCashierId: session.cashierId,
             // A role that may open anybody's table sees the names and no locks. Read
             // from the role rather than from the account being a manager, so a shop
@@ -2132,25 +2169,24 @@ class _PosAppState extends State<PosApp> {
                 unawaited(_resumeTab(floorContext, session, held.first));
                 return;
               }
+              // Who opens first (attendance + their own PIN), then covers. Asking
+              // guests before the opener made the floor look like seating skipped
+              // attribution entirely.
+              String? openedBy;
+              if (widget.settings.askCashierOnOpen ||
+                  widget.users.active().length > 1) {
+                if (!floorContext.mounted) return;
+                openedBy = await _pickOpenerWithPin(floorContext);
+                if (openedBy == null) return;
+              }
               // Covers belong to a bill that is eaten at the table. A to-go is packed
               // while its guests wait, so it takes the table without taking a count.
               final dineIn = seatAs == OrderType.dineIn;
               int? covers;
               if (dineIn && widget.settings.askGuestCount) {
+                if (!floorContext.mounted) return;
                 covers = await _askGuestCount(floorContext, t.seats);
                 if (covers == null) return;
-              }
-              // On a shared till, ask who is opening the table and assign it to them.
-              // Cancelling the prompt leaves the table unopened, so nobody's tab is
-              // started under the wrong name.
-              String? openedBy;
-              if (widget.assignments != null && widget.settings.askCashierOnOpen) {
-                if (!floorContext.mounted) return;
-                openedBy = await _pickCashier(
-                    floorContext,
-                    tr(floorContext, 'Who is opening this table?'),
-                    widget.users.active().map((u) => u.id).toList());
-                if (openedBy == null) return;
               }
               if (!mounted) return;
               setState(() {
@@ -2165,6 +2201,7 @@ class _PosAppState extends State<PosApp> {
                 // charge is priced per guest, so the count has to be on the order
                 // before the line is rung.
                 if (dineIn) _addPreorders(session, t, guests: seated);
+                if (openedBy != null) session.rebindCashier(openedBy);
                 _onCounter = true;
               });
               // Attribute the table to whoever opened it, using the same assignment
@@ -2296,35 +2333,76 @@ class _PosAppState extends State<PosApp> {
   /// the same question of whoever is standing there; this one names the person it
   /// expects, because a cashier being asked for "a PIN" with no name on it does not
   /// know whose is wanted.
+  ///
+  /// Touch-first: dots + on-screen pad (no OS soft keyboard), same as the lock
+  /// screen. A restaurant till is a fingertip, not a keyboard.
   Future<String?> _promptPin(BuildContext context, String title, String message,
       {required String subject}) {
-    final ctrl = TextEditingController();
+    var pin = '';
     return showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('$subject. $message'),
-          const SizedBox(height: 12),
-          TextField(
-            key: const Key('tab-pin'),
-            controller: ctrl,
-            autofocus: true,
-            obscureText: true,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-                labelText: tr(ctx, 'PIN'), border: const OutlineInputBorder()),
-          ),
-        ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-            key: const Key('tab-pin-ok'),
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: Text(tr(ctx, 'Open tab')),
-          ),
-        ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final scheme = Theme.of(ctx).colorScheme;
+          return AlertDialog(
+            title: Text(title),
+            content: SizedBox(
+              width: 300,
+              child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text('$subject. $message'),
+                  const SizedBox(height: 10),
+                  Container(
+                    key: const Key('tab-pin'),
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color:
+                          scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: scheme.outlineVariant),
+                    ),
+                    child: Text(
+                      pin.isEmpty ? '····' : '•' * pin.length,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 26,
+                        letterSpacing: 8,
+                        fontWeight: FontWeight.w700,
+                        color: pin.isEmpty
+                            ? scheme.onSurfaceVariant
+                            : scheme.primary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  NumericKeypad(
+                    decimal: false,
+                    compact: true,
+                    onKey: (k) {
+                      if (pin.length >= 6) return;
+                      setLocal(() => pin += k);
+                    },
+                    onBackspace: () => setLocal(() => pin =
+                        pin.isEmpty ? pin : pin.substring(0, pin.length - 1)),
+                    onClear: () => setLocal(() => pin = ''),
+                  ),
+                ]),
+              ),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(tr(ctx, 'Cancel'))),
+              FilledButton(
+                key: const Key('tab-pin-ok'),
+                onPressed: pin.isEmpty ? null : () => Navigator.pop(ctx, pin),
+                child: Text(tr(ctx, 'Open tab')),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -2436,6 +2514,13 @@ class _PosAppState extends State<PosApp> {
     final moved = held.where((o) => o.cashierId == from).toList();
     for (final tab in moved) {
       widget.orders.reassignCashier(tab.uuid, to);
+      // Floor ownership follows the tabs, or the next waiter still sees the old
+      // name on the tile after the bills have moved.
+      final label = tab.tableLabel;
+      if (label != null && widget.assignments != null) {
+        final table = widget.tables.byName(label);
+        if (table != null) _assignTable(table, to);
+      }
     }
     widget.audit.record(_session?.cashierId ?? 'system', 'tables.transferred',
         detail: '$from->$to|${moved.length} tab(s)');
@@ -2443,6 +2528,100 @@ class _PosAppState extends State<PosApp> {
     setState(() {});
     showToast(context, '${tr(context, 'Tabs moved')}: ${moved.length}',
         kind: ToastKind.success);
+  }
+
+  /// Staff offered when opening a table: only people on the clock. The manager
+  /// unlocks the till; cashiers appear here after Attendance → Clock in.
+  List<String> _openerCandidates() {
+    final onDuty = widget.attendance.onNow().map((e) => e.staffId).toSet();
+    final active = widget.users.active();
+    final real = active.where((u) => u.id != BootstrapCashier.id).toList();
+    final pool = real.isEmpty ? active : real;
+    return pool.where((u) => onDuty.contains(u.id)).map((u) => u.id).toList();
+  }
+
+  /// Pick who opens the table and verify that person's own PIN.
+  ///
+  /// Manager PIN is not a substitute here: attribution must match who is
+  /// actually opening. Managers elevate elsewhere (resume lock, voids, etc.).
+  Future<String?> _pickOpenerWithPin(BuildContext context) async {
+    final ids = _openerCandidates();
+    if (ids.isEmpty) {
+      if (context.mounted) {
+        showToast(
+          context,
+          tr(context, 'Clock in from Attendance before opening a table'),
+          kind: ToastKind.error,
+        );
+      }
+      return null;
+    }
+    final picked = await _pickOpenerDropdown(
+      context,
+      tr(context, 'Who is opening this table?'),
+      ids,
+    );
+    if (picked == null || !context.mounted) return null;
+    final user = widget.users.byId(picked);
+    final pin = await _promptPin(
+      context,
+      tr(context, 'Confirm with PIN'),
+      tr(context, 'Enter this person\'s PIN'),
+      subject: user?.name ?? picked,
+    );
+    if (pin == null || pin.isEmpty) return null;
+    final ok = await widget.auth.authorizeCashier(picked, pin);
+    if (!ok) {
+      if (context.mounted) {
+        showToast(context, tr(context, 'Incorrect PIN'), kind: ToastKind.error);
+      }
+      return null;
+    }
+    return picked;
+  }
+
+  /// Dropdown of who may open the table (on-duty staff).
+  Future<String?> _pickOpenerDropdown(
+      BuildContext context, String title, List<String> ids) {
+    final byId = {for (final u in widget.users.active()) u.id: u.name};
+    String? selected = ids.length == 1 ? ids.first : null;
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(title),
+          content: DropdownButtonFormField<String>(
+            key: const Key('opener-dropdown'),
+            value: selected,
+            isExpanded: true,
+            decoration: InputDecoration(
+              labelText: tr(ctx, 'Select user'),
+              border: const OutlineInputBorder(),
+            ),
+            items: [
+              for (final id in ids)
+                DropdownMenuItem<String>(
+                  value: id,
+                  child: Text(byId[id] ?? id),
+                ),
+            ],
+            onChanged: (v) => setLocal(() => selected = v),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr(ctx, 'Cancel')),
+            ),
+            FilledButton(
+              key: const Key('opener-ok'),
+              onPressed:
+                  selected == null ? null : () => Navigator.pop(ctx, selected),
+              child: Text(tr(ctx, 'OK')),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Pick one of the staff on this till by name, for the transfer.
@@ -2534,41 +2713,132 @@ class _PosAppState extends State<PosApp> {
     final max = seats > 0 ? (seats > 40 ? 40 : seats) : 8;
     return showDialog<int>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        key: const Key('guest-count-prompt'),
-        title: Text(tr(ctx, 'How many guests?')),
-        content: SizedBox(
-          width: 320,
-          child: DropdownButton<int>(
-            key: const Key('guest-count-dropdown'),
-            // Nothing is preselected: the covers decide the per-guest lines and
-            // every per-head figure in the reports, so the waiter picks rather
-            // than accepts whatever sat at the top of the list.
-            value: null,
-            isExpanded: true,
-            hint: Text(tr(ctx, 'Choose a number')),
-            items: [
-              for (var n = 1; n <= max; n++)
-                DropdownMenuItem<int>(
-                  key: Key('guests-$n'),
-                  value: n,
-                  child: Text('$n'),
+      builder: (ctx) {
+        var otherMode = false;
+        final otherCtrl = TextEditingController();
+        return StatefulBuilder(
+          builder: (ctx, setSt) {
+            Widget square({
+              required Key key,
+              required String label,
+              required VoidCallback onTap,
+              double fontSize = 22,
+            }) {
+              return Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  key: key,
+                  onTap: onTap,
+                  borderRadius: BorderRadius.circular(14),
+                  child: Ink(
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.55),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        label,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: fontSize,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.brandNavy,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-            ],
-            // Picking a number is the answer; there is nothing further to confirm.
-            onChanged: (n) {
-              if (n != null) Navigator.pop(ctx, n);
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            key: const Key('guests-cancel'),
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(tr(ctx, 'Cancel')),
-          ),
-        ],
-      ),
+              );
+            }
+
+            if (otherMode) {
+              return AlertDialog(
+                key: const Key('guest-count-other'),
+                title: Text(tr(ctx, 'How many guests?')),
+                content: TextField(
+                  key: const Key('guests-other-input'),
+                  controller: otherCtrl,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: tr(ctx, 'Number of guests'),
+                    border: const OutlineInputBorder(),
+                  ),
+                  onSubmitted: (v) {
+                    final n = int.tryParse(v.trim());
+                    if (n != null && n > 0) Navigator.pop(ctx, n);
+                  },
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => setSt(() => otherMode = false),
+                    child: Text(tr(ctx, 'Back')),
+                  ),
+                  FilledButton(
+                    key: const Key('guests-other-ok'),
+                    onPressed: () {
+                      final n = int.tryParse(otherCtrl.text.trim());
+                      if (n != null && n > 0) Navigator.pop(ctx, n);
+                    },
+                    child: Text(tr(ctx, 'OK')),
+                  ),
+                ],
+              );
+            }
+
+            return AlertDialog(
+              key: const Key('guest-count-prompt'),
+              title: Text(tr(ctx, 'How many guests?')),
+              content: SizedBox(
+                key: const Key('guest-count-dropdown'),
+                width: 360,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 400),
+                  child: GridView.builder(
+                    shrinkWrap: true,
+                    // Seat numbers + Other.
+                    itemCount: max + 1,
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 4,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 1,
+                    ),
+                    itemBuilder: (_, i) {
+                      if (i == max) {
+                        return square(
+                          key: const Key('guests-other'),
+                          label: tr(ctx, 'Other'),
+                          fontSize: 14,
+                          onTap: () => setSt(() => otherMode = true),
+                        );
+                      }
+                      final n = i + 1;
+                      return square(
+                        key: Key('guests-$n'),
+                        label: '$n',
+                        onTap: () => Navigator.pop(ctx, n),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  key: const Key('guests-cancel'),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(tr(ctx, 'Cancel')),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -2768,6 +3038,23 @@ class _PosAppState extends State<PosApp> {
           if (ok && context.mounted) _openSettings(context);
         },
       ),
+      SettingsEntry(
+        title: 'Dishflow owner mirror',
+        subtitle: 'Show paid sales in owner Flash when online',
+        icon: Icons.cloud_upload_outlined,
+        keyValue: 'set-dishflow',
+        group: 'Server',
+        onTap: () => pushGated(
+            Permission.openSettings,
+            DishflowMirrorSettingsScreen(
+              settings: widget.settings,
+              sender: widget.dishflow?.sender,
+              onChanged: () {
+                widget.dishflow?.apply(widget.settings);
+                refresh();
+              },
+            )),
+      ),
       // Only offered on a build that has a sender: a setting whose switch does
       // nothing is worse than no setting.
       if (widget.emailer != null)
@@ -2835,6 +3122,7 @@ class _PosAppState extends State<PosApp> {
       ),
       SettingsEntry(
         title: 'Staff',
+        subtitle: 'Add employees, set role and PIN',
         icon: Icons.badge_outlined,
         keyValue: 'set-staff',
         group: 'People & customers',
@@ -2986,47 +3274,86 @@ class _PosAppState extends State<PosApp> {
   /// passes straight through; anyone else must enter a manager PIN.
   Future<bool> _authorizeManager(BuildContext context) async {
     if (widget.auth.signedIn?.isManager ?? false) return true;
-    final ctrl = TextEditingController();
-    final codeCtrl = TextEditingController();
+    var pin = '';
+    var code = '';
     // Only a shop that has enrolled an authenticator is shown the second field, so
     // nothing changes for a till that does not use one.
     final second = widget.auth.managersUseSecondFactor;
     final entered = await showDialog<(String, String)>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(tr(ctx, 'Manager approval')),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(
-            key: const Key('manager-pin'),
-            controller: ctrl,
-            autofocus: true,
-            obscureText: true,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-                labelText: tr(ctx, 'Manager PIN'), border: const OutlineInputBorder()),
-          ),
-          if (second) ...[
-            const SizedBox(height: 10),
-            TextField(
-              key: const Key('manager-code'),
-              controller: codeCtrl,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                  labelText: tr(ctx, 'Authenticator code'),
-                  helperText: tr(ctx, 'Only if this manager set one up'),
-                  border: const OutlineInputBorder()),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final scheme = Theme.of(ctx).colorScheme;
+          return AlertDialog(
+            title: Text(tr(ctx, 'Manager approval')),
+            content: SizedBox(
+              width: 300,
+              child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  key: const Key('manager-pin'),
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Text(
+                    pin.isEmpty ? '····' : '•' * pin.length,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 26,
+                      letterSpacing: 8,
+                      fontWeight: FontWeight.w700,
+                      color: pin.isEmpty
+                          ? scheme.onSurfaceVariant
+                          : scheme.primary,
+                    ),
+                  ),
+                ),
+                if (second) ...[
+                  const SizedBox(height: 10),
+                  TextField(
+                    key: const Key('manager-code'),
+                    keyboardType: TextInputType.number,
+                    onChanged: (v) => setLocal(() => code = v.trim()),
+                    decoration: InputDecoration(
+                        labelText: tr(ctx, 'Authenticator code'),
+                        helperText: tr(ctx, 'Only if this manager set one up'),
+                        border: const OutlineInputBorder()),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                NumericKeypad(
+                  decimal: false,
+                  compact: true,
+                  onKey: (k) {
+                    if (pin.length >= 6) return;
+                    setLocal(() => pin += k);
+                  },
+                  onBackspace: () => setLocal(() =>
+                      pin = pin.isEmpty ? pin : pin.substring(0, pin.length - 1)),
+                  onClear: () => setLocal(() => pin = ''),
+                ),
+              ]),
+              ),
             ),
-          ],
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-            key: const Key('manager-ok'),
-            onPressed: () =>
-                Navigator.pop(ctx, (ctrl.text.trim(), codeCtrl.text.trim())),
-            child: Text(tr(ctx, 'Approve')),
-          ),
-        ],
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(tr(ctx, 'Cancel'))),
+              FilledButton(
+                key: const Key('manager-ok'),
+                onPressed: pin.isEmpty
+                    ? null
+                    : () => Navigator.pop(ctx, (pin, code)),
+                child: Text(tr(ctx, 'Approve')),
+              ),
+            ],
+          );
+        },
       ),
     );
     if (entered == null || entered.$1.isEmpty) return false;

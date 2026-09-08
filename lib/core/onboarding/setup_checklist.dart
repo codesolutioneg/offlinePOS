@@ -58,7 +58,8 @@ class SetupChecklist {
         SetupStep(
           id: 'staff',
           title: 'Add your staff',
-          detail: 'Everyone who rings a sale needs their own PIN.',
+          detail:
+              'Settings → Staff: create each employee, pick their role, set their PIN.',
           done: staffEnrolled,
         ),
       ]);

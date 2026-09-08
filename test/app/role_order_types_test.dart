@@ -55,6 +55,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
     tables = TableStore(db);
     audit = AuditLog(db);
     table5 = tables.add(name: '5');

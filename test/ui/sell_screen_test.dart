@@ -137,12 +137,10 @@ void main() {
     await t.tap(find.byKey(const Key('product-20')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('mod-2000')));
-    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('mod-2001')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
-    await t.pumpAndSettle();
     expect(session.current.lines.single.modifiers.length, 1);
+    expect(session.current.lines.single.modifiers.single.name, 'L');
     expect(session.total, 105);
   });
 
@@ -187,12 +185,10 @@ void main() {
         isNull);
 
     await t.tap(find.byKey(const Key('mod-3001-plus')));
-    await t.pumpAndSettle();
-    // The box is full at three, so every plus is now frozen.
+    // Cap filled → Dishflow auto-adds on the last step; settle after checking freeze.
+    await t.pump();
     expect(t.widget<IconButton>(find.byKey(const Key('mod-3001-plus'))).onPressed,
         isNull);
-
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
     await t.pumpAndSettle();
     final mods = session.current.lines.single.modifiers;
     expect(mods.firstWhere((m) => m.name == 'Chicken').quantity, 2);
@@ -219,13 +215,11 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('mod-4000')));
     await t.tap(find.byKey(const Key('mod-4001')));
-    await t.pumpAndSettle();
+    await t.pump();
     // The cap is reached; the third option cannot be added at all.
     expect(t.widget<IconButton>(find.byKey(const Key('mod-4002-plus'))).onPressed,
         isNull);
     await t.tap(find.byKey(const Key('mod-4002')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
     await t.pumpAndSettle();
     final mods = session.current.lines.single.modifiers;
     expect(mods.length, 2);

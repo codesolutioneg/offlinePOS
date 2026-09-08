@@ -105,6 +105,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
     shifts = ShiftStore(db);
     audit = AuditLog(db);
     TableStore(db)

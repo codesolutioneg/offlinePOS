@@ -57,6 +57,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
     // Seating here is about the order type / the receipt, not the covers, so the
     // guest prompt is off: on by default it would sit in front of every seating.
     settings.askGuestCount = false;
@@ -298,11 +299,7 @@ void main() {
       await signIn(t);
 
       await tapTable(t);
-      // The covers are picked from a list, so the menu opens before the number.
-      await t.tap(find.byKey(const Key('guest-count-dropdown')));
-      await t.pumpAndSettle();
-      await t.tap(find.descendant(
-          of: find.byKey(const Key('guests-2')), matching: find.text('2')));
+      await t.tap(find.byKey(const Key('guests-2')));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('product-10')));
       await t.pumpAndSettle();

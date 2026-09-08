@@ -2528,7 +2528,7 @@ class _SellScreenState extends State<SellScreen> {
               ),
             ),
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
             child: TextField(
               key: const Key('search'),
               focusNode: _searchFocus,
@@ -2541,121 +2541,160 @@ class _SellScreenState extends State<SellScreen> {
               onChanged: (v) => setState(() => _search = v),
             ),
           ),
-          SizedBox(height: 44, child: _categoryStrip()),
+          // Dishflow side layout: products centre, category squares on the right.
           Expanded(
-            child: products.isEmpty
-                ? EmptyState(
-                    icon: Icons.inventory_2_outlined,
-                    title: tr(context, 'No products'),
-                    message: tr(context, 'Try a different search or category'),
-                  )
-                : GridView.builder(
-                    padding: const EdgeInsets.all(8),
-                    // A fixed column count when the manager set a grid density,
-                    // otherwise fit tiles by width.
-                    gridDelegate: widget.gridColumns > 0
-                        ? SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: widget.gridColumns,
-                            childAspectRatio: 1.3,
-                            mainAxisSpacing: 8,
-                            crossAxisSpacing: 8)
-                        : const SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: 168,
-                            childAspectRatio: 1.05,
-                            mainAxisSpacing: 10,
-                            crossAxisSpacing: 10),
-                    itemCount: products.length,
-                    itemBuilder: (_, i) => _ProductTile(
-                      product: products[i],
-                      price: widget.formatAmount(products[i].price),
-                      color: _tileColorFor(products[i]),
-                      modifiers: marks[products[i].id],
-                      image: widget.productImages[products[i].id],
-                      unavailable: widget.unavailableProducts.contains(products[i].id),
-                      favourite: widget.favourites.contains(products[i].id),
-                      onTap: () => _tapProduct(products[i]),
-                      onLongPress: (widget.onToggleAvailable == null && widget.onToggleFavourite == null)
-                          ? null
-                          : () => _productMenu(products[i]),
-                    ),
-                  ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: products.isEmpty
+                      ? EmptyState(
+                          icon: Icons.inventory_2_outlined,
+                          title: tr(context, 'No products'),
+                          message: tr(
+                              context, 'Try a different search or category'),
+                        )
+                      : GridView.builder(
+                          padding: const EdgeInsets.all(8),
+                          gridDelegate: widget.gridColumns > 0
+                              ? SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: widget.gridColumns,
+                                  childAspectRatio: 1.3,
+                                  mainAxisSpacing: 8,
+                                  crossAxisSpacing: 8)
+                              : const SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent: 168,
+                                  childAspectRatio: 1.05,
+                                  mainAxisSpacing: 10,
+                                  crossAxisSpacing: 10),
+                          itemCount: products.length,
+                          itemBuilder: (_, i) => _ProductTile(
+                            product: products[i],
+                            price: widget.formatAmount(products[i].price),
+                            color: _tileColorFor(products[i]),
+                            modifiers: marks[products[i].id],
+                            image: widget.productImages[products[i].id],
+                            unavailable: widget.unavailableProducts
+                                .contains(products[i].id),
+                            favourite:
+                                widget.favourites.contains(products[i].id),
+                            onTap: () => _tapProduct(products[i]),
+                            onLongPress: (widget.onToggleAvailable == null &&
+                                    widget.onToggleFavourite == null)
+                                ? null
+                                : () => _productMenu(products[i]),
+                          ),
+                        ),
+                ),
+                const VerticalDivider(width: 1),
+                SizedBox(width: 132, child: _categoryRail()),
+              ],
+            ),
           ),
         ],
       );
   }
 
-  Widget _categoryStrip() {
-    // A category with nothing filed under it on this till is left off the strip.
-    // Tapping one can only ever show an empty grid, and on a branch till that is
-    // most of them: the menu is filtered by branch and the categories are not, so
-    // the chain's whole list arrives whatever this shop sells. The categories are
-    // still pulled and still stored, because they cost nothing and one that is
-    // empty here today may not be tomorrow; only the tab is held back, and it
-    // comes back by itself on the refresh that brings the first dish.
+  /// Vertical rail of square category tiles on the right (Dishflow side layout).
+  Widget _categoryRail() {
     final stocked = s.catalogue.categoryIdsWithProducts();
     final cats = s.catalogue
         .categories()
-        // The one being shown always stays, so a category that empties under a
-        // cashier does not take its own chip away and leave them with no way back.
         .where((c) => stocked.contains(c.id) || c.id == _categoryId)
         .toList();
-    return ListView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      children: [
-        if (widget.favourites.isNotEmpty) ...[
-          ChoiceChip(
-            key: const Key('cat-favourites'),
-            avatar: const Icon(Icons.star, size: 16),
-            label: Text(tr(context, 'Favourites')),
-            selected: _favesOnly,
-            onSelected: (_) => setState(() => _favesOnly = !_favesOnly),
+    return ColoredBox(
+      color: AppColors.background,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+        children: [
+          if (widget.favourites.isNotEmpty) ...[
+            _categorySquare(
+              key: const Key('cat-favourites'),
+              label: tr(context, 'Favourites'),
+              selected: _favesOnly,
+              color: AppColors.warning,
+              icon: Icons.star,
+              onTap: () => setState(() => _favesOnly = !_favesOnly),
+            ),
+            const SizedBox(height: 8),
+          ],
+          _categorySquare(
+            label: tr(context, 'All'),
+            selected: _categoryId == null && !_favesOnly,
+            color: AppColors.primary,
+            onTap: () => setState(() {
+              _categoryId = null;
+              _favesOnly = false;
+            }),
           ),
-          const SizedBox(width: 6),
+          for (final c in cats) ...[
+            const SizedBox(height: 8),
+            _categorySquare(
+              key: Key('cat-chip-${c.id}'),
+              label: c.name,
+              selected: _categoryId == c.id && !_favesOnly,
+              color: _colorFor(c.id) ?? AppColors.primary,
+              onTap: () => setState(() {
+                _categoryId = c.id;
+                _favesOnly = false;
+              }),
+            ),
+          ],
         ],
-        ChoiceChip(
-          label: Text(tr(context, 'All')),
-          selected: _categoryId == null && !_favesOnly,
-          onSelected: (_) => setState(() {
-            _categoryId = null;
-            _favesOnly = false;
-          }),
-        ),
-        for (final c in cats) ...[
-          const SizedBox(width: 6),
-          _categoryChip(id: c.id, name: c.name),
-        ],
-      ],
+      ),
     );
   }
 
-  /// A category chip in that category's own colour: a dot of it when the chip is
-  /// idle, the whole chip filled with it when it is the one being shown. The strip
-  /// and the grid then read as one thing, which is the point of colouring either.
-  Widget _categoryChip({required int id, required String name}) {
-    final selected = _categoryId == id && !_favesOnly;
-    final color = _colorFor(id);
-    return ChoiceChip(
-      key: Key('cat-chip-$id'),
-      avatar: color == null || selected
-          ? null
-          : CircleAvatar(backgroundColor: color, radius: 6),
-      label: Text(name),
-      selected: selected,
-      selectedColor: color?.withValues(alpha: 0.9),
-      // White on the shop's colour rather than on the theme's, so a dark chip is
-      // still readable whichever colour the manager picked.
-      labelStyle: selected && color != null
-          ? const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)
-          : null,
-      showCheckmark: false,
-      side: color == null
-          ? null
-          : BorderSide(color: color.withValues(alpha: selected ? 0.9 : 0.4)),
-      onSelected: (_) => setState(() {
-        _categoryId = id;
-        _favesOnly = false;
-      }),
+  Widget _categorySquare({
+    Key? key,
+    required String label,
+    required bool selected,
+    required Color color,
+    required VoidCallback onTap,
+    IconData? icon,
+  }) {
+    return Material(
+      key: key,
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 72),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? color : color.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? color : color.withValues(alpha: 0.45),
+              width: selected ? 2 : 1.2,
+            ),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 18, color: selected ? Colors.white : color),
+                const SizedBox(height: 4),
+              ],
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.15,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                  color: selected ? Colors.white : AppColors.brandNavy,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -3118,11 +3157,18 @@ class _ProductTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = color ?? AppColors.primary;
     final tile = Card(
       clipBehavior: Clip.antiAlias,
-      // A tinted fill plus a coloured top stripe, so the category reads at a
-      // glance without hurting the legibility of the name and price.
-      color: unavailable ? Colors.grey.shade300 : color?.withValues(alpha: 0.12),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: unavailable ? Colors.grey.shade400 : const Color(0xFFCBD5E1),
+          width: 1.2,
+        ),
+      ),
+      color: unavailable ? Colors.grey.shade200 : Colors.white,
       child: InkWell(
         key: Key('product-${product.id}'),
         onTap: onTap,
@@ -3158,10 +3204,13 @@ class _ProductTile extends StatelessWidget {
               ),
             ],
             Container(
-              decoration: (color == null || unavailable)
+              decoration: unavailable
                   ? null
-                  : BoxDecoration(border: Border(top: BorderSide(color: color!, width: 4))),
-              padding: const EdgeInsets.all(10),
+                  : BoxDecoration(
+                      border: Border(
+                          top: BorderSide(color: accent, width: 4)),
+                    ),
+              padding: const EdgeInsets.fromLTRB(10, 12, 10, 10),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -3178,20 +3227,27 @@ class _ProductTile extends StatelessWidget {
                           : TextStyle(
                               fontSize: 15,
                               height: 1.15,
-                              fontWeight: FontWeight.w500,
-                              color: _onPicture ? Colors.white : null,
+                              fontWeight: FontWeight.w600,
+                              color: _onPicture
+                                  ? Colors.white
+                                  : AppColors.brandNavy,
                               shadows: _onPicture ? _readable : null)),
                   const SizedBox(height: 8),
                   if (unavailable)
                     Text(tr(context, 'Sold out'),
                         key: Key('soldout-${product.id}'),
-                        style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 13))
+                        style: TextStyle(
+                            color: Colors.red.shade700,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13))
                   else
                     Text(price,
                         style: TextStyle(
-                            fontWeight: FontWeight.bold,
+                            fontWeight: FontWeight.w800,
                             fontSize: 17,
-                            color: _onPicture ? Colors.white : null,
+                            color: _onPicture
+                                ? Colors.white
+                                : AppColors.primaryDark,
                             shadows: _onPicture ? _readable : null)),
                 ],
               ),
@@ -3217,7 +3273,7 @@ class _ProductTile extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: modifiers!.required
                         ? AppColors.warning
-                        : Colors.black.withValues(alpha: 0.55),
+                        : AppColors.brandNavy.withValues(alpha: 0.75),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [

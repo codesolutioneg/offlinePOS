@@ -445,6 +445,12 @@ class EscPos {
     return this;
   }
 
+  /// White-on-black band (Dishflow classic TOTAL DUE). `GS B n`.
+  EscPos reverse([bool on = true]) {
+    _out.add([_gs, 0x42, on ? 1 : 0]);
+    return this;
+  }
+
   /// Emphasise this line over the document's base size, or with no arguments go
   /// back to it. Composes rather than replaces: a shop printing everything double
   /// height and a TOTAL asking for double height again is one instruction, not two

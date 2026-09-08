@@ -5,8 +5,14 @@ import 'package:flutter/material.dart';
 /// than from text alone. Kept in one place so the sell screen, the open-tabs list,
 /// the floor and the kitchen board all speak the same colours.
 abstract final class AppColors {
-  // Brand.
-  static const primary = Color(0xFF00897B); // teal
+  // Brand — Dishflow navy + sky accent.
+  static const brandNavy = Color(0xFF1B2838);
+  static const brandNavyLight = Color(0xFF243447);
+  static const primary = Color(0xFF0EA5E9); // sky
+  static const primaryLight = Color(0xFF38BDF8);
+  static const primaryDark = Color(0xFF0284C7);
+  static const background = Color(0xFFF8FAFC);
+  static const surface = Color(0xFFE2E8F0);
 
   // Status.
   static const success = Color(0xFF22C55E); // green  — done / ready / paid
@@ -32,6 +38,7 @@ abstract final class AppColors {
   /// A stable, readable colour for a category tile when the manager has not picked
   /// one, so the grid is never a wall of one colour. Indexed by category id.
   static const categoryPalette = <Color>[
+    Color(0xFF0EA5E9),
     Color(0xFF22C55E),
     Color(0xFF3B82F6),
     Color(0xFFEF4444),
@@ -41,7 +48,6 @@ abstract final class AppColors {
     Color(0xFFEC4899),
     Color(0xFF84CC16),
     Color(0xFFF97316),
-    Color(0xFF14B8A6),
   ];
 
   static Color categoryColor(int categoryId) =>

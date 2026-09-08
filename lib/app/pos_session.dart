@@ -1,6 +1,8 @@
 import '../core/audit/audit_log.dart';
 import '../core/db/catalogue_store.dart';
 import '../core/db/order_store.dart';
+import '../core/db/settings_store.dart';
+import '../core/sync/dishflow_mirror.dart';
 import '../core/sync/outbox.dart';
 import '../domain/catalogue.dart';
 import '../domain/delivery.dart';
@@ -18,6 +20,7 @@ class PosSession {
     required this.audit,
     required this.deviceId,
     required this.cashierId,
+    this.settings,
     this.taxRateFor,
     this.serviceChargeFor,
     this.nextOrderNo,
@@ -29,6 +32,9 @@ class PosSession {
   final AuditLog audit;
   final String deviceId;
   final String cashierId;
+
+  /// When set, paid sales are also queued for the Dishflow owner mirror.
+  final SettingsStore? settings;
 
   /// Resolves the tax rate for a line's category in the current order type, or null
   /// to keep the product's own rate. Lets a shop set tax per category per order type
@@ -493,6 +499,18 @@ class PosSession {
     _current = _blankOrder();
   }
 
+  /// Stamp a different cashier on the bill being built (who opened the table).
+  ///
+  /// The till may be signed in as Setup or a manager while a waiter opens the
+  /// table under their own PIN: the order's cashier is that waiter so reopen
+  /// security and reports match who actually owns the tab.
+  void rebindCashier(String newCashierId) {
+    if (current.cashierId == newCashierId) return;
+    final rebound = Order.fromMap({...current.toMap(), 'cashier_id': newCashierId});
+    _current = rebound;
+    orders.save(rebound);
+  }
+
   /// Begin a fresh order of [type]. A current order with lines is parked (held); an
   /// empty draft is discarded rather than left behind, so starting from the floor
   /// home never orphans a stale empty draft that could be restored later.
@@ -518,6 +536,7 @@ class PosSession {
     order.cashReceived = cashReceived;
     orders.save(order);
     outbox.enqueue('order.push', order.uuid, order.toServerPayload());
+    _mirrorPaid(order);
     audit.record(cashierId, 'order.paid', detail: order.uuid);
     _current = _blankOrder();
     return order;
@@ -544,6 +563,7 @@ class PosSession {
       order.state = OrderState.paid;
       orders.save(order);
       outbox.enqueue('order.push', order.uuid, order.toServerPayload());
+      _mirrorPaid(order);
       audit.record(cashierId, 'order.paid', detail: '${order.uuid}|even split settled');
       _current = _blankOrder();
       return 0;
@@ -755,6 +775,7 @@ class PosSession {
     _stampOrderNo(check);
     orders.save(check);
     outbox.enqueue('order.push', check.uuid, check.toServerPayload());
+    _mirrorPaid(check);
     audit.record(cashierId, 'order.paid', detail: '${check.uuid}|split check');
     order.lines.removeWhere((l) => ids.contains(l.uuid));
     if (order.lines.isEmpty) {
@@ -853,6 +874,18 @@ class PosSession {
     orders.delete(source.uuid);
     audit.record(cashierId, 'order.merged',
         detail: '${source.uuid}->${current.uuid}|${source.lines.length} line(s)');
+  }
+
+  /// Queue the Dishflow owner mirror when configured. Fire-and-forget like
+  /// order.push: the outbox append is durable and selling must not await a network.
+  void _mirrorPaid(Order order) {
+    final s = settings;
+    if (s == null) return;
+    DishflowMirror.enqueueIfEnabled(
+      outbox: outbox,
+      settings: s,
+      order: order,
+    );
   }
 
   static String? _blankToNull(String? v) =>

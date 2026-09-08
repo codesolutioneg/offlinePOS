@@ -59,6 +59,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
     tables = TableStore(db);
     audit = AuditLog(db);
     table5 = tables.add(name: '5', seats: 4);
@@ -132,16 +133,10 @@ void main() {
 
 
 
-  /// Seat the table and answer the covers prompt with [guests], which is picked
-  /// from a list rather than tapped straight off the dialog.
+  /// Seat the table and answer the covers prompt with [guests].
   Future<void> seatFor(WidgetTester t, int guests) async {
     await seatTable(t);
-    await t.tap(find.byKey(const Key('guest-count-dropdown')));
-    await t.pumpAndSettle();
-    // Tap the number inside the row rather than the row itself: the menu item's
-    // own box reports a position the hit test does not land in.
-    await t.tap(find.descendant(
-        of: find.byKey(Key('guests-$guests')), matching: find.text('$guests')));
+    await t.tap(find.byKey(Key('guests-$guests')));
     await t.pumpAndSettle();
   }
 

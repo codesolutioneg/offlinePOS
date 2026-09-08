@@ -55,6 +55,8 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    // This suite is about covers, not who opens the table.
+    settings.askCashierOnOpen = false;
     tables = TableStore(db);
     audit = AuditLog(db);
     table5 = tables.add(name: '5', seats: 4);
@@ -128,19 +130,9 @@ void main() {
           of: find.byKey(const Key('guests')), matching: find.byType(Text)))
       .data!;
 
-  /// The count is picked from a list, so the menu has to be opened before any
-  /// number is in the tree to tap.
-  Future<void> openGuestList(WidgetTester t) async {
-    await t.tap(find.byKey(const Key('guest-count-dropdown')));
-    await t.pumpAndSettle();
-  }
-
+  /// Numbers are shown as tappable squares — no dropdown to open first.
   Future<void> pickGuests(WidgetTester t, int n) async {
-    await openGuestList(t);
-    // Tap the number inside the row rather than the row itself: the menu item's
-    // own box reports a position the hit test does not land in.
-    await t.tap(find.descendant(
-        of: find.byKey(Key('guests-$n')), matching: find.text('$n')));
+    await t.tap(find.byKey(Key('guests-$n')));
     await t.pumpAndSettle();
   }
 
@@ -164,7 +156,6 @@ void main() {
     await signIn(t);
 
     await seatTable(t);
-    await openGuestList(t);
 
     // Table 5 seats four, so one to four and nothing above it: a waiter seating five
     // at a six-top was picking a round number and the covers were wrong from the tap.

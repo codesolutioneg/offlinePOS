@@ -61,6 +61,8 @@ class TableFloorScreen extends StatefulWidget {
     this.onAssign,
     this.authorizeAssign,
     this.assignHint = false,
+    this.onDuty = const [],
+    this.onOpenAttendance,
   });
 
   /// Who each table belongs to for this service, by table id.
@@ -102,6 +104,13 @@ class TableFloorScreen extends StatefulWidget {
   /// shell for whoever may do it, so a waiter is not shown a button that only ever
   /// asks them for a manager's PIN.
   final bool assignHint;
+
+  /// Staff currently on the clock (attendance). Shown on the floor so a manager
+  /// sees who may open tables; empty when nobody has clocked in.
+  final List<({String id, String name})> onDuty;
+
+  /// Opens the attendance / clock-in screen from the floor strip.
+  final VoidCallback? onOpenAttendance;
 
   /// The room to open on, and the way back up to whoever remembers it.
   ///
@@ -862,6 +871,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           if (widget.dayNotice case final notice?) _dayNoticeStrip(notice),
           if (widget.parkedNotice case final parked?) _parkedStrip(parked),
           if (_assigning) _assigningStrip(),
+          if (!widget.pickMode && !_editing && !_noShift) _attendanceStrip(),
           // Only with a drawer open and a room to share out: before that the strip
           // above it is the one that matters, and an empty floor has its own prompt.
           if (!_assigning &&
@@ -1554,6 +1564,70 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     );
   }
 
+  /// Who is on the clock — these are the people offered when a table is opened.
+  Widget _attendanceStrip() {
+    final duty = widget.onDuty;
+    return Material(
+      key: const Key('floor-attendance'),
+      color: AppColors.primary.withValues(alpha: 0.06),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(
+          children: [
+            Icon(Icons.badge_outlined, size: 18, color: AppColors.primaryDark),
+            const SizedBox(width: 8),
+            Text(
+              tr(context, 'Attendance'),
+              style: const TextStyle(
+                  fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.brandNavy),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: duty.isEmpty
+                  ? Text(
+                      tr(context, 'Nobody clocked in — roster will be offered'),
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    )
+                  : SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          for (final u in duty) ...[
+                            Container(
+                              margin: const EdgeInsets.only(right: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                    color: AppColors.primary.withValues(alpha: 0.45)),
+                              ),
+                              child: Text(
+                                u.name,
+                                style: const TextStyle(
+                                    fontSize: 12.5, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+            ),
+            if (widget.onOpenAttendance != null)
+              TextButton(
+                key: const Key('floor-attendance-open'),
+                onPressed: widget.onOpenAttendance,
+                child: Text(tr(context, 'Manage')),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// A Free/Occupied colour key, shown only while picking so a waiter reads the
   /// tile colours without guessing.
   Widget _legend() => Padding(
@@ -1969,20 +2043,19 @@ class _TableTile extends StatelessWidget {
     final palette = TablePalette.shared;
     final color = occupied ? palette.occupied : palette.free;
     final wide = table.shape == TableShape.rectangle;
-    final round = table.shape == TableShape.round;
     final tile = Container(
       // A rectangle is short rather than extra-wide so it still fits one grid slot
       // and cannot overlap the table snapped into the next cell.
-      width: 120,
-      height: wide ? 72 : 120,
+      width: 128,
+      height: wide ? 96 : 132,
       margin: const EdgeInsets.all(6),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
+        color: color.withValues(alpha: 0.10),
         // A waiter's own table is ringed in the app's colour, so their section is
         // findable across a room of free/occupied greens and reds.
         border: Border.all(
             color: mine ? AppColors.primary : color, width: mine ? 3 : 2),
-        borderRadius: round ? BorderRadius.circular(999) : BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
       ),
       // A short rectangle tile cannot fit the full name+seats+status stack at full
       // size, so scale the content down to fit rather than overflow the fixed
@@ -1993,25 +2066,31 @@ class _TableTile extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              _TableVisual(
+                seats: table.seats,
+                color: mine ? AppColors.primary : color,
+                shape: table.shape,
+              ),
+              const SizedBox(height: 4),
               Text(table.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-              const SizedBox(height: 2),
-              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                const Icon(Icons.event_seat, size: 13),
-                const SizedBox(width: 2),
-                Text('${table.seats}', style: const TextStyle(fontSize: 12)),
-              ]),
+                  style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
+                      color: AppColors.brandNavy)),
               if (occupied && total != null)
                 Text(total!,
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: color))
+              else
+                Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
+                    style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
               if (occupied && ageMinutes != null)
                 Text('${ageMinutes}m',
                     style: TextStyle(
                         fontSize: 11,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant))
-              else
-                Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
-                    style: TextStyle(fontSize: 11, color: color)),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
               if (assignee case final who?)
                 Padding(
                   key: Key('table-waiter-${table.id}'),
@@ -2084,6 +2163,105 @@ class _TableTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
       ),
       child: table.vertical ? RotatedBox(quarterTurns: 1, child: label) : label,
+    );
+  }
+}
+
+/// Dishflow-style top-down table with chairs around it.
+class _TableVisual extends StatelessWidget {
+  const _TableVisual({
+    required this.seats,
+    required this.color,
+    required this.shape,
+  });
+
+  final int seats;
+  final Color color;
+  final TableShape shape;
+
+  @override
+  Widget build(BuildContext context) {
+    final chairColor = color.withValues(alpha: 0.65);
+    final topChairs = (seats / 2).ceil().clamp(1, 4);
+    final bottomChairs = (seats / 2).floor().clamp(1, 4);
+
+    final BorderRadius radius;
+    final double w;
+    final double h;
+    switch (shape) {
+      case TableShape.round:
+        radius = BorderRadius.circular(24);
+        w = 44;
+        h = 44;
+      case TableShape.rectangle:
+        radius = BorderRadius.circular(8);
+        w = 56;
+        h = 28;
+      case TableShape.square:
+      case TableShape.divider:
+        radius = BorderRadius.circular(8);
+        w = 44;
+        h = 44;
+    }
+
+    return SizedBox(
+      width: 78,
+      height: 64,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(
+                topChairs, (_) => _Chair(color: chairColor)),
+          ),
+          const SizedBox(height: 3),
+          Container(
+            width: w,
+            height: h,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.18),
+              borderRadius: radius,
+              border: Border.all(color: color, width: 1.5),
+            ),
+          ),
+          const SizedBox(height: 3),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(
+                bottomChairs, (_) => _Chair(color: chairColor, flip: true)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Chair extends StatelessWidget {
+  const _Chair({required this.color, this.flip = false});
+  final Color color;
+  final bool flip;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Transform.rotate(
+        angle: flip ? 3.14159 : 0,
+        child: Container(
+          width: 11,
+          height: 7,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(4),
+              topRight: Radius.circular(4),
+              bottomLeft: Radius.circular(2),
+              bottomRight: Radius.circular(2),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

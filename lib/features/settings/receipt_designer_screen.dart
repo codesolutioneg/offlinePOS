@@ -91,7 +91,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     // Clamped to the offered choices: the segmented control below asserts on a
     // selection it has no segment for.
     final style = widget.settings.receiptDividerStyle;
-    _dividerStyle = _dividerStyles.contains(style) ? style : 'line';
+    _dividerStyle = _dividerStyles.contains(style) ? style : 'equals';
     // The same paper width the printers screen sets, so the two never disagree.
     _columns = widget.settings.receiptColumns == 32 ? 32 : 42;
     _fontProfile = widget.settings.receiptFontProfile;
@@ -253,7 +253,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
   /// A fixed, made-up two-line sale used only to give the preview something to
   /// lay out; it does not read real orders.
   String _sampleBody(int columns) {
-    final divider = _dividerChars[_dividerStyle] ?? '-';
+    final divider = _dividerChars[_dividerStyle] ?? '=';
     final rule = divider * columns;
     final now = DateTime.now();
     String two(int n) => n.toString().padLeft(2, '0');
@@ -261,21 +261,30 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
 
     final lines = <String>[rule];
     if (_showOrderType) lines.add('Dine-in');
-    if (_showTable) lines.add('Table 4 - 2 guests');
-    final stamped = [
-      if (_showDateTime) stamp,
-      if (_showNumber) '#A1B2C3',
-    ].join('  ');
-    if (stamped.isNotEmpty) lines.add(stamped);
-    if (_showCashier) lines.add('Cashier: Sara');
+    if (_showTable) {
+      lines.add('* Table 4 *');
+      lines.add(rule);
+    }
+    lines.add(_rowText(
+      _showDateTime ? stamp : '',
+      _showNumber ? 'ORDER:A1B2C3' : '',
+      columns,
+    ));
+    if (_showCashier) lines.add(_rowText('Cashier: Sara', 'Cust: (2)', columns));
     lines.add(rule);
-    lines.add(_rowText('2 x Coffee', _showItemPrice ? '5.00' : '', columns));
-    lines.add(_rowText('1 x Sandwich', _showItemPrice ? '6.50' : '', columns));
-    lines.add(rule);
-    lines.add(_rowText('TOTAL', '11.50', columns));
+    lines.add(_rowText('2 Coffee', _showItemPrice ? '5.00' : '', columns));
+    lines.add('  => Extra shot');
+    lines.add(_rowText('1 Sandwich', _showItemPrice ? '6.50' : '', columns));
+    lines.add('-' * columns);
+    lines.add('');
+    // Preview of the reverse TOTAL DUE bar (as plain text).
+    final due = 'TOTAL DUE: 11.50';
+    final pad = ((columns - due.length) ~/ 2).clamp(0, columns);
+    lines.add('${' ' * pad}$due');
     if (_showPayment) {
       lines.add('');
       lines.add(_rowText('Cash', '11.50', columns));
+      lines.add('-' * columns);
     }
     return lines.join('\n');
   }

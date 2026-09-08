@@ -7,6 +7,7 @@ import '../../domain/catalogue.dart';
 import '../db/catalogue_store.dart';
 import '../db/sqlite_outbox_store.dart';
 import 'device_status.dart';
+import 'dishflow_mirror.dart';
 import 'odoo_puller.dart';
 import 'outbox.dart';
 
@@ -166,6 +167,12 @@ class SyncService {
   /// device would lose money. The update gate is the caller that matters.
   int get pendingSales => _outboxStore.pendingSalesCount;
 
+  /// Paid sales still waiting to reach the Dishflow owner view.
+  int get pendingDishflow => _outboxStore.pendingDishflowCount;
+
+  /// Badge number: Odoo queue plus Dishflow mirror queue.
+  int get pendingToSync => pendingSales + pendingDishflow;
+
   /// True when something is registered that can actually deliver.
   ///
   /// A till with no destination is not offline, and calling it offline is the
@@ -275,13 +282,32 @@ class SyncService {
     unawaited(periodicPass());
   }
 
-  /// One turn of the periodic loop: the read-only [refresh], then, only while a
-  /// failed batch push is armed, one bounded attempt to finish it. Kept as its own
-  /// method so the two stay separate: [refresh] is what the loop does every time
-  /// and it must remain incapable of pushing an order.
+  /// One turn of the periodic loop: the read-only [refresh], the owner-mirror
+  /// drain (Dishflow only), then, only while a failed batch push is armed, one
+  /// bounded attempt to finish Odoo. Kept as its own method so [refresh] stays
+  /// incapable of booking an Odoo order.
   Future<void> periodicPass() async {
     await refresh();
+    await drainDishflowMirror();
     await retryArmedFlush();
+  }
+
+  /// Push paid sales to Dishflow when online. Never touches `order.push`.
+  Future<void> drainDishflowMirror() async {
+    if (!online.value) return;
+    if (!_outbox.hasSenderFor(DishflowMirror.kind)) return;
+    if (_state == SyncState.working) return;
+    try {
+      final sent = await _outbox.drain(
+        maxBatches: 5,
+        kinds: const {DishflowMirror.kind},
+      );
+      if (sent > 0) {
+        _outboxStore.pruneSent();
+      }
+    } catch (e) {
+      lastError = e.toString();
+    }
   }
 
   void stop() {
