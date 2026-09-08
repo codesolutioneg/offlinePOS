@@ -9,7 +9,9 @@ import '../../core/db/settings_store.dart';
 import '../../core/db/table_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/theme/dishflow_brand.dart';
 import '../../core/widgets/feedback.dart';
+import '../../core/widgets/select_pill.dart';
 import '../../domain/order.dart' show OrderType, OrderTypeLabel;
 import 'reservations_screen.dart';
 import 'section_settings_sheet.dart';
@@ -1411,11 +1413,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             Expanded(
               child: Wrap(spacing: 8, children: [
                 for (final t in widget.seatTypes)
-                  ChoiceChip(
+                  SelectPill(
                     key: Key('seat-as-${t.name.toLowerCase()}'),
-                    label: Text(tr(context, t.label)),
+                    label: tr(context, t.label),
                     selected: _seatType == t,
-                    onSelected: (_) => _setSeatAs(t),
+                    onTap: () => _setSeatAs(t),
                   ),
               ]),
             ),
@@ -1595,23 +1597,21 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   }
 
   /// Who is on the clock — these are the people offered when a table is opened.
+  /// Branded as Dishflow (not "Attendance") so the floor reads like the Dishflow till.
   Widget _attendanceStrip() {
     final duty = widget.onDuty;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Material(
       key: const Key('floor-attendance'),
-      color: AppColors.primary.withValues(alpha: 0.06),
+      color: dark
+          ? AppColors.surfaceDark.withValues(alpha: 0.9)
+          : AppColors.primary.withValues(alpha: 0.06),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         child: Row(
           children: [
-            Icon(Icons.badge_outlined, size: 18, color: AppColors.primaryDark),
-            const SizedBox(width: 8),
-            Text(
-              tr(context, 'Attendance'),
-              style: const TextStyle(
-                  fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.brandNavy),
-            ),
-            const SizedBox(width: 10),
+            const DishflowBrandMark(height: 26),
+            const SizedBox(width: 12),
             Expanded(
               child: duty.isEmpty
                   ? Text(
@@ -1630,15 +1630,21 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 10, vertical: 4),
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: dark
+                                    ? AppColors.backgroundLightDark
+                                    : Colors.white,
                                 borderRadius: BorderRadius.circular(16),
                                 border: Border.all(
-                                    color: AppColors.primary.withValues(alpha: 0.45)),
+                                    color: AppColors.primary
+                                        .withValues(alpha: 0.45)),
                               ),
                               child: Text(
                                 u.name,
-                                style: const TextStyle(
-                                    fontSize: 12.5, fontWeight: FontWeight.w600),
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: Theme.of(context).colorScheme.onSurface,
+                                ),
                               ),
                             ),
                           ],

@@ -4,6 +4,7 @@ import '../../core/auth/auth_service.dart';
 import '../../core/auth/user_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/theme/dishflow_brand.dart';
 
 /// PIN sign-in.
 ///
@@ -174,22 +175,12 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  /// The shop's mark and the build it is running, in one glance.
+  /// Dishflow mark and the build this till is running.
   Widget _brand(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Column(children: [
-      Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(
-          color: scheme.primary,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Icon(Icons.storefront, size: 26, color: scheme.onPrimary),
-      ),
-      const SizedBox(height: 8),
-      Text(tr(context, 'offlinePOS'),
-          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+      const DishflowBrandMark(height: 52, showSubtitle: true),
+      const SizedBox(height: 10),
       Text(
           '${tr(context, 'Build')} ${const String.fromEnvironment('APP_VERSION', defaultValue: 'dev')}',
           key: const Key('build-version'),

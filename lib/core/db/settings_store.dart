@@ -1731,7 +1731,7 @@ class SettingsStore {
   /// Light, dark, or whatever the device is set to. Stored as the key rather than
   /// the enum so this file stays free of Flutter's widget layer; [AppTheme] turns it
   /// back into a [ThemeMode].
-  String get themeMode => getString('theme_mode') ?? 'system';
+  String get themeMode => getString('theme_mode') ?? 'dark';
   set themeMode(String v) => setString('theme_mode', v);
 
   /// Show the product picture on its grid tile.

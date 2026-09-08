@@ -14,6 +14,7 @@ import '../../core/printing/receipt_builder.dart' show PartialPayment;
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/numeric_keypad.dart';
+import '../../core/widgets/select_pill.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/delivery.dart';
 import '../../domain/order.dart';
@@ -2753,6 +2754,11 @@ class _SellScreenState extends State<SellScreen> {
                     .chipTheme
                     .labelStyle
                     ?.copyWith(fontSize: 12.5),
+                secondaryLabelStyle: const TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
               ),
         ),
         child: Column(
@@ -2768,6 +2774,7 @@ class _SellScreenState extends State<SellScreen> {
                     message: tr(context, 'Tap a product to add it to the order'),
                   )
                 : ListView(
+                    padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
                     children: [
                       for (final line in s.current.lines)
                         _LineTile(
@@ -2823,18 +2830,19 @@ class _SellScreenState extends State<SellScreen> {
               // already is: a tab handed over from another till has to stay
               // settleable even when this cashier could not have opened it.
               for (final t in OrderType.values)
-                if (widget.allowedOrderTypes.contains(t) || s.current.type == t) ...[
-                ChoiceChip(
-                  key: Key('order-type-${t.name.toLowerCase()}'),
-                  // Tight enough that all four kinds fit a 360px panel at once,
-                  // so no order type hides behind a scroll.
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 2),
-                  label: Text(tr(context, t.label)),
-                  selected: s.current.type == t,
-                  onSelected: (_) => _changed(() => s.setOrderType(t)),
-                ),
-                const SizedBox(width: 4),
-              ],
+                if (widget.allowedOrderTypes.contains(t) ||
+                    s.current.type == t) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: SelectPill(
+                      key: Key('order-type-${t.name.toLowerCase()}'),
+                      label: tr(context, t.label),
+                      selected: s.current.type == t,
+                      compact: true,
+                      onTap: () => _changed(() => s.setOrderType(t)),
+                    ),
+                  ),
+                ],
             ],
           ),
         ),
@@ -3483,157 +3491,195 @@ class _LineTile extends StatelessWidget {
     // removed: taking it off must go through the Void action (manager gate, reason,
     // deletion slip, kitchen cancel, audit), never a silent quantity edit.
     final kitchenHasIt = line.printedToKitchen || line.firedStations.isNotEmpty;
-    final edge = sent ? AppColors.sent : AppColors.draft;
+    final edge = sent ? AppColors.sent : AppColors.primary;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border(left: BorderSide(color: edge, width: 4)),
-      ),
-      // The wash is the Material's own so the tap ripple stays visible on it. A
-      // quiet fill either way, so each item reads as its own card with room for
-      // its modifiers and note under the name.
-      child: Material(
-        color: sent
-            ? AppColors.sent.withValues(alpha: 0.06)
-            : Theme.of(context)
-                .colorScheme
-                .surfaceContainerHighest
-                .withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: onTapLine,
-          child: Padding(
-            padding: const EdgeInsetsDirectional.fromSTEB(6, 7, 2, 7),
-            child: Row(children: [
-              // The quantity controls sit where the quantity is read, so a simple
-              // item costs the bill one line, not a strip of three: on a small
-              // panel that is the difference between seeing two items and six.
-              if (!kitchenHasIt) ...[
-                _step(Icons.remove_circle_outline, AppColors.error,
-                    () => onQty(line.quantity - 1)),
-                Container(
-                  constraints: const BoxConstraints(minWidth: 22),
-                  alignment: Alignment.center,
-                  child: Text(_qtyText,
-                      style: const TextStyle(
-                          fontSize: 14.5, fontWeight: FontWeight.w800)),
+        color: dark ? AppColors.backgroundLightDark : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: dark
+              ? AppColors.surfaceLightDark
+              : AppColors.surfaceLight.withValues(alpha: 0.9),
+        ),
+        boxShadow: dark
+            ? null
+            : [
+                BoxShadow(
+                  color: AppColors.brandNavy.withValues(alpha: 0.04),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
                 ),
-                _step(Icons.add_circle_outline, AppColors.success,
-                    () => onQty(line.quantity + 1)),
-                const SizedBox(width: 4),
-              ] else ...[
-                const SizedBox(width: 4),
-                Text('$_qtyText×',
-                    style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.primary)),
-                const SizedBox(width: 6),
               ],
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(children: [
-                      if (line.seat != null) ...[
-                        _tag('G${line.seat}', AppColors.info,
-                            key: Key('seat-badge-${line.uuid}')),
-                        const SizedBox(width: 5),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onTapLine,
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  width: 4,
+                  decoration: BoxDecoration(
+                    color: edge,
+                    borderRadius: const BorderRadiusDirectional.horizontal(
+                        start: Radius.circular(14)),
+                  ),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 10, 4, 10),
+                    child: Row(children: [
+                      if (!kitchenHasIt) ...[
+                        _qtyBtn(Icons.remove, AppColors.error,
+                            () => onQty(line.quantity - 1)),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          child: Text(_qtyText,
+                              style: const TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.w800)),
+                        ),
+                        _qtyBtn(Icons.add, AppColors.success,
+                            () => onQty(line.quantity + 1)),
+                        const SizedBox(width: 8),
+                      ] else ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text('$_qtyText×',
+                              style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.primaryDark)),
+                        ),
+                        const SizedBox(width: 8),
                       ],
                       Expanded(
-                        child: Text(line.name,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 14.5, fontWeight: FontWeight.w600)),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              if (line.seat != null) ...[
+                                _tag('G${line.seat}', AppColors.info,
+                                    key: Key('seat-badge-${line.uuid}')),
+                                const SizedBox(width: 5),
+                              ],
+                              Expanded(
+                                child: Text(line.name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                        height: 1.2)),
+                              ),
+                              if (sent) ...[
+                                const SizedBox(width: 4),
+                                StatusChip(tr(context, 'Sent'), AppColors.sent,
+                                    icon: Icons.check),
+                              ] else if (line.isTimed) ...[
+                                const SizedBox(width: 4),
+                                StatusChip(_fireCountdown(line.fireAt!),
+                                    AppColors.pending,
+                                    icon: Icons.timer_outlined),
+                              ],
+                            ]),
+                            for (final m in line.modifiers)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 3),
+                                child: Text(
+                                    '+ ${m.name}${m.quantity > 1 ? ' ×${m.quantity.toStringAsFixed(0)}' : ''}'
+                                    '${m.unitPrice == 0 ? '  (${tr(context, 'free')})' : '  ${format(m.total * line.quantity)}'}',
+                                    style: TextStyle(
+                                        fontSize: 12.5,
+                                        color: m.unitPrice == 0
+                                            ? AppColors.modifierFree
+                                            : AppColors.modifierPaid)),
+                              ),
+                            if (line.discountPercent > 0)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 3),
+                                child: Text(
+                                    '-${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
+                                    style: const TextStyle(
+                                        fontSize: 12.5,
+                                        color: AppColors.warning)),
+                              ),
+                            if (line.note != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 3),
+                                child: Text(line.note!,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 12.5,
+                                        fontStyle: FontStyle.italic,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant)),
+                              ),
+                          ],
+                        ),
                       ),
-                      if (sent) ...[
-                        const SizedBox(width: 4),
-                        StatusChip(tr(context, 'Sent'), AppColors.sent,
-                            icon: Icons.check),
-                      ] else if (line.isTimed) ...[
-                        const SizedBox(width: 4),
-                        StatusChip(_fireCountdown(line.fireAt!), AppColors.pending,
-                            icon: Icons.timer_outlined),
-                      ],
+                      const SizedBox(width: 6),
+                      Text(amount,
+                          style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.primary)),
+                      if (kitchenHasIt)
+                        IconButton(
+                            key: Key('line-void-inline-${line.uuid}'),
+                            icon: const Icon(Icons.remove_circle, size: 22),
+                            color: AppColors.error,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                                minWidth: 36, minHeight: 36),
+                            visualDensity: VisualDensity.compact,
+                            tooltip: tr(context, 'Void this line'),
+                            onPressed: onVoid)
+                      else
+                        IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 22),
+                            color: AppColors.error,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                                minWidth: 36, minHeight: 36),
+                            visualDensity: VisualDensity.compact,
+                            onPressed: onRemove),
                     ]),
-                    for (final m in line.modifiers)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(
-                            '+ ${m.name}${m.quantity > 1 ? ' ×${m.quantity.toStringAsFixed(0)}' : ''}'
-                            '${m.unitPrice == 0 ? '  (${tr(context, 'free')})' : '  ${format(m.total * line.quantity)}'}',
-                            style: TextStyle(
-                                fontSize: 12.5,
-                                color: m.unitPrice == 0
-                                    ? AppColors.modifierFree
-                                    : AppColors.modifierPaid)),
-                      ),
-                    if (line.discountPercent > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(
-                            '-${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
-                            style: const TextStyle(
-                                fontSize: 12.5, color: AppColors.warning)),
-                      ),
-                    if (line.note != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(line.note!,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 12.5, fontStyle: FontStyle.italic)),
-                      ),
-                  ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 4),
-              Text(amount,
-                  style: const TextStyle(
-                      fontSize: 14.5, fontWeight: FontWeight.w700)),
-              // A sent line shows the Void affordance instead of a free trash:
-              // removing it is a permissioned, audited, slip-printing action,
-              // not a silent delete.
-              if (kitchenHasIt)
-                IconButton(
-                    key: Key('line-void-inline-${line.uuid}'),
-                    icon: const Icon(Icons.remove_circle_outline, size: 22),
-                    color: AppColors.error,
-                    padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints(minWidth: 36, minHeight: 36),
-                    visualDensity: VisualDensity.compact,
-                    tooltip: tr(context, 'Void this line'),
-                    onPressed: onVoid)
-              else
-                IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 22),
-                    color: AppColors.error,
-                    padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints(minWidth: 36, minHeight: 36),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: onRemove),
-            ]),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  /// One compact quantity key. An InkWell rather than an IconButton so the tap
-  /// target stays a tight 32px square instead of Material's 48px minimum, which
-  /// is what let the stepper move up into the line itself.
-  Widget _step(IconData icon, Color color, VoidCallback onTap) => InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(5),
-          child: Icon(icon, size: 22, color: color),
+  Widget _qtyBtn(IconData icon, Color color, VoidCallback onTap) => Material(
+        color: color,
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 30,
+            height: 30,
+            child: Icon(icon, size: 17, color: Colors.white),
+          ),
         ),
       );
 

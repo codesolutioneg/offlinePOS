@@ -1091,7 +1091,7 @@ class _PosAppState extends State<PosApp> {
     return ValueListenableBuilder<Locale>(
       valueListenable: _locale,
       builder: (context, locale, _) => MaterialApp(
-        title: 'offlinePOS',
+        title: 'Dishflow',
         // Held because this shell sits ABOVE the navigator it builds, so its own
         // context cannot reach one. The shift nudge and the tab recalled from a
         // list that has already closed itself both run from up here.
