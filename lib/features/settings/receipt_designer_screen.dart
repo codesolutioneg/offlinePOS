@@ -270,7 +270,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
       _showNumber ? 'ORDER:A1B2C3' : '',
       columns,
     ));
-    if (_showCashier) lines.add(_rowText('Cashier: Sara', 'Cust: (2)', columns));
+    if (_showCashier) lines.add(_rowText('Server: Sara', 'Cust: (2)', columns));
     lines.add(rule);
     lines.add(_rowText('2 Coffee', _showItemPrice ? '5.00' : '', columns));
     lines.add('  => Extra shot');

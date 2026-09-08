@@ -111,8 +111,12 @@ void main() {
       ..lines.add(OrderLine(productId: 1, name: 'Cola', quantity: 1, unitPrice: 10));
     final local = at.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
+    final h24 = local.hour;
+    final ap = h24 >= 12 ? 'PM' : 'AM';
+    final h12 = h24 % 12 == 0 ? 12 : h24 % 12;
+    final yy = (local.year % 100).toString().padLeft(2, '0');
     final stamp =
-        '${local.year}-${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
+        '${two(local.month)}/${two(local.day)}/$yy $h12:${two(local.minute)} $ap';
 
     expect(render(o), contains(stamp));
     expect(render(o, showDateTime: false), isNot(contains(stamp)));
@@ -123,7 +127,8 @@ void main() {
     final ref = o.uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
     final s = render(o, showNumber: false);
     expect(s, isNot(contains('ORDER:$ref')));
-    expect(s, contains('${o.createdAt.toLocal().year}-'));
+    expect(s, contains('/'));
+    expect(s, anyOf(contains('AM'), contains('PM')));
   });
 
   test('a dine-in table prints as a classic banner with covers', () {

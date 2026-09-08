@@ -79,6 +79,7 @@ class ReceiptBuilder {
     this.logo,
     this.paymentLabels = const {},
     this.sectionOf,
+    this.serverNameOf,
   });
 
   final String shopName;
@@ -130,6 +131,9 @@ class ReceiptBuilder {
   /// where it stands now, which is the answer a waiter holding the slip wants.
   final String? Function(String tableLabel)? sectionOf;
 
+  /// Cashier id → display name for the Dishflow "Server:" row.
+  final String? Function(String cashierId)? serverNameOf;
+
   /// The printer command that puts the shop's mark above the name, or null for the
   /// text-only slip this always printed. Composed by the caller (see PrinterLogo)
   /// because which of the two logo routes a shop is on depends on its hardware, and
@@ -180,9 +184,15 @@ class ReceiptBuilder {
     // the slip from before the correction can see which of the two stands.
     if (order.amended) p.centred('*** AMENDED ***');
 
-    // Where the sale was served, so a delivery or table sale reads differently
-    // from a counter one on the same roll.
-    if (showOrderType) p.line(order.type.label);
+    // Where the sale was served — Dishflow English labels.
+    if (showOrderType) {
+      p.line(switch (order.type) {
+        OrderType.dineIn => 'DINE IN',
+        OrderType.toGo => 'TO GO',
+        OrderType.takeaway => 'TAKEAWAY',
+        OrderType.delivery => 'DELIVERY',
+      });
+    }
 
     p.align(EscPosAlign.left).rule(major);
 
@@ -200,7 +210,7 @@ class ReceiptBuilder {
       }
     }
 
-    // Date/time left, ORDER:ref right — Dishflow classic row.
+    // Date/time left (Dishflow MM/DD/YY h:mm AM/PM), ORDER:ref right.
     if (showDateTime || showNumber) {
       p.bold(true).row(
             showDateTime ? _stamp(order.createdAt) : '',
@@ -208,8 +218,11 @@ class ReceiptBuilder {
           ).bold(false);
     }
 
-    // Server / cashier and covers on one row when both print.
-    final serverTx = showCashier ? 'Cashier: ${order.cashierId}' : '';
+    // Server / covers on one row — Dishflow classic uses Server:, not Cashier:.
+    final name = serverNameOf?.call(order.cashierId)?.trim();
+    final serverTx = showCashier
+        ? 'Server: ${(name != null && name.isNotEmpty) ? name : order.cashierId}'
+        : '';
     final custTx =
         order.guestCount != null ? 'Cust: (${order.guestCount})' : '';
     if (serverTx.isNotEmpty || custTx.isNotEmpty) {
@@ -589,9 +602,14 @@ class ReceiptBuilder {
     return double.parse(shown) == percent ? '$head $shown%' : head;
   }
 
+  /// Dishflow classic stamp: `MM/DD/YY h:mm AM/PM` in local time.
   String _stamp(DateTime utc) {
     final d = utc.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
-    return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+    final h24 = d.hour;
+    final ap = h24 >= 12 ? 'PM' : 'AM';
+    final h12 = h24 % 12 == 0 ? 12 : h24 % 12;
+    final yy = (d.year % 100).toString().padLeft(2, '0');
+    return '${two(d.month)}/${two(d.day)}/$yy $h12:${two(d.minute)} $ap';
   }
 }

@@ -710,6 +710,7 @@ class _PosAppState extends State<PosApp> {
       // The floor plan is on this device, so the slip can say which part of the room
       // the table is in without the printing layer knowing the database exists.
       sectionOf: widget.tables.sectionFor,
+      serverNameOf: (id) => widget.users.byId(id)?.name,
       formatAmount: PosApp.money,
     );
   }
@@ -3402,7 +3403,11 @@ class _PosAppState extends State<PosApp> {
     if (lines.isEmpty) return KitchenFireResult.sent;
     // The ticket says which part of the floor the plate is going to, resolved from
     // the floor plan on this device.
-    final builder = KitchenTicketBuilder(sectionOf: widget.tables.sectionFor);
+    final builder = KitchenTicketBuilder(
+      sectionOf: widget.tables.sectionFor,
+      categoryNameOf: (id) => widget.catalogue.categoryById(id)?.name,
+      serverNameOf: (id) => widget.users.byId(id)?.name,
+    );
     // Route each line to its category's station, so a multi-station kitchen sends
     // hot food and bar drinks to different printers. Unmapped categories fall to
     // the single default kitchen.
@@ -3455,8 +3460,11 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _fireVoid(Order order, OrderLine line, String reason) async {
-    final bytes = KitchenTicketBuilder(sectionOf: widget.tables.sectionFor)
-        .buildVoid(order, line, reason);
+    final bytes = KitchenTicketBuilder(
+      sectionOf: widget.tables.sectionFor,
+      categoryNameOf: (id) => widget.catalogue.categoryById(id)?.name,
+      serverNameOf: (id) => widget.users.byId(id)?.name,
+    ).buildVoid(order, line, reason);
     // Void goes to the station(s) this line was actually fired to; only when that
     // was not recorded (older orders) do we fall back to the current routing.
     final stations = line.firedStations.isNotEmpty

@@ -20,144 +20,289 @@ enum KitchenFireResult {
       other.index > index ? other : this;
 }
 
-/// Formats an order as a kitchen ticket (KOT), which is a different document from
-/// the customer receipt: no prices, big product names the line cook reads at a
-/// glance, and the modifiers and notes that actually change how a dish is made.
+/// Formats an order as a kitchen ticket (KOT) in the Dishflow classic layout:
+/// station banner, large order-type / table / time, Cust(s)/ORDER row, category
+/// groups, double-height qty+name, indented modifiers and notes — no prices.
 ///
-/// A restaurant cannot run without this. The customer receipt tells the guest what
-/// they paid; the kitchen ticket tells the kitchen what to cook, and sending only
-/// the receipt (which is what the app did before) means the kitchen never sees the
-/// order at all.
+/// The customer receipt tells the guest what they paid; this ticket tells the
+/// kitchen what to cook.
 class KitchenTicketBuilder {
-  KitchenTicketBuilder({this.columns = 42, this.sectionOf});
+  KitchenTicketBuilder({
+    this.columns = 42,
+    this.sectionOf,
+    this.categoryNameOf,
+    this.serverNameOf,
+  });
 
   final int columns;
 
-  /// Which part of the floor a table sits in, by table name, or null on a shop with
-  /// no floor plan. The runner carrying the plate needs this more than the guest
-  /// does: two parts of a floor can each have a "5".
+  /// Which part of the floor a table sits in, by table name.
   final String? Function(String tableLabel)? sectionOf;
 
-  /// Build a ticket for [order]. When [only] is given, prints just those lines,
-  /// which is how a re-fire adds newly rung items without reprinting the whole
-  /// order. [station] labels the ticket for the printer it is routed to.
-  Uint8List build(Order order, {List<OrderLine>? only, String? station, bool reprint = false}) {
+  /// Category title for grouping items on the ticket.
+  final String? Function(int categoryId)? categoryNameOf;
+
+  /// Human name for the Server row (cashier id → display name).
+  final String? Function(String cashierId)? serverNameOf;
+
+  /// Build a ticket for [order]. When [only] is given, prints just those lines.
+  Uint8List build(Order order,
+      {List<OrderLine>? only, String? station, bool reprint = false}) {
     final lines = only ?? order.lines;
     final p = EscPos(columns: columns)..reset();
+    const major = '=';
 
+    // Top breathing room, then ===STATION=== like Dishflow.
+    p.feed(4);
     p.align(EscPosAlign.center)
       ..size(doubleWidth: true, doubleHeight: true)
       ..bold(true)
-      ..line(station == null ? 'KITCHEN' : station.toUpperCase())
+      ..centred('===${(station ?? 'KITCHEN').toUpperCase()}===')
       ..bold(false)
       ..size();
-    if (reprint) p.centred('*** REPRINT ***');
-    p.align(EscPosAlign.left).rule();
-
-    // The kitchen needs the where/who/how-many before the what: a dine-in for 4 at
-    // table 12 is cooked and plated differently from a takeaway.
-    p.size(doubleHeight: true).bold(true).line(order.type.label.toUpperCase())..bold(false)..size();
-    if (order.tableLabel != null) {
-      _seating(p, order.tableLabel!);
+    if (reprint) {
+      for (var i = 0; i < 3; i++) {
+        p.size(doubleWidth: true, doubleHeight: true)
+            .bold(true)
+            .centred('** RE-PRINT **')
+            .bold(false)
+            .size();
+      }
     }
-    if (order.guestCount != null) p.line('Guests: ${order.guestCount}');
-    // The pass is where a delivery is bagged and handed over, so the ticket carries
-    // enough to match bag to rider: who it is for, which app sent it and its number
-    // there. The address is not repeated here; that belongs on the slip that goes
-    // out with the food.
+    p.align(EscPosAlign.left).rule(major);
+
+    // Order-type banner (skip plain DINE IN — table carries that).
+    final typeBanner = _orderTypeBanner(order);
+    if (typeBanner != null) {
+      p.align(EscPosAlign.center)
+          .size(doubleWidth: true, doubleHeight: true)
+          .bold(true)
+          .centred(typeBanner)
+          .bold(false)
+          .size();
+    }
+    if (order.type == OrderType.delivery &&
+        order.companyOrderNo != null &&
+        order.companyOrderNo!.isNotEmpty) {
+      p.align(EscPosAlign.center)
+          .size(doubleWidth: true, doubleHeight: true)
+          .bold(true)
+          .centred('#${order.companyOrderNo}')
+          .bold(false)
+          .size();
+    }
+
+    // Table / seating — large, centered.
+    final tableLine = _tableDisplay(order);
+    if (tableLine != null) {
+      p.align(EscPosAlign.center)
+          .size(doubleWidth: true, doubleHeight: true)
+          .bold(true)
+          .centred(tableLine)
+          .bold(false)
+          .size();
+    }
+
+    // Time large in the middle.
+    p.align(EscPosAlign.center)
+        .size(doubleWidth: true, doubleHeight: true)
+        .bold(true)
+        .centred(_time12(order.createdAt))
+        .bold(false)
+        .size();
+
+    p.align(EscPosAlign.left).rule(major);
+
+    // Cust(s): N …… ORDER: short
+    final cust = order.guestCount != null
+        ? 'Cust(s): ${order.guestCount}'
+        : 'Cust(s): -';
+    final ord = 'ORDER: ${_shortOrder(order.displayNo)}';
+    p.bold(true).row(cust, ord).bold(false);
+    p.rule(major);
+
+    // Date …… Server: name
+    final server = serverNameOf?.call(order.cashierId)?.trim();
+    final serverTx =
+        (server != null && server.isNotEmpty) ? 'Server: $server' : '';
+    p.bold(true).row(_dateMdy(order.createdAt), serverTx).bold(false);
+
+    // Delivery contact under the header (kitchen needs who/phone, not address).
     if (order.type == OrderType.delivery) {
-      if (order.customerName != null) p.line('For: ${order.customerName}');
+      if (order.customerName != null && order.customerName!.isNotEmpty) {
+        p.line('Customer: ${order.customerName}');
+      }
       if (order.customerPhone != null && order.customerPhone!.isNotEmpty) {
         p.line('Phone: ${order.customerPhone}');
       }
       final channel = [
         if (order.deliveryChannel != null) order.deliveryChannel!,
-        if (order.companyOrderNo != null) '#${order.companyOrderNo}',
       ].join(' ');
       if (channel.isNotEmpty) p.line('Channel: $channel');
       if (order.driverName != null) p.line('Driver: ${order.driverName}');
     }
-    p.line('${_stamp(order.createdAt)}  #${order.displayNo}');
-    p.line('By: ${order.cashierId}');
-    p.rule();
 
+    // Items grouped by category (uppercase headers), Dishflow style.
+    String? lastCat;
     for (final l in lines) {
-      // Name doubled so it is legible on a steamy pass; quantity leads it.
-      p.size(doubleHeight: true).bold(true)
-        ..line('${_qty(l.quantity)} x ${l.name}')
-        ..bold(false)
-        ..size();
+      final cat = _categoryLabel(l);
+      if (cat != null && cat != lastCat) {
+        lastCat = cat;
+        p.feed()
+            .bold(true)
+            .size(doubleHeight: true)
+            .line(cat.toUpperCase())
+            .size()
+            .bold(false)
+            .rule(major);
+      }
+      // qty + name — double height, no "x".
+      p.size(doubleHeight: true)
+          .bold(true)
+          .line('${_qty(l.quantity)}  ${l.name}')
+          .bold(false)
+          .size();
       for (final m in l.modifiers) {
-        p.line('   + ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}');
+        final label =
+            '    ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}';
+        p.size(doubleHeight: true).line(label).size();
       }
-      // The note is the whole point of a kitchen ticket ("no onions"), so it is the
-      // one thing printed bold under its line.
       if (l.note != null && l.note!.isNotEmpty) {
-        p.bold(true).line('   ** ${l.note}').bold(false);
+        p.bold(true).line('    ** ${l.note} **').bold(false);
       }
+      p.feed();
     }
 
     if (order.note != null && order.note!.isNotEmpty) {
-      p.rule().bold(true).line('NOTE: ${order.note}').bold(false);
+      p.rule(major).bold(true).line('NOTE: ${order.note}').bold(false);
     }
     return (p..feed(3)..cut()).build();
   }
 
-  /// A deletion slip: tells the kitchen to bin something already fired. Without
-  /// this a voided line keeps cooking. Mirrors jouma's deleted-line audit onto
-  /// paper the kitchen can see.
+  /// A deletion slip: Dishflow-style DELETION banner so the kitchen bins a line.
   Uint8List buildVoid(Order order, OrderLine line, String reason) {
     final p = EscPos(columns: columns)..reset();
+    const major = '=';
+    p.feed(2);
     p.align(EscPosAlign.center)
       ..size(doubleWidth: true, doubleHeight: true)
       ..bold(true)
-      ..line('*** CANCEL ***')
+      ..centred('===${'KITCHEN'}===')
       ..bold(false)
       ..size();
-    p.align(EscPosAlign.left).rule();
-    if (order.tableLabel != null) {
-      _seating(p, order.tableLabel!);
+    p.align(EscPosAlign.left).rule(major);
+    final tableLine = _tableDisplay(order);
+    if (tableLine != null) {
+      p.align(EscPosAlign.center)
+          .size(doubleHeight: true)
+          .bold(true)
+          .centred(tableLine)
+          .bold(false)
+          .size();
     }
-    p.line('#${order.displayNo}  ${_stamp(DateTime.now().toUtc())}');
-    p.rule();
-    p.size(doubleHeight: true).bold(true)
-      ..line('CANCEL: ${_qty(line.quantity)} x ${line.name}')
-      ..bold(false)
-      ..size();
-    p.line('Reason: $reason');
-    p.line('By: ${order.cashierId}');
+    p.align(EscPosAlign.center)
+        .size(doubleHeight: true)
+        .bold(true)
+        .centred(_time12(DateTime.now().toUtc()))
+        .bold(false)
+        .size();
+    p.align(EscPosAlign.left).rule(major);
+    p.bold(true).row(
+          order.guestCount != null
+              ? 'Cust(s): ${order.guestCount}'
+              : 'Cust(s): -',
+          'ORDER: ${_shortOrder(order.displayNo)}',
+        ).bold(false);
+    p.rule(major);
+    p.align(EscPosAlign.center)
+        .bold(true)
+        .line('*' * (columns.clamp(8, 32)))
+        .size(doubleWidth: true, doubleHeight: true)
+        .centred('DELETION')
+        .size()
+        .line('*' * (columns.clamp(8, 32)))
+        .bold(false);
+    p.align(EscPosAlign.left);
+    p.size(doubleHeight: true)
+        .bold(true)
+        .line('-${_qty(line.quantity)}  ${line.name}')
+        .bold(false)
+        .size();
+    for (final m in line.modifiers) {
+      p.line('       ${m.name}');
+    }
+    if (line.note != null && line.note!.isNotEmpty) {
+      p.bold(true).line('       ** ${line.note} **').bold(false);
+    }
+    p.feed().line('Reason: $reason');
+    final server = serverNameOf?.call(order.cashierId)?.trim();
+    if (server != null && server.isNotEmpty) p.line('By: $server');
     return (p..feed(3)..cut()).build();
   }
 
-  /// Where to carry the plate. The section goes on its own line above the table
-  /// rather than beside it, because this is the part of the ticket a runner reads at
-  /// arm's length. A shop with no floor plan prints the table alone, as before.
-  void _seating(EscPos p, String tableLabel) {
-    final section = sectionOf?.call(tableLabel);
-    if (section != null && section.isNotEmpty) p.line('Section: $section');
-    p.line('Table: $tableLabel');
+  /// Non–dine-in order type as Dishflow English kitchen label; dine-in is table-only.
+  String? _orderTypeBanner(Order order) {
+    return switch (order.type) {
+      OrderType.dineIn => null,
+      OrderType.toGo => 'TO GO',
+      OrderType.takeaway => 'TAKEAWAY',
+      OrderType.delivery => 'DELIVERY',
+    };
+  }
+
+  String? _tableDisplay(Order order) {
+    final label = order.tableLabel;
+    if (label == null || label.isEmpty) return null;
+    final section = sectionOf?.call(label);
+    if (order.type == OrderType.dineIn) {
+      if (section != null && section.isNotEmpty) return '$section $label';
+      return 'Table $label';
+    }
+    // To-go / delivery seated on a floor label: SECTION N or the raw label.
+    if (section != null && section.isNotEmpty) return '$section $label';
+    return label;
+  }
+
+  String? _categoryLabel(OrderLine l) {
+    final id = l.categoryId;
+    if (id == null) return null;
+    final name = categoryNameOf?.call(id)?.trim();
+    return (name != null && name.isNotEmpty) ? name : null;
   }
 
   String _qty(double q) =>
       q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toStringAsFixed(3);
 
-  String _stamp(DateTime utc) {
+  /// Dishflow short order: middle segment of DDMM-SEQ-TAG, else digits / raw.
+  static String _shortOrder(String raw) {
+    final parts = raw.split('-');
+    if (parts.length >= 2 && RegExp(r'^\d+$').hasMatch(parts[1])) {
+      return parts[1];
+    }
+    final digits = raw.replaceAll(RegExp(r'\D'), '');
+    if (digits.isNotEmpty) return digits;
+    return raw.isNotEmpty ? raw : '-';
+  }
+
+  static String _time12(DateTime utc) {
+    final d = utc.toLocal();
+    final h24 = d.hour;
+    final ap = h24 >= 12 ? 'PM' : 'AM';
+    final h12 = h24 % 12 == 0 ? 12 : h24 % 12;
+    final min = d.minute.toString().padLeft(2, '0');
+    return '$h12:$min $ap';
+  }
+
+  static String _dateMdy(DateTime utc) {
     final d = utc.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
-    return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+    return '${two(d.month)}/${two(d.day)}/${d.year}';
   }
 }
 
 /// Groups an order's lines by the kitchen station(s) that should cook them, so
 /// each station's printer gets its own items and a line that belongs at more
-/// than one station (a shared side, or a category routed to two printers) prints
-/// at every one of them rather than just the first.
-///
-/// A line's route is decided in this order: [productToStations] for its exact
-/// product, if that product has any stations set; otherwise [categoryToStations]
-/// for its category, if that category has any stations set; otherwise
-/// [fallbackStation], because a line with no route must still reach a kitchen
-/// rather than silently vanish. Returns station name -> the lines routed to it.
+/// than one station prints at every one of them rather than just the first.
 Map<String, List<OrderLine>> routeToStations(
   List<OrderLine> lines, {
   Map<int, List<String>> categoryToStations = const {},
