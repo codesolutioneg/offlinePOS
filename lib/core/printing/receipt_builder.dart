@@ -336,14 +336,16 @@ class ReceiptBuilder {
       if (order.tip > 0) p.row('Tip', formatAmount(order.tip));
     }
     if (showTotals) {
-      // TOTAL DUE: reverse bar for visibility, but single size — double W+H was
-      // too loud on 80mm paper and ate the foot of the slip.
+      // TOTAL DUE: reverse bar + double height only (not double width — that
+      // was huge; plain size was too small).
       p.feed()
           .align(EscPosAlign.center)
           .reverse(true)
+          .size(doubleHeight: true)
           .bold(true)
           .centred('TOTAL DUE: ${formatAmount(order.total)}')
           .bold(false)
+          .size()
           .reverse(false)
           .align(EscPosAlign.left);
     }
@@ -380,9 +382,11 @@ class ReceiptBuilder {
       p.row('Already paid', '-${formatAmount(order.amountPaid)}');
       p.align(EscPosAlign.center)
           .reverse(true)
+          .size(doubleHeight: true)
           .bold(true)
           .centred('BALANCE DUE: ${formatAmount(order.balance)}')
           .bold(false)
+          .size()
           .reverse(false)
           .align(EscPosAlign.left);
     }
