@@ -32,11 +32,14 @@ String strippedText(List<int> bytes) {
   return String.fromCharCodes(out);
 }
 
-/// How long a GS sequence is: `GS ! n` sets the character size in three bytes,
-/// everything else this app emits (GS V B n) takes four. Getting this wrong leaks a
-/// parameter byte into the text and inflates every width assertion.
+/// How long a GS sequence is: `GS ! n` (character size) and `GS B n` (reverse)
+/// take three bytes, everything else this app emits (GS V B n) takes four.
+/// Getting this wrong leaks a parameter byte into the text, or swallows the
+/// first character after the sequence, and inflates every width assertion.
 int _gsLength(List<int> bytes, int i) =>
-    i + 1 < bytes.length && bytes[i + 1] == 0x21 ? 3 : 4;
+    i + 1 < bytes.length && (bytes[i + 1] == 0x21 || bytes[i + 1] == 0x42)
+        ? 3
+        : 4;
 
 /// One rendered line found in a document.
 class PrintedBand {
