@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
+import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/domain/table_preorder.dart';
 import 'package:offline_pos/domain/table_section_config.dart';
 
@@ -94,5 +95,23 @@ void main() {
     });
     expect(settings.sectionConfig('officer').allowedCategoryIds, [5]);
     expect(settings.sectionConfig('officer').isStaffSection, isTrue);
+  });
+
+  test('section default order type and guest prompt round-trip', () {
+    settings.deviceRole = DeviceRole.primary;
+    settings.setSectionConfig(const TableSectionConfig(
+      name: 'TOGO',
+      defaultOrderType: OrderType.toGo,
+      requireGuestCount: false,
+    ));
+    final cfg = settings.sectionConfig('TOGO');
+    expect(cfg.defaultOrderType, OrderType.toGo);
+    expect(cfg.requireGuestCount, isFalse);
+  });
+
+  test('moving a table before kitchen is allowed until the shop turns the gate on', () {
+    expect(settings.moveRequiresKitchen, isFalse);
+    settings.moveRequiresKitchen = true;
+    expect(settings.moveRequiresKitchen, isTrue);
   });
 }

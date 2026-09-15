@@ -89,7 +89,7 @@ class DishflowSaleMapper {
     final items = order.lines.map(_lineSummary).toList();
 
     final discountAmount = order.discountMoney.abs();
-    final isDelivery = order.type == OrderType.delivery;
+    final isDelivery = order.type.isDelivery;
 
     return {
       'odooOrderId': 'pending_${order.uuid}',
@@ -107,7 +107,7 @@ class DishflowSaleMapper {
       'syncedToOdoo': order.state == OrderState.synced,
       'status': 'sale',
       'source': 'offline_pos',
-      'orderType': order.type.wireName,
+      'orderType': order.type.dishflowName,
       if (isDelivery) 'delivery_status': 'received',
       'businessDateKey': biz,
       'sessionDate': biz,

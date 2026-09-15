@@ -68,6 +68,7 @@ void main() {
     // These are about who may open a table, not about the covers, so seating stays
     // one tap: a guest prompt in the way would only be a second thing to answer.
     settings.askGuestCount = false;
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     tables = TableStore(db);
     assignments = TableAssignmentStore(db);
@@ -410,7 +411,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('bill-merge')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(Key('merge-${theirs.uuid}')));
+    await t.tap(find.byKey(Key('merge-table-${theirs.uuid}')));
     await t.pumpAndSettle();
 
     expect(find.byKey(const Key('manager-pin')), findsOneWidget);

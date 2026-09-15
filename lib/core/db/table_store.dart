@@ -29,6 +29,7 @@ class PosTable {
     this.shape = TableShape.square,
     this.vertical = false,
     this.span = 140,
+    this.displayLabel = '',
   });
 
   final String id;
@@ -50,6 +51,14 @@ class PosTable {
   final bool vertical;
   final int span;
 
+  /// Shown on the tile and the slip when a staff section names the slot after
+  /// the employee. Empty means the recall [name] is what guests and waiters see.
+  final String displayLabel;
+
+  /// What a waiter reads on the floor: the staff label when one was set, otherwise
+  /// the unique name the bill is recalled by.
+  String get shownName => displayLabel.trim().isEmpty ? name : displayLabel.trim();
+
   /// A divider is a visual wall/aisle marker, not a seatable table: it never
   /// shows as occupied and is never tapped to open an order.
   bool get isDivider => shape == TableShape.divider;
@@ -68,6 +77,7 @@ class PosTable {
         'shape': shape.name,
         'vertical': vertical,
         'span': span,
+        'display_label': displayLabel.trim().isEmpty ? null : displayLabel.trim(),
       };
 
   /// Throws if the payload is not a table. An unreadable event is refused by the
@@ -83,6 +93,7 @@ class PosTable {
         shape: _shapeFromDb(m['shape'] as String?),
         vertical: m['vertical'] == true,
         span: (m['span'] as num?)?.toInt() ?? 140,
+        displayLabel: '${m['display_label'] ?? ''}',
       );
 
   PosTable copyWith({
@@ -95,6 +106,7 @@ class PosTable {
     TableShape? shape,
     bool? vertical,
     int? span,
+    String? displayLabel,
   }) =>
       PosTable(
         id: id,
@@ -107,6 +119,7 @@ class PosTable {
         shape: shape ?? this.shape,
         vertical: vertical ?? this.vertical,
         span: span ?? this.span,
+        displayLabel: displayLabel ?? this.displayLabel,
       );
 }
 
@@ -184,6 +197,7 @@ class TableStore {
     double? x,
     double? y,
     TableShape shape = TableShape.square,
+    String displayLabel = '',
   }) {
     final seq = _nextSequence(section);
     final table = PosTable(
@@ -195,6 +209,7 @@ class TableStore {
       y: y ?? (seq ~/ 5).toDouble(),
       sequence: seq,
       shape: shape,
+      displayLabel: displayLabel,
     );
     upsert(table);
     return table;
@@ -218,14 +233,15 @@ class TableStore {
     announcedWrite(
       _db,
       () => _db.raw.execute(
-        'INSERT INTO pos_tables (id, section, name, seats, pos_x, pos_y, sequence, shape, vertical, span) '
-        'VALUES (?,?,?,?,?,?,?,?,?,?) '
+        'INSERT INTO pos_tables (id, section, name, seats, pos_x, pos_y, sequence, shape, vertical, span, display_label) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?,?) '
         'ON CONFLICT(id) DO UPDATE SET section=excluded.section, name=excluded.name, '
         'seats=excluded.seats, pos_x=excluded.pos_x, pos_y=excluded.pos_y, '
         'sequence=excluded.sequence, shape=excluded.shape, vertical=excluded.vertical, '
-        'span=excluded.span',
+        'span=excluded.span, display_label=excluded.display_label',
         [t.id, t.section, t.name, t.seats, t.x, t.y, t.sequence, t.shape.name,
-          t.vertical ? 1 : 0, t.span],
+          t.vertical ? 1 : 0, t.span,
+          t.displayLabel.trim().isEmpty ? null : t.displayLabel.trim()],
       ),
       announce && publish != null
           ? () => publish(LanEventKind.tableUpsert, t.id, t.toMap())
@@ -278,5 +294,6 @@ class TableStore {
         shape: _shapeFromDb(r['shape'] as String?),
         vertical: (r['vertical'] as int? ?? 0) != 0,
         span: r['span'] as int? ?? 140,
+        displayLabel: (r['display_label'] as String?) ?? '',
       );
 }

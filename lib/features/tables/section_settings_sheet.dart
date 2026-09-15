@@ -4,6 +4,7 @@ import '../../core/db/catalogue_store.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
+import '../../domain/order.dart';
 import '../../domain/table_section_config.dart';
 
 /// Edit one floor section: staff toggle, allowed categories, payments, and
@@ -31,6 +32,8 @@ class _SectionSettingsSheetState extends State<SectionSettingsSheet> {
   late Set<int> _cats;
   late Set<int> _pays;
   late Map<String, List<String>> _employeeCats;
+  late bool? _requireGuests;
+  late OrderType? _defaultType;
 
   @override
   void initState() {
@@ -42,6 +45,8 @@ class _SectionSettingsSheetState extends State<SectionSettingsSheet> {
     _employeeCats = {
       for (final e in cfg.employeeAllowedCategories.entries) e.key: [...e.value],
     };
+    _requireGuests = cfg.requireGuestCount;
+    _defaultType = cfg.defaultOrderType;
   }
 
   void _save() {
@@ -57,6 +62,8 @@ class _SectionSettingsSheetState extends State<SectionSettingsSheet> {
       allowedCategoryIds: _cats.toList()..sort(),
       allowedPaymentMethodIds: _pays.toList()..sort(),
       employeeAllowedCategories: _staff ? _employeeCats : const {},
+      requireGuestCount: _requireGuests,
+      defaultOrderType: _defaultType,
     ));
     Navigator.pop(context, true);
   }
@@ -113,6 +120,56 @@ class _SectionSettingsSheetState extends State<SectionSettingsSheet> {
                         'Restrict the menu and payments; optional rules per employee')),
                     value: _staff,
                     onChanged: (v) => setState(() => _staff = v),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(tr(ctx, 'Ask for the guest count'),
+                      style: Theme.of(ctx).textTheme.titleMedium),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        key: const Key('section-guests-inherit'),
+                        label: Text(tr(ctx, 'Shop default')),
+                        selected: _requireGuests == null,
+                        onSelected: (_) =>
+                            setState(() => _requireGuests = null),
+                      ),
+                      ChoiceChip(
+                        key: const Key('section-guests-on'),
+                        label: Text(tr(ctx, 'Ask')),
+                        selected: _requireGuests == true,
+                        onSelected: (_) =>
+                            setState(() => _requireGuests = true),
+                      ),
+                      ChoiceChip(
+                        key: const Key('section-guests-off'),
+                        label: Text(tr(ctx, 'Skip (1 guest)')),
+                        selected: _requireGuests == false,
+                        onSelected: (_) =>
+                            setState(() => _requireGuests = false),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(tr(ctx, 'Default order type'),
+                      style: Theme.of(ctx).textTheme.titleMedium),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        key: const Key('section-type-none'),
+                        label: Text(tr(ctx, 'Waiter picks')),
+                        selected: _defaultType == null,
+                        onSelected: (_) => setState(() => _defaultType = null),
+                      ),
+                      for (final t in OrderType.values)
+                        ChoiceChip(
+                          key: Key('section-type-${t.name}'),
+                          label: Text(tr(ctx, t.label)),
+                          selected: _defaultType == t,
+                          onSelected: (_) => setState(() => _defaultType = t),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 8),
                   Text(tr(ctx, 'Allowed categories'),

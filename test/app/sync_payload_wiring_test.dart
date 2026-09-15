@@ -263,7 +263,7 @@ void main() {
     testWidgets('a delivery with a charge and a tip declares both on the wire',
         (t) async {
       orders.save(
-        Order(deviceId: 'till-1', cashierId: 'sara', type: OrderType.delivery)
+        Order(deviceId: 'till-1', cashierId: 'sara', type: OrderType.storeDelivery)
           ..lines.add(
               OrderLine(productId: 10, name: 'Pizza', quantity: 2, unitPrice: 100)),
         announce: false,

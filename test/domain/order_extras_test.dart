@@ -58,4 +58,18 @@ void main() {
     expect(back.subtotal, 10);
     expect(back.total, 8);
   });
+
+  test('sibling tabs and a printed check stay off the server payload', () {
+    final o = Order(
+      deviceId: 'd',
+      cashierId: 'c',
+      linkedOrderUuids: const ['other-tab'],
+      billPrintedAt: DateTime.utc(2026, 1, 1),
+    )..lines.add(line(10));
+    expect(o.toMap()['linked_order_uuids'], ['other-tab']);
+    expect(o.toMap()['bill_printed_at'], isNotNull);
+    final sent = o.toServerPayload();
+    expect(sent.containsKey('linked_order_uuids'), isFalse);
+    expect(sent.containsKey('bill_printed_at'), isFalse);
+  });
 }

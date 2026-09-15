@@ -60,6 +60,7 @@ void main() {
     orders = OrderStore(db);
     settings = SettingsStore(db);
     settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     tables = TableStore(db);
     audit = AuditLog(db);
     table5 = tables.add(name: '5', seats: 4);

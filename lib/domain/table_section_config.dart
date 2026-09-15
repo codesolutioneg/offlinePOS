@@ -1,3 +1,5 @@
+import 'order.dart';
+
 /// Per-floor-section rules: which menu categories and payment methods appear,
 /// and (for staff sections) optional per-employee category overrides.
 ///
@@ -11,6 +13,8 @@ class TableSectionConfig {
     this.allowedCategoryIds = const [],
     this.allowedPaymentMethodIds = const [],
     this.employeeAllowedCategories = const {},
+    this.requireGuestCount,
+    this.defaultOrderType,
   });
 
   final String name;
@@ -20,6 +24,13 @@ class TableSectionConfig {
 
   /// Employee display name → category id strings, or a single [allCategoriesSentinel].
   final Map<String, List<String>> employeeAllowedCategories;
+
+  /// Whether seating this section asks for covers. Null inherits the shop toggle.
+  final bool? requireGuestCount;
+
+  /// Order type applied when a free table in this section is seated, when that
+  /// type is offered on the till. Null keeps whatever the waiter already picked.
+  final OrderType? defaultOrderType;
 
   /// Explicit "every category" for one employee (not the same as a missing key).
   static const String allCategoriesSentinel = '__ALL__';
@@ -52,6 +63,10 @@ class TableSectionConfig {
     List<int>? allowedCategoryIds,
     List<int>? allowedPaymentMethodIds,
     Map<String, List<String>>? employeeAllowedCategories,
+    bool? requireGuestCount,
+    bool clearRequireGuestCount = false,
+    OrderType? defaultOrderType,
+    bool clearDefaultOrderType = false,
   }) =>
       TableSectionConfig(
         name: name ?? this.name,
@@ -61,6 +76,12 @@ class TableSectionConfig {
             allowedPaymentMethodIds ?? this.allowedPaymentMethodIds,
         employeeAllowedCategories:
             employeeAllowedCategories ?? this.employeeAllowedCategories,
+        requireGuestCount: clearRequireGuestCount
+            ? null
+            : (requireGuestCount ?? this.requireGuestCount),
+        defaultOrderType: clearDefaultOrderType
+            ? null
+            : (defaultOrderType ?? this.defaultOrderType),
       );
 
   Map<String, dynamic> toMap() => {
@@ -69,6 +90,8 @@ class TableSectionConfig {
         'allowed_category_ids': allowedCategoryIds,
         'allowed_payment_method_ids': allowedPaymentMethodIds,
         'employee_allowed_categories': employeeAllowedCategories,
+        if (requireGuestCount != null) 'require_guest_count': requireGuestCount,
+        if (defaultOrderType != null) 'default_order_type': defaultOrderType!.name,
       };
 
   factory TableSectionConfig.fromMap(Map<String, dynamic> m) {
@@ -96,12 +119,21 @@ class TableSectionConfig {
       };
     }
 
+    bool? asBool(dynamic raw) {
+      if (raw is bool) return raw;
+      return null;
+    }
+
+    final typeRaw = m['default_order_type'] as String?;
     return TableSectionConfig(
       name: '${m['name'] ?? ''}',
       isStaffSection: m['is_staff_section'] == true,
       allowedCategoryIds: ints(m['allowed_category_ids']),
       allowedPaymentMethodIds: ints(m['allowed_payment_method_ids']),
       employeeAllowedCategories: employees(m['employee_allowed_categories']),
+      requireGuestCount: asBool(m['require_guest_count']),
+      defaultOrderType:
+          typeRaw == null || typeRaw.isEmpty ? null : OrderTypeLabel.parse(typeRaw),
     );
   }
 }

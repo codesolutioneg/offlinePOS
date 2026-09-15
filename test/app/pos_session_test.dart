@@ -67,7 +67,7 @@ void main() {
   test('startFresh discards an empty draft rather than leaving it behind', () {
     // An empty order that has been persisted (e.g. a type was set) then a fresh
     // start: the old empty draft must not linger to be restored later.
-    session.setOrderType(OrderType.delivery);
+    session.setOrderType(OrderType.storeDelivery);
     final staleUuid = session.current.uuid;
     expect(orders.drafts().length, 1);
 

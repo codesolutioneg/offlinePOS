@@ -56,6 +56,7 @@ import '../core/updates/update_service.dart';
 import '../domain/business_day.dart';
 import '../domain/catalogue.dart';
 import '../domain/order.dart';
+import '../domain/table_floor_info.dart';
 import '../domain/table_section_config.dart';
 import '../domain/shift.dart';
 import '../features/admin/attendance_screen.dart';
@@ -69,6 +70,7 @@ import '../features/kitchen/kitchen_display_screen.dart';
 import '../features/menu/menu_editor_screen.dart';
 import '../features/onboarding/setup_checklist_card.dart';
 import '../features/onboarding/wizard_overlay.dart';
+import '../features/orders/delivery_waiting_screen.dart';
 import '../features/orders/open_orders_screen.dart';
 import '../features/orders/order_history_screen.dart';
 import '../features/orders/refund_screen.dart';
@@ -524,8 +526,13 @@ class _PosAppState extends State<PosApp> {
     if (!mounted) return;
     if (widget.settings.deviceRole != DeviceRole.unset) return;
     if (widget.settings.lanRolePromptDismissed) return;
+    // PosApp's State sits above MaterialApp; dialogs need the navigator below.
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    final navCtx = _navigator.currentContext;
+    if (navCtx == null) return;
     final choice = await showDialog<String>(
-      context: context,
+      context: navCtx,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         key: const Key('lan-role-prompt'),
@@ -556,6 +563,7 @@ class _PosAppState extends State<PosApp> {
     if (!mounted || choice == null) return;
     widget.settings.lanRolePromptDismissed = true;
     if (choice == 'skip') return;
+    final messengerCtx = _navigator.currentContext ?? context;
     if (choice == 'primary') {
       widget.settings.deviceRole = DeviceRole.primary;
       if (!(widget.settings.lanEnabled(fallback: widget.config.lanDefault))) {
@@ -565,9 +573,9 @@ class _PosAppState extends State<PosApp> {
       unawaited(_reconcileLan());
       if (mounted) setState(() {});
       if (widget.lan == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        ScaffoldMessenger.of(messengerCtx).showSnackBar(SnackBar(
           content: Text(tr(
-              context,
+              messengerCtx,
               'Primary saved. Restart the app once so Share can start on the network.')),
         ));
       }
@@ -582,9 +590,9 @@ class _PosAppState extends State<PosApp> {
     if (!mounted) return;
     setState(() {});
     if (widget.lan == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      ScaffoldMessenger.of(messengerCtx).showSnackBar(SnackBar(
         content: Text(tr(
-            context,
+            messengerCtx,
             'Restart the app, then open Shop network and Join with the PIN '
                 'from the primary.')),
       ));
@@ -629,7 +637,14 @@ class _PosAppState extends State<PosApp> {
     // is no longer anything to name.
     final parked = confirmPark && (session?.hasLines ?? false);
     final table = session?.current.tableLabel;
-    session?.hold();
+    // Hold refuses an empty cart, and a seated claim is stored held so the LAN
+    // floor colours it. Leaving with nothing rung must drop that claim, or the
+    // table stays busy after the waiter backed out.
+    if (session != null && !session.hasLines) {
+      session.newOrder();
+    } else {
+      session?.hold();
+    }
     _publishActivity();
     if (!mounted) return;
     // Cleared on every way onto the floor, so a line about one service's parked tab
@@ -875,6 +890,7 @@ class _PosAppState extends State<PosApp> {
   Future<void> _printBill(Order order) async {
     widget.audit.record(_session?.cashierId ?? order.cashierId, 'bill.printed',
         detail: order.uuid);
+    _session?.markBillPrinted();
     try {
       final bytes = _receiptBuilder().buildBill(order);
       // A bill is reprintable on demand, so the timestamp keeps each copy out of the
@@ -2014,26 +2030,32 @@ class _PosAppState extends State<PosApp> {
   /// Which tables read as occupied right now, and their running total + age, from
   /// the held orders plus the one on screen. Shared by the floor plan and the table
   /// picker so both colour tables identically.
-  ({Set<String> occupied, Map<String, ({double total, DateTime since})> info})
+  ({Set<String> occupied, Map<String, TableFloorInfo> info})
       _floorOccupancy(PosSession session) {
     // Every parked order in the shop, not just this till's. A table busy on the bar
     // till has to read as busy here, or two cashiers seat the same table and the
     // second guest's food goes to a bill nobody is holding.
-    final held = widget.orders.occupyingAnywhere();
-    final occupied = held.map((o) => o.tableLabel).whereType<String>().toSet();
-    final info = <String, ({double total, DateTime since})>{
-      for (final o in held)
-        if (o.tableLabel != null)
-          o.tableLabel!: (total: o.total, since: o.createdAt),
-    };
-    // The order on screen (not yet held) also occupies its table, or opening the
-    // floor and tapping it would start a second order on the same table.
-    final active = session.current;
-    if (active.lines.isNotEmpty && active.tableLabel != null) {
-      occupied.add(active.tableLabel!);
-      info[active.tableLabel!] = (total: active.total, since: active.createdAt);
+    final byTable = <String, List<Order>>{};
+    void add(Order o) {
+      final label = o.tableLabel;
+      if (label == null || label.isEmpty) return;
+      final list = byTable.putIfAbsent(label, () => []);
+      if (list.any((e) => e.uuid == o.uuid)) return;
+      list.add(o);
     }
-    return (occupied: occupied, info: info);
+
+    for (final o in widget.orders.occupyingAnywhere()) {
+      add(o);
+    }
+    // The order on screen also occupies its table, or opening the floor and
+    // tapping it would start a second order on the same table.
+    add(session.current);
+    return (
+      occupied: byTable.keys.toSet(),
+      info: {
+        for (final e in byTable.entries) e.key: TableFloorInfo.fromTabs(e.value),
+      },
+    );
   }
 
   /// Choose a table on the same drawn floor plan the manager laid out, with the
@@ -2073,39 +2095,60 @@ class _PosAppState extends State<PosApp> {
 
   /// Resume one of the parked deliveries, start a new one, or back out.
   ///
-  /// Returns the [Order] to pick up, null to ring a new one, or 'cancel' when the
-  /// cashier dismissed the sheet: backing out must not silently start an order.
-  Future<Object?> _pickParkedDelivery(BuildContext context, List<Order> parked) =>
-      showModalBottomSheet<Object?>(
+  /// Which Dishflow delivery subtype to start when the floor has more than one.
+  Future<OrderType?> _pickDeliverySubtype(
+          BuildContext context, List<OrderType> types) =>
+      showDialog<OrderType>(
         context: context,
-        builder: (ctx) => SafeArea(
-          child: ListView(shrinkWrap: true, children: [
-            ListTile(
-              title: Text(tr(ctx, 'Deliveries waiting'),
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text(tr(ctx, 'Pick one up, or start a new order.')),
+        barrierColor: const Color(0x99000000),
+        builder: (ctx) => Dialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(tr(ctx, 'Delivery'),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w800, fontSize: 16)),
+                  ),
+                ),
+                for (final t in types)
+                  ListTile(
+                    key: Key('pick-delivery-${t.name}'),
+                    leading: const Icon(Icons.delivery_dining),
+                    title: Text(tr(ctx, t.label)),
+                    onTap: () => Navigator.pop(ctx, t),
+                  ),
+                const SizedBox(height: 8),
+              ],
             ),
-            for (final o in parked)
-              ListTile(
-                key: Key('resume-delivery-${o.uuid}'),
-                leading: const Icon(Icons.delivery_dining),
-                title: Text(o.customerName ?? '#${o.displayNo}'),
-                subtitle: Text([
-                  if (o.customerPhone != null) o.customerPhone!,
-                  if (o.deliveryChannel != null) o.deliveryChannel!,
-                  PosApp.money(o.total),
-                ].join('  ·  ')),
-                onTap: () => Navigator.pop(ctx, o),
-              ),
-            ListTile(
-              key: const Key('new-delivery'),
-              leading: const Icon(Icons.add),
-              title: Text(tr(ctx, 'New delivery')),
-              onTap: () => Navigator.pop(ctx, 'new'),
-            ),
-          ]),
+          ),
         ),
-      ).then((v) => v ?? 'cancel');
+      );
+
+  /// Full screen of parked bags for [type]: resume one, start new, or back out.
+  ///
+  /// Dishflow shows suspended deliveries as a panel after the subtype pick; we
+  /// use a dedicated route so the cashier gets a real screen, not a sheet.
+  Future<Object?> _pickParkedDelivery(
+      BuildContext context, OrderType type, List<Order> parked) {
+    return Navigator.of(context)
+        .push<Object?>(MaterialPageRoute(
+          builder: (_) => DeliveryWaitingScreen(
+            type: type,
+            parked: parked,
+            formatAmount: PosApp.money,
+          ),
+        ))
+        .then((v) => v ?? 'cancel');
+  }
+
   /// The kinds of sale the signed-in role may open here: what the shop offers at
   /// all, narrowed by what this role may ring. Unrestricted until a manager says
   /// otherwise on either.
@@ -2225,98 +2268,129 @@ class _PosAppState extends State<PosApp> {
             onTakeaway: !allowed.contains(OrderType.takeaway)
                 ? null
                 : () => _startOrder(session, OrderType.takeaway),
-            onDelivery: !allowed.contains(OrderType.delivery)
+            onDelivery: ![
+                      OrderType.deliveryFromCompany,
+                      OrderType.storeDelivery,
+                      OrderType.carDelivery,
+                    ].any(allowed.contains)
                 ? null
                 : () async {
-                    // A delivery has no table to tap, so a parked one is only reachable
-                    // through Open orders: a cashier taking the next call has no way of
-                    // knowing they are about to start a second order for a bag already
-                    // waiting. Ask, but only when there is something to resume.
+                    final deliveryTypes = [
+                      OrderType.deliveryFromCompany,
+                      OrderType.storeDelivery,
+                      OrderType.carDelivery,
+                    ].where(allowed.contains).toList();
+                    final chosen = deliveryTypes.length == 1
+                        ? deliveryTypes.first
+                        : await _pickDeliverySubtype(floorContext, deliveryTypes);
+                    if (chosen == null || !mounted) return;
+                    // Always open the waiting screen for this subtype (Dishflow
+                    // panel): resume a parked bag, start new, or back out.
                     final parked = widget.orders
                         .held()
-                        .where((o) => o.type == OrderType.delivery)
+                        .where((o) => o.type == chosen)
                         .toList();
-                    final resume = parked.isEmpty
-                        ? null
-                        : await _pickParkedDelivery(floorContext, parked);
+                    final resume = await _pickParkedDelivery(
+                        floorContext, chosen, parked);
                     if (resume == 'cancel' || !mounted) return;
                     setState(() {
                       if (resume is Order) {
                         session.recall(resume.uuid);
                       } else {
-                        session.startFresh(OrderType.delivery);
+                        session.startFresh(chosen);
                       }
                       _onCounter = true;
                     });
                   },
             onOpenTable: (t, seatAs) async {
               // Tapping the table the current order is already seated at just returns
-              // to it rather than parking it and starting a duplicate.
+              // to it rather than parking it and starting a duplicate, unless more
+              // than one bill already sits there and the waiter has to pick.
               if (session.current.tableLabel == t.name &&
                   session.current.lines.isNotEmpty) {
-                _toCounter();
+                final others = widget.orders.occupyingAnywhere().where(
+                    (o) => o.tableLabel == t.name && o.uuid != session.current.uuid);
+                if (others.isEmpty) {
+                  _toCounter();
+                  return;
+                }
+              }
+              final tabs = [
+                for (final o in widget.orders.occupyingAnywhere())
+                  if (o.tableLabel == t.name) o,
+              ];
+              if (session.current.tableLabel == t.name &&
+                  !tabs.any((o) => o.uuid == session.current.uuid) &&
+                  (session.current.lines.isNotEmpty ||
+                      session.current.tableLabel != null)) {
+                tabs.add(session.current);
+              }
+              final local = [
+                for (final o in tabs)
+                  if (o.deviceId == widget.deviceId) o,
+              ];
+              if (local.isEmpty && tabs.isNotEmpty) {
+                final tab = tabs.first;
+                final signed = widget.auth.signedIn;
+                final me = session.cashierId;
+                final isOpener =
+                    tab.cashierId == me || tab.cashierId == signed?.id;
+                final isManager = signed?.isManager ?? false;
+                final canTake = widget.lan != null &&
+                    (widget.settings.lanAllowTakeover ||
+                        isOpener ||
+                        isManager);
+                if (canTake) {
+                  unawaited(_takeOverTab(floorContext, session, tab,
+                      asOpener: isOpener, asManager: isManager));
+                  return;
+                }
+                ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
+                  content: Text(tr(floorContext,
+                      'This table is open on another device. Settle it there.')),
+                ));
                 return;
               }
-              // Every bill parked on this table, whatever it was rung as: a to-go left
-              // on a table is recalled by tapping it exactly like a dine-in.
-              final held =
-                  widget.orders.held().where((o) => o.tableLabel == t.name).toList();
-              if (held.isEmpty) {
-                // Parked / seated on another till.
-                final elsewhere = widget.orders
-                    .occupyingElsewhere()
-                    .where((o) => o.tableLabel == t.name)
-                    .toList();
-                if (elsewhere.isNotEmpty) {
-                  final tab = elsewhere.first;
-                  final signed = widget.auth.signedIn;
-                  final me = session.cashierId;
-                  final isOpener =
-                      tab.cashierId == me || tab.cashierId == signed?.id;
-                  final isManager = signed?.isManager ?? false;
-                  final canTake = widget.lan != null &&
-                      (widget.settings.lanAllowTakeover ||
-                          isOpener ||
-                          isManager);
-                  if (canTake) {
-                    unawaited(_takeOverTab(floorContext, session, tab,
-                        asOpener: isOpener, asManager: isManager));
+              if (local.isNotEmpty) {
+                Order? chosen;
+                if (local.length == 1) {
+                  chosen = local.first;
+                } else {
+                  final pick = await _pickTableTab(floorContext, local);
+                  if (!floorContext.mounted) return;
+                  if (pick == null) return;
+                  if (pick == 'new') {
+                    if (!allowed.contains(seatAs)) {
+                      ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
+                        content: Text(tr(floorContext,
+                            'This role does not open dine-in orders.')),
+                      ));
+                      return;
+                    }
+                    setState(() {
+                      session.openLinkedTab(t.name);
+                      _onCounter = true;
+                    });
                     return;
                   }
-                  ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
-                    content: Text(tr(floorContext,
-                        'This table is open on another device. Settle it there.')),
-                  ));
-                  return;
+                  chosen = pick as Order;
                 }
-                // Seating a table opens a sale, so a till that may open none of the
-                // seatable kinds says so plainly instead of landing on one it may not
-                // have started. The selector only ever offers a type this till rings,
-                // so what is refused here is the dine-in a shop with no seating fell
-                // back to. Recalling a tab that is already open is untouched by this:
-                // settling somebody else's table is not opening one.
-                if (!allowed.contains(seatAs)) {
-                  ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
-                    content: Text(
-                        tr(floorContext, 'This role does not open dine-in orders.')),
-                  ));
-                  return;
-                }
-              }
-              // How many are sitting down, when the shop asks. Before the order is
-              // started, so backing out of the prompt leaves no half-seated table
-              // behind, and only when a table is actually being seated: recalling a
-              // tab already has its covers.
-              if (held.isNotEmpty) {
-                // Whose tab it is may need answering first; the rest of the tap waits
-                // for that answer rather than opening the bill behind it. Before the
-                // guest prompt, so resuming never sits behind an await it does not need.
-                unawaited(_resumeTab(floorContext, session, held.first));
+                unawaited(_resumeTab(floorContext, session, chosen));
                 return;
               }
-              // Who opens first (attendance + their own PIN), then covers. Asking
-              // guests before the opener made the floor look like seating skipped
-              // attribution entirely.
+              if (!allowed.contains(seatAs)) {
+                ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
+                  content: Text(
+                      tr(floorContext, 'This role does not open dine-in orders.')),
+                ));
+                return;
+              }
+              final cfg = widget.settings.sectionConfig(t.section);
+              var type = seatAs;
+              if (cfg.defaultOrderType != null &&
+                  allowed.contains(cfg.defaultOrderType)) {
+                type = cfg.defaultOrderType!;
+              }
               String? openedBy;
               if (widget.settings.askCashierOnOpen ||
                   widget.users.active().length > 1) {
@@ -2324,33 +2398,27 @@ class _PosAppState extends State<PosApp> {
                 openedBy = await _pickOpenerWithPin(floorContext);
                 if (openedBy == null) return;
               }
-              // Covers belong to a bill that is eaten at the table. A to-go is packed
-              // while its guests wait, so it takes the table without taking a count.
-              final dineIn = seatAs == OrderType.dineIn;
+              final dineIn = type == OrderType.dineIn;
+              final askGuests =
+                  cfg.requireGuestCount ?? widget.settings.askGuestCount;
               int? covers;
-              if (dineIn && widget.settings.askGuestCount) {
+              if (dineIn && askGuests) {
                 if (!floorContext.mounted) return;
                 covers = await _askGuestCount(floorContext, t.seats);
                 if (covers == null) return;
+              } else if (dineIn && cfg.requireGuestCount == false) {
+                covers = 1;
               }
               if (!mounted) return;
               setState(() {
-                session.startFresh(seatAs);
-                session.setTable(t.name);
-                // The prompt's answer when there was one, otherwise the table's own
-                // seat count, which is what the floor has always seeded. A tab that was
-                // already open never reaches here: the resume path above took it.
+                session.startFresh(type);
+                session.claimSeat(t.name);
                 final seated = covers ?? t.seats;
                 if (dineIn && seated > 0) session.setGuestCount(seated);
-                // What the table opens with, after the covers are known: a cover
-                // charge is priced per guest, so the count has to be on the order
-                // before the line is rung.
                 if (dineIn) _addPreorders(session, t, guests: seated);
                 if (openedBy != null) session.rebindCashier(openedBy);
                 _onCounter = true;
               });
-              // Attribute the table to whoever opened it, using the same assignment
-              // the floor already shows against a waiter's tables.
               if (openedBy != null) _assignTable(t, openedBy);
             },
           );
@@ -2390,6 +2458,39 @@ class _PosAppState extends State<PosApp> {
       text: '${tr(context, 'The day was closed on')} ${notice.deviceName}. '
           '${tr(context, blocking ? 'New orders are held until this till is closed too.' : 'Close this till too.')}',
       blocking: blocking,
+    );
+  }
+
+  /// Which bill to resume when more than one sits on the same table, or a new
+  /// check on that table. Null is backing out.
+  Future<Object?> _pickTableTab(BuildContext context, List<Order> tabs) {
+    return showModalBottomSheet<Object>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final o in tabs)
+              ListTile(
+                key: Key('table-tab-${o.uuid}'),
+                title: Text(
+                  o.orderNo ??
+                      '${tr(ctx, 'Tab')} ${o.uuid.substring(0, 6).toUpperCase()}',
+                ),
+                subtitle: Text(
+                  '${PosApp.money(o.total)} · ${o.lines.length} ${tr(ctx, 'item(s)')}',
+                ),
+                onTap: () => Navigator.pop(ctx, o),
+              ),
+            ListTile(
+              key: const Key('table-tab-new'),
+              leading: const Icon(Icons.add),
+              title: Text(tr(ctx, 'New bill on this table')),
+              onTap: () => Navigator.pop(ctx, 'new'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -3274,6 +3375,20 @@ class _PosAppState extends State<PosApp> {
         // Behind the same gate as the server settings: this is the one switch in the
         // app that opens a listening socket, so it is not a cashier's to flip.
         onTap: () => pushGated(Permission.openSettings, _lanScreen(refresh)),
+      ),
+      SettingsEntry(
+        title: 'SQL console',
+        subtitle: 'Inspect and edit the local SQLite tables',
+        icon: Icons.storage_outlined,
+        keyValue: 'set-sql',
+        group: 'Shop',
+        onTap: () => pushGated(
+            Permission.openSettings,
+            SqlConsoleScreen(
+              db: widget.outboxStore.db,
+              audit: widget.audit,
+              cashierId: _session?.cashierId,
+            )),
       ),
       SettingsEntry(
         title: 'Staff',
@@ -4172,6 +4287,15 @@ class _PosAppState extends State<PosApp> {
         printError: _printError,
         authorize: (p) => _authorize(p, context),
         onBackup: widget.backup,
+        onOpenSql: () {
+          Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => SqlConsoleScreen(
+              db: widget.outboxStore.db,
+              audit: widget.audit,
+              cashierId: _session?.cashierId,
+            ),
+          ));
+        },
       ),
     ));
   }

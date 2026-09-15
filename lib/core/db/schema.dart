@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 25;
+  static const int version = 26;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -613,6 +613,14 @@ class Schema {
     // the catalogue brings the value down.
     [
       'ALTER TABLE modifiers ADD COLUMN max_quantity INTEGER NOT NULL DEFAULT 0',
+    ],
+    // v25 -> v26: a staff-section display name that is not the recall key.
+    //
+    // Orders recall by table name, and names stay unique across the floor. A staff
+    // slot still needs to read as the employee (TOGO / officer) on the tile and the
+    // slip without renaming the bill's key, so the label is its own column.
+    [
+      'ALTER TABLE pos_tables ADD COLUMN display_label TEXT',
     ],
   ];
 }

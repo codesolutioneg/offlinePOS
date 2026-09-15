@@ -186,12 +186,7 @@ class ReceiptBuilder {
 
     // Where the sale was served — Dishflow English labels.
     if (showOrderType) {
-      p.line(switch (order.type) {
-        OrderType.dineIn => 'DINE IN',
-        OrderType.toGo => 'TO GO',
-        OrderType.takeaway => 'TAKEAWAY',
-        OrderType.delivery => 'DELIVERY',
-      });
+      p.line(order.type.printBanner);
     }
 
     p.align(EscPosAlign.left).rule(major);
@@ -232,7 +227,7 @@ class ReceiptBuilder {
     // A delivery slip goes out with the bag, so it has to be enough for the driver
     // to find the door and ring ahead. Name alone is a slip nobody can deliver.
     // Everything here is captured on the till, and prints with the line down.
-    if (order.type == OrderType.delivery) {
+    if (order.type.isDelivery) {
       if (order.customerPhone != null && order.customerPhone!.isNotEmpty) {
         p.bold(true).line('Phone: ${order.customerPhone}').bold(false);
       }

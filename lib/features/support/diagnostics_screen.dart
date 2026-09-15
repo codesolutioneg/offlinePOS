@@ -34,6 +34,7 @@ class DiagnosticsScreen extends StatefulWidget {
     this.printError,
     this.authorize,
     this.onBackup,
+    this.onOpenSql,
   });
 
   final SyncService sync;
@@ -63,6 +64,10 @@ class DiagnosticsScreen extends StatefulWidget {
   /// returns where it landed. Null on a build with nowhere to write, which hides
   /// the action rather than offering one that cannot work.
   final Future<String> Function()? onBackup;
+
+  /// Opens the live SQL window. Null hides the row, so a suite that does not
+  /// wire the database is unchanged.
+  final VoidCallback? onOpenSql;
 
   /// Gate for adding, editing or forgetting a printer here: it is the same
   /// managePrinters right the Settings printer screen uses, so support cannot be a
@@ -364,6 +369,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
             label: Text(_syncing ? tr(context, 'Syncing...') : tr(context, 'Sync now')),
           ),
           ..._updateSection(),
+          if (widget.onOpenSql != null) ..._sqlSection(),
           if (widget.onBackup != null) ..._backupSection(),
           if (widget.printers != null) ..._printerSection(),
           if (widget.wizards != null && widget.cashierId != null)

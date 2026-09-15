@@ -61,6 +61,8 @@ abstract final class AppColors {
   static const tableFree = success;
   static const tableOccupied = error;
   static const tableThis = primary; // the table this order is on
+  static const tableSent = info; // kitchen has the ticket
+  static const tableBilled = secondary; // pre-bill printed, still open
 
   /// A stable, readable colour for a category tile when the manager has not picked
   /// one, so the grid is never a wall of one colour. Indexed by category id.

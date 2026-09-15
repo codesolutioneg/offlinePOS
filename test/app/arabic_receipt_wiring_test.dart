@@ -85,6 +85,7 @@ void main() {
     // as it is on a real start-up.
     settings = SettingsStore(db);
     settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     // Seating here is about the order type / the receipt, not the covers, so the
     // guest prompt is off: on by default it would sit in front of every seating.
     settings.askGuestCount = false;

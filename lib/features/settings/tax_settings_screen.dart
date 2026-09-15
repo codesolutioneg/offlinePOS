@@ -35,15 +35,12 @@ class _TaxSettingsScreenState extends State<TaxSettingsScreen> {
     OrderType.dineIn,
     OrderType.takeaway,
     OrderType.toGo,
-    OrderType.delivery,
+    OrderType.deliveryFromCompany,
+    OrderType.storeDelivery,
+    OrderType.carDelivery,
   ];
 
-  String _typeLabel(BuildContext context, OrderType t) => switch (t) {
-        OrderType.dineIn => tr(context, 'Dine-in'),
-        OrderType.takeaway => tr(context, 'Takeaway'),
-        OrderType.toGo => tr(context, 'To go'),
-        OrderType.delivery => tr(context, 'Delivery'),
-      };
+  String _typeLabel(BuildContext context, OrderType t) => tr(context, t.label);
 
   /// The shop's service percentage. Blank reads as off, the same as zero, so clearing
   /// the field cannot leave the last percentage quietly charging.

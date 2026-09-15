@@ -23,6 +23,7 @@ import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
+import 'package:offline_pos/core/widgets/select_pill.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
@@ -60,6 +61,7 @@ void main() {
     orders = OrderStore(db);
     settings = SettingsStore(db);
     settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     // Seating here is about what the floor remembers across a trip to the counter,
     // not about the covers, so the guest prompt is off: on by default it would sit in
     // front of every seating below.
@@ -181,7 +183,7 @@ void main() {
 
       await counterRoundTrip(t);
 
-      final chip = t.widget<ChoiceChip>(find.byKey(const Key('seat-as-togo')));
+      final chip = t.widget<SelectPill>(find.byKey(const Key('seat-as-togo')));
       expect(chip.selected, isTrue);
     });
   });

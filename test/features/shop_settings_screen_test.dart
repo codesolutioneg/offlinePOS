@@ -95,8 +95,8 @@ void main() {
     await t.tap(find.byKey(const Key('save-shop')));
     await t.pumpAndSettle();
 
-    expect(settings.shopOrderTypes.contains(OrderType.delivery), isFalse);
-    expect(settings.availableOrderTypesFor('cashier').contains(OrderType.delivery),
+    expect(settings.shopOrderTypes.contains(OrderType.storeDelivery), isFalse);
+    expect(settings.availableOrderTypesFor('cashier').contains(OrderType.storeDelivery),
         isFalse);
   });
 

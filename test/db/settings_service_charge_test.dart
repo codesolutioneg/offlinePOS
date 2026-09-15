@@ -26,7 +26,7 @@ void main() {
     expect(settings.serviceChargeOrderTypes, {OrderType.dineIn});
     expect(settings.serviceChargePercentFor(OrderType.dineIn), 12);
     expect(settings.serviceChargePercentFor(OrderType.takeaway), 0);
-    expect(settings.serviceChargePercentFor(OrderType.delivery), 0);
+    expect(settings.serviceChargePercentFor(OrderType.storeDelivery), 0);
   });
 
   test('a fractional percentage round-trips', () {
@@ -43,11 +43,11 @@ void main() {
 
   test('adding a type charges it, removing one stops charging it', () {
     settings.serviceChargePercent = 10;
-    settings.setServiceChargeOrderType(OrderType.delivery, true);
-    expect(settings.serviceChargePercentFor(OrderType.delivery), 10);
+    settings.setServiceChargeOrderType(OrderType.storeDelivery, true);
+    expect(settings.serviceChargePercentFor(OrderType.storeDelivery), 10);
     settings.setServiceChargeOrderType(OrderType.dineIn, false);
     expect(settings.serviceChargePercentFor(OrderType.dineIn), 0);
-    expect(settings.serviceChargeOrderTypes, {OrderType.delivery});
+    expect(settings.serviceChargeOrderTypes, {OrderType.storeDelivery});
   });
 
   test('unticking every type stays empty instead of reverting to the default', () {

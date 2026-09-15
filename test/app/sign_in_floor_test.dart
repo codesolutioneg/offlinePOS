@@ -24,6 +24,7 @@ import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/order.dart';
+import 'package:offline_pos/core/widgets/select_pill.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
@@ -57,6 +58,7 @@ void main() {
     // guest prompt is off: on by default it would sit in front of every tap below.
     SettingsStore(db).askGuestCount = false;
     SettingsStore(db).askCashierOnOpen = false;
+    SettingsStore(db).lanRolePromptDismissed = true;
     tables = TableStore(db);
     table5 = tables.add(name: '5', seats: 4);
     // A drawer is open, so nothing here is refused for the wrong reason. The
@@ -155,7 +157,10 @@ void main() {
     expect(find.byType(SellScreen), findsOneWidget);
     expect(find.byType(TableFloorScreen), findsNothing);
     // Seated where it was tapped, which is what the bill has to say.
-    expect(find.widgetWithText(ActionChip, 'Table 5'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byKey(const Key('table')), matching: find.text('Table 5')),
+        findsOneWidget);
   });
 
   testWidgets('the takeaway button opens the counter with no table', (t) async {
@@ -166,7 +171,7 @@ void main() {
 
     expect(find.byType(SellScreen), findsOneWidget);
     final chip =
-        t.widget<ChoiceChip>(find.byKey(const Key('order-type-takeaway')));
+        t.widget<SelectPill>(find.byKey(const Key('order-type-takeaway')));
     expect(chip.selected, isTrue);
   });
 
@@ -208,7 +213,7 @@ void main() {
       (t) async {
     await boot(t);
     await seatAndRing(t);
-    final ringing = orders.drafts().single;
+    final ringing = orders.held().single;
 
     // The way off the counter, which is the floor the order was started from.
     await t.tap(find.byKey(const Key('new-order')));
@@ -247,6 +252,9 @@ void main() {
 
     expect(find.byType(SellScreen), findsOneWidget);
     expect(find.byType(TableFloorScreen), findsNothing);
-    expect(find.widgetWithText(ActionChip, 'Table 5'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byKey(const Key('table')), matching: find.text('Table 5')),
+        findsOneWidget);
   });
 }

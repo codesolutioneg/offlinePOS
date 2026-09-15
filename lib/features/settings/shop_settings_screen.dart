@@ -30,6 +30,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late bool _showTax;
   late bool _askGuests;
   late bool _askCashierOnOpen;
+  late bool _moveRequiresKitchen;
   late bool _askSessionStaff;
   late int _cutoverHour;
   late Set<OrderType> _offered;
@@ -46,6 +47,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _showTax = widget.settings.receiptShowTax;
     _askGuests = widget.settings.askGuestCount;
     _askCashierOnOpen = widget.settings.askCashierOnOpen;
+    _moveRequiresKitchen = widget.settings.moveRequiresKitchen;
     _askSessionStaff = widget.settings.askSessionStaff;
     _cutoverHour = widget.settings.businessDayCutoverHour;
     _offered = widget.settings.shopOrderTypes;
@@ -82,6 +84,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.receiptShowTax = _showTax;
     widget.settings.askGuestCount = _askGuests;
     widget.settings.askCashierOnOpen = _askCashierOnOpen;
+    widget.settings.moveRequiresKitchen = _moveRequiresKitchen;
     widget.settings.askSessionStaff = _askSessionStaff;
     widget.settings.businessDayCutoverHour = _cutoverHour;
     widget.settings.shopOrderTypes = _offered;
@@ -150,6 +153,14 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             subtitle: Text(tr(context, 'On a shared till, assigns the table to them')),
             value: _askCashierOnOpen,
             onChanged: (v) => setState(() => _askCashierOnOpen = v),
+          ),
+          SwitchListTile(
+            key: const Key('move-requires-kitchen'),
+            title: Text(tr(context, 'Move table only after kitchen')),
+            subtitle: Text(tr(context,
+                'A dine-in bill cannot change tables until a line is sent')),
+            value: _moveRequiresKitchen,
+            onChanged: (v) => setState(() => _moveRequiresKitchen = v),
           ),
           SwitchListTile(
             key: const Key('ask-session-staff'),

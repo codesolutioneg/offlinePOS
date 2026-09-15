@@ -57,6 +57,7 @@ void main() {
     settings = SettingsStore(db);
     // This suite is about covers, not who opens the table.
     settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     tables = TableStore(db);
     audit = AuditLog(db);
     table5 = tables.add(name: '5', seats: 4);

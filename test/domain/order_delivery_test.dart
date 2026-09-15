@@ -6,7 +6,7 @@ void main() {
   Order delivery() => Order(
         deviceId: 'd',
         cashierId: 'c',
-        type: OrderType.delivery,
+        type: OrderType.storeDelivery,
         deliveryChannel: 'Talabat',
         companyOrderNo: 'TLB-99182',
         driverName: 'Hany',

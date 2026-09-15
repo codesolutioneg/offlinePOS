@@ -82,7 +82,7 @@ class KitchenTicketBuilder {
           .bold(false)
           .size();
     }
-    if (order.type == OrderType.delivery &&
+    if (order.type.isDelivery &&
         order.companyOrderNo != null &&
         order.companyOrderNo!.isNotEmpty) {
       p.align(EscPosAlign.center)
@@ -134,7 +134,7 @@ class KitchenTicketBuilder {
     p.align(EscPosAlign.left);
 
     // Delivery contact under the header (kitchen needs who/phone, not address).
-    if (order.type == OrderType.delivery) {
+    if (order.type.isDelivery) {
       if (order.customerName != null && order.customerName!.isNotEmpty) {
         p.line('Customer: ${order.customerName}');
       }
@@ -259,12 +259,8 @@ class KitchenTicketBuilder {
 
   /// Non–dine-in order type as Dishflow English kitchen label; dine-in is table-only.
   String? _orderTypeBanner(Order order) {
-    return switch (order.type) {
-      OrderType.dineIn => null,
-      OrderType.toGo => 'TO GO',
-      OrderType.takeaway => 'TAKEAWAY',
-      OrderType.delivery => 'DELIVERY',
-    };
+    if (order.type == OrderType.dineIn) return null;
+    return order.type.printBanner;
   }
 
   /// Same wording as the payment receipt banner: `e - Table 2`.

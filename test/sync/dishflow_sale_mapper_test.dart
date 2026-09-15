@@ -76,7 +76,7 @@ void main() {
   });
 
   test('delivery orders stamp delivery_status', () {
-    final o = paidOrder()..type = OrderType.delivery;
+    final o = paidOrder()..type = OrderType.storeDelivery;
     final fields = DishflowSaleMapper.toSalesFields(
       o,
       odooConnectionId: 'c',
@@ -84,7 +84,7 @@ void main() {
       orderNumber: 'n',
     );
     expect(fields['delivery_status'], 'received');
-    expect(fields['orderType'], 'delivery');
+    expect(fields['orderType'], 'Store delivery');
   });
 
   test('outbox payload keeps transport coords next to fields', () {

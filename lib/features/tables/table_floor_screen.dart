@@ -13,6 +13,7 @@ import '../../core/theme/dishflow_brand.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/select_pill.dart';
 import '../../domain/order.dart' show OrderType, OrderTypeLabel;
+import '../../domain/table_floor_info.dart';
 import 'reservations_screen.dart';
 import 'section_settings_sheet.dart';
 import '../../core/theme/table_palette.dart';
@@ -231,7 +232,7 @@ class TableFloorScreen extends StatefulWidget {
 
   /// Per occupied table: its running total and when it was opened, so a waiter sees
   /// the bill and how long the table has been sitting straight off the floor.
-  final Map<String, ({double total, DateTime since})> occupiedInfo;
+  final Map<String, TableFloorInfo> occupiedInfo;
   final String Function(double)? formatAmount;
 
   /// Start a new order on a free table, or recall the order parked on an occupied
@@ -363,6 +364,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       shape: result.shape,
       x: spot.x.toDouble(),
       y: spot.y.toDouble(),
+      displayLabel: result.displayLabel,
     );
     // Selected on arrival, so the arrows are already under the manager's thumb
     // and the new tile does not have to be hunted for.
@@ -448,6 +450,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         shape: result.shape,
         vertical: result.vertical,
         span: result.span,
+        displayLabel: result.displayLabel,
       ));
     }
     _reload();
@@ -515,6 +518,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   Future<_TableEdit?> _tableDialog({required String title, PosTable? initial}) {
     final nameCtrl = TextEditingController(text: initial?.name ?? '');
+    final labelCtrl = TextEditingController(text: initial?.displayLabel ?? '');
     final seatsCtrl = TextEditingController(text: '${initial?.seats ?? 4}');
     final isDivider = initial?.isDivider ?? false;
     var shape = initial?.shape ?? TableShape.square;
@@ -535,6 +539,17 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               decoration: InputDecoration(
                   labelText: tr(ctx, 'Name / number'), border: const OutlineInputBorder()),
             ),
+            if (!isDivider) ...[
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('table-display-label'),
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                    labelText: tr(ctx, 'Display label'),
+                    hintText: tr(ctx, 'Optional, e.g. a staff name'),
+                    border: const OutlineInputBorder()),
+              ),
+            ],
             // A divider seats nobody and has a fixed shape, so neither field
             // applies to one; keep the dialog to just its name.
             if (!isDivider) ...[
@@ -633,6 +648,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                   ctx,
                   _TableEdit(
                     name: name,
+                    displayLabel: labelCtrl.text.trim(),
                     seats: isDivider ? 0 : (int.tryParse(seatsCtrl.text.trim()) ?? 4),
                     shape: isDivider ? TableShape.divider : shape,
                     vertical: vertical,
@@ -709,6 +725,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       shape: t.shape,
       x: spot.x.toDouble(),
       y: spot.y.toDouble(),
+      displayLabel: t.displayLabel,
     );
     final moved = widget.store.byId(added.id);
     if (moved != null && t.isDivider) {
@@ -819,13 +836,20 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       appBar: AppBar(
         title: Text(tr(context, widget.pickMode ? 'Choose a table' : 'Tables')),
         actions: [
-          if (widget.pickMode)
+          if (widget.pickMode) ...[
             TextButton.icon(
               key: const Key('pick-other'),
               onPressed: _pickOther,
               icon: const Icon(Icons.edit_note),
               label: Text(tr(context, 'Other')),
-            )
+            ),
+            TextButton.icon(
+              key: const Key('pick-no-table'),
+              onPressed: () => Navigator.pop(context, ''),
+              icon: const Icon(Icons.table_restaurant_outlined),
+              label: Text(tr(context, 'No table')),
+            ),
+          ]
           else ...[
             if (widget.onAssign != null)
               IconButton(
@@ -1672,6 +1696,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           _legendDot(TablePalette.shared.free, tr(context, 'Free')),
           const SizedBox(width: 14),
           _legendDot(TablePalette.shared.occupied, tr(context, 'Occupied')),
+          const SizedBox(width: 14),
+          _legendDot(TablePalette.shared.sent, tr(context, 'Sent to kitchen')),
+          const SizedBox(width: 14),
+          _legendDot(TablePalette.shared.billed, tr(context, 'Bill printed')),
         ]),
       );
 
@@ -1879,8 +1907,8 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final tile = _TableTile(
       table: t,
       occupied: occupied,
-      // The waiter's name on the tile, so the room reads as shared out at a glance
-      // rather than only when a tap is refused.
+      life: info?.life,
+      tabCount: info?.tabCount ?? 0,
       assignee: owner == null ? null : (_staffNames[owner] ?? owner),
       mine: owner != null && owner == widget.myCashierId,
       locked: !isDivider && _lockedFor(t),
@@ -2042,6 +2070,8 @@ class _TableTile extends StatelessWidget {
   const _TableTile({
     required this.table,
     required this.occupied,
+    this.life,
+    this.tabCount = 0,
     this.total,
     this.ageMinutes,
     this.booking,
@@ -2051,6 +2081,8 @@ class _TableTile extends StatelessWidget {
   });
   final PosTable table;
   final bool occupied;
+  final TableFloorLife? life;
+  final int tabCount;
   final String? total;
   final int? ageMinutes;
 
@@ -2077,7 +2109,7 @@ class _TableTile extends StatelessWidget {
     // The shop's own two colours, which default to the green/red every floor has
     // been drawn in until a manager says otherwise.
     final palette = TablePalette.shared;
-    final color = occupied ? palette.occupied : palette.free;
+    final color = palette.colorFor(life, occupied: occupied);
     final wide = table.shape == TableShape.rectangle;
     final tile = Container(
       // A rectangle is short rather than extra-wide so it still fits one grid slot
@@ -2108,11 +2140,17 @@ class _TableTile extends StatelessWidget {
                 shape: table.shape,
               ),
               const SizedBox(height: 4),
-              Text(table.name,
+              Text(table.shownName,
                   style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 16,
                       color: AppColors.brandNavy)),
+              if (occupied && tabCount > 1)
+                Text('$tabCount ${tr(context, 'bills')}',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: color)),
               if (occupied && total != null)
                 Text(total!,
                     style: TextStyle(
@@ -2305,6 +2343,7 @@ class _Chair extends StatelessWidget {
 class _TableEdit {
   const _TableEdit({
     required this.name,
+    this.displayLabel = '',
     required this.seats,
     this.shape = TableShape.square,
     this.vertical = false,
@@ -2312,12 +2351,14 @@ class _TableEdit {
   }) : delete = false;
   const _TableEdit.remove()
       : name = '',
+        displayLabel = '',
         seats = 0,
         shape = TableShape.square,
         vertical = false,
         span = 140,
         delete = true;
   final String name;
+  final String displayLabel;
   final int seats;
   final TableShape shape;
   // Divider-only geometry; ignored for a seatable table.

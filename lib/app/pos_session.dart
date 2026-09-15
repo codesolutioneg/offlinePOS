@@ -365,8 +365,10 @@ class PosSession {
     orders.save(current);
   }
 
-  /// Set the order type. Clears delivery details when switching away from delivery.
+  /// Set the order type. Clears delivery details when leaving delivery, and
+  /// clears subtype-only fields when moving between Dishflow delivery kinds.
   void setOrderType(OrderType type) {
+    final prev = current.type;
     current.type = type;
     // Service follows the type: what is table service dine-in is not table service in a
     // takeaway bag. Re-stamped here, on the bill, so the total still never depends on
@@ -377,7 +379,7 @@ class PosSession {
     for (final line in current.lines) {
       _applyTax(line);
     }
-    if (type != OrderType.delivery) {
+    if (!type.isDelivery) {
       // The customer survives the switch: every order type can name one, and the
       // till shows and clears it on all of them. Only what is delivery's alone goes,
       // because an address and a delivery charge mean nothing on a counter sale.
@@ -388,6 +390,20 @@ class PosSession {
       current.deliveryChannel = null;
       current.companyOrderNo = null;
       current.driverName = null;
+    } else if (prev != type) {
+      // Company # / channel only belong on aggregator delivery.
+      if (!type.needsCompanyOrderNo) {
+        current.companyOrderNo = null;
+        current.deliveryChannel = null;
+      }
+      // Zone fees and rider are store-delivery concerns; car is a plain till sale.
+      if (!type.usesDeliveryZones) {
+        current.deliveryCost = 0;
+      }
+      if (!type.needsDeliveryCustomer) {
+        current.customerAddress = null;
+        current.driverName = null;
+      }
     }
     orders.save(current);
   }
@@ -400,6 +416,108 @@ class PosSession {
   void setTable(String? label) {
     current.tableLabel = (label == null || label.trim().isEmpty) ? null : label.trim();
     orders.save(current);
+  }
+
+  /// Park this bill on [label] even when it has no lines yet, so the floor on
+  /// every till colours the table busy the moment it is tapped. Hold refuses an
+  /// empty cart because that would orphan a blank tab; seating is the one empty
+  /// write that is a fact about the room rather than about the food.
+  void claimSeat(String label) {
+    final trimmed = label.trim();
+    if (trimmed.isEmpty) return;
+    current.tableLabel = trimmed;
+    current.state = OrderState.held;
+    orders.save(current);
+    audit.record(cashierId, 'table.claimed',
+        detail: '${current.uuid}|$trimmed');
+  }
+
+  /// Stamp that the check went to the printer, so the floor can colour the table
+  /// as billed while it is still open.
+  void markBillPrinted() {
+    current.billPrintedAt = DateTime.now().toUtc();
+    orders.save(current);
+  }
+
+  /// Open another check on a table that already has one, without folding the
+  /// lines together. The bills stay linked so the floor shows one occupied tile
+  /// with several tabs.
+  void openLinkedTab(String tableLabel) {
+    final label = tableLabel.trim();
+    if (label.isEmpty) return;
+    final type =
+        current.type.seatsAtTable ? current.type : OrderType.dineIn;
+    startFresh(type);
+    claimSeat(label);
+    _linkCurrentToTable(label);
+  }
+
+  /// Keep [sourceUuid] as its own cart on this table rather than folding its
+  /// lines in. The source table is left empty.
+  void mergeAsSeparateCarts(String sourceUuid) {
+    final source = orders.byUuid(sourceUuid);
+    final destLabel = current.tableLabel;
+    if (source == null || source.uuid == current.uuid || destLabel == null) {
+      return;
+    }
+    source.tableLabel = destLabel;
+    orders.save(source);
+    _linkPair(current, source);
+    _linkCurrentToTable(destLabel);
+    audit.record(cashierId, 'order.linked',
+        detail: '${source.uuid}->${current.uuid}|$destLabel');
+  }
+
+  /// Move the current tab onto an empty [targetLabel] and drop the sibling
+  /// links, which is how a waiter undoes a separate-carts merge.
+  void splitTabToTable(String targetLabel) {
+    final trimmed = targetLabel.trim();
+    if (trimmed.isEmpty || trimmed == current.tableLabel) return;
+    _detachFromSiblings(current);
+    current.tableLabel = trimmed;
+    orders.save(current);
+    audit.record(cashierId, 'order.split_table',
+        detail: '${current.uuid}|$trimmed');
+  }
+
+  /// Leave the floor: drop the table label and, on a dine-in, become a takeaway
+  /// so the kitchen ticket no longer names a seat.
+  void clearTableToTakeaway() {
+    _detachFromSiblings(current);
+    current.tableLabel = null;
+    if (current.type == OrderType.dineIn) {
+      setOrderType(OrderType.takeaway);
+      return;
+    }
+    orders.save(current);
+  }
+
+  void _linkCurrentToTable(String label) {
+    for (final s in orders.occupyingAnywhere()) {
+      if (s.tableLabel != label || s.uuid == current.uuid) continue;
+      _linkPair(current, s);
+    }
+    orders.save(current);
+  }
+
+  void _linkPair(Order a, Order b) {
+    if (a.uuid == b.uuid) return;
+    if (!a.linkedOrderUuids.contains(b.uuid)) a.linkedOrderUuids.add(b.uuid);
+    if (!b.linkedOrderUuids.contains(a.uuid)) b.linkedOrderUuids.add(a.uuid);
+    orders.save(a);
+    orders.save(b);
+  }
+
+  void _detachFromSiblings(Order order) {
+    final ids = List<String>.of(order.linkedOrderUuids);
+    if (ids.isEmpty) return;
+    order.linkedOrderUuids.clear();
+    for (final id in ids) {
+      final other = orders.byUuid(id);
+      if (other == null) continue;
+      other.linkedOrderUuids.remove(order.uuid);
+      orders.save(other);
+    }
   }
 
   void setNote(String? note) {
@@ -494,11 +612,16 @@ class PosSession {
   }
 
   /// Start a brand-new order, parking the current one if it has lines.
+  /// An empty seated claim is dropped so backing out of a tap does not leave the
+  /// table busy on every till.
   void newOrder() {
     final active = current;
     if (active.lines.isNotEmpty) {
       active.state = OrderState.held;
       orders.save(active);
+    } else {
+      _detachFromSiblings(active);
+      orders.delete(active.uuid);
     }
     _current = _blankOrder();
   }
@@ -524,6 +647,7 @@ class PosSession {
       active.state = OrderState.held;
       orders.save(active);
     } else {
+      _detachFromSiblings(active);
       orders.delete(active.uuid);
     }
     _current = _blankOrder();
@@ -534,6 +658,7 @@ class PosSession {
   /// Returns the completed order so the caller can print it.
   Order pay({List<OrderPayment> payments = const [], double? cashReceived}) {
     final order = current;
+    _detachFromSiblings(order);
     order.state = OrderState.paid;
     _stampOrderNo(order);
     order.payments = List.of(payments);
@@ -564,6 +689,7 @@ class PosSession {
       order.cashReceived = (order.cashReceived ?? 0) + cashReceived;
     }
     if (order.balance <= 0.001) {
+      _detachFromSiblings(order);
       order.state = OrderState.paid;
       orders.save(order);
       outbox.enqueue('order.push', order.uuid, order.toServerPayload());
@@ -784,6 +910,7 @@ class PosSession {
     order.lines.removeWhere((l) => ids.contains(l.uuid));
     if (order.lines.isEmpty) {
       // Whole table settled: discard the now-empty running order and start fresh.
+      _detachFromSiblings(order);
       orders.delete(order.uuid);
       _current = _blankOrder();
     } else {
@@ -827,24 +954,42 @@ class PosSession {
   /// a tab that already exists keeps its own, and the lines joining it are serviced at
   /// that bill's rate. Both were stamped from the same shop setting, so they differ
   /// only if it was edited mid-service.
-  Order moveLinesToTable(Set<String> lineUuids, String targetTableLabel) {
+  Order moveLinesToTable(Set<String> lineUuids, String targetTableLabel,
+      {String? targetOrderUuid}) {
     final order = current;
     // Moving onto the table the order is already on would fork a duplicate tab for
-    // the same table, so it is a no-op.
-    if (targetTableLabel == order.tableLabel) return order;
+    // the same table, so it is a no-op unless the waiter named a specific other
+    // bill already sitting there.
+    if (targetTableLabel == order.tableLabel &&
+        (targetOrderUuid == null || targetOrderUuid == order.uuid)) {
+      return order;
+    }
     final taken = order.lines.where((l) => lineUuids.contains(l.uuid)).toList();
     if (taken.isEmpty) return order;
     _carryOrderDiscount(order.discountPercent, taken);
-    final target = orders.held().firstWhere(
-          (o) => o.tableLabel == targetTableLabel && o.uuid != order.uuid,
-          orElse: () => Order(
-            deviceId: deviceId,
-            cashierId: cashierId,
-            type: OrderType.dineIn,
-            tableLabel: targetTableLabel,
-            serviceChargePercent: order.serviceChargePercent,
-          )..state = OrderState.held,
-        );
+    Order? named;
+    if (targetOrderUuid != null) {
+      named = orders.byUuid(targetOrderUuid);
+      if (named != null && named.tableLabel != targetTableLabel) named = null;
+    }
+    Order? existing;
+    if (named == null) {
+      for (final o in orders.held()) {
+        if (o.tableLabel == targetTableLabel && o.uuid != order.uuid) {
+          existing = o;
+          break;
+        }
+      }
+    }
+    final target = named ??
+        existing ??
+        (Order(
+          deviceId: deviceId,
+          cashierId: cashierId,
+          type: OrderType.dineIn,
+          tableLabel: targetTableLabel,
+          serviceChargePercent: order.serviceChargePercent,
+        )..state = OrderState.held);
     // Flatten the target's own discount to line level first, so the moved lines
     // (already priced) are not discounted a second time by it.
     _flattenOrderDiscount(target);
@@ -854,6 +999,7 @@ class PosSession {
     audit.record(cashierId, 'order.moved',
         detail: '${order.uuid}->${target.uuid}|${taken.length} line(s)');
     if (order.lines.isEmpty) {
+      _detachFromSiblings(order);
       orders.delete(order.uuid);
       _current = _blankOrder();
     } else {
@@ -875,6 +1021,7 @@ class PosSession {
     _flattenOrderDiscount(current);
     current.lines.addAll(source.lines);
     orders.save(current);
+    _detachFromSiblings(source);
     orders.delete(source.uuid);
     audit.record(cashierId, 'order.merged',
         detail: '${source.uuid}->${current.uuid}|${source.lines.length} line(s)');

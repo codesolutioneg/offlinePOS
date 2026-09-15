@@ -9,6 +9,10 @@ class SqliteOutboxStore implements OutboxStore {
 
   final Db _db;
 
+  /// The same handle the till is already using, so a support console can inspect
+  /// and patch rows without opening a second connection onto the encrypted file.
+  Db get db => _db;
+
   @override
   Future<void> append(String kind, String payloadUuid, Map<String, dynamic> payload) async {
     // Re-queuing the same record replaces the payload rather than adding a second

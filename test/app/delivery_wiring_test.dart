@@ -100,6 +100,8 @@ void main() {
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234', role: 'manager');
     WizardStore(db).dismiss(WizardId.firstSale, 'sara');
+    // Tests are single-till shops; skip the first-run LAN role prompt.
+    SettingsStore(db).lanRolePromptDismissed = true;
   });
   tearDown(() => db.close());
 
@@ -139,7 +141,7 @@ void main() {
   /// A delivery being rung on the till, restored as the open order at sign-in so
   /// the shell lands straight on the sell screen.
   Order deliveryOnTheTill() {
-    final order = Order(deviceId: 'till-1', cashierId: 'sara', type: OrderType.delivery)
+    final order = Order(deviceId: 'till-1', cashierId: 'sara', type: OrderType.storeDelivery)
       ..lines.add(OrderLine(productId: 10, name: 'Pizza', quantity: 1, unitPrice: 100));
     orders.save(order, announce: false);
     return order;
@@ -167,9 +169,25 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  Future<void> save(WidgetTester t) async {
+  Future<void> save(WidgetTester t, {String customerName = 'Nadia'}) async {
+    // Dishflow gate: company/store delivery need at least one contact field.
+    final nameField = find.byKey(const Key('delivery-name'));
+    if (nameField.evaluate().isNotEmpty) {
+      await t.enterText(nameField, customerName);
+    }
     await t.tap(find.text('Save'));
     await t.pumpAndSettle();
+  }
+
+  /// Floor Delivery → subtype popup → waiting screen (resume / new).
+  Future<void> pickStoreDeliveryFromFloor(WidgetTester t) async {
+    await t.tap(find.byKey(const Key('floor-delivery')));
+    await t.pumpAndSettle();
+    final subtype = find.byKey(const Key('pick-delivery-storeDelivery'));
+    if (subtype.evaluate().isNotEmpty) {
+      await t.tap(subtype);
+      await t.pumpAndSettle();
+    }
   }
 
   /// The open order as it stands on disk.
@@ -366,7 +384,7 @@ void main() {
       await t.pumpAndSettle();
 
       expect(stored(order.uuid).driverName, 'Hany');
-      expect(find.widgetWithText(ActionChip, 'Hany'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Hany'), findsOneWidget);
     });
 
     testWidgets('the driver can be taken back off the order', (t) async {
@@ -491,8 +509,9 @@ void main() {
       expect(receipt, contains('12 Nile St, Maadi'));
       expect(receipt, contains('Driver: Hany'));
       // And the kitchen's copy says who the bag belongs to.
-      final ticket = slips.firstWhere((s) => s.contains('DELIVERY'));
-      expect(ticket, contains('For: Nadia'));
+      final ticket = slips.firstWhere(
+          (s) => s.contains('Store delivery') || s.contains('DELIVERY'));
+      expect(ticket, contains('Customer: Nadia'));
     });
   });
 
@@ -502,7 +521,7 @@ void main() {
       final order = Order(
         deviceId: 'till-1',
         cashierId: 'sara',
-        type: OrderType.delivery,
+        type: OrderType.storeDelivery,
         state: OrderState.held,
         customerName: name,
         customerPhone: '0100',
@@ -517,9 +536,9 @@ void main() {
       await t.pumpWidget(app());
       await signIn(t);
       expect(find.byType(TableFloorScreen), findsOneWidget);
-      await t.tap(find.byKey(const Key('floor-delivery')));
-      await t.pumpAndSettle();
+      await pickStoreDeliveryFromFloor(t);
 
+      expect(find.byKey(const Key('delivery-waiting-screen')), findsOneWidget);
       expect(find.text('Deliveries waiting'), findsOneWidget);
       await t.tap(find.byKey(Key('resume-delivery-${orders.held().single.uuid}')));
       await t.pumpAndSettle();
@@ -535,8 +554,8 @@ void main() {
 
       await t.pumpWidget(app());
       await signIn(t);
-      await t.tap(find.byKey(const Key('floor-delivery')));
-      await t.pumpAndSettle();
+      await pickStoreDeliveryFromFloor(t);
+      expect(find.byKey(const Key('delivery-waiting-screen')), findsOneWidget);
       await t.tap(find.byKey(const Key('new-delivery')));
       await t.pumpAndSettle();
 
@@ -549,14 +568,13 @@ void main() {
 
       await t.pumpWidget(app());
       await signIn(t);
-      await t.tap(find.byKey(const Key('floor-delivery')));
-      await t.pumpAndSettle();
-      // Dismiss the sheet the way a tap outside it does.
-      await t.tapAt(const Offset(20, 20));
+      await pickStoreDeliveryFromFloor(t);
+      expect(find.byKey(const Key('delivery-waiting-screen')), findsOneWidget);
+      await t.tap(find.byKey(const Key('delivery-waiting-back')));
       await t.pumpAndSettle();
 
       expect(find.byType(TableFloorScreen), findsOneWidget,
-          reason: 'a dismissed prompt must leave the cashier on the floor');
+          reason: 'backing out must leave the cashier on the floor');
       expect(orders.held(), hasLength(1));
     });
 
@@ -566,23 +584,26 @@ void main() {
 
       await t.pumpWidget(app());
       await signIn(t);
-      await t.tap(find.byKey(const Key('floor-delivery')));
-      await t.pumpAndSettle();
+      await pickStoreDeliveryFromFloor(t);
 
       expect(find.text('طلبات توصيل منتظرة'), findsOneWidget);
       expect(find.text('طلب توصيل جديد'), findsOneWidget);
     });
 
-    testWidgets('with nothing parked the button still starts a delivery straight away',
+    testWidgets('with nothing parked the waiting screen still offers a new delivery',
         (t) async {
       await t.pumpWidget(app());
       await signIn(t);
-      await t.tap(find.byKey(const Key('floor-delivery')));
+      await pickStoreDeliveryFromFloor(t);
+
+      expect(find.byKey(const Key('delivery-waiting-screen')), findsOneWidget);
+      expect(find.text('Deliveries waiting'), findsOneWidget);
+      await t.tap(find.byKey(const Key('new-delivery')));
       await t.pumpAndSettle();
 
-      expect(find.text('Deliveries waiting'), findsNothing);
       expect(find.byType(SellScreen), findsOneWidget);
-      expect(find.byKey(const Key('delivery')), findsOneWidget);
+      expect(find.byKey(const Key('customer')), findsOneWidget,
+          reason: 'store delivery shows the delivery customer header');
     });
   });
 }

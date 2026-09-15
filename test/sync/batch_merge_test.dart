@@ -35,7 +35,7 @@ void main() {
       deviceId: 'till-1',
       cashierId: cashier,
       createdAt: at,
-      type: delivery > 0 ? OrderType.delivery : OrderType.dineIn,
+      type: delivery > 0 ? OrderType.storeDelivery : OrderType.dineIn,
       deliveryCost: delivery,
       tip: tip,
     )..lines.add(

@@ -56,6 +56,7 @@ void main() {
     orders = OrderStore(db);
     settings = SettingsStore(db);
     settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     tables = TableStore(db);
     audit = AuditLog(db);
     table5 = tables.add(name: '5');
@@ -118,7 +119,7 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  /// Everything on, which is what an unconfigured till is.
+  /// Delivery subtypes only — no seating or counter takeaway for this role.
   void deliveryDeskOnly() {
     settings.setRoleOrderType('cashier', OrderType.dineIn, false);
     settings.setRoleOrderType('cashier', OrderType.takeaway, false);
@@ -143,11 +144,20 @@ void main() {
 
   testWidgets('a delivery-only role is offered no other kind of sale', (t) async {
     deliveryDeskOnly();
-    draftOnTheTill(type: OrderType.delivery);
+    draftOnTheTill(type: OrderType.storeDelivery);
     await t.pumpWidget(app());
     await signIn(t);
 
-    expect(find.byKey(const Key('order-type-delivery')), findsOneWidget);
+    for (final name in [
+      'order-type-storedelivery',
+      'order-type-deliveryfromcompany',
+      'order-type-cardelivery',
+    ]) {
+      final chip = find.byKey(Key(name));
+      await t.dragUntilVisible(
+          chip, find.byKey(const Key('order-type-strip')), const Offset(-60, 0));
+      expect(chip, findsOneWidget);
+    }
     expect(find.byKey(const Key('order-type-dinein')), findsNothing);
     expect(find.byKey(const Key('order-type-takeaway')), findsNothing);
     expect(find.byKey(const Key('order-type-togo')), findsNothing);
@@ -167,7 +177,9 @@ void main() {
 
   testWidgets('the floor drops the buttons for the types the role cannot ring',
       (t) async {
-    settings.setRoleOrderType('cashier', OrderType.delivery, false);
+    settings.setRoleOrderType('cashier', OrderType.deliveryFromCompany, false);
+    settings.setRoleOrderType('cashier', OrderType.storeDelivery, false);
+    settings.setRoleOrderType('cashier', OrderType.carDelivery, false);
     await t.pumpWidget(app());
     // No draft, so sign-in lands on the floor.
     await signIn(t);

@@ -55,10 +55,18 @@ void main() {
 
   testWidgets('the move/merge chip appears once a dine-in order has lines', (t) async {
     await t.pumpWidget(app());
-    expect(find.byKey(const Key('bill-options')), findsNothing);
+    await t.tap(find.byKey(const Key('bill-options')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('bill-move')), findsNothing);
+    expect(find.byKey(const Key('bill-merge')), findsNothing);
+    await t.tapAt(const Offset(8, 8));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
-    expect(find.byKey(const Key('bill-options')), findsOneWidget);
+    await t.tap(find.byKey(const Key('bill-options')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('bill-move')), findsOneWidget);
+    expect(find.byKey(const Key('bill-merge')), findsOneWidget);
   });
 
   testWidgets('split by item lets you choose how many units of a line to take', (t) async {
@@ -211,7 +219,9 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('bill-merge')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(Key('merge-${other.uuid}')));
+    await t.tap(find.byKey(Key('merge-table-${other.uuid}')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('merge-one-bill')));
     await t.pumpAndSettle();
 
     expect(session.current.lines.map((l) => l.productId).toSet(), {10, 11});

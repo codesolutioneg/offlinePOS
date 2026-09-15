@@ -6,7 +6,7 @@ import 'dart:math';
 
 import '../../domain/business_day.dart';
 import '../../domain/order.dart'
-    show DiscountBooking, LocalProductBooking, OrderType;
+    show DiscountBooking, LocalProductBooking, OrderType, OrderTypeLabel;
 import '../../domain/table_preorder.dart';
 import '../../domain/table_section_config.dart';
 import '../auth/permissions.dart';
@@ -252,7 +252,7 @@ class SettingsStore {
       return (jsonDecode(v) as Map).map((k, val) => MapEntry(
             int.parse(k as String),
             (val as Map).map((t, r) =>
-                MapEntry(OrderType.values.byName(t as String), (r as num).toDouble())),
+                MapEntry(OrderTypeLabel.parse(t as String), (r as num).toDouble())),
           ));
     } catch (_) {
       return const {};
@@ -304,7 +304,7 @@ class SettingsStore {
     if (raw == null) return const {OrderType.dineIn};
     try {
       final names = (jsonDecode(raw) as List).map((e) => e.toString()).toSet();
-      return OrderType.values.where((t) => names.contains(t.name)).toSet();
+      return OrderTypeLabel.parseSet(names);
     } catch (_) {
       return const {OrderType.dineIn};
     }
@@ -559,6 +559,13 @@ class SettingsStore {
   /// between. A shop that shares one screen between waiters turns it on.
   bool get askCashierOnOpen => getBool('ask_cashier_on_open', fallback: true);
   set askCashierOnOpen(bool v) => setBool('ask_cashier_on_open', v);
+
+  /// Whether moving a dine-in bill to another table waits until a line has been
+  /// sent to the kitchen. Off by default: the till can reseat before the pass has
+  /// the ticket, which is what a shop does when guests change tables as they sit.
+  /// A shop that wants the other till's rule turns it on.
+  bool get moveRequiresKitchen => getBool('move_requires_kitchen');
+  set moveRequiresKitchen(bool v) => setBool('move_requires_kitchen', v);
 
   /// Whether opening a shift asks who is working this session and clocks them in.
   /// Off by default: a single-operator till has only the person who opened it.
@@ -1250,7 +1257,9 @@ class SettingsStore {
     final empty = !config.isStaffSection &&
         config.allowedCategoryIds.isEmpty &&
         config.allowedPaymentMethodIds.isEmpty &&
-        config.employeeAllowedCategories.isEmpty;
+        config.employeeAllowedCategories.isEmpty &&
+        config.requireGuestCount == null &&
+        config.defaultOrderType == null;
     if (empty) {
       map.remove(config.name);
     } else {
@@ -1322,6 +1331,7 @@ class SettingsStore {
         'table_security': tableSecurity,
         'ask_guest_count': askGuestCount,
         'ask_cashier_on_open': askCashierOnOpen,
+        'move_requires_kitchen': moveRequiresKitchen,
         'floor_sections_side': floorSectionsSide,
         'category_stations': {
           for (final e in categoryStations.entries) '${e.key}': e.value,
@@ -1411,6 +1421,9 @@ class SettingsStore {
     }
     if (bundle['ask_cashier_on_open'] is bool) {
       askCashierOnOpen = bundle['ask_cashier_on_open'] as bool;
+    }
+    if (bundle['move_requires_kitchen'] is bool) {
+      moveRequiresKitchen = bundle['move_requires_kitchen'] as bool;
     }
     if (bundle['floor_sections_side'] is bool) {
       floorSectionsSide = bundle['floor_sections_side'] as bool;
@@ -1803,7 +1816,7 @@ class SettingsStore {
       final map = jsonDecode(raw) as Map;
       if (!map.containsKey(role)) return OrderType.values.toSet();
       final names = (map[role] as List).map((e) => e.toString()).toSet();
-      final allowed = OrderType.values.where((t) => names.contains(t.name)).toSet();
+      final allowed = OrderTypeLabel.parseSet(names);
       // A role that may ring nothing could take no money at all, so an empty set
       // reads as unrestricted rather than as a till nobody can sell on.
       return allowed.isEmpty ? OrderType.values.toSet() : allowed;
@@ -1851,7 +1864,7 @@ class SettingsStore {
     if (raw == null) return OrderType.values.toSet();
     try {
       final names = (jsonDecode(raw) as List).map((e) => e.toString()).toSet();
-      final offered = OrderType.values.where((t) => names.contains(t.name)).toSet();
+      final offered = OrderTypeLabel.parseSet(names);
       // A shop that offers nothing could take no money at all, so an empty saved
       // value reads as "everything" rather than as a till nobody can sell on.
       return offered.isEmpty ? OrderType.values.toSet() : offered;

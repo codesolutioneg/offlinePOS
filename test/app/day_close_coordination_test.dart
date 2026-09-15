@@ -106,6 +106,7 @@ void main() {
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
     settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     shifts = ShiftStore(db);
     audit = AuditLog(db);
     TableStore(db)
