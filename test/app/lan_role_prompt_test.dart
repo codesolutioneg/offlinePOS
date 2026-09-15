@@ -126,6 +126,22 @@ void main() {
     expect(takenException(t), isNull);
     expect(find.byKey(const Key('lan-role-prompt')), findsNothing);
   });
+
+  // Every answer carries on in the shell, so each one needs the same context
+  // the question was asked on. Answering used to throw where asking did.
+  for (final answer in const ['primary', 'join', 'skip']) {
+    testWidgets('answering $answer is carried out without throwing', (t) async {
+      await signIn(t);
+
+      await t.tap(find.byKey(Key('lan-role-prompt-$answer')));
+      for (var i = 0; i < 30; i++) {
+        await t.pump(const Duration(milliseconds: 16));
+      }
+
+      expect(takenException(t), isNull);
+      expect(settings.lanRolePromptDismissed, isTrue);
+    });
+  }
 }
 
 /// The exception the binding caught, if any. A dialog opened on the wrong

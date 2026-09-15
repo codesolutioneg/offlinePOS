@@ -269,6 +269,11 @@ class _PosAppState extends State<PosApp> {
   /// from the Open orders list after that list has closed itself.
   final GlobalKey<NavigatorState> _navigator = GlobalKey<NavigatorState>();
 
+  /// A context under the MaterialApp, for a dialog or snack bar the shell raises
+  /// itself. This State's own context is above it, so it carries neither
+  /// MaterialLocalizations nor a ScaffoldMessenger and throws on use.
+  BuildContext? get _belowApp => _navigator.currentContext;
+
   PosSession? _session;
 
   /// Whether the counter is up. False is the resting state of a restaurant till:
@@ -524,7 +529,7 @@ class _PosAppState extends State<PosApp> {
     if (!mounted) return;
     if (widget.settings.deviceRole != DeviceRole.unset) return;
     if (widget.settings.lanRolePromptDismissed) return;
-    final below = _navigator.currentContext;
+    final below = _belowApp;
     if (below == null) return;
     final choice = await showDialog<String>(
       context: below,
@@ -566,10 +571,11 @@ class _PosAppState extends State<PosApp> {
       widget.settings.lanShopKey ??= LanCredential.newKey();
       unawaited(_reconcileLan());
       if (mounted) setState(() {});
-      if (widget.lan == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      final after = _belowApp;
+      if (widget.lan == null && after != null && after.mounted) {
+        ScaffoldMessenger.of(after).showSnackBar(SnackBar(
           content: Text(tr(
-              context,
+              after,
               'Primary saved. Restart the app once so Share can start on the network.')),
         ));
       }
@@ -584,19 +590,23 @@ class _PosAppState extends State<PosApp> {
     if (!mounted) return;
     setState(() {});
     if (widget.lan == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(tr(
-            context,
-            'Restart the app, then open Shop network and Join with the PIN '
-                'from the primary.')),
-      ));
+      final after = _belowApp;
+      if (after != null && after.mounted) {
+        ScaffoldMessenger.of(after).showSnackBar(SnackBar(
+          content: Text(tr(
+              after,
+              'Restart the app, then open Shop network and Join with the PIN '
+                  'from the primary.')),
+        ));
+      }
       return;
     }
     _openLanSettings();
   }
 
   void _openLanSettings() {
-    final nav = Navigator.of(context);
+    final nav = _navigator.currentState;
+    if (nav == null) return;
     nav.push(MaterialPageRoute<void>(
       builder: (_) => _lanScreen(() {
         if (mounted) setState(() {});
