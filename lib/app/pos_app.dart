@@ -524,8 +524,10 @@ class _PosAppState extends State<PosApp> {
     if (!mounted) return;
     if (widget.settings.deviceRole != DeviceRole.unset) return;
     if (widget.settings.lanRolePromptDismissed) return;
+    final below = _navigator.currentContext;
+    if (below == null) return;
     final choice = await showDialog<String>(
-      context: context,
+      context: below,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         key: const Key('lan-role-prompt'),
