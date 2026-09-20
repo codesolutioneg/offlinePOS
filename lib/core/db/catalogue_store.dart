@@ -74,8 +74,8 @@ class CatalogueStore {
         if (claimedCategories.contains(c.id)) continue;
         _db.raw.execute(
             'INSERT INTO categories (id, name, sequence, parent_id, odoo_id, source, active) '
-            "VALUES (?,?,?,?,?,'odoo',1)",
-            [c.id, c.name, c.sequence, c.parentId, c.id]);
+            "VALUES (?,?,?,?,?,'odoo',?)",
+            [c.id, c.name, c.sequence, c.parentId, c.id, c.active ? 1 : 0]);
       }
       for (final p in products) {
         if (claimedProducts.contains(p.id)) continue;

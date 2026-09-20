@@ -256,6 +256,29 @@ void main() {
     expect(session.total, 750);
   });
 
+  test('voiding one unit of a consolidated line leaves the rest', () {
+    session.addProduct(pizza);
+    session.addProduct(pizza);
+    session.addProduct(pizza); // qty 3
+    final uuid = session.current.lines.single.uuid;
+    session.current.lines.single.printedToKitchen = true;
+    final voided = session.voidQuantity(uuid, 1, 'Customer changed');
+    expect(voided, isNotNull);
+    expect(voided!.quantity, 1);
+    expect(voided.name, pizza.name);
+    expect(session.current.lines.single.quantity, 2);
+    expect(session.total, 500);
+  });
+
+  test('voiding the full quantity removes the line', () {
+    session.addProduct(pizza);
+    session.addProduct(pizza);
+    final uuid = session.current.lines.single.uuid;
+    final voided = session.voidQuantity(uuid, 2, 'Wrong item');
+    expect(voided!.quantity, 2);
+    expect(session.hasLines, isFalse);
+  });
+
   test('assigning a guest to a consolidated line peels one unit onto that guest', () {
     session.addProduct(pizza);
     session.addProduct(pizza); // consolidated -> one line, qty 2

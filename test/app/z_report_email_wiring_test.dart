@@ -62,6 +62,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     shifts = ShiftStore(db);
     users = UserStore(db);
     audit = AuditLog(db);
@@ -155,6 +156,7 @@ void main() {
     await t.tap(find.byKey(const Key('nav-shift')));
     await t.pumpAndSettle();
     expect(find.byType(ShiftScreen), findsOneWidget);
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
   }
 
   /// Type an amount on the till's number pad and accept it.
@@ -169,11 +171,14 @@ void main() {
 
   /// The whole cash-up, from the Close button to the Z on screen.
   Future<void> closeTheShift(WidgetTester t) async {
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
     await t.tap(find.byKey(const Key('close-shift')));
     await t.pumpAndSettle();
     await keyIn(t, '100');
     await t.tap(find.byKey(const Key('confirm-close-shift')));
     await t.pumpAndSettle();
+    // End-of-day now lands on an inline done view (Dishflow-style), not a dialog.
+    expect(find.byKey(const Key('session-done')), findsOneWidget);
   }
 
   testWidgets('closing the shift sends the day to the owner', (t) async {

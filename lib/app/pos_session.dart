@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import '../core/audit/audit_log.dart';
 import '../core/db/catalogue_store.dart';
 import '../core/db/order_store.dart';
 import '../core/db/settings_store.dart';
 import '../core/sync/dishflow_mirror.dart';
+import '../core/sync/ecommerce_orders_client.dart';
 import '../core/sync/outbox.dart';
 import '../domain/catalogue.dart';
 import '../domain/delivery.dart';
@@ -203,14 +206,70 @@ class PosSession {
   /// Void a line with a reason. Returns the removed line so a deletion slip can be
   /// printed to the kitchen if it had already been fired. The reason is recorded
   /// in the audit trail, which is jouma's deleted-lines parity.
-  OrderLine? voidLine(String lineUuid, String reason) {
+  OrderLine? voidLine(String lineUuid, String reason, {String? approvedBy}) {
     final idx = current.lines.indexWhere((l) => l.uuid == lineUuid);
     if (idx < 0) return null;
     final line = current.lines.removeAt(idx);
     orders.save(current);
+    final by = (approvedBy != null && approvedBy.isNotEmpty)
+        ? '|by:$approvedBy'
+        : '';
     audit.record(cashierId, 'line.voided',
-        detail: '${current.uuid}|${line.name} x${line.quantity}|$reason');
+        detail: '${current.uuid}|${line.name} x${line.quantity}|$reason$by');
     return line;
+  }
+
+  /// Void [qty] units of a multi-unit line. When [qty] covers the whole line this
+  /// is [voidLine]; otherwise the line stays with the remainder and a detached
+  /// snapshot (quantity = [qty]) is returned for the kitchen cancel / deletion
+  /// slips so the pass only bins what was voided — e.g. void 1 of 8.
+  ///
+  /// Partial voids only apply to whole-number lines; a weighed/fractional line
+  /// can only be taken off in full.
+  OrderLine? voidQuantity(String lineUuid, double qty, String reason,
+      {String? approvedBy}) {
+    final idx = current.lines.indexWhere((l) => l.uuid == lineUuid);
+    if (idx < 0) return null;
+    final line = current.lines[idx];
+    if (qty <= 0) return null;
+    if (qty >= line.quantity ||
+        line.quantity != line.quantity.roundToDouble() ||
+        qty != qty.roundToDouble()) {
+      return voidLine(lineUuid, reason, approvedBy: approvedBy);
+    }
+    line.quantity -= qty;
+    orders.save(current);
+    final voided = OrderLine(
+      productId: line.productId,
+      odooProductId: line.odooProductId,
+      name: line.name,
+      quantity: qty,
+      unitPrice: line.unitPrice,
+      categoryId: line.categoryId,
+      taxRate: line.taxRate,
+      baseTaxRate: line.baseTaxRate,
+      note: line.note,
+      discountPercent: line.discountPercent,
+      printedToKitchen: line.printedToKitchen,
+      firedStations: List.of(line.firedStations),
+      fireAt: line.fireAt,
+      seat: line.seat,
+      modifiers: [
+        for (final m in line.modifiers)
+          OrderModifier(
+              modifierId: m.modifierId,
+              productId: m.productId,
+              name: m.name,
+              quantity: m.quantity,
+              unitPrice: m.unitPrice),
+      ],
+    );
+    final by = (approvedBy != null && approvedBy.isNotEmpty)
+        ? '|by:$approvedBy'
+        : '';
+    audit.record(cashierId, 'line.voided',
+        detail: '${current.uuid}|${line.name} x$qty|$reason$by');
+    return voided;
   }
 
   void setQuantity(String lineUuid, double qty) {
@@ -350,7 +409,14 @@ class PosSession {
     order.deliveryCost = 0;
     order.deliveryChannel = null;
     order.companyOrderNo = null;
+    order.driverId = null;
     order.driverName = null;
+    order.driverPhone = null;
+    order.deliveryStatus = DeliveryStatus.received;
+    order.shippingZoneId = null;
+    order.shippingZoneName = null;
+    order.serviceFee = 0;
+    order.ecommerceOrderId = null;
     order.tip = 0;
     // An emptied order is a fresh bill on the same row, so it takes the service charge
     // the shop is on now rather than keeping a stamp from the sale that was cleared.
@@ -389,7 +455,13 @@ class PosSession {
       // aggregator reference and nobody driving a sale handed over the counter.
       current.deliveryChannel = null;
       current.companyOrderNo = null;
+      current.driverId = null;
       current.driverName = null;
+      current.driverPhone = null;
+      current.deliveryStatus = DeliveryStatus.received;
+      current.shippingZoneId = null;
+      current.shippingZoneName = null;
+      current.serviceFee = 0;
     } else if (prev != type) {
       // Company # / channel only belong on aggregator delivery.
       if (!type.needsCompanyOrderNo) {
@@ -399,10 +471,15 @@ class PosSession {
       // Zone fees and rider are store-delivery concerns; car is a plain till sale.
       if (!type.usesDeliveryZones) {
         current.deliveryCost = 0;
+        current.shippingZoneId = null;
+        current.shippingZoneName = null;
       }
       if (!type.needsDeliveryCustomer) {
         current.customerAddress = null;
+        current.driverId = null;
         current.driverName = null;
+        current.driverPhone = null;
+        current.serviceFee = 0;
       }
     }
     orders.save(current);
@@ -530,6 +607,19 @@ class PosSession {
     orders.save(current);
   }
 
+  /// Flat service fee (Dishflow manual), separate from the %-based service charge.
+  void setServiceFee(double fee) {
+    current.serviceFee = fee < 0 ? 0 : fee;
+    orders.save(current);
+  }
+
+  void setShippingZone(DeliveryZone? zone) {
+    current.shippingZoneId = zone?.id;
+    current.shippingZoneName = zone?.name;
+    if (zone != null) current.deliveryCost = zone.fee < 0 ? 0 : zone.fee;
+    orders.save(current);
+  }
+
   void setTip(double tip) {
     current.tip = tip < 0 ? 0 : tip;
     orders.save(current);
@@ -564,12 +654,40 @@ class PosSession {
     orders.save(current);
   }
 
-  /// Who is carrying this delivery. The name is stamped rather than a reference to
-  /// the driver list, so a printed slip still says who took it after that driver
-  /// leaves and is taken off the roster.
-  void setDriver(String? name) {
-    current.driverName = _blankToNull(name);
+  /// Who is carrying this delivery. Stamps id + name + phone (Dishflow assign).
+  /// Advancing from `received` → `sent` when a driver is first assigned.
+  void setDriver(Driver? driver) {
+    current.driverId = driver?.id;
+    current.driverName = driver == null ? null : _blankToNull(driver.name);
+    current.driverPhone = driver?.phone;
+    if (driver != null &&
+        current.type.isDelivery &&
+        current.deliveryStatus == DeliveryStatus.received) {
+      current.deliveryStatus = DeliveryStatus.sent;
+    }
     orders.save(current);
+  }
+
+  /// Assign / reassign a driver on any delivery bag (held or paid), for the board.
+  void assignDriverTo(Order order, Driver? driver) {
+    order.driverId = driver?.id;
+    order.driverName = driver == null ? null : _blankToNull(driver.name);
+    order.driverPhone = driver?.phone;
+    if (driver != null && order.deliveryStatus == DeliveryStatus.received) {
+      order.deliveryStatus = DeliveryStatus.sent;
+    }
+    orders.save(order);
+    if (order.state == OrderState.paid || order.state == OrderState.synced) {
+      _mirrorPaid(order);
+    }
+  }
+
+  void setDeliveryStatus(Order order, DeliveryStatus status) {
+    order.deliveryStatus = status;
+    orders.save(order);
+    if (order.state == OrderState.paid || order.state == OrderState.synced) {
+      _mirrorPaid(order);
+    }
   }
 
   /// Attach (or clear, with null) the Odoo customer this sale is for.
@@ -1037,6 +1155,21 @@ class PosSession {
       settings: s,
       order: order,
     );
+    unawaited(_completeEcommerceIfLinked(order));
+  }
+
+  /// Soft-complete the store order so the customer app leaves "preparing".
+  Future<void> _completeEcommerceIfLinked(Order order) async {
+    final id = order.ecommerceOrderId?.trim();
+    final s = settings;
+    if (id == null || id.isEmpty || s == null || !s.dishflowMirrorReady) return;
+    try {
+      await EcommerceOrdersClient().markCompleted(
+        projectId: s.dishflowProjectId!,
+        apiKey: s.dishflowApiKey!,
+        orderId: id,
+      );
+    } catch (_) {}
   }
 
   static String? _blankToNull(String? v) =>

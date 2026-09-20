@@ -260,6 +260,14 @@ class TableStore {
     );
   }
 
+  /// Replace the whole floor plan from a primary join snapshot (no LAN echo).
+  void replaceAllForJoin(Iterable<PosTable> tables) {
+    _db.raw.execute('DELETE FROM pos_tables');
+    for (final t in tables) {
+      upsert(t, announce: false);
+    }
+  }
+
   /// Rename a whole section (moves every table in it).
   ///
   /// A table at a time rather than one bulk UPDATE, so each move carries its own

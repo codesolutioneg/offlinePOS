@@ -44,7 +44,9 @@ double payloadLinesTotal(Map<String, dynamic> payload) {
 /// The two charges that reach Odoo as fields of their own rather than as lines,
 /// for the module to price into the sale it builds.
 double payloadPricedExtras(Map<String, dynamic> payload) =>
-    _num(payload['delivery_cost']) + _num(payload['tip']);
+    _num(payload['delivery_cost']) +
+    _num(payload['tip']) +
+    _num(payload['service_fee']);
 
 /// The tax this payload's own lines say will be charged on them.
 ///
@@ -54,8 +56,8 @@ double payloadPricedExtras(Map<String, dynamic> payload) =>
 ///
 /// Each line's own rate, applied to that line and to the modifiers priced into it,
 /// which is exactly how the till worked the figure out before it charged the guest.
-/// Delivery and a tip carry no tax and so are not in here: the module books their
-/// lines untaxed for the same reason.
+/// Delivery, tip and an absolute service fee carry no tax and so are not in here:
+/// the module books their untaxed amounts from the matching payload fields.
 double payloadTaxTotal(Map<String, dynamic> payload) {
   var tax = 0.0;
   for (final raw in (payload['lines'] as List? ?? const [])) {
@@ -110,7 +112,7 @@ String? payloadImbalanceReason(Map<String, dynamic> payload) {
   final gap = payloadImbalance(payload);
   return 'payload does not add up: tendered ${_money(payloadTendered(payload))} '
       'against lines ${_money(payloadLinesTotal(payload))} plus tax '
-      '${_money(payloadTaxTotal(payload))} plus delivery and tip '
+      '${_money(payloadTaxTotal(payload))} plus delivery, tip and service fee '
       '${_money(payloadPricedExtras(payload))}, a gap of ${_money(gap)}';
 }
 

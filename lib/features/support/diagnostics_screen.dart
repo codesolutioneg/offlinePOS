@@ -88,7 +88,12 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
 
   Future<void> _syncNow() async {
     setState(() => _syncing = true);
-    await widget.sync.tick();
+    final retry = widget.sync.closedShiftRetry;
+    if (retry != null) {
+      await retry();
+    } else {
+      await widget.sync.tick();
+    }
     if (mounted) setState(() => _syncing = false);
   }
 
@@ -410,6 +415,25 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     ];
   }
 
+  /// Opens the live SQL window when Support wired one. Writes there change the
+  /// till the floor is reading, so the row is only shown when a door was handed in.
+  List<Widget> _sqlSection() => [
+        const SizedBox(height: 16),
+        Text(tr(context, 'SQL console'),
+            style: const TextStyle(fontWeight: FontWeight.bold)),
+        Text(
+          tr(context,
+              'Inspect and edit the live till database. Writes are confirmed first.'),
+          style: const TextStyle(fontSize: 12, color: Colors.black54),
+        ),
+        TextButton.icon(
+          key: const Key('open-sql'),
+          onPressed: widget.onOpenSql,
+          icon: const Icon(Icons.storage_outlined),
+          label: Text(tr(context, 'Open SQL console')),
+        ),
+      ];
+
   /// One copy of the whole till, encrypted exactly as it sits on disk, for the day
   /// the machine does not come back on.
   List<Widget> _backupSection() => [
@@ -594,7 +618,7 @@ class _PrinterDialogState extends State<_PrinterDialog> {
               // held receipts.
               enabled: widget.existing == null,
               decoration: InputDecoration(
-                  labelText: tr(context, 'Name (receipt, kitchen, bar)')),
+                  labelText: tr(context, 'Name (receipt, kitchen, delivery, bar)')),
             ),
             TextField(
               key: const Key('printer-host'),

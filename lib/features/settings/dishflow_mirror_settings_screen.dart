@@ -3,11 +3,14 @@ import 'package:flutter/material.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/sync/dishflow_firestore_sender.dart';
+import '../../domain/table_section_config.dart';
 
 /// Point this till at a Dishflow Firebase branch so paid sales show for the owner.
 ///
 /// The till still owns the sale in SQLite. This screen only configures the mirror
 /// that runs when the line is up; selling never waits on it.
+///
+/// On a secondary till the fields are read-only: the primary owns the connection.
 class DishflowMirrorSettingsScreen extends StatefulWidget {
   const DishflowMirrorSettingsScreen({
     super.key,
@@ -36,6 +39,8 @@ class _DishflowMirrorSettingsScreenState
   String? _testResult;
   bool _testing = false;
 
+  bool get _readOnly => widget.settings.deviceRole == DeviceRole.secondary;
+
   @override
   void initState() {
     super.initState();
@@ -60,6 +65,12 @@ class _DishflowMirrorSettingsScreenState
   }
 
   void _save() {
+    if (_readOnly) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr(context,
+              'Dishflow mirror is owned by the primary till. Join as primary to edit.'))));
+      return;
+    }
     final s = widget.settings;
     s.dishflowMirrorEnabled = _enabled;
     s.dishflowProjectId = _projectId.text;
@@ -101,28 +112,41 @@ class _DishflowMirrorSettingsScreenState
       appBar: AppBar(
         title: Text(tr(context, 'Dishflow owner mirror')),
         actions: [
-          TextButton(
-            key: const Key('dishflow-save'),
-            onPressed: _save,
-            child: Text(tr(context, 'Save')),
-          ),
+          if (!_readOnly)
+            TextButton(
+              key: const Key('dishflow-save'),
+              onPressed: _save,
+              child: Text(tr(context, 'Save')),
+            ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (_readOnly)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                tr(context,
+                    'Dishflow mirror is owned by the primary till. Join as primary to edit.'),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
           SwitchListTile(
             key: const Key('dishflow-enabled'),
             title: Text(tr(context, 'Mirror paid sales to Dishflow')),
             subtitle: Text(tr(context,
                 'When online, paid orders appear in owner Flash and reports. Selling never waits on the network.')),
             value: _enabled,
-            onChanged: (v) => setState(() => _enabled = v),
+            onChanged: _readOnly ? null : (v) => setState(() => _enabled = v),
           ),
           const SizedBox(height: 8),
           TextField(
             key: const Key('dishflow-project'),
             controller: _projectId,
+            readOnly: _readOnly,
             decoration: InputDecoration(
               labelText: tr(context, 'Firebase project id'),
               hintText: 'odc-chat',
@@ -131,6 +155,7 @@ class _DishflowMirrorSettingsScreenState
           TextField(
             key: const Key('dishflow-apikey'),
             controller: _apiKey,
+            readOnly: _readOnly,
             decoration: InputDecoration(
               labelText: tr(context, 'Firebase web API key'),
             ),
@@ -139,6 +164,7 @@ class _DishflowMirrorSettingsScreenState
           TextField(
             key: const Key('dishflow-connection'),
             controller: _connectionId,
+            readOnly: _readOnly,
             decoration: InputDecoration(
               labelText: tr(context, 'Odoo connection id'),
               helperText: tr(context,
@@ -148,6 +174,7 @@ class _DishflowMirrorSettingsScreenState
           TextField(
             key: const Key('dishflow-branch-id'),
             controller: _branchId,
+            readOnly: _readOnly,
             decoration: InputDecoration(
               labelText: tr(context, 'Branch id (optional)'),
             ),
@@ -155,12 +182,13 @@ class _DishflowMirrorSettingsScreenState
           TextField(
             key: const Key('dishflow-branch-name'),
             controller: _branchName,
+            readOnly: _readOnly,
             decoration: InputDecoration(
               labelText: tr(context, 'Branch name (optional)'),
             ),
           ),
           const SizedBox(height: 16),
-          if (widget.sender != null)
+          if (widget.sender != null && !_readOnly)
             FilledButton.tonal(
               key: const Key('dishflow-test'),
               onPressed: _testing ? null : _test,

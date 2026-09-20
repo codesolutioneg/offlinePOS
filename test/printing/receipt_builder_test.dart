@@ -238,7 +238,7 @@ void main() {
       orderNo: '1508-007-A1B',
       lines: [OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100)],
     );
-    expect(render(order), contains('ORDER:1508-007-A1B'));
+    expect(render(order), contains('ORDER:15087'));
   });
 
   test('a customer on a counter sale prints on the slip', () {

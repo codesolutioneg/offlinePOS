@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../../domain/order.dart';
+import '../../domain/shift.dart';
 import '../lan/lan_cart_board.dart';
 import '../lan/lan_event.dart';
 import 'database.dart';
@@ -217,6 +218,20 @@ class OrderStore {
   /// from another till must never appear in it or the shop would book it twice.
   List<Order> awaitingSync() => _mine("state = 'paid'");
 
+  /// Paid sales on this till that fall inside [shift]'s open→close window.
+  ///
+  /// Close-shift sync uses this — not [awaitingSync] — so a backlog from an
+  /// earlier shift cannot ride along under the new shift's uuid, and the Z and
+  /// the Odoo SO cover the same tickets.
+  List<Order> awaitingSyncInShift(Shift shift) {
+    final from = shift.openedAt.toIso8601String();
+    final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
+    return _mine(
+      "state = 'paid' AND created_at >= ? AND created_at <= ?",
+      [from, to],
+    );
+  }
+
   /// Completed sales, newest first, for the history / reprint browser and the
   /// reports. Includes both paid-not-yet-synced and synced, so a sale shows up the
   /// instant it is taken, not only after the server confirms. This till's own: a
@@ -248,9 +263,10 @@ class OrderStore {
       .toList();
 
   /// [_query] restricted to orders this till rang.
-  List<Order> _mine(String where) => ownDeviceId == null
-      ? _query(where)
-      : _query('$where AND device_id = ?', [ownDeviceId]);
+  List<Order> _mine(String where, [List<Object?> args = const []]) =>
+      ownDeviceId == null
+          ? _query(where, args)
+          : _query('$where AND device_id = ?', [...args, ownDeviceId]);
 
   List<Order> _query(String where, [List<Object?> args = const []]) => _db.raw
       .select('SELECT payload FROM orders WHERE $where ORDER BY created_at ASC', args)
@@ -356,6 +372,27 @@ class OrderStore {
     if (order.state != OrderState.held && !seatedDraft) return null;
     if (order.deviceId == toDeviceId) return order;
     if (ownDeviceId != null && order.deviceId != ownDeviceId) return null;
+    return _moveOwnership(order, toDeviceId, seatedDraft: seatedDraft);
+  }
+
+  /// Primary till only: take a parked tab whose owner cannot answer.
+  ///
+  /// Uses the local replica and announces [LanEventKind.orderClaim] so a secondary
+  /// that rejoins learns it no longer owns the bill. Deliberately skips the
+  /// "only the owner may give it away" check — that is the whole point when the
+  /// owner is unreachable and the primary is the shop authority.
+  Order? seizeFromUnreachable(String uuid, String toDeviceId) {
+    final order = byUuid(uuid);
+    if (order == null) return null;
+    final seatedDraft = order.state == OrderState.draft &&
+        order.tableLabel != null &&
+        order.tableLabel!.isNotEmpty;
+    if (order.state != OrderState.held && !seatedDraft) return null;
+    if (order.deviceId == toDeviceId) return order;
+    return _moveOwnership(order, toDeviceId, seatedDraft: seatedDraft);
+  }
+
+  Order _moveOwnership(Order order, String toDeviceId, {required bool seatedDraft}) {
     final moved = _withDevice(
       seatedDraft
           ? (Order.fromMap({...order.toMap(), 'state': OrderState.held.name}))
@@ -367,7 +404,7 @@ class OrderStore {
       moved,
       publish == null
           ? null
-          : () => publish(LanEventKind.orderClaim, uuid,
+          : () => publish(LanEventKind.orderClaim, order.uuid,
               {'to': toDeviceId, 'from': order.deviceId}),
     );
     return moved;
@@ -469,6 +506,18 @@ class OrderStore {
       remove();
       _onAnnounceFailed?.call(uuid, e);
     }
+  }
+
+  /// Wipe every open (draft / held) tab before a secondary join snapshot lands.
+  ///
+  /// Without this, a till that once ran alone keeps stale tabs whose owner device
+  /// is gone — the floor shows ancient timers and claim fails with "did not answer".
+  /// Paid history is kept. No LAN announce: the primary's snapshot is the truth.
+  void clearOpenForJoin() {
+    _db.raw.execute(
+      "DELETE FROM orders WHERE state IN (?, ?)",
+      [OrderState.draft.name, OrderState.held.name],
+    );
   }
 
   int get count => _db.raw.select('SELECT COUNT(*) c FROM orders').first['c'] as int;

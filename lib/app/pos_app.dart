@@ -9,8 +9,12 @@ import '../core/i18n/l10n.dart';
 import '../core/audit/audit_log.dart';
 import '../core/auth/auth_service.dart';
 import '../core/auth/bootstrap_cashier.dart';
+import '../core/auth/fingerprint_agent_launcher.dart';
+import '../core/auth/fingerprint_service.dart';
+import '../core/auth/fingerprint_store.dart';
 import '../core/auth/permissions.dart';
 import '../core/auth/user_store.dart';
+import '../features/auth/fingerprint_or_pin_dialog.dart';
 import '../core/config/till_config.dart';
 import '../core/db/catalogue_store.dart';
 import '../core/db/attendance_store.dart';
@@ -44,10 +48,12 @@ import '../core/printing/registry_printer.dart';
 import '../core/printing/spool_store.dart';
 import '../core/sync/dishflow_mirror.dart';
 import '../core/sync/dishflow_wiring.dart';
+import '../core/sync/ecommerce_orders_client.dart';
 import '../core/sync/odoo_endpoint.dart';
 import '../core/sync/odoo_puller.dart';
 import '../core/sync/odoo_wiring.dart';
 import '../core/sync/outbox.dart';
+import '../core/sync/store_order_alert.dart';
 import '../core/sync/server_probe.dart';
 import '../core/sync/sync_service.dart';
 import '../core/theme/app_colors.dart';
@@ -71,10 +77,14 @@ import '../features/menu/menu_editor_screen.dart';
 import '../features/onboarding/setup_checklist_card.dart';
 import '../features/onboarding/wizard_overlay.dart';
 import '../features/orders/delivery_waiting_screen.dart';
+import '../features/orders/ecommerce_orders_screen.dart';
 import '../features/orders/open_orders_screen.dart';
 import '../features/orders/order_history_screen.dart';
 import '../features/orders/refund_screen.dart';
 import '../features/reports/reports_hub_screen.dart';
+import '../features/reports/flash/flash_report_data.dart';
+import '../features/reports/flash/flash_thermal_escpos.dart';
+import '../features/reports/flash/flash_type_dialog.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/delivery_settings_screen.dart';
@@ -90,9 +100,12 @@ import '../features/settings/receipt_designer_screen.dart';
 import '../features/settings/server_settings_screen.dart';
 import '../features/settings/settings_hub_screen.dart';
 import '../features/settings/shop_settings_screen.dart';
+import '../features/settings/fingerprint_diag_screen.dart';
+import '../features/settings/station_settings_screen.dart';
 import '../features/settings/table_preorder_screen.dart';
 import '../features/shift/shift_screen.dart';
 import '../features/support/diagnostics_screen.dart';
+import '../features/support/sql_console_screen.dart';
 import '../features/tables/table_floor_screen.dart';
 import 'pos_session.dart';
 import 'till_activity.dart';
@@ -122,7 +135,9 @@ class PosApp extends StatefulWidget {
     required this.tables,
     required this.settings,
     required this.customers,
-    required this.attendance,
+    required     this.attendance,
+    this.fingerprints,
+    this.fingerprintStore,
     this.delivery,
     this.config = const TillConfig(),
     this.receiptSpool,
@@ -199,6 +214,12 @@ class PosApp extends StatefulWidget {
   /// Staff clock in / clock out, separate from the cash-drawer shift.
   final AttendanceStore attendance;
 
+  /// ZKTeco USB fingerprint reader (local agent). Null = PIN only.
+  final FingerprintService? fingerprints;
+
+  /// Enrolled templates (LAN-synced). Null when fingerprints are off.
+  final FingerprintStore? fingerprintStore;
+
   /// Shop name, tax id and receipt footer. Nothing here is invented in code: a
   /// receipt with no shop name and no tax id is not a legal receipt, and a
   /// plausible placeholder hides that from whoever installs the till.
@@ -234,6 +255,11 @@ class PosApp extends StatefulWidget {
   /// The name receipts are routed by. Part of the on-disk contract: the printers
   /// table and the held-receipt queue are both keyed on it.
   static const String receiptPrinter = 'receipt';
+
+  /// Customer / driver slip for delivery bags (store delivery and company).
+  /// Distinct from kitchen stations so a shop can put the bag receipt on its
+  /// own roll — or the same physical printer under this name.
+  static const String deliveryReceiptPrinter = 'delivery';
 
   static String money(double v) => v.toStringAsFixed(2);
 
@@ -302,6 +328,23 @@ class _PosAppState extends State<PosApp> {
 
   String? _printError;
   Timer? _background;
+  Timer? _storeOrderPoll;
+
+  /// Seen Firebase store-order ids — first poll is silent, then new ones alert.
+  final StoreOrderWatchState _storeWatch = StoreOrderWatchState();
+
+  /// Active store orders (`pending`/`received`) last seen while signed in.
+  int _storeOrderCount = 0;
+
+  /// Banner + dialog stay up until the cashier opens Store orders or dismisses.
+  bool _storeAlertVisible = false;
+  String? _storeAlertOrderNo;
+  int _storeAlertNewCount = 0;
+  bool _storeAlertDialogOpen = false;
+
+  /// Soft hint when the till can sell but cannot hear store orders yet.
+  bool _storeMirrorHint = false;
+  String? _storePollError;
 
   /// What the cashier who just signed in needs telling about the drawer, or null
   /// when the shift is in order. Cleared when they act on it or wave it away.
@@ -386,6 +429,7 @@ class _PosAppState extends State<PosApp> {
   @override
   void dispose() {
     _background?.cancel();
+    _stopStoreOrderWatch();
     _justParkedClear?.cancel();
     unawaited(widget.lan?.dispose());
     super.dispose();
@@ -486,7 +530,17 @@ class _PosAppState extends State<PosApp> {
         serviceChargeFor: widget.settings.serviceChargePercentFor,
         // The number staff and customers actually say out loud. Per till and per
         // trading day, handed out when an order is parked or paid.
-        nextOrderNo: () => widget.settings.nextOrderNumber(widget.deviceId),
+        nextOrderNo: () {
+          // Climb past any number already on this shop (other tills / older
+          // sales) so Flash never lists two different checks as the same #.
+          var floor = 0;
+          for (final o in widget.orders.recentAnywhere(limit: 2000)) {
+            final n = int.tryParse(o.displayNo);
+            if (n != null && n > floor) floor = n;
+          }
+          return widget.settings
+              .nextOrderNumber(widget.deviceId, atLeast: floor);
+        },
         settings: widget.settings,
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
@@ -519,6 +573,7 @@ class _PosAppState extends State<PosApp> {
     _publishActivity();
     _nudgeShift();
     unawaited(_offerLanRoleIfNeeded());
+    _startStoreOrderWatch();
   }
 
   /// First install (or after Unlink): ask Primary / Join / Skip once.
@@ -740,6 +795,113 @@ class _PosAppState extends State<PosApp> {
     );
   }
 
+  /// Persistent strip while a new store order is waiting — stays until View or
+  /// the cashier opens Store orders (sound keeps going with it).
+  Widget _storeOrderAlertBar(BuildContext context) {
+    final n = _storeAlertNewCount;
+    final no = _storeAlertOrderNo;
+    final label = n > 1
+        ? tr(context, '{n} new store orders waiting').replaceAll('{n}', '$n')
+        : (no != null && no.isNotEmpty
+            ? '${tr(context, 'New store order')} #$no'
+            : tr(context, 'New store order'));
+    return Material(
+      key: const Key('store-order-alert-bar'),
+      color: AppColors.primary,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Row(children: [
+            const Icon(Icons.storefront, size: 20, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(label, style: const TextStyle(color: Colors.white)),
+            ),
+            TextButton(
+              key: const Key('store-order-alert-bar-view'),
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              onPressed: () {
+                final session = _session;
+                final below = _navigator.currentContext;
+                if (session == null || below == null) return;
+                _ackStoreOrderAlert();
+                _openStoreOrders(below, session);
+              },
+              child: Text(tr(context, 'View orders')),
+            ),
+            TextButton(
+              key: const Key('store-order-alert-bar-dismiss'),
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              onPressed: _ackStoreOrderAlert,
+              child: Text(tr(context, 'Later')),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _storeMirrorHintBar(BuildContext context) {
+    return Material(
+      key: const Key('store-mirror-hint-bar'),
+      color: AppColors.warning,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Row(children: [
+            const Icon(Icons.link_off, size: 20, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                tr(context,
+                    'Turn on Dishflow mirror in Settings to receive store orders.'),
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+            TextButton(
+              key: const Key('store-mirror-hint-dismiss'),
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              onPressed: () => setState(() => _storeMirrorHint = false),
+              child: Text(tr(context, 'Later')),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _storePollErrorBar(BuildContext context, String error) {
+    return Material(
+      key: const Key('store-poll-error-bar'),
+      color: AppColors.error,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Row(children: [
+            const Icon(Icons.cloud_off, size: 20, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '${tr(context, 'Could not load store orders')}: $error',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 12.5),
+              ),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              onPressed: () => setState(() => _storePollError = null),
+              child: Text(tr(context, 'Later')),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
   /// Ends the shift without ending the process.
   ///
   /// A shift change with no network is a headline capability of this app, and
@@ -748,6 +910,7 @@ class _PosAppState extends State<PosApp> {
   void _signOut() {
     widget.auth.signOut();
     widget.sync.cashierId = null;
+    _stopStoreOrderWatch();
     setState(() {
       _session = null;
       _firstSaleHelp = false;
@@ -762,6 +925,201 @@ class _PosAppState extends State<PosApp> {
       _nudge = null;
     });
     _publishActivity();
+  }
+
+  void _startStoreOrderWatch() {
+    if (!widget.settings.receivesStoreOrderAlerts) {
+      _stopStoreOrderWatch();
+      if (mounted) {
+        setState(() {
+          _storeMirrorHint = false;
+          _storePollError = null;
+        });
+      }
+      return;
+    }
+    _storeOrderPoll?.cancel();
+    _storeWatch.reset();
+    _storeOrderCount = 0;
+    _storeAlertVisible = false;
+    _storeAlertOrderNo = null;
+    _storeAlertNewCount = 0;
+    _storeMirrorHint = false;
+    _storePollError = null;
+    TillAlertSound.stop();
+    // Poll often enough that a bag on the phone is heard within ~10s.
+    _storeOrderPoll =
+        Timer.periodic(const Duration(seconds: 10), (_) {
+      unawaited(_pollStoreOrders());
+    });
+    unawaited(_pollStoreOrders());
+  }
+
+  /// Start or stop the ecommerce alert poller when station type / sign-in changes.
+  void _syncStoreOrderWatchForStation() {
+    if (_session == null) {
+      _stopStoreOrderWatch();
+      return;
+    }
+    if (widget.settings.receivesStoreOrderAlerts) {
+      _startStoreOrderWatch();
+    } else {
+      _stopStoreOrderWatch();
+      if (mounted) {
+        setState(() {
+          _storeMirrorHint = false;
+          _storePollError = null;
+          _storeOrderCount = 0;
+        });
+      }
+    }
+  }
+
+  void _stopStoreOrderWatch() {
+    _storeOrderPoll?.cancel();
+    _storeOrderPoll = null;
+    _storeWatch.reset();
+    TillAlertSound.stop();
+    _storeAlertVisible = false;
+    _storeOrderCount = 0;
+    _storeAlertOrderNo = null;
+    _storeAlertNewCount = 0;
+    _storeMirrorHint = false;
+    _storePollError = null;
+  }
+
+  void _ackStoreOrderAlert() {
+    TillAlertSound.stop();
+    if (!mounted) return;
+    setState(() {
+      _storeAlertVisible = false;
+      _storeAlertOrderNo = null;
+      _storeAlertNewCount = 0;
+    });
+  }
+
+  Future<void> _pollStoreOrders() async {
+    if (!mounted || _session == null) return;
+    if (!widget.settings.receivesStoreOrderAlerts) {
+      _stopStoreOrderWatch();
+      return;
+    }
+    final s = widget.settings;
+    if (!s.dishflowMirrorReady) {
+      if (!_storeMirrorHint) {
+        setState(() => _storeMirrorHint = true);
+      }
+      return;
+    }
+    if (_storeMirrorHint) {
+      setState(() => _storeMirrorHint = false);
+    }
+    try {
+      final list = await EcommerceOrdersClient().listActive(
+        projectId: s.dishflowProjectId!,
+        apiKey: s.dishflowApiKey!,
+        branchId: s.dishflowBranchId,
+      );
+      if (!mounted || _session == null) return;
+      if (_storePollError != null) {
+        setState(() => _storePollError = null);
+      }
+      final ids = list.map((o) => o.id).toSet();
+      final neu = _storeWatch.observe(ids);
+      final countChanged = _storeOrderCount != list.length;
+      if (countChanged) {
+        setState(() => _storeOrderCount = list.length);
+      }
+      if (ids.isEmpty) {
+        TillAlertSound.stop();
+        if (_storeAlertVisible) {
+          setState(() {
+            _storeAlertVisible = false;
+            _storeAlertOrderNo = null;
+            _storeAlertNewCount = 0;
+          });
+        }
+        return;
+      }
+      if (neu.isEmpty) return;
+      final first = list.firstWhere(
+        (o) => neu.contains(o.id),
+        orElse: () => list.first,
+      );
+      final orderNo = first.orderNumber;
+      setState(() {
+        _storeOrderCount = list.length;
+        _storeAlertVisible = true;
+        _storeAlertNewCount = neu.length;
+        _storeAlertOrderNo = orderNo;
+      });
+      unawaited(TillAlertSound.start());
+      unawaited(_showStoreOrderDialog(orderNo, neu.length));
+    } catch (e) {
+      // Keep selling; surface the reason so a wrong project/key is not invisible.
+      if (!mounted) return;
+      final msg = e.toString();
+      if (_storePollError != msg) {
+        setState(() => _storePollError = msg);
+      }
+      widget.audit.record(
+        _session?.cashierId ?? 'system',
+        'store.orders.poll.failed',
+        detail: msg,
+      );
+    }
+  }
+
+  Future<void> _showStoreOrderDialog(String? orderNo, int count) async {
+    if (_storeAlertDialogOpen) return;
+    final navCtx = _navigator.currentContext;
+    if (navCtx == null || !navCtx.mounted) return;
+    _storeAlertDialogOpen = true;
+    try {
+      final go = await showDialog<bool>(
+        context: navCtx,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          key: const Key('store-order-alert-dialog'),
+          icon: const Icon(Icons.storefront, color: AppColors.primary, size: 36),
+          title: Text(tr(ctx, 'New store order')),
+          content: Text(
+            count > 1
+                ? tr(ctx, '{n} new store orders waiting')
+                    .replaceAll('{n}', '$count')
+                : (orderNo != null && orderNo.isNotEmpty
+                    ? '${tr(ctx, 'Order')} #$orderNo'
+                    : tr(ctx, 'A customer order is waiting to be claimed.')),
+          ),
+          actions: [
+            TextButton(
+              key: const Key('store-order-alert-later'),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr(ctx, 'Later')),
+            ),
+            FilledButton(
+              key: const Key('store-order-alert-view'),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(tr(ctx, 'View orders')),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (go == true) {
+        final session = _session;
+        final below = _navigator.currentContext;
+        if (session != null && below != null) {
+          _ackStoreOrderAlert();
+          _openStoreOrders(below, session);
+        }
+      } else {
+        // Acknowledge the beep; the top strip stays until they open Store orders.
+        TillAlertSound.stop();
+      }
+    } finally {
+      _storeAlertDialogOpen = false;
+    }
   }
 
   /// Tells the update gate whether a customer is standing at the counter. Lines on
@@ -866,7 +1224,7 @@ class _PosAppState extends State<PosApp> {
   /// removal leaves a paper trail at the till alongside the audit entry. Spooled
   /// like any receipt: a record slip that missed the printer is reprinted, not lost.
   Future<void> _printDeletion(Order order, List<OrderLine> lines,
-      {required String title, String? reason}) async {
+      {required String title, String? reason, String? approvedBy}) async {
     if (lines.isEmpty) return;
     final bytes = _receiptBuilder().buildDeletion(
       order,
@@ -875,6 +1233,7 @@ class _PosAppState extends State<PosApp> {
       at: DateTime.now(),
       actor: _session?.cashierId,
       reason: reason,
+      approvedBy: approvedBy,
     );
     try {
       await _receiptPrinter.send(bytes, reference: 'void-slip-${order.uuid}-${DateTime.now().microsecondsSinceEpoch}');
@@ -990,6 +1349,58 @@ class _PosAppState extends State<PosApp> {
         modifiers: line.modifiers,
       );
 
+  /// Which named printer gets the customer-facing slip for [order].
+  ///
+  /// Delivery bags use the configured delivery-receipt printer when that name
+  /// exists in the registry; everything else (and delivery when that printer is
+  /// missing) stays on the main receipt printer.
+  String _customerSlipPrinterName(Order order) {
+    if (!order.type.isDelivery) return PosApp.receiptPrinter;
+    final preferred = widget.settings.deliveryReceiptPrinter.trim();
+    if (preferred.isNotEmpty && widget.printers[preferred] != null) {
+      return preferred;
+    }
+    return PosApp.receiptPrinter;
+  }
+
+  /// Send bytes to [printerName], falling back to the receipt spool so a missing
+  /// delivery printer never loses the bag slip.
+  Future<void> _sendCustomerSlip(
+    Uint8List bytes, {
+    required String printerName,
+    required String reference,
+  }) async {
+    if (printerName == PosApp.receiptPrinter) {
+      await _receiptPrinter.send(bytes, reference: reference);
+      return;
+    }
+    try {
+      await RegistryPrinter(widget.printers, printerName).send(bytes);
+    } on PrinterUnavailable {
+      await _receiptPrinter.send(bytes, reference: reference);
+    }
+  }
+
+  /// Unpaid bag / driver slip after kitchen for a delivery order — address and
+  /// totals on the delivery-receipt printer so the kitchen ticket is not the
+  /// only paper that comes out.
+  Future<void> _printDeliveryBagSlip(Order order) async {
+    if (!order.type.isDelivery) return;
+    try {
+      final bytes = _receiptBuilder().buildBill(order);
+      final name = _customerSlipPrinterName(order);
+      await _sendCustomerSlip(bytes,
+          printerName: name,
+          reference:
+              'delivery-bag-${order.uuid}-${DateTime.now().microsecondsSinceEpoch}');
+    } on PrinterUnavailable {
+      // Spool / offline — same as a sale receipt.
+    } catch (e) {
+      widget.audit.record(order.cashierId, 'receipt.failed',
+          detail: 'delivery-bag ${order.uuid}: $e');
+    }
+  }
+
   Future<void> _printReceipt(Order order, {bool reprint = false}) async {
     try {
       // On-device settings win over the compile-time defaults, so a manager can
@@ -1013,10 +1424,14 @@ class _PosAppState extends State<PosApp> {
       // kick, so a two-copy cash sale opens the drawer once, not twice.
       final base = reprint ? 'reprint-${order.uuid}' : order.uuid;
       final wantDrawer = isCash && !reprint && s.openDrawerOnSale;
+      final printerName = _customerSlipPrinterName(order);
       for (var i = 0; i < s.receiptCopies; i++) {
         try {
-          await _receiptPrinter.send(build(openDrawer: wantDrawer && i == 0),
-              reference: i == 0 ? base : '$base-c$i');
+          await _sendCustomerSlip(
+            build(openDrawer: wantDrawer && i == 0),
+            printerName: printerName,
+            reference: i == 0 ? base : '$base-c$i',
+          );
         } on PrinterUnavailable {
           // Each copy is spooled independently by SpooledPrinter before it rethrows,
           // so keep queuing the rest rather than losing the remaining copies when the
@@ -1124,12 +1539,23 @@ class _PosAppState extends State<PosApp> {
         // one. Nothing else belongs here: this is the app's only chrome.
         builder: (context, navigator) {
           final nudge = _nudge;
-          final content = nudge == null || navigator == null
-              ? (navigator ?? const SizedBox.shrink())
-              : Column(children: [
-                  _shiftNudgeBar(context, nudge),
-                  Expanded(child: navigator),
-                ]);
+          final storeAlert = _storeAlertVisible;
+          final mirrorHint = _storeMirrorHint;
+          final pollError = _storePollError;
+          Widget content = navigator ?? const SizedBox.shrink();
+          if (nudge != null ||
+              storeAlert ||
+              mirrorHint ||
+              pollError != null) {
+            content = Column(children: [
+              if (nudge != null) _shiftNudgeBar(context, nudge),
+              if (storeAlert) _storeOrderAlertBar(context),
+              if (!storeAlert && mirrorHint) _storeMirrorHintBar(context),
+              if (!storeAlert && !mirrorHint && pollError != null)
+                _storePollErrorBar(context, pollError),
+              Expanded(child: navigator ?? const SizedBox.shrink()),
+            ]);
+          }
           // Above the navigator so every touch on any screen, dialog or sheet
           // stamps the idle clock. A plain field write: repainting the app on
           // every tap would be a heavy price for a timestamp.
@@ -1160,6 +1586,8 @@ class _PosAppState extends State<PosApp> {
                         onSignedIn: _signedIn,
                         provisioningPin: _provisioningPin,
                         managersOnly: widget.loginManagersOnly,
+                        fingerprints: widget.fingerprints,
+                        fingerprintStore: widget.fingerprintStore,
                       )
                     : _home(session),
       ),
@@ -1280,8 +1708,12 @@ class _PosAppState extends State<PosApp> {
       if (bound == null) return false;
       final s = widget.settings;
       var changed = false;
-      if (s.odooBranchId != bound.companyId) {
-        s.odooBranchId = bound.companyId;
+      if (s.odooBranchId != bound.branchId) {
+        s.odooBranchId = bound.branchId;
+        changed = true;
+      }
+      if (s.odooCompanyId != bound.companyId) {
+        s.odooCompanyId = bound.companyId;
         changed = true;
       }
       if (bound.warehouseId != null && s.odooWarehouseId != bound.warehouseId) {
@@ -1290,7 +1722,7 @@ class _PosAppState extends State<PosApp> {
       }
       if (changed) {
         widget.audit.record('system', 'site.bound',
-            detail: '${bound.name} (${bound.companyId})');
+            detail: '${bound.name} branch=${bound.branchId} co=${bound.companyId}');
       }
       return changed;
     } catch (_) {
@@ -1390,6 +1822,13 @@ class _PosAppState extends State<PosApp> {
           maxDiscountPercent: widget.settings.maxDiscountPercent,
           allowAmountDiscount: widget.settings.allowAmountDiscount,
           authorize: (p) => _authorize(p, context),
+          // Void always collects a manager PIN (never skipped by role) so the
+          // approving manager is named on the audit trail and the deletion slip.
+          authorizeVoidManager: () async {
+            final who =
+                await _authorizeManager(context, requirePin: true);
+            return who?.name;
+          },
           // Whose table a parked tab is sitting on, for the ways onto a bill that do
           // not go through the floor: merging one table into another.
           authorizeTabTable: (tab) => _authorizeTabTable(context, tab),
@@ -1470,15 +1909,37 @@ class _PosAppState extends State<PosApp> {
           // without the line cooking it. The floor says it was parked, so the
           // confirmation is on the screen the cashier lands on rather than over
           // the row of buttons they tap next.
-          onHold: () => _toFloor(confirmPark: true),
+          //
+          // Dishflow delivery: after park (Hold or auto after kitchen), reopen
+          // the waiting list for that subtype so the next call is one tap away.
+          onHold: () {
+            final type = session.current.type;
+            final delivery = type.isDelivery;
+            _toFloor(confirmPark: true);
+            if (delivery) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                unawaited(_reopenDeliveryWaiting(context, type));
+              });
+            }
+          },
           // Fire the kitchen ticket but keep the order on the counter. The
           // result is handed back so the screen can say what really happened.
-          onSendToKitchen: () => _fireKitchen(session.current),
+          // Delivery also prints the unpaid bag slip on the delivery-receipt
+          // printer — kitchen alone was leaving the driver with no paper.
+          onSendToKitchen: () async {
+            final order = session.current;
+            final result = await _fireKitchen(order);
+            if (order.type.isDelivery) {
+              unawaited(_printDeliveryBagSlip(order));
+            }
+            return result;
+          },
           // Re-fire every line (a lost or re-requested ticket), ignoring the
           // already-printed flag.
           onResendToKitchen: () =>
               _fireKitchen(session.current, only: session.current.lines, resend: true),
-          onLineVoided: (line, reason) {
+          onLineVoided: (line, reason, {approvedBy}) {
             // The deletion slip is the till's own record that an item was taken
             // off, printed for every void. The kitchen cancel slip only fires
             // when the kitchen already has a copy, or it would send a cancel for
@@ -1492,7 +1953,9 @@ class _PosAppState extends State<PosApp> {
               _slipped.add(line.uuid);
             }
             unawaited(_printDeletion(session.current, [line],
-                title: 'ITEM VOIDED', reason: reason));
+                title: 'ITEM VOIDED',
+                reason: reason,
+                approvedBy: approvedBy));
           },
           onPaid: (order) {
             _publishActivity();
@@ -1633,6 +2096,21 @@ class _PosAppState extends State<PosApp> {
             onTap: () {
               Navigator.pop(rootContext);
               _openOrders(rootContext, session);
+            },
+          ),
+          tile(
+            key: const Key('nav-store-orders'),
+            icon: Icons.storefront_outlined,
+            label: tr(rootContext, 'Store orders'),
+            trailing: _storeOrderCount > 0
+                ? Chip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text('$_storeOrderCount'))
+                : null,
+            onTap: () {
+              Navigator.pop(rootContext);
+              _ackStoreOrderAlert();
+              _openStoreOrders(rootContext, session);
             },
           ),
           tile(
@@ -1852,6 +2330,22 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
+  void _openStoreOrders(BuildContext context, PosSession session) {
+    _ackStoreOrderAlert();
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => EcommerceOrdersScreen(
+        settings: widget.settings,
+        session: session,
+        catalogue: widget.catalogue,
+        formatAmount: PosApp.money,
+        cashierName: widget.auth.signedIn?.name,
+        onOpened: () {
+          setState(() => _onCounter = true);
+        },
+      ),
+    ));
+  }
+
   void _openHistory(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (historyContext) => OrderHistoryScreen(
@@ -1916,6 +2410,13 @@ class _PosAppState extends State<PosApp> {
       }
       return;
     }
+    // Mirror may already be in Firestore; PATCH status cancelled on the same doc.
+    // A later re-pay enqueues status sale again.
+    unawaited(DishflowMirror.enqueueCancelIfEnabled(
+      outbox: widget.outbox,
+      settings: widget.settings,
+      order: order,
+    ));
     widget.audit.record(session.cashierId, 'order.amended',
         detail: '${order.uuid}|${PosApp.money(oldTotal)}');
     _amending[order.uuid] = before;
@@ -1974,6 +2475,8 @@ class _PosAppState extends State<PosApp> {
             if (m.isCash) m.id,
         },
         allOrders: widget.orders.recent(limit: 1000),
+        // Flash sums every till: LAN replicas already sit in SQLite as paid/synced.
+        shopOrders: widget.orders.recentAnywhere(limit: 2000),
         categories: widget.catalogue.categories(),
         formatAmount: PosApp.money,
         audit: widget.audit,
@@ -1990,10 +2493,12 @@ class _PosAppState extends State<PosApp> {
             .where((o) => o.tableLabel != null)
             .length,
         onPrint: _printShiftReport,
+        onPrintFlash: _printFlashReport,
         // What every exported report is headed with, so a downloaded file says
         // which shop it came from and who ran it.
         shopName: widget.settings.shopName ?? widget.config.shopName,
         ranBy: _session?.cashierId ?? '',
+        drivers: widget.delivery?.drivers() ?? const [],
       ),
     ));
   }
@@ -2021,6 +2526,8 @@ class _PosAppState extends State<PosApp> {
         // reaches here via the manageStaff permission can manage cashiers only, so
         // the manager role stays out of reach and self-promotion is impossible.
         canAssignManager: widget.auth.signedIn?.isManager ?? false,
+        fingerprints: widget.fingerprints,
+        fingerprintStore: widget.fingerprintStore,
       ),
     ));
   }
@@ -2138,15 +2645,46 @@ class _PosAppState extends State<PosApp> {
   /// use a dedicated route so the cashier gets a real screen, not a sheet.
   Future<Object?> _pickParkedDelivery(
       BuildContext context, OrderType type, List<Order> parked) {
+    final session = _session;
     return Navigator.of(context)
         .push<Object?>(MaterialPageRoute(
           builder: (_) => DeliveryWaitingScreen(
             type: type,
             parked: parked,
             formatAmount: PosApp.money,
+            drivers: widget.delivery?.drivers() ?? const [],
+            onAssignDriver: session == null
+                ? null
+                : (order, driver) {
+                    session.assignDriverTo(order, driver);
+                  },
+            onSetStatus: session == null
+                ? null
+                : (order, status) {
+                    session.setDeliveryStatus(order, status);
+                  },
           ),
         ))
         .then((v) => v ?? 'cancel');
+  }
+
+  /// After a delivery bag is parked (Hold or kitchen auto-suspend), land back on
+  /// that subtype's waiting list — Dishflow's post-suspend panel.
+  Future<void> _reopenDeliveryWaiting(BuildContext context, OrderType type) async {
+    final session = _session;
+    if (session == null || !mounted) return;
+    final parked =
+        widget.orders.held().where((o) => o.type == type).toList();
+    final resume = await _pickParkedDelivery(context, type, parked);
+    if (resume == 'cancel' || !mounted) return;
+    setState(() {
+      if (resume is Order) {
+        session.recall(resume.uuid);
+      } else {
+        session.startFresh(type);
+      }
+      _onCounter = true;
+    });
   }
 
   /// The kinds of sale the signed-in role may open here: what the shop offers at
@@ -2188,9 +2726,8 @@ class _PosAppState extends State<PosApp> {
             // reads it.
             shiftOpen: () => widget.shifts.currentOpenShift() != null,
             onOpenShift: () => _openShift(floorContext, session),
-            // The way off the till. On the counter it is disabled mid-order; here
-            // it needs no guard, because whatever was on the counter was parked on
-            // the way to this screen.
+            // End shift → End of Day close (not sign-out). Sign-out stays in the drawer.
+            onEndShift: () => _openShift(floorContext, session, startClose: true),
             onSignOut: _signOut,
             // The confirmation for the bill that was just parked, said up here where
             // it cannot cover the button row along the bottom.
@@ -2437,6 +2974,11 @@ class _PosAppState extends State<PosApp> {
         cashierId: session.cashierId,
       );
 
+  void _announceShiftOpen(PosSession session) => widget.lan?.announceShiftOpen(
+        businessDate: BusinessDay.of(DateTime.now().toUtc()).key,
+        cashierId: session.cashierId,
+      );
+
   /// What another till has said about today, and whether this one should stop
   /// starting new work over it.
   ///
@@ -2565,7 +3107,7 @@ class _PosAppState extends State<PosApp> {
     );
     if (pin == null || pin.isEmpty) return false;
     final ok = await widget.auth.authorizeCashier(tab.cashierId, pin) ||
-        await widget.auth.authorizeManager(pin);
+        (await widget.auth.authorizeManager(pin)) != null;
     widget.audit.record(who, ok ? 'order.unlocked' : 'order.locked',
         detail: '${tab.uuid}|${tab.cashierId}');
     if (!ok && context.mounted) {
@@ -2740,7 +3282,7 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _transferTables(BuildContext context) async {
-    if (!await _authorizeManager(context)) return;
+    if (await _authorizeManager(context) == null) return;
     final held = widget.orders.held();
     final holders = held.map((o) => o.cashierId).toSet().toList()..sort();
     if (!context.mounted) return;
@@ -2786,7 +3328,7 @@ class _PosAppState extends State<PosApp> {
     return pool.where((u) => onDuty.contains(u.id)).map((u) => u.id).toList();
   }
 
-  /// Pick who opens the table and verify that person's own PIN.
+  /// Pick who opens the table: fingerprint when the reader is up, else PIN.
   ///
   /// Manager PIN is not a substitute here: attribution must match who is
   /// actually opening. Managers elevate elsewhere (resume lock, voids, etc.).
@@ -2802,6 +3344,70 @@ class _PosAppState extends State<PosApp> {
       }
       return null;
     }
+
+    final fp = widget.fingerprints;
+    if (fp != null) {
+      final result = await showFingerprintOrPin(
+        context,
+        fingerprints: fp,
+        title: tr(context, 'Who is opening this table?'),
+        message: tr(context, 'Fingerprint or this person\'s PIN'),
+        prepareTemplates: () async {
+          await FingerprintAgentLauncher().ensureRunning();
+          await widget.fingerprintStore?.pushToAgent();
+        },
+      );
+      if (result == null || !context.mounted) return null;
+      if (result.isFingerprint) {
+        final uid = result.matchedUserId!;
+        if (!ids.contains(uid)) {
+          showToast(
+            context,
+            tr(context, 'That person is not clocked in'),
+            kind: ToastKind.error,
+          );
+          return null;
+        }
+        return uid;
+      }
+      // PIN path: pick who, then verify with the PIN they already typed.
+      final picked = await _pickOpenerDropdown(
+        context,
+        tr(context, 'Who is opening this table?'),
+        ids,
+      );
+      if (picked == null || !context.mounted) return null;
+      final pin = result.pin ?? '';
+      if (pin.isEmpty) {
+        final user = widget.users.byId(picked);
+        final typed = await _promptPin(
+          context,
+          tr(context, 'Confirm with PIN'),
+          tr(context, 'Enter this person\'s PIN'),
+          subject: user?.name ?? picked,
+        );
+        if (typed == null || typed.isEmpty) return null;
+        final ok = await widget.auth.authorizeCashier(picked, typed);
+        if (!ok) {
+          if (context.mounted) {
+            showToast(context, tr(context, 'Incorrect PIN'),
+                kind: ToastKind.error);
+          }
+          return null;
+        }
+        return picked;
+      }
+      final ok = await widget.auth.authorizeCashier(picked, pin);
+      if (!ok) {
+        if (context.mounted) {
+          showToast(context, tr(context, 'Incorrect PIN'),
+              kind: ToastKind.error);
+        }
+        return null;
+      }
+      return picked;
+    }
+
     final picked = await _pickOpenerDropdown(
       context,
       tr(context, 'Who is opening this table?'),
@@ -2908,8 +3514,8 @@ class _PosAppState extends State<PosApp> {
         title: Text(tr(ctx, 'Take over this tab?')),
         content: Text(tr(
             ctx,
-            'It is open on another device. That device is asked first and gives '
-                'it up, so it cannot be settled in two places.')),
+            'It is open on another device. That device is asked first. If it '
+                'does not answer, this till takes the tab so you can settle it.')),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -2925,7 +3531,7 @@ class _PosAppState extends State<PosApp> {
     if (confirmed != true || !context.mounted) return;
     if (!asOpener) {
       if (!(widget.auth.signedIn?.isManager ?? false)) {
-        if (!await _authorizeManager(context)) return;
+        if (await _authorizeManager(context) == null) return;
       }
     }
     final result = await lan.claim(
@@ -2942,8 +3548,7 @@ class _PosAppState extends State<PosApp> {
           tr(
               context,
               result.refusal == LanClaimRefusal.ownerUnreachable
-                  ? 'That device did not answer, so the tab stays with it. '
-                      'Settle it there.'
+                  ? 'That device did not answer and this till has no copy of the tab.'
                   : 'That device would not hand the tab over.'),
           kind: ToastKind.error);
       return;
@@ -3100,7 +3705,10 @@ class _PosAppState extends State<PosApp> {
 
   /// The settings hub: one door onto everything a manager configures on the device.
   void _openSettingsHub(BuildContext context) {
-    void refresh() => setState(() {});
+    void refresh() {
+      setState(() {});
+      _syncStoreOrderWatchForStation();
+    }
     void push(Widget screen) => Navigator.of(context)
         .push(MaterialPageRoute<void>(builder: (_) => screen));
     // Sensitive config (server credentials, printers, shop identity) is gated by the
@@ -3187,6 +3795,30 @@ class _PosAppState extends State<PosApp> {
               await RegistryPrinter(widget.printers, name)
                   .send(Uint8List.fromList(bytes));
             })),
+      ),
+      SettingsEntry(
+        title: 'This device type',
+        subtitle: widget.settings.stationType == StationType.delivery
+            ? 'Delivery station — store-order alerts on'
+            : 'Counter — store-order alerts off',
+        icon: Icons.devices,
+        keyValue: 'set-station-type',
+        group: 'Hardware',
+        onTap: () => pushGated(
+            Permission.openSettings,
+            StationSettingsScreen(
+              settings: widget.settings,
+              onChanged: refresh,
+            )),
+      ),
+      SettingsEntry(
+        title: 'Fingerprint setup',
+        subtitle: 'Auto-install libraries / see errors on this PC',
+        icon: Icons.fingerprint,
+        keyValue: 'set-fingerprint-diag',
+        group: 'Hardware',
+        onTap: () => pushGated(
+            Permission.openSettings, const FingerprintDiagScreen()),
       ),
       SettingsEntry(
         title: 'Appearance',
@@ -3307,6 +3939,7 @@ class _PosAppState extends State<PosApp> {
               sender: widget.dishflow?.sender,
               onChanged: () {
                 widget.dishflow?.apply(widget.settings);
+                widget.settings.publishShopBundle();
                 refresh();
               },
             )),
@@ -3411,7 +4044,7 @@ class _PosAppState extends State<PosApp> {
         group: 'People & customers',
         onTap: () async {
           final ok = await _authorizeManager(context);
-          if (ok && context.mounted) {
+          if (ok != null && context.mounted) {
             push(RolesPermissionsScreen(
               settings: widget.settings,
               onChanged: refresh,
@@ -3577,7 +4210,16 @@ class _PosAppState extends State<PosApp> {
                   }
                   pendingKey = key;
 
-                  var err = await runStep('Section settings...', 0.20, () {
+                  // Drop this till's old open floor / prints / fingerprints so
+                  // stale tabs (and dead device owners) cannot survive the join.
+                  var err = await runStep('Clearing old local data...', 0.12, () {
+                    widget.orders.clearOpenForJoin();
+                    widget.assignments?.clearAll(announce: false);
+                    widget.fingerprintStore?.replaceAllForJoin(const []);
+                  });
+                  if (err != null) return err;
+
+                  err = await runStep('Section settings...', 0.20, () {
                     final configs = payload['section_configs'];
                     if (configs is! Map) return;
                     widget.settings.applySectionConfigSnapshot({
@@ -3594,6 +4236,7 @@ class _PosAppState extends State<PosApp> {
                     if (bundle is! Map) return;
                     widget.settings
                         .applyShopBundle(bundle.cast<String, dynamic>());
+                    widget.dishflow?.apply(widget.settings);
                   });
                   if (err != null) return err;
 
@@ -3609,10 +4252,28 @@ class _PosAppState extends State<PosApp> {
                   });
                   if (err != null) return err;
 
+                  err = await runStep('Fingerprints...', 0.40, () async {
+                    final fps = payload['fingerprints'];
+                    final store = widget.fingerprintStore;
+                    if (store == null) return;
+                    final entries = <Map<String, dynamic>>[
+                      if (fps is List)
+                        for (final raw in fps)
+                          if (raw is Map) raw.cast<String, dynamic>(),
+                    ];
+                    store.replaceAllForJoin(entries);
+                    await FingerprintAgentLauncher().ensureRunning();
+                    await store.pushToAgent();
+                  });
+                  if (err != null) return err;
+
                   err = await runStep('Printers...', 0.44, () {
                     final printersPayload = payload['printers'];
                     if (printersPayload is! Map) return;
-                    widget.printers.applyFromMap(
+                    // Kitchen / bar stations come from the primary; this till's
+                    // receipt (and delivery) printer stay local so each counter
+                    // keeps its own roll and cash drawer.
+                    widget.printers.applySharedStationsFromMap(
                       printersPayload.cast<String, Object?>(),
                     );
                   });
@@ -3640,16 +4301,19 @@ class _PosAppState extends State<PosApp> {
 
                   err = await runStep('Floor plan...', 0.72, () {
                     final tablesRaw = payload['tables'];
-                    if (tablesRaw is! List) return;
+                    if (tablesRaw is! List) {
+                      widget.tables.replaceAllForJoin(const []);
+                      return;
+                    }
+                    final tables = <PosTable>[];
                     for (final raw in tablesRaw) {
                       if (raw is! Map) continue;
                       try {
-                        widget.tables.upsert(
-                          PosTable.fromMap(raw.cast<String, dynamic>()),
-                          announce: false,
-                        );
+                        tables.add(
+                            PosTable.fromMap(raw.cast<String, dynamic>()));
                       } catch (_) {}
                     }
+                    widget.tables.replaceAllForJoin(tables);
                   });
                   if (err != null) return err;
 
@@ -3705,10 +4369,36 @@ class _PosAppState extends State<PosApp> {
         },
       );
 
-  /// Gate a privileged action behind manager approval. A manager already signed in
-  /// passes straight through; anyone else must enter a manager PIN.
-  Future<bool> _authorizeManager(BuildContext context) async {
-    if (widget.auth.signedIn?.isManager ?? false) return true;
+  /// Gate a privileged action behind manager approval. Returns the approving
+  /// manager. A manager already signed in passes as themselves unless
+  /// [requirePin] is set (voids always ask so the approving PIN is on the slip).
+  ///
+  /// When a ZK reader is connected, fingerprint is offered first; PIN remains
+  /// the fallback for every permission path.
+  Future<Cashier?> _authorizeManager(BuildContext context,
+      {bool requirePin = false}) async {
+    final signedIn = widget.auth.signedIn;
+    if (!requirePin && (signedIn?.isManager ?? false)) return signedIn;
+
+    final fp = widget.fingerprints;
+    if (fp != null) {
+      final result = await showFingerprintOrPin(
+        context,
+        fingerprints: fp,
+        title: tr(context, 'Manager approval'),
+        message: tr(context, 'Fingerprint or manager PIN'),
+        askTotp: widget.auth.managersUseSecondFactor,
+        prepareTemplates: widget.fingerprintStore?.pushToAgent,
+      );
+      if (result == null) return null;
+      if (result.isFingerprint) {
+        return widget.auth
+            .authorizeManagerByFingerprint(result.matchedUserId!);
+      }
+      return widget.auth
+          .authorizeManager(result.pin!, code: result.totpCode);
+    }
+
     var pin = '';
     var code = '';
     // Only a shop that has enrolled an authenticator is shown the second field, so
@@ -3791,13 +4481,14 @@ class _PosAppState extends State<PosApp> {
         },
       ),
     );
-    if (entered == null || entered.$1.isEmpty) return false;
-    final ok = await widget.auth.authorizeManager(entered.$1, code: entered.$2);
-    if (!ok && context.mounted) {
+    if (entered == null || entered.$1.isEmpty) return null;
+    final who =
+        await widget.auth.authorizeManager(entered.$1, code: entered.$2);
+    if (who == null && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(tr(context, 'Manager approval failed'))));
     }
-    return ok;
+    return who;
   }
 
   /// Gate a privileged action behind the signed-in cashier's role permissions.
@@ -3811,10 +4502,11 @@ class _PosAppState extends State<PosApp> {
     final role = cashier?.role ?? 'cashier';
     if (widget.settings.roleCan(role, p)) return true;
     final approved = await _authorizeManager(context);
-    if (!approved) {
+    if (approved == null) {
       widget.audit.record(cashier?.id ?? 'unknown', 'permission.denied', detail: p.key);
+      return false;
     }
-    return approved;
+    return true;
   }
 
   // ── kitchen tickets ──────────────────────────────────────────────
@@ -3836,13 +4528,21 @@ class _PosAppState extends State<PosApp> {
         only ?? order.lines.where((l) => !l.printedToKitchen && l.dueAt(now)).toList();
     if (lines.isEmpty) return KitchenFireResult.sent;
     // Number the bill before the first kitchen ticket, so the pass and the
-    // receipt quote the same DDMM-SEQ-TAG guests and staff can search for.
+    // receipt quote the same sequential order number guests and staff can search for.
     final session = _session;
     if (session != null) {
       session.ensureOrderNo(order);
       widget.orders.save(order, announce: false);
     } else if (order.orderNo == null) {
-      order.orderNo = widget.settings.nextOrderNumber(widget.deviceId);
+      order.orderNo = widget.settings.nextOrderNumber(widget.deviceId,
+          atLeast: () {
+            var floor = 0;
+            for (final o in widget.orders.recentAnywhere(limit: 2000)) {
+              final n = int.tryParse(o.displayNo);
+              if (n != null && n > floor) floor = n;
+            }
+            return floor;
+          }());
       widget.orders.save(order, announce: false);
     }
     // The ticket says which part of the floor the plate is going to, resolved from
@@ -4012,6 +4712,7 @@ class _PosAppState extends State<PosApp> {
         // from this screen.
         loadChoices: () =>
             OdooPuller(call: widget.odoo.catalogueCall).siteChoices(),
+        sessionPartners: widget.catalogue.customers(limit: 500),
       ),
     ));
   }
@@ -4074,7 +4775,8 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
-  Future<void> _openShift(BuildContext context, PosSession session) {
+  Future<void> _openShift(BuildContext context, PosSession session,
+      {bool startClose = false}) {
     // Which tenders count as drawer cash, read from the synced catalogue so the
     // X/Z drawer total reconciles cash and leaves card sales out.
     final cashMethodIds = widget.catalogue
@@ -4086,17 +4788,56 @@ class _PosAppState extends State<PosApp> {
       builder: (_) => ShiftScreen(
         store: widget.shifts,
         cashierId: session.cashierId,
+        startCloseOnOpen: startClose,
         // Right after the shift opens, ask who is working this session so sales and
         // tables can be attributed to whoever is actually on the floor. Opt-in.
-        onShiftOpened: widget.settings.askSessionStaff
-            ? () => unawaited(_pickSessionStaff(context, session))
-            : null,
+        onShiftOpened: () {
+          _announceShiftOpen(session);
+          if (widget.settings.askSessionStaff) {
+            unawaited(_pickSessionStaff(context, session));
+          }
+        },
         cashMethodIds: cashMethodIds,
         formatAmount: PosApp.money,
         onPrintReport: _printShiftReport,
         // Read at the moment the Z is attempted, not only when the screen was
         // built: a tab can be settled while the shift screen is open.
         openWork: () => _openWork(context),
+        // Dishflow session-close: jump back to the floor to settle parked tabs.
+        onNavigateToFloor: () {
+          Navigator.of(context).pop();
+          _toFloor();
+        },
+        pendingSyncCount: () {
+          final shift = widget.shifts.currentOpenShift() ??
+              widget.shifts.latestShift();
+          if (shift == null) return widget.sync.pendingSales;
+          return widget.orders.awaitingSyncInShift(shift).length;
+        },
+        sessionPartnerName: () {
+          final name = widget.settings.odooSessionPartnerName;
+          if (name != null && name.isNotEmpty) return name;
+          final id = widget.settings.odooSessionPartnerId;
+          return id == null ? null : '#$id';
+        },
+        // Dishflow: arm consolidated merge. Session customer comes from the branch
+        // in Odoo (Session close tab); we pull it live if this till has not cached it.
+        onPrepareCloseSync: () async {
+          final shift = widget.shifts.currentOpenShift();
+          if (shift == null) return null;
+          // Tickets in THIS open shift only — not the whole outbox backlog.
+          if (widget.orders.awaitingSyncInShift(shift).isEmpty) return null;
+          widget.settings.mergeBatchIntoOneSaleOrder = true;
+          await _ensureSessionPartnerFromBranch();
+          if (widget.settings.odooSessionPartnerId == null &&
+              widget.settings.odooBranchId == null) {
+            return tr(context,
+                'Consolidated close needs a branch with a session invoice customer. '
+                'Pick the branch under Server settings, and set the customer on '
+                'Offline POS ▸ Branches ▸ Session close in Odoo.');
+          }
+          return null;
+        },
         // The allowance the counted drawer is held to, zero unless the shop set one.
         cashVarianceTolerance: widget.settings.cashVarianceTolerance,
         // A refused Z is worth knowing about the morning after: it says a till was
@@ -4120,26 +4861,61 @@ class _PosAppState extends State<PosApp> {
         // batch. Returns a message for the cashier: how it went, or that the
         // orders are safe and will sync once the connection is back.
         onCloseSync: () async {
-          // The drawer is counted and the shift is already closed, so telling the
-          // other devices costs the cash-up nothing and cannot delay it.
           _announceDayClose(session);
-          // Sweep any paid sale that never reached the outbox back in first, so the
-          // count below reflects everything owed to the server, not just what
-          // happened to be queued.
-          await widget.sync.reconcilePending();
-          final pendingBefore = widget.sync.pendingSales;
-          if (pendingBefore == 0) return 'No orders to sync.';
-          await widget.sync.flush();
-          final left = widget.sync.pendingSales;
-          if (left == 0) {
-            return 'Synced $pendingBefore order(s) to Odoo.';
+          final shift = widget.shifts.latestShift();
+          if (shift == null) return 'No shift to sync.';
+          // Same window the Z used: paid tickets created between open and close.
+          final shiftOrders = widget.orders.awaitingSyncInShift(shift);
+          if (shiftOrders.isEmpty) {
+            final existing = widget.sync.lastOdooOrderRef ??
+                await _resolveOdooSaleName(null);
+            if (existing != null && existing.isNotEmpty) {
+              return 'No new orders in this shift.\nLast Odoo order: $existing';
+            }
+            return 'No orders in this shift to sync.';
           }
-          if (!widget.sync.online.value) {
-            return 'Offline. $left order(s) saved on this till and will sync when '
-                'the connection is back (or from Support > Sync now).';
+          widget.settings.mergeBatchIntoOneSaleOrder = true;
+          await _ensureSessionPartnerFromBranch();
+          final partner = widget.settings.odooSessionPartnerName ??
+              (widget.settings.odooSessionPartnerId == null
+                  ? null
+                  : '#${widget.settings.odooSessionPartnerId}');
+          final result = await widget.sync.flushClosedShift(
+            orderUuids: {for (final o in shiftOrders) o.uuid},
+            enqueueOrders: () async {
+              // Fresh wire payloads so delivery / tip / service fee are not
+              // stale zeros left from an older enqueue.
+              for (final o in shiftOrders) {
+                await widget.outbox.enqueue(
+                    'order.push', o.uuid, o.toServerPayload());
+              }
+            },
+          );
+          if (result.merged) {
+            var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
+            if (odooRef == null ||
+                odooRef.isEmpty ||
+                odooRef.startsWith('#')) {
+              final resolved = await _resolveOdooSaleName(odooRef);
+              if (resolved != null) odooRef = resolved;
+            }
+            if (odooRef != null && odooRef.isNotEmpty) {
+              widget.sync.lastOdooOrderRef = odooRef;
+              return 'Synced ${result.orderCount} order(s) from this shift '
+                  'to Odoo as one sale order'
+                  '${partner != null ? ' under $partner' : ''}.\n'
+                  'Odoo order: $odooRef';
+            }
+            return 'Sent ${result.orderCount} order(s) from this shift'
+                '${partner != null ? ' under $partner' : ''}, '
+                'but Odoo did not return the sale number yet.\n'
+                'Check Sales orders for today under the session customer.';
           }
-          return 'Synced ${pendingBefore - left} of $pendingBefore. $left still '
-              'pending, try again from Support > Sync now.';
+          final why = result.skipReason ?? widget.sync.lastError;
+          return 'Could not book this shift as one sale order'
+              '${why != null && why.isNotEmpty ? ': $why' : '.'}\n'
+              '${result.orderCount} order(s) stay on this till — '
+              'will retry in the background, or use Support ▸ Sync now.';
         },
       ),
     ))
@@ -4151,6 +4927,137 @@ class _PosAppState extends State<PosApp> {
         _nudgeShift();
       }
     });
+  }
+
+  /// Turn an Odoo id (`#42`) or a missing ref into the sale order name (`S04741`)
+  /// for the green box on Session closed. Searches by id, shift uuid, then the
+  /// session partner's newest sale today.
+  Future<String?> _resolveOdooSaleName(String? ref) async {
+    try {
+      if (ref != null && ref.startsWith('#')) {
+        final id = int.tryParse(ref.substring(1));
+        if (id != null) {
+          final rows = await widget.odoo.catalogueCall(
+            'sale.order',
+            'read',
+            [
+              [id],
+              ['name']
+            ],
+            {},
+          );
+          if (rows is List && rows.isNotEmpty && rows.first is Map) {
+            final name = (rows.first as Map)['name']?.toString();
+            if (name != null && name.isNotEmpty) return name;
+          }
+        }
+      }
+      final shiftUuid = widget.shifts.latestShift()?.uuid;
+      if (shiftUuid != null && shiftUuid.isNotEmpty) {
+        for (final field in ['offline_uuid', 'client_order_ref']) {
+          final found = await widget.odoo.catalogueCall(
+            'sale.order',
+            'search_read',
+            [
+              [
+                [field, '=', shiftUuid]
+              ]
+            ],
+            {
+              'fields': ['name'],
+              'limit': 1,
+              'order': 'id desc',
+            },
+          );
+          if (found is List && found.isNotEmpty && found.first is Map) {
+            final name = (found.first as Map)['name']?.toString();
+            if (name != null && name.isNotEmpty) return name;
+          }
+        }
+      }
+      final partnerId = widget.settings.odooSessionPartnerId;
+      if (partnerId != null) {
+        final day = DateTime.now().toUtc();
+        final start =
+            DateTime.utc(day.year, day.month, day.day).toIso8601String();
+        final found = await widget.odoo.catalogueCall(
+          'sale.order',
+          'search_read',
+          [
+            [
+              ['partner_id', '=', partnerId],
+              ['date_order', '>=', start],
+            ]
+          ],
+          {
+            'fields': ['name'],
+            'limit': 1,
+            'order': 'id desc',
+          },
+        );
+        if (found is List && found.isNotEmpty && found.first is Map) {
+          final name = (found.first as Map)['name']?.toString();
+          if (name != null && name.isNotEmpty) return name;
+        }
+      }
+    } catch (_) {
+      // Close screen still shows the sync message; a missing name is not a failed close.
+    }
+    return null;
+  }
+
+  /// Load the branch's Session-close customer onto this till if missing.
+  ///
+  /// Tries the cached site choices first, then a live `branch.simple` read so a
+  /// customer set only in Odoo still reaches the consolidated payload.
+  Future<void> _ensureSessionPartnerFromBranch() async {
+    if (widget.settings.odooSessionPartnerId != null) return;
+    final branchId = widget.settings.odooBranchId;
+    if (branchId == null) return;
+
+    for (final b in widget.settings.odooSiteChoices.branches) {
+      if (b.id == branchId && b.sessionPartnerId != null) {
+        widget.settings.odooSessionPartnerId = b.sessionPartnerId;
+        widget.settings.odooSessionPartnerName = b.sessionPartnerName;
+        return;
+      }
+    }
+
+    try {
+      final raw = await widget.odoo.catalogueCall(
+        'branch.simple',
+        'search_read',
+        [
+          [
+            ['id', '=', branchId]
+          ],
+          ['session_partner_id', 'consolidate_session_invoice', 'name'],
+        ],
+        {'limit': 1},
+      );
+      if (raw is! List || raw.isEmpty || raw.first is! Map) return;
+      final row = (raw.first as Map).cast<String, dynamic>();
+      final partner = row['session_partner_id'];
+      int? partnerId;
+      String? partnerName;
+      if (partner is List && partner.isNotEmpty && partner.first is int) {
+        partnerId = partner.first as int;
+        if (partner.length > 1 && partner[1] is String) {
+          partnerName = partner[1] as String;
+        }
+      } else if (partner is int) {
+        partnerId = partner;
+      }
+      if (partnerId == null) return;
+      widget.settings.odooSessionPartnerId = partnerId;
+      widget.settings.odooSessionPartnerName = partnerName;
+      widget.settings.mergeBatchIntoOneSaleOrder =
+          row['consolidate_session_invoice'] == true ||
+              widget.settings.mergeBatchIntoOneSaleOrder;
+    } catch (_) {
+      // Offline or old module without the fields: close still proceeds with
+      // branch_id on the payload so the server can resolve the partner.
+    }
   }
 
   /// Queue the closed Z for whoever the shop asked to send it to.
@@ -4189,16 +5096,19 @@ class _PosAppState extends State<PosApp> {
   ///
   /// Scoped to this till's own orders, like everything else that decides money: a
   /// tab parked on the bar till is that till's to settle and close over.
+  ///
+  /// Empty seat claims (held, no lines) are discarded here: they keep a table
+  /// colour busy on the floor while End of Day sees "1 unfinished" with nothing
+  /// to settle. Paid sales waiting to sync may still have kitchen timers; the
+  /// money is already in, so those timers never block a Z.
   OpenWork _openWork(BuildContext context) {
+    for (final o in widget.orders.held()) {
+      if (o.lines.isEmpty) widget.orders.delete(o.uuid);
+    }
     final held = widget.orders.held();
     final session = _session;
-    // Every order a course can still be waiting on: parked tabs, the one on the
-    // counter (a timer can be set on a table that was never parked), and sales
-    // already paid whose later course has not fired yet. The same list the ticker
-    // fires from, so the two never disagree about what is still coming.
     final withTimers = <String, Order>{
       for (final o in held) o.uuid: o,
-      for (final o in widget.orders.awaitingSync()) o.uuid: o,
       if (session != null && session.current.lines.isNotEmpty)
         session.current.uuid: session.current,
     };
@@ -4230,7 +5140,7 @@ class _PosAppState extends State<PosApp> {
     return '${two(t.hour)}:${two(t.minute)}';
   }
 
-  /// Print an X or Z shift report to the receipt printer (spooled if it is down).
+  /// Print an X, Z, or generic report to the receipt printer (spooled if down).
   Future<void> _printShiftReport(String title, List<(String, String)> rows) async {
     final shop = widget.settings.shopName ?? widget.config.shopName;
     final p = EscPos()..reset();
@@ -4248,13 +5158,64 @@ class _PosAppState extends State<PosApp> {
       ..line('${now.year}-${two(now.month)}-${two(now.day)} ${two(now.hour)}:${two(now.minute)}')
       ..rule();
     for (final r in rows) {
-      p.row(r.$1, r.$2);
+      final label = r.$1.trim();
+      final value = r.$2.trim();
+      if (label.isEmpty && value.isEmpty) continue;
+      // Section banners from Flash ("— Payments —") print centred.
+      if (label.startsWith('—') || (label.isNotEmpty && value.isEmpty)) {
+        p.align(EscPosAlign.center)
+          ..bold(true)
+          ..line(label)
+          ..bold(false)
+          ..align(EscPosAlign.left);
+        continue;
+      }
+      p.row(label, value);
     }
     final bytes = (p..feed(2)..cut()).build();
+    if (widget.printers[PosApp.receiptPrinter] == null) {
+      throw StateError('No receipt printer configured');
+    }
     try {
-      await _receiptPrinter.send(bytes, reference: 'shift-$title-${now.millisecondsSinceEpoch}');
+      await _receiptPrinter.send(
+          bytes, reference: 'report-$title-${now.millisecondsSinceEpoch}');
     } on PrinterUnavailable {
-      // Held in the spool; the flush retries it.
+      // Held in the spool — tell the UI so Flash does not claim a paper that
+      // never came out.
+      throw StateError('Printer offline — job held');
+    }
+  }
+
+  /// Dishflow-layout Flash slip (Control / Summary / Delivery) — same fields
+  /// and section order as the Dishflow thermal builders.
+  Future<void> _printFlashReport(FlashReportData data, FlashKind kind) async {
+    if (widget.printers[PosApp.receiptPrinter] == null) {
+      throw StateError('No receipt printer configured');
+    }
+    final shop = widget.settings.shopName ?? widget.config.shopName;
+    final cashLabels = <String>{
+      for (final m in widget.catalogue.paymentMethods())
+        if (m.isCash) (m.name).trim().toLowerCase(),
+    };
+    final bytes = FlashThermalEscPos.build(
+      data: data,
+      kind: flashThermalKindFor(kind),
+      shopName: shop,
+      columns: widget.settings.receiptColumns,
+      categoryNameOf: (id) =>
+          id == null ? 'Other' : (widget.catalogue.categoryById(id)?.name ?? 'Other'),
+      isCashPayment: (label) {
+        final s = label.trim().toLowerCase();
+        if (s.contains('cash') || s == 'نقدي' || s == 'كاش') return true;
+        return cashLabels.contains(s);
+      },
+    );
+    final now = DateTime.now();
+    try {
+      await _receiptPrinter.send(bytes,
+          reference: 'flash-${data.title}-${now.millisecondsSinceEpoch}');
+    } on PrinterUnavailable {
+      throw StateError('Printer offline — job held');
     }
   }
 

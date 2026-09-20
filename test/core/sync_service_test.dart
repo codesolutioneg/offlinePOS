@@ -85,6 +85,8 @@ void main() {
     Outbox? outbox,
     Future<bool> Function()? probe,
     Future<void> Function()? reconcile,
+    Future<bool> Function({Set<String>? onlyUuids})? mergeBatch,
+    Future<ShiftFlushResult?> Function()? closedShiftRetry,
     Duration retryWindow = const Duration(hours: 12),
     Duration retryInterval = const Duration(minutes: 5),
     DateTime Function()? now,
@@ -100,6 +102,8 @@ void main() {
         puller: puller,
         probe: probe,
         reconcile: reconcile,
+        mergeBatch: mergeBatch,
+        closedShiftRetry: closedShiftRetry,
         retryWindow: retryWindow,
         retryInterval: retryInterval,
         now: now,
@@ -115,17 +119,45 @@ void main() {
     RetryArmingStore? arming,
   }) async {
     final server = FlakyServer();
-    final outbox = Outbox(store: store, senders: {'order.push': server.send});
-    await outbox.enqueue('order.push', 'u1', {});
-    final sync = serviceWith(
+    final outbox = Outbox(store: store, senders: {
+      'order.push': server.send,
+      'audit.push': (_) async {},
+      'device.status': (_) async {},
+    });
+    await outbox.enqueue('order.push', 'u1', {'uuid': 'u1'});
+    late final SyncService sync;
+    sync = serviceWith(
       outbox: outbox,
       probe: probe,
       retryWindow: retryWindow,
       retryInterval: retryInterval,
       now: now,
       arming: arming,
+      mergeBatch: ({Set<String>? onlyUuids}) async {
+        // Stand-in for BatchPush: one RPC for the shift, then mark those rows sent.
+        await server.send(OutboxEntry(
+          id: 0,
+          kind: 'order.push',
+          payloadUuid: 'shift-batch',
+          payload: const {},
+        ));
+        for (final e in await store.pending(kinds: const {'order.push'})) {
+          if (onlyUuids == null || onlyUuids.contains(e.payloadUuid)) {
+            await store.markSent(e.id);
+          }
+        }
+        sync.noteOdooAck(name: 'S-TEST');
+        return true;
+      },
+      closedShiftRetry: () => sync.flushClosedShift(
+            orderUuids: const {'u1'},
+            enqueueOrders: () async {},
+          ),
     );
-    await sync.flush();
+    await sync.flushClosedShift(
+      orderUuids: const {'u1'},
+      enqueueOrders: () async {},
+    );
     return (sync: sync, outbox: outbox, server: server);
   }
 
@@ -156,16 +188,34 @@ void main() {
 
   test('a batch push re-queues a paid sale that never reached the outbox', () async {
     // Simulates the app being killed between saving a paid sale and queuing it: the
-    // reconcile hook re-enqueues it, so a flush still delivers it rather than
-    // stranding money on the till.
-    final outbox = Outbox(store: store, senders: {'order.push': (e) async {}});
-    final s = serviceWith(
+    // enqueue hook on close re-builds the wire payload, so a flush still delivers
+    // it rather than stranding money on the till.
+    final outbox = Outbox(store: store, senders: {
+      'order.push': (e) async {},
+      'audit.push': (_) async {},
+      'device.status': (_) async {},
+    });
+    late final SyncService s;
+    s = serviceWith(
       outbox: outbox,
-      reconcile: () async => outbox.enqueue('order.push', 'lost-1', {'uuid': 'lost-1'}),
+      mergeBatch: ({Set<String>? onlyUuids}) async {
+        for (final e in await store.pending(kinds: const {'order.push'})) {
+          if (onlyUuids == null || onlyUuids.contains(e.payloadUuid)) {
+            await store.markSent(e.id);
+          }
+        }
+        s.noteOdooAck(name: 'S1');
+        return true;
+      },
     );
     expect(store.pendingSalesCount, 0); // nothing queued yet
-    await s.flush();
-    expect(s.sentThisRun, 1); // the reconciled sale was delivered
+    final result = await s.flushClosedShift(
+      orderUuids: const {'lost-1'},
+      enqueueOrders: () async =>
+          outbox.enqueue('order.push', 'lost-1', {'uuid': 'lost-1'}),
+    );
+    expect(result.merged, isTrue);
+    expect(store.pendingSalesCount, 0);
   });
 
   test('reconcilePending runs the hook so pending counts can be read after it', () async {
@@ -175,16 +225,21 @@ void main() {
     expect(ran, 1);
   });
 
-  test('a tick drains the outbox and refreshes the catalogue', () async {
-    final outbox = Outbox(store: store, senders: {'order.push': (e) async {}});
+  test('a tick never books order.push; sales leave on flushClosedShift', () async {
+    var sold = 0;
+    final outbox = Outbox(store: store, senders: {
+      'order.push': (e) async => sold++,
+      'audit.push': (_) async {},
+      'device.status': (_) async {},
+    });
     await outbox.enqueue('order.push', 'u1', {});
     final s = serviceWith(
       outbox: outbox,
       puller: pullerWith(const [Product(id: 1, name: 'A', price: 5)]),
     );
     await s.tick();
-    // The sale and the heartbeat: the heartbeat has no sender, so only one went.
-    expect(s.sentThisRun, 1);
+    expect(sold, 0, reason: 'timer/tick must not book sales');
+    expect(store.pendingSalesCount, 1);
     expect(cat.products().single.name, 'A');
     expect(s.state, SyncState.idle);
     expect(s.catalogueNeedsRefresh, isFalse);
@@ -350,11 +405,31 @@ void main() {
 
     // Morning, new process, same database and the same sale still queued.
     clock = DateTime.utc(2026, 1, 2, 8);
-    final after = serviceWith(
+    late final SyncService after;
+    after = serviceWith(
       outbox: till.outbox,
       arming: saved,
       now: () => clock,
       probe: () async => true,
+      mergeBatch: ({Set<String>? onlyUuids}) async {
+        await till.server.send(OutboxEntry(
+          id: 0,
+          kind: 'order.push',
+          payloadUuid: 'shift-batch',
+          payload: const {},
+        ));
+        for (final e in await store.pending(kinds: const {'order.push'})) {
+          if (onlyUuids == null || onlyUuids.contains(e.payloadUuid)) {
+            await store.markSent(e.id);
+          }
+        }
+        after.noteOdooAck(name: 'S-TEST');
+        return true;
+      },
+      closedShiftRetry: () => after.flushClosedShift(
+            orderUuids: const {'u1'},
+            enqueueOrders: () async {},
+          ),
     );
     after.restoreArming();
     expect(after.retryArmed, isTrue);
@@ -437,12 +512,32 @@ void main() {
     );
 
     clock = DateTime.utc(2026, 1, 4, 9);
-    final after = serviceWith(
+    late final SyncService after;
+    after = serviceWith(
       outbox: till.outbox,
       arming: saved,
       now: () => clock,
       probe: () async => true,
       retryWindow: const Duration(hours: 12),
+      mergeBatch: ({Set<String>? onlyUuids}) async {
+        await till.server.send(OutboxEntry(
+          id: 0,
+          kind: 'order.push',
+          payloadUuid: 'shift-batch',
+          payload: const {},
+        ));
+        for (final e in await store.pending(kinds: const {'order.push'})) {
+          if (onlyUuids == null || onlyUuids.contains(e.payloadUuid)) {
+            await store.markSent(e.id);
+          }
+        }
+        after.noteOdooAck(name: 'S-TEST');
+        return true;
+      },
+      closedShiftRetry: () => after.flushClosedShift(
+            orderUuids: const {'u1'},
+            enqueueOrders: () async {},
+          ),
     );
     after.restoreArming();
     expect(after.retryStoppedReason, contains('gave up'));
@@ -450,7 +545,7 @@ void main() {
 
     // The server comes back and a manual sync clears the backlog.
     till.server.down = false;
-    await after.flush();
+    await after.closedShiftRetry!();
     expect(store.pendingSalesCount, 0);
     expect(saved.stopped, isNull, reason: 'and forgotten the moment it is not');
 
@@ -468,7 +563,8 @@ void main() {
     expect(till.sync.retryAttempts, 1);
     expect(till.sync.lastRetryAt, isNotNull);
     expect(till.sync.retryArmed, isFalse);
-    expect(till.sync.retryStoppedReason, contains('delivered'));
+    expect(till.sync.retryStoppedReason, contains('shift booked'),
+        reason: 'close-style merge disarms with the SO it booked');
   });
 
   test('the armed retry paces itself instead of hammering a dead server', () async {

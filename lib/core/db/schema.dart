@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 26;
+  static const int version = 27;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -621,6 +621,18 @@ class Schema {
     // slip without renaming the bill's key, so the label is its own column.
     [
       'ALTER TABLE pos_tables ADD COLUMN display_label TEXT',
+    ],
+    // v26 -> v27: ZKTeco fingerprint templates per staff member (LAN-synced).
+    [
+      '''
+      CREATE TABLE fingerprint_templates (
+        user_id   TEXT NOT NULL,
+        slot      INTEGER NOT NULL,
+        template  TEXT NOT NULL,
+        PRIMARY KEY (user_id, slot)
+      )
+      ''',
+      'CREATE INDEX idx_fp_user ON fingerprint_templates(user_id)',
     ],
   ];
 }

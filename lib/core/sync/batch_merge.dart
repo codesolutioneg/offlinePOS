@@ -65,9 +65,16 @@ class MergeOutcome {
 /// [batchUuid] is the shift's own uuid. A shift is the natural batch and it
 /// already carries a uuid nothing else consumes, so the merged sale gets a key
 /// that is stable across every retry of the same close.
+///
+/// When [partnerId] is set (Dishflow's session-report customer), even a single
+/// sale is wrapped so the night books as one invoice under that partner. Without
+/// a partner, two or more sales are still required — a lone ticket is already
+/// its own payload.
 MergeOutcome mergeOrderPushes(
   List<OutboxEntry> entries, {
   required String batchUuid,
+  int? partnerId,
+  String? partnerName,
 }) {
   final sales = <OutboxEntry>[];
   for (final e in entries) {
@@ -78,9 +85,11 @@ MergeOutcome mergeOrderPushes(
     if (e.payload['refund_of_uuid'] != null) continue;
     sales.add(e);
   }
-  if (sales.length < 2) {
-    return const MergeOutcome.skipped(
-        BatchNotMerged('fewer than two sales to merge'));
+  final minSales = partnerId != null ? 1 : 2;
+  if (sales.length < minSales) {
+    return MergeOutcome.skipped(BatchNotMerged(partnerId == null
+        ? 'fewer than two sales to merge'
+        : 'no sales to merge'));
   }
   // Whether the prices already have the discount in them is a shop setting read
   // when each sale was turned into a payload, so a batch spanning a change to it
@@ -97,6 +106,7 @@ MergeOutcome mergeOrderPushes(
   final tenders = <String, Map<String, dynamic>>{};
   var delivery = 0.0;
   var tip = 0.0;
+  var serviceFee = 0.0;
   var discount = 0.0;
   var amountTotal = 0.0;
   DateTime? earliest;
@@ -139,6 +149,7 @@ MergeOutcome mergeOrderPushes(
     }
     delivery += _num(p['delivery_cost']);
     tip += _num(p['tip']);
+    serviceFee += _num(p['service_fee']);
     discount += _num(p['discount_amount']);
     amountTotal += _num(p['amount_total']);
     final at = DateTime.tryParse(p['created_at']?.toString() ?? '');
@@ -164,8 +175,12 @@ MergeOutcome mergeOrderPushes(
     // more than one it is left off and each ticket keeps its own below, rather
     // than posting a week onto whichever day happened to be first.
     if (businessDates.length == 1) 'business_date': businessDates.single,
+    if (partnerId != null) 'partner_id': partnerId,
+    if (partnerName != null && partnerName.isNotEmpty)
+      'customer_name': partnerName,
     'delivery_cost': delivery,
     'tip': tip,
+    'service_fee': serviceFee,
     'discount_amount': discount,
     'prices_include_discount': statesDiscount.single,
     'amount_total': amountTotal,

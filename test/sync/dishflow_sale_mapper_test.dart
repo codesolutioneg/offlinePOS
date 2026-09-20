@@ -51,6 +51,17 @@ void main() {
     expect(a, 'conn1_offlinepos_till-A_1508-0007-A1B');
   });
 
+  test('sales fields carry ecommerceOrderId when linked', () {
+    final o = paidOrder()..ecommerceOrderId = 'ecom-abc';
+    final fields = DishflowSaleMapper.toSalesFields(
+      o,
+      odooConnectionId: 'conn1',
+      userId: DishflowSaleMapper.mirrorUserId(o.deviceId),
+      orderNumber: o.orderNo!,
+    );
+    expect(fields['ecommerceOrderId'], 'ecom-abc');
+  });
+
   test('sales fields carry what Dishflow Flash reads', () {
     final o = paidOrder();
     final fields = DishflowSaleMapper.toSalesFields(

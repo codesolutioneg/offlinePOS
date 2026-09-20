@@ -65,6 +65,7 @@ void main() {
     shifts.openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     // These are about who may open a table, not about the covers, so seating stays
     // one tap: a guest prompt in the way would only be a second thing to answer.
     settings.askGuestCount = false;
@@ -365,6 +366,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byType(ShiftScreen), findsOneWidget);
 
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
     await t.tap(find.byKey(const Key('close-shift')));
     await t.pumpAndSettle();
     for (final d in '100'.split('')) {

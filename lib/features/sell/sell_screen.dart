@@ -53,6 +53,7 @@ class SellScreen extends StatefulWidget {
     this.maxDiscountPercent = 0,
     this.allowAmountDiscount = false,
     this.authorize,
+    this.authorizeVoidManager,
     this.authorizeTabTable,
     this.unavailableProducts = const {},
     this.onToggleAvailable,
@@ -154,8 +155,10 @@ class SellScreen extends StatefulWidget {
   final VoidCallback? onOpenOrders;
 
   /// A line was voided with a reason, so the shell can print a kitchen cancel slip
-  /// if the line had already been fired.
-  final void Function(OrderLine line, String reason)? onLineVoided;
+  /// if the line had already been fired. [approvedBy] is the manager who entered
+  /// their PIN when the void was gated.
+  final void Function(OrderLine line, String reason, {String? approvedBy})?
+      onLineVoided;
 
   /// Whether the server is reachable, for the status badge. Orders sell and queue
   /// the same either way; this only tells the cashier what will happen at close.
@@ -194,6 +197,10 @@ class SellScreen extends StatefulWidget {
   /// needs and returns true if the cashier's role allows it or a manager approves.
   /// When null, actions are not gated.
   final Future<bool> Function(Permission)? authorize;
+
+  /// Void always asks for a manager PIN and returns that manager's name for the
+  /// audit / deletion slip. Null falls back to [authorize] with [Permission.voidLine].
+  final Future<String?> Function()? authorizeVoidManager;
 
   /// Clears the gate to work a parked tab sitting on a table that belongs to another
   /// waiter. Null asks nobody, which is a shop that has assigned no tables and every
@@ -305,12 +312,33 @@ class _SellScreenState extends State<SellScreen> {
   // Keeps the course-fire countdown badges ticking down while the cart is open.
   Timer? _fireTick;
 
+  /// Dishflow: fees/customer dialog has been saved once this visit, so kitchen
+  /// send does not re-ask when contact is already on the bag.
+  bool _deliveryDetailsConfirmed = false;
+
   @override
   void initState() {
     super.initState();
     widget.catalogueChanged?.addListener(_onCatalogueChanged);
     _fireTick = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted && s.current.lines.any((l) => l.isTimed)) setState(() {});
+    });
+    // New company/store delivery: open the customer dialog immediately, same as
+    // Dishflow when the type is picked with nothing filled yet. A resumed bag
+    // that already has contact skips the dialog and counts as fees-confirmed.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final t = s.current.type;
+      if (!t.needsDeliveryCustomer) return;
+      final o = s.current;
+      final empty = (o.customerName ?? '').trim().isEmpty &&
+          (o.customerPhone ?? '').trim().isEmpty &&
+          (o.customerAddress ?? '').trim().isEmpty;
+      if (!empty) {
+        _deliveryDetailsConfirmed = true;
+        return;
+      }
+      unawaited(_deliveryDetails());
     });
   }
 
@@ -856,7 +884,12 @@ class _SellScreenState extends State<SellScreen> {
                   _lineActionTile(
                     key: const Key('line-void'),
                     icon: Icons.remove_circle_outline,
-                    title: tr(ctx, 'Void this line'),
+                    title: line.quantity > 1
+                        ? tr(ctx, 'Void units…')
+                        : tr(ctx, 'Void this line'),
+                    subtitle: line.quantity > 1
+                        ? '${tr(ctx, 'Pick how many')} (1–${line.quantity.toStringAsFixed(0)})'
+                        : null,
                     danger: true,
                     onTap: () => Navigator.pop(ctx, 'void'),
                   ),
@@ -1180,19 +1213,109 @@ class _SellScreenState extends State<SellScreen> {
     _changed(() => s.setLineDiscount(line.uuid, applied));
   }
 
-  Future<void> _voidLine(OrderLine line) async {
-    // Voiding a line is a privileged action, so it needs the void permission first.
-    if (widget.authorize != null && !await widget.authorize!(Permission.voidLine)) return;
+  /// Void [units] of [line], or ask how many when [units] is null and qty > 1.
+  Future<void> _voidLine(OrderLine line, {double? units}) async {
+    // Void always wants a manager PIN when the shell wires [authorizeVoidManager];
+    // otherwise it falls back to the role / manager gate for voidLine.
+    String? approvedBy;
+    if (widget.authorizeVoidManager != null) {
+      approvedBy = await widget.authorizeVoidManager!();
+      if (approvedBy == null) return;
+    } else if (widget.authorize != null &&
+        !await widget.authorize!(Permission.voidLine)) {
+      return;
+    }
     if (!mounted) return;
-    final reason = await _askReason('Void ${line.name}');
+    // Multi-unit: either a fixed peel (inline minus → 1) or a picker. A
+    // weighed/fractional line has no "one unit", so it still voids in full.
+    var qty = units ?? line.quantity;
+    final canPartial = units == null &&
+        line.quantity > 1 &&
+        line.quantity == line.quantity.roundToDouble();
+    if (canPartial) {
+      final picked = await _askVoidQuantity(line);
+      if (picked == null) return;
+      qty = picked;
+    }
+    final reason = await _askReason(
+        qty < line.quantity
+            ? 'Void ${qty.toStringAsFixed(0)}× ${line.name}'
+            : 'Void ${line.name}');
     if (reason == null) return;
+    OrderLine? voided;
     _changed(() {
-      s.voidLine(line.uuid, reason);
+      voided =
+          s.voidQuantity(line.uuid, qty, reason, approvedBy: approvedBy);
     });
+    if (voided == null) return;
     // Every void is reported so the shell can print the till's deletion slip; the
     // shell decides separately whether the line also needs a kitchen cancel slip
-    // (only when the kitchen already has a copy).
-    widget.onLineVoided?.call(line, reason);
+    // (only when the kitchen already has a copy). Pass the voided snapshot so a
+    // partial void prints qty 1 of 8, not the whole consolidated line.
+    widget.onLineVoided?.call(voided!, reason, approvedBy: approvedBy);
+  }
+
+  /// How many units to take off a consolidated line. Returns null on cancel.
+  Future<double?> _askVoidQuantity(OrderLine line) {
+    final max = line.quantity.round();
+    var picked = 1;
+    return showDialog<double>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: Text(tr(ctx, 'How many to void?')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${line.name} — ${tr(ctx, 'on the order')}: $max',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    key: const Key('void-qty-minus'),
+                    icon: const Icon(Icons.remove_circle_outline),
+                    onPressed:
+                        picked > 1 ? () => setSt(() => picked--) : null,
+                  ),
+                  Text(
+                    '$picked',
+                    key: const Key('void-qty-value'),
+                    style: const TextStyle(
+                        fontSize: 28, fontWeight: FontWeight.w800),
+                  ),
+                  IconButton(
+                    key: const Key('void-qty-plus'),
+                    icon: const Icon(Icons.add_circle_outline),
+                    onPressed:
+                        picked < max ? () => setSt(() => picked++) : null,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                key: const Key('void-qty-all'),
+                onPressed: () => setSt(() => picked = max),
+                child: Text('${tr(ctx, 'Void all')} ($max)'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(tr(ctx, 'Cancel'))),
+            FilledButton(
+              key: const Key('confirm-void-qty'),
+              onPressed: () => Navigator.pop(ctx, picked.toDouble()),
+              child: Text(tr(ctx, 'Next')),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// A required reason, with quick picks. Returns null on cancel.
@@ -1412,7 +1535,10 @@ class _SellScreenState extends State<SellScreen> {
 
   /// Dishflow soft gate: company/store delivery need contact details (and a
   /// company order # for aggregator) before kitchen, hold, or pay. Car skips.
-  Future<bool> _ensureDeliveryReady() async {
+  ///
+  /// Kitchen also wants the details dialog confirmed once (fees may be zero),
+  /// matching Dishflow's `_feesConfirmed` before send.
+  Future<bool> _ensureDeliveryReady({bool forKitchen = false}) async {
     final t = s.current.type;
     if (!t.needsDeliveryCustomer) return true;
     final o = s.current;
@@ -1421,9 +1547,13 @@ class _SellScreenState extends State<SellScreen> {
         (o.customerAddress ?? '').trim().isNotEmpty;
     final hasCompanyNo =
         !t.needsCompanyOrderNo || (o.companyOrderNo ?? '').trim().isNotEmpty;
-    if (hasContact && hasCompanyNo) return true;
-    await _deliveryDetails();
-    if (!mounted) return false;
+    final needsDialog = !hasContact ||
+        !hasCompanyNo ||
+        (forKitchen && !_deliveryDetailsConfirmed);
+    if (needsDialog) {
+      await _deliveryDetails();
+      if (!mounted) return false;
+    }
     final after = s.current;
     final okContact = (after.customerName ?? '').trim().isNotEmpty ||
         (after.customerPhone ?? '').trim().isNotEmpty ||
@@ -1452,6 +1582,8 @@ class _SellScreenState extends State<SellScreen> {
     final addr = TextEditingController(text: s.current.customerAddress ?? '');
     final cost = TextEditingController(
         text: s.current.deliveryCost > 0 ? s.current.deliveryCost.toStringAsFixed(2) : '');
+    final serviceFee = TextEditingController(
+        text: s.current.serviceFee > 0 ? s.current.serviceFee.toStringAsFixed(2) : '');
     final companyNo =
         TextEditingController(text: s.current.companyOrderNo ?? '');
     final zones = widget.deliveryZones?.call() ?? const <DeliveryZone>[];
@@ -1462,15 +1594,23 @@ class _SellScreenState extends State<SellScreen> {
     final wasOn =
         channels.where((c) => c.name == s.current.deliveryChannel).firstOrNull;
     var channel = wasOn;
-    // A driver taken off the roster mid-delivery stays selectable on the order they
-    // are already carrying, so saving the dialog cannot quietly drop their name.
-    final driverNames = <String>[
-      for (final d in drivers) d.name,
-      if (s.current.driverName != null &&
-          !drivers.any((d) => d.name == s.current.driverName))
-        s.current.driverName!,
+    DeliveryZone? zone = zones
+        .where((z) => z.id == s.current.shippingZoneId)
+        .firstOrNull;
+    final driverList = <Driver>[
+      ...drivers,
+      if (s.current.driverId != null &&
+          !drivers.any((d) => d.id == s.current.driverId))
+        Driver(
+          id: s.current.driverId!,
+          name: s.current.driverName ?? s.current.driverId!,
+          phone: s.current.driverPhone,
+          active: false,
+        ),
     ];
-    var driver = s.current.driverName;
+    var driver = driverList
+        .where((d) => d.id == s.current.driverId || d.name == s.current.driverName)
+        .firstOrNull;
     // The existing customer picked, so the delivery links to that partner rather
     // than being saved as a free-typed name (which would duplicate them in Odoo).
     Customer? picked;
@@ -1545,8 +1685,10 @@ class _SellScreenState extends State<SellScreen> {
                     ActionChip(
                       key: Key('delivery-zone-${z.id}'),
                       label: Text('${z.name}  ${widget.formatAmount(z.fee)}'),
-                      onPressed: () => setSt(
-                          () => cost.text = z.fee.toStringAsFixed(2)),
+                      onPressed: () => setSt(() {
+                        zone = z;
+                        cost.text = z.fee.toStringAsFixed(2);
+                      }),
                     ),
                 ]),
               ),
@@ -1557,6 +1699,15 @@ class _SellScreenState extends State<SellScreen> {
                 controller: cost,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(labelText: tr(ctx, 'Delivery charge'), border: const OutlineInputBorder(), isDense: true)),
+            const SizedBox(height: 8),
+            TextField(
+                key: const Key('delivery-service-fee'),
+                controller: serviceFee,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                    labelText: tr(ctx, 'Service fee'),
+                    border: const OutlineInputBorder(),
+                    isDense: true)),
             // Which app sent the order, and the number that app calls it by, which
             // is what the rider and the call centre quote when they ring.
             // Company delivery always needs the aggregator reference; channel chips
@@ -1588,9 +1739,9 @@ class _SellScreenState extends State<SellScreen> {
                         isDense: true)),
               ],
             ],
-            if (driverNames.isNotEmpty) ...[
+            if (driverList.isNotEmpty) ...[
               const SizedBox(height: 8),
-              DropdownButtonFormField<String?>(
+              DropdownButtonFormField<Driver?>(
                 key: const Key('delivery-driver'),
                 initialValue: driver,
                 isExpanded: true,
@@ -1599,10 +1750,10 @@ class _SellScreenState extends State<SellScreen> {
                     border: const OutlineInputBorder(),
                     isDense: true),
                 items: [
-                  DropdownMenuItem<String?>(
+                  DropdownMenuItem<Driver?>(
                       value: null, child: Text(tr(ctx, 'No driver yet'))),
-                  for (final n in driverNames)
-                    DropdownMenuItem<String?>(value: n, child: Text(n)),
+                  for (final d in driverList)
+                    DropdownMenuItem<Driver?>(value: d, child: Text(d.name)),
                 ],
                 onChanged: (v) => setSt(() => driver = v),
               ),
@@ -1649,7 +1800,11 @@ class _SellScreenState extends State<SellScreen> {
         }
         s.setDeliveryCustomer(
             name: name.text, phone: phone.text, address: addr.text);
+        if (zone != null) {
+          s.setShippingZone(zone);
+        }
         s.setDeliveryCost(double.tryParse(cost.text.trim()) ?? 0);
+        s.setServiceFee(double.tryParse(serviceFee.text.trim()) ?? 0);
         // Last, so an aggregator's own partner wins over whoever was picked above:
         // the company is who the shop invoices, and the typed name stays on the
         // slip as the person the driver is looking for.
@@ -1657,6 +1812,7 @@ class _SellScreenState extends State<SellScreen> {
             companyOrderNo: companyNo.text, previous: wasOn);
         s.setDriver(driver);
       });
+      _deliveryDetailsConfirmed = true;
     }
   }
 
@@ -1683,7 +1839,7 @@ class _SellScreenState extends State<SellScreen> {
               leading: const Icon(Icons.delivery_dining),
               title: Text(d.name),
               subtitle: d.phone == null ? null : Text(d.phone!),
-              onTap: () => Navigator.pop(ctx, d.name),
+              onTap: () => Navigator.pop(ctx, d),
             ),
           // Distinguishable from backing out, exactly as walk-in is on the customer
           // picker: one takes the driver off, the other leaves them on.
@@ -1697,7 +1853,8 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (chosen == null) return;
-    _changed(() => s.setDriver(chosen == 'clear' ? null : chosen as String));
+    _changed(() =>
+        s.setDriver(chosen == 'clear' ? null : chosen as Driver));
   }
 
   Future<void> _hold() async {
@@ -1733,16 +1890,24 @@ class _SellScreenState extends State<SellScreen> {
 
   Future<void> _sendToKitchen() async {
     if (!s.hasLines) return;
-    if (!await _ensureDeliveryReady()) return;
+    if (!await _ensureDeliveryReady(forKitchen: true)) return;
     final fire = widget.onSendToKitchen;
     if (fire == null) return;
     // Nothing on screen is blocked while the printer is tried: the order is already
     // saved and the cashier can keep ringing. What waits is only the message, because
     // "Sent to kitchen" before the printer has answered is the lie this fixes.
+    final deliveryType =
+        s.current.type.isDelivery ? s.current.type : null;
     final result = await fire();
     if (!mounted) return;
     setState(() {});
     _tellKitchenOutcome(result, key: const Key('sent-kitchen'));
+    // Dishflow: after kitchen, every delivery bag auto-suspends so the till is
+    // free for the next call. Park even when the printer spool failed — the
+    // lines are marked and the waiting list is where the cashier resumes to pay.
+    if (deliveryType != null && widget.onHold != null) {
+      widget.onHold!();
+    }
   }
 
   /// Say what actually happened to the ticket. Green only when a printer took it;
@@ -2052,55 +2217,66 @@ class _SellScreenState extends State<SellScreen> {
   /// another table in, hold the order back from the kitchen. Everything about taking
   /// money moved to the payment sheet, where a cashier looks for it.
   Future<void> _billOptions() async {
-    final action = await showModalBottomSheet<String>(
+    final action = await showDialog<String>(
       context: context,
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        // Scrollable so the menu never overflows a short sheet as options grow.
-        child: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (widget.onPrintBill != null)
-            ListTile(
-              key: const Key('bill-print'),
-              leading: const Icon(Icons.receipt_long_outlined),
-              title: Text(tr(ctx, 'Print bill')),
-              subtitle: Text(tr(ctx, 'The check to take to the table, before payment')),
-              onTap: () => Navigator.pop(ctx, 'print'),
-            ),
-          ListTile(
-            key: const Key('bill-move-order'),
-            leading: const Icon(Icons.table_restaurant_outlined),
-            title: Text(tr(ctx, 'Move the whole order to another table')),
-            onTap: () => Navigator.pop(ctx, 'move-order'),
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Order')),
+        contentPadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (widget.onPrintBill != null)
+                ListTile(
+                  key: const Key('bill-print'),
+                  leading: const Icon(Icons.receipt_long_outlined),
+                  title: Text(tr(ctx, 'Print bill')),
+                  subtitle: Text(
+                      tr(ctx, 'The check to take to the table, before payment')),
+                  onTap: () => Navigator.pop(ctx, 'print'),
+                ),
+              ListTile(
+                key: const Key('bill-move-order'),
+                leading: const Icon(Icons.table_restaurant_outlined),
+                title: Text(tr(ctx, 'Move the whole order to another table')),
+                onTap: () => Navigator.pop(ctx, 'move-order'),
+              ),
+              ListTile(
+                key: const Key('bill-move'),
+                leading: const Icon(Icons.drive_file_move_outline),
+                title: Text(tr(ctx, 'Move items to another table')),
+                onTap: () => Navigator.pop(ctx, 'move'),
+              ),
+              ListTile(
+                key: const Key('bill-merge'),
+                leading: const Icon(Icons.merge_type),
+                title: Text(tr(ctx, 'Merge another table in')),
+                onTap: () => Navigator.pop(ctx, 'merge'),
+              ),
+              if (s.current.linkedOrderUuids.isNotEmpty)
+                ListTile(
+                  key: const Key('bill-split-table'),
+                  leading: const Icon(Icons.call_split),
+                  title: Text(tr(ctx, 'Split this bill onto another table')),
+                  onTap: () => Navigator.pop(ctx, 'split-table'),
+                ),
+              ListTile(
+                key: const Key('bill-timing'),
+                leading: const Icon(Icons.timer_outlined),
+                title: Text(tr(ctx, 'Course timing (whole order)')),
+                subtitle: Text(tr(
+                    ctx, 'Hold the order back a set time before the kitchen')),
+                onTap: () => Navigator.pop(ctx, 'timing'),
+              ),
+            ]),
           ),
-          ListTile(
-            key: const Key('bill-move'),
-            leading: const Icon(Icons.drive_file_move_outline),
-            title: Text(tr(ctx, 'Move items to another table')),
-            onTap: () => Navigator.pop(ctx, 'move'),
-          ),
-          ListTile(
-            key: const Key('bill-merge'),
-            leading: const Icon(Icons.merge_type),
-            title: Text(tr(ctx, 'Merge another table in')),
-            onTap: () => Navigator.pop(ctx, 'merge'),
-          ),
-          if (s.current.linkedOrderUuids.isNotEmpty)
-            ListTile(
-              key: const Key('bill-split-table'),
-              leading: const Icon(Icons.call_split),
-              title: Text(tr(ctx, 'Split this bill onto another table')),
-              onTap: () => Navigator.pop(ctx, 'split-table'),
-            ),
-          ListTile(
-            key: const Key('bill-timing'),
-            leading: const Icon(Icons.timer_outlined),
-            title: Text(tr(ctx, 'Course timing (whole order)')),
-            subtitle: Text(tr(ctx, 'Hold the order back a set time before the kitchen')),
-            onTap: () => Navigator.pop(ctx, 'timing'),
-          ),
-        ]),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+        ],
       ),
     );
     if (!mounted) return;
@@ -3042,7 +3218,16 @@ class _SellScreenState extends State<SellScreen> {
                                   onQty: (q) => _changed(
                                       () => s.setQuantity(line.uuid, q)),
                                   onTapLine: () => _lineActions(line),
-                                  onVoid: () => _voidLine(line),
+                                  onVoid: () => _voidLine(
+                                    line,
+                                    // Red minus on a multi-qty sent line = peel
+                                    // one unit; the line menu still asks how many.
+                                    units: line.quantity > 1 &&
+                                            line.quantity ==
+                                                line.quantity.roundToDouble()
+                                        ? 1
+                                        : null,
+                                  ),
                                 ),
                             ],
                           ),
@@ -3087,11 +3272,14 @@ class _SellScreenState extends State<SellScreen> {
                       // Dishflow: open delivery details when switching onto
                       // company/store with nothing filled yet.
                       if (t.needsDeliveryCustomer) {
+                        _deliveryDetailsConfirmed = false;
                         final o = s.current;
                         final empty = (o.customerName ?? '').trim().isEmpty &&
                             (o.customerPhone ?? '').trim().isEmpty &&
                             (o.customerAddress ?? '').trim().isEmpty;
                         if (empty) unawaited(_deliveryDetails());
+                      } else {
+                        _deliveryDetailsConfirmed = false;
                       }
                     },
                   ),
@@ -3289,6 +3477,12 @@ class _SellScreenState extends State<SellScreen> {
             ),
             if (s.current.deliveryCost > 0)
               _totalRow('Delivery', widget.formatAmount(s.current.deliveryCost),
+                  muted: true),
+            if (s.current.serviceFee > 0)
+              _totalRow('Service fee', widget.formatAmount(s.current.serviceFee),
+                  muted: true),
+            if (s.current.serviceCharge > 0)
+              _totalRow('Service', widget.formatAmount(s.current.serviceCharge),
                   muted: true),
             _totalRow(
               'VAT',
@@ -3987,7 +4181,9 @@ class _LineTile extends StatelessWidget {
                   constraints:
                       const BoxConstraints(minWidth: 36, minHeight: 36),
                   visualDensity: VisualDensity.compact,
-                  tooltip: tr(context, 'Void this line'),
+                  tooltip: line.quantity > 1
+                      ? tr(context, 'Void one unit')
+                      : tr(context, 'Void this line'),
                   onPressed: onVoid)
             else
               IconButton(

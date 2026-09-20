@@ -20,13 +20,22 @@ class DishflowFirestoreSender {
   Future<void> send(Map<String, dynamic> payload) async {
     final projectId = (payload['project_id'] ?? '').toString().trim();
     final apiKey = (payload['api_key'] ?? '').toString().trim();
-    final docId = (payload['doc_id'] ?? '').toString().trim();
     final fields = payload['fields'];
-    if (projectId.isEmpty || apiKey.isEmpty || docId.isEmpty) {
-      throw PermanentlyRejected('dishflow mirror missing project, key or doc id');
+    if (projectId.isEmpty || apiKey.isEmpty) {
+      throw PermanentlyRejected('dishflow mirror missing project or key');
     }
     if (fields is! Map) {
       throw PermanentlyRejected('dishflow mirror payload has no fields');
+    }
+
+    // sales/{docId} (default) or an explicit path for drivers/{id}/orders/{sale}.
+    final docPath = (payload['doc_path'] ?? '').toString().trim();
+    final docId = (payload['doc_id'] ?? '').toString().trim();
+    final path = docPath.isNotEmpty
+        ? docPath
+        : (docId.isEmpty ? '' : 'sales/$docId');
+    if (path.isEmpty) {
+      throw PermanentlyRejected('dishflow mirror missing project, key or doc id');
     }
 
     final encoded = <String, dynamic>{
@@ -40,7 +49,7 @@ class DishflowFirestoreSender {
 
     final url = Uri.parse(
       'https://firestore.googleapis.com/v1/projects/$projectId'
-      '/databases/(default)/documents/sales/$docId?key=$apiKey',
+      '/databases/(default)/documents/$path?key=$apiKey',
     );
 
     final client = _openClient()..connectionTimeout = const Duration(seconds: 20);

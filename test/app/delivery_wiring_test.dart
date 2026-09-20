@@ -139,10 +139,15 @@ void main() {
   }
 
   /// A delivery being rung on the till, restored as the open order at sign-in so
-  /// the shell lands straight on the sell screen.
-  Order deliveryOnTheTill() {
-    final order = Order(deviceId: 'till-1', cashierId: 'sara', type: OrderType.storeDelivery)
-      ..lines.add(OrderLine(productId: 10, name: 'Pizza', quantity: 1, unitPrice: 100));
+  /// the shell lands straight on the sell screen. Contact is pre-filled so the
+  /// Dishflow auto-details dialog does not cover the chips the tests drive.
+  Order deliveryOnTheTill({String customerName = 'Nadia'}) {
+    final order = Order(
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      type: OrderType.storeDelivery,
+      customerName: customerName,
+    )..lines.add(OrderLine(productId: 10, name: 'Pizza', quantity: 1, unitPrice: 100));
     orders.save(order, announce: false);
     return order;
   }
@@ -165,8 +170,12 @@ void main() {
   }
 
   Future<void> openDeliveryDialog(WidgetTester t) async {
-    await t.tap(find.byKey(const Key('customer')));
-    await t.pumpAndSettle();
+    // Dishflow parity may already have opened the details dialog on a new
+    // company/store bag; only tap Customer when it is not on screen yet.
+    if (find.byKey(const Key('delivery-name')).evaluate().isEmpty) {
+      await t.tap(find.byKey(const Key('customer')));
+      await t.pumpAndSettle();
+    }
   }
 
   Future<void> save(WidgetTester t, {String customerName = 'Nadia'}) async {
@@ -604,6 +613,26 @@ void main() {
       expect(find.byType(SellScreen), findsOneWidget);
       expect(find.byKey(const Key('customer')), findsOneWidget,
           reason: 'store delivery shows the delivery customer header');
+      // Dishflow: a new company/store bag opens the details dialog immediately.
+      expect(find.byKey(const Key('delivery-name')), findsOneWidget);
+    });
+
+    testWidgets('kitchen send parks the bag and returns to the waiting list',
+        (t) async {
+      // Dishflow auto-suspend: after kitchen, the till must free the counter.
+      deliveryOnTheTill();
+
+      await t.pumpWidget(app());
+      await signIn(t);
+      expect(find.byType(SellScreen), findsOneWidget);
+
+      await t.tap(find.byKey(const Key('send-kitchen')));
+      await t.pumpAndSettle();
+
+      expect(orders.held(), hasLength(1),
+          reason: 'the bag must be parked after kitchen, like Dishflow');
+      expect(find.byKey(const Key('delivery-waiting-screen')), findsOneWidget,
+          reason: 'cashier lands on the subtype waiting list, not an empty cart');
     });
   });
 }

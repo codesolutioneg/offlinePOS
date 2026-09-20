@@ -49,11 +49,14 @@ only governs who may mint join PINs and who owns section-config writes.
 
 The join snapshot is what makes a new till feel like the same shop on day one: staff
 sign in with the same PINs, roles and payment rules match, section menus match,
-receipt/kitchen printers and Odoo connection are copied, the catalogue (categories /
-products / payments) is transferred, floor tables and open tabs are seeded, and open
-attendance is mirrored. A first-join progress dialog lists each step. After join,
-floor plan, open tabs, 86 board, assignments, preorders, attendance and day-close
-keep aligning through the ordinary fabric events. Per-device print spool stays local.
+**kitchen / bar station printers** and Odoo connection are copied, the catalogue
+(categories / products / payments) is transferred, floor tables and open tabs are
+seeded, and open attendance is mirrored. **`receipt` and `delivery` printers stay
+on each till** after join (cash drawer and bag slip are per-counter). A first-join
+progress dialog lists each step. After join, floor plan, open tabs, 86 board,
+assignments, preorders, attendance and day-close keep aligning through the ordinary
+fabric events. Per-device print spool stays local. Order numbers are local counters
+that climb past shop-wide peaks so Flash does not list two sales as the same `#`.
 
 Replication makes a device show more, never own more. `OrderStore` splits its reads and
 the split is load-bearing:

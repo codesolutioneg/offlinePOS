@@ -28,6 +28,7 @@ void main() {
 
     expect(bound, isNotNull);
     expect(bound!.name, 'Cairo');
+    expect(bound.branchId, 5);
     expect(bound.companyId, 3);
     expect(bound.warehouseId, 9);
   });
@@ -38,7 +39,8 @@ void main() {
         'warehouse_id': false},
     ]).boundSite();
 
-    expect(bound!.companyId, 3);
+    expect(bound!.branchId, 5);
+    expect(bound.companyId, 3);
     expect(bound.warehouseId, isNull);
   });
 

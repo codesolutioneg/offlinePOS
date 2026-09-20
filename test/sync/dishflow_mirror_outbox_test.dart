@@ -106,4 +106,28 @@ void main() {
     expect(sync.pendingDishflow, 1);
     expect(sync.pendingToSync, 2);
   });
+
+  test('enqueueCancelIfEnabled writes status cancelled on the same uuid', () async {
+    settings.dishflowMirrorEnabled = true;
+    settings.dishflowProjectId = 'odc-chat';
+    settings.dishflowApiKey = 'key';
+    settings.dishflowOdooConnectionId = 'conn1';
+    session.addProduct(burger);
+    final paid = session.pay(payments: const [
+      OrderPayment(methodId: -1, amount: 50, label: 'Cash'),
+    ]);
+    await Future<void>.delayed(Duration.zero);
+    expect(store.pendingDishflowCount, 1);
+
+    await DishflowMirror.enqueueCancelIfEnabled(
+      outbox: outbox,
+      settings: settings,
+      order: paid,
+    );
+    final pending = await store.pending(kinds: {DishflowMirror.kind});
+    // Same (kind, uuid) upserts — cancel replaces the queued sale payload.
+    expect(pending, hasLength(1));
+    expect(pending.single.payloadUuid, paid.uuid);
+    expect(pending.single.payload['fields']['status'], 'cancelled');
+  });
 }

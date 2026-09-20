@@ -59,6 +59,9 @@ class OdooSender {
     required this.baseUrl,
     required this.db,
     required this.post,
+    // Staging22: Dishflow-style booking is sale.order.create_from_offline_pos
+    // (confirm → invoice → payment). pos.order remains as a fallback method on the
+    // same module for older tills.
     this.model = 'sale.order',
     this.method = 'create_from_offline_pos',
     this.tillId = kOfflineTillId,
@@ -117,6 +120,12 @@ class OdooSender {
 
   /// An [OutboxSender] for 'order.push' entries.
   OutboxSender get orderSender => (OutboxEntry entry) async {
+        await bookOrder(entry);
+      };
+
+  /// Push one payload and return the module's status dict (`created` /
+  /// `duplicate` / `rejected`), including `id` and `name` when the server books.
+  Future<Map<String, dynamic>> bookOrder(OutboxEntry entry) async {
         if (!isAuthenticated) {
           // Not a refusal: the till simply has not signed in yet. Keep the sale.
           throw TransientSyncError('not authenticated yet');
@@ -153,21 +162,74 @@ class OdooSender {
           // The module returns one status dict per order: created/duplicate mean the
           // sale is booked (a duplicate is a safe repeat, still an ack); rejected
           // means retrying cannot help (deleted product, locked period), so park it
-          // rather than loop or silently drop a genuine sale.
-          final status = result is List && result.isNotEmpty && result.first is Map
-              ? (result.first as Map)['status']
-              : null;
+          // rather than loop or silently drop a genuine sale. Odoo builds and JSON
+          // bridges sometimes wrap that dict in one extra list — unwrap both shapes.
+          final statusMap = _statusFromResult(result);
+          // Normalise alternate keys older module builds used (sale_order_id).
+          final id = statusMap['id'] ?? statusMap['sale_order_id'];
+          if (id != null) statusMap['id'] = id;
+          final name = statusMap['name'] ??
+              statusMap['sale_order_name'] ??
+              statusMap['display_name'];
+          if (name != null) statusMap['name'] = name;
+
+          final status = statusMap['status']?.toString();
           if (status == 'rejected') {
-            final message = (result.first as Map)['message']?.toString() ??
-                'rejected by server';
+            final message =
+                statusMap['message']?.toString() ?? 'rejected by server';
             throw _park(message);
           }
+          // A bare integer / empty dict used to count as success and clear the
+          // outbox with no SO number — the close screen then lied "Synced".
+          // created/duplicate with an id or name are the only honest acks; a
+          // plain int id (legacy) is also accepted and wrapped.
+          if (status == 'created' || status == 'duplicate') {
+            if (statusMap['id'] == null &&
+                (statusMap['name'] == null ||
+                    statusMap['name'].toString().isEmpty)) {
+              throw TransientSyncError(
+                  'Odoo booked without id/name for ${entry.payloadUuid}');
+            }
+            return statusMap;
+          }
+          if (result is num) {
+            return {
+              'uuid': entry.payloadUuid,
+              'status': 'created',
+              'id': result.toInt(),
+            };
+          }
+          throw TransientSyncError(
+              'Unexpected Odoo reply for ${entry.payloadUuid}: $result');
         } on PermanentSyncError catch (e) {
           // The server understood the order and refused it. Retrying cannot help,
           // so park this one and let everything behind it through.
           throw _park(e.message);
         }
-      };
+  }
+
+  /// Pull `{uuid, status, id, name, …}` out of whatever nesting call_kw handed back.
+  static Map<String, dynamic> _statusFromResult(dynamic result) {
+    if (result is num) {
+      return {'status': 'created', 'id': result.toInt()};
+    }
+    if (result is Map) return Map<String, dynamic>.from(result);
+    if (result is List && result.isNotEmpty) {
+      final first = result.first;
+      if (first is Map) return Map<String, dynamic>.from(first);
+      if (first is num) {
+        return {'status': 'created', 'id': first.toInt()};
+      }
+      if (first is List && first.isNotEmpty) {
+        final inner = first.first;
+        if (inner is Map) return Map<String, dynamic>.from(inner);
+        if (inner is num) {
+          return {'status': 'created', 'id': inner.toInt()};
+        }
+      }
+    }
+    return {};
+  }
 
   /// One authenticated `call_kw`, used for reads such as the catalogue pull.
   /// Returns the raw `result`. Authentication is the caller's responsibility,

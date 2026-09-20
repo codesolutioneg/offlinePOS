@@ -50,6 +50,17 @@ class ShiftStore {
     return rows.isEmpty ? null : _row(rows.first);
   }
 
+  /// Recently closed shifts, newest first — Dishflow's "previous sessions" strip
+  /// so a cashier can re-open a Z without digging through the database.
+  List<Shift> recentClosed({int limit = 10}) {
+    final rows = _db.raw.select(
+      'SELECT * FROM shifts WHERE closed_at IS NOT NULL '
+      'ORDER BY closed_at DESC, id DESC LIMIT ?',
+      [limit],
+    );
+    return [for (final r in rows) _row(r)];
+  }
+
   /// Open a shift. Refuses if one is already open, because two open drawers make
   /// the cash count meaningless.
   Shift openShift({
@@ -148,6 +159,17 @@ class ShiftStore {
     if (open == null) return null;
     final expected = summary(open, cashMethodIds: cashMethodIds).expectedCash;
     return closeShift(countedCash: expected);
+  }
+
+  /// Open a local drawer when a peer announced shop-shift open. No-op when one
+  /// is already open — cash float stays local and is never copied from the peer.
+  Shift? openQuietly({
+    required String cashierId,
+    double openingFloat = 0,
+  }) {
+    final open = currentOpenShift();
+    if (open != null) return open;
+    return openShift(openingFloat: openingFloat, cashierId: cashierId);
   }
 
   /// The X/Z figures for [shift], with sales read from the orders taken in its

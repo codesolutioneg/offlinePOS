@@ -329,6 +329,7 @@ class ReceiptBuilder {
             formatAmount(tax));
       }
       if (order.deliveryCost > 0) p.row('Delivery', formatAmount(order.deliveryCost));
+      if (order.serviceFee > 0) p.row('Service fee', formatAmount(order.serviceFee));
       if (order.tip > 0) p.row('Tip', formatAmount(order.tip));
     }
     if (showTotals) {
@@ -394,6 +395,7 @@ class ReceiptBuilder {
     required DateTime at,
     String? reason,
     String? actor,
+    String? approvedBy,
   }) {
     final p = EscPos(columns: columns)..reset();
     final divider = _dividerChars[dividerStyle] ?? '-';
@@ -407,6 +409,9 @@ class ReceiptBuilder {
 
     p.line('${_stamp(at)}  #${order.displayNo}');
     if (actor != null) p.line('Cashier: $actor');
+    if (approvedBy != null && approvedBy.isNotEmpty) {
+      p.line('Approved: $approvedBy');
+    }
     if (order.type == OrderType.dineIn && order.tableLabel != null) {
       p.line('Table ${order.tableLabel}');
     }

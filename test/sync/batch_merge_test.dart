@@ -193,10 +193,38 @@ void main() {
         reason: 'the refund row must stay queued for the ordinary drain');
   });
 
-  test('one sale is not merged: it is already its own payload', () {
+  test('one sale is not merged without a session partner', () {
     final outcome = mergeOrderPushes([entryFor(paidSale())], batchUuid: 'shift');
     expect(outcome.batch, isNull);
     expect(outcome.notMerged!.reason, contains('fewer than two'));
+  });
+
+  test('one sale merges when a session partner is set', () {
+    final sale = paidSale();
+    final batch = mergeOrderPushes(
+      [entryFor(sale)],
+      batchUuid: 'shift',
+      partnerId: 42,
+      partnerName: 'Brisk Strip Madinaty',
+    ).batch!;
+
+    expect(batch.payload['order_count'], 1);
+    expect(batch.payload['partner_id'], 42);
+    expect(batch.payload['customer_name'], 'Brisk Strip Madinaty');
+    expect(batch.orderUuids, [sale.uuid]);
+    expect(payloadBalances(batch.payload), isTrue);
+  });
+
+  test('a merged batch carries the session partner on the payload', () {
+    final batch = mergeOrderPushes(
+      [entryFor(paidSale()), entryFor(paidSale(price: 250))],
+      batchUuid: 'shift',
+      partnerId: 7,
+      partnerName: 'Session Customer',
+    ).batch!;
+
+    expect(batch.payload['partner_id'], 7);
+    expect(batch.payload['customer_name'], 'Session Customer');
   });
 
   test('a batch that states its discount two ways is not merged', () {

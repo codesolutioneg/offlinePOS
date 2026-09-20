@@ -25,8 +25,10 @@ class DishflowWiring {
   void apply(SettingsStore settings) {
     if (settings.dishflowMirrorReady) {
       _outbox.register(DishflowMirror.kind, _sender.call);
+      _outbox.register(DishflowMirror.driverOrderKind, _sender.call);
     } else {
       _outbox.unregister(DishflowMirror.kind);
+      _outbox.unregister(DishflowMirror.driverOrderKind);
     }
   }
 }

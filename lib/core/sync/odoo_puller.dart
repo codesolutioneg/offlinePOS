@@ -78,20 +78,17 @@ class OdooPuller {
 
   bool get _wantsImages => withImages ?? CataloguePullOptions.shared.images;
 
-  /// The menu this till should show: everything sold in its branch, plus
-  /// everything nobody restricted to a branch at all.
+  /// The menu this till should show for its branch.
   ///
-  /// A chain lists a product against the branches that sell it, and an empty list
-  /// means every branch, which is the convention Odoo's own company_id already
-  /// uses and the reason installing branches hides nothing that was visible
-  /// yesterday.
+  /// When a `branch.simple` is selected, only products listed on that branch
+  /// (via `product.template.branch_ids`) are pulled — matching the Products tab
+  /// on the branch form in Odoo. With no branch configured, the whole POS menu
+  /// is pulled as before.
   ///
-  /// Two ways this asks for less than it wants, both deliberate. With no branch
-  /// configured it asks for the whole menu, because a single-shop till has no
-  /// branch to filter by and never had one. And an Odoo without the branches field
-  /// answers the filtered read with an error rather than an empty menu, so that is
-  /// caught and the whole menu pulled instead: a till showing a few extra dishes is
-  /// a nuisance, and a till showing none cannot trade.
+  /// An Odoo without the branches field answers the filtered read with an error
+  /// rather than an empty menu, so that is caught and the whole menu pulled
+  /// instead: a till showing a few extra dishes is a nuisance, and a till
+  /// showing none cannot trade.
   Future<List<Map<String, dynamic>>> _productsForBranch() async {
     const fields = ['id', 'display_name', 'lst_price', 'pos_categ_ids', 'barcode',
         'active', 'to_weight', 'taxes_id', 'product_tmpl_id'];
@@ -104,8 +101,6 @@ class OdooPuller {
         final byBranch =
             await _searchReadOptional('product.product', fields, extras, [
           inPos,
-          '|',
-          ['product_tmpl_id.branch_ids', '=', false],
           ['product_tmpl_id.branch_ids', 'in', [branch]],
         ]);
         _branchFieldMissing = false;
@@ -218,14 +213,14 @@ class OdooPuller {
     }
 
     return CataloguePull(
-      categories: categories
+      categories: await _applyBranchCategoryLayout(categories
           .map((c) => Category(
                 id: c['id'] as int,
                 name: (c['name'] ?? '') as String,
                 sequence: (c['sequence'] ?? 0) as int,
                 parentId: _id(c['parent_id']),
               ))
-          .toList(),
+          .toList()),
       products: products
           .map((p) => Product(
                 id: p['id'] as int,
@@ -601,17 +596,50 @@ class OdooPuller {
   static bool _readsAsMissingConfigModel(Object error) =>
       _unknownConfigModel.hasMatch(error.toString().toLowerCase());
 
-  /// The journals the shop named for this branch on `branch.pos.config`, or
-  /// empty for "the shop named none", which callers read as no narrowing.
+  /// The journals the shop named for this branch, or empty for "named none".
   ///
-  /// The till's branch is a company (jouma books each branch in a company of
-  /// its own), so the configuration is found by that company. Errors land here
-  /// as empty rather than failing the refresh, unlike the menu's branch filter:
-  /// the company narrowing above already keeps other branches' journals off
-  /// this till, so the worst a bad moment costs is the branch's own unnamed
-  /// journals showing for one refresh. An Odoo that plainly says it has no
-  /// such model is remembered so it is not asked again until the next launch.
+  /// Prefers `branch.simple.payment_journal_ids` (one company, many branches),
+  /// then `branch.pos.config` by `branch_id`, then by `company_id` for older
+  /// installs. Errors land as empty rather than failing the refresh.
   Future<Set<int>> _branchNamedJournalIds() async {
+    final branch = branchId?.call();
+    if (branch != null) {
+      try {
+        final rows = await _searchReadOptional(
+          'branch.simple',
+          ['id'],
+          ['payment_journal_ids'],
+          [
+            ['id', '=', branch]
+          ],
+        );
+        if (rows.isNotEmpty) {
+          final ids = _ids(rows.first['payment_journal_ids']).toSet();
+          if (ids.isNotEmpty) return ids;
+        }
+      } catch (_) {}
+      if (_branchConfigMissing != true) {
+        try {
+          final rows = await _searchRead(
+            'branch.pos.config',
+            ['payment_journal_ids'],
+            [
+              ['branch_id', '=', branch]
+            ],
+          );
+          _branchConfigMissing = false;
+          final ids = {
+            for (final r in rows) ..._ids(r['payment_journal_ids']),
+          };
+          if (ids.isNotEmpty) return ids;
+        } catch (e) {
+          if (_readsAsMissingConfigModel(e)) {
+            _branchConfigMissing = true;
+            return const {};
+          }
+        }
+      }
+    }
     final company = companyId();
     if (company == null || _branchConfigMissing == true) return const {};
     try {
@@ -767,6 +795,52 @@ class OdooPuller {
     }
   }
 
+  /// Branch tab "Categories": order and show/hide on the till rail.
+  ///
+  /// Empty lines → keep the global ``pos.category`` sequence. When the branch has
+  /// at least one line, only those categories appear (visible ones), in that
+  /// order; everything else stays on disk as inactive so products still resolve.
+  Future<List<Category>> _applyBranchCategoryLayout(
+      List<Category> categories) async {
+    final branch = branchId?.call();
+    if (branch == null || categories.isEmpty) return categories;
+    try {
+      final rows = await _searchRead(
+        'branch.pos.category.line',
+        ['pos_categ_id', 'sequence', 'visible'],
+        [
+          ['branch_id', '=', branch]
+        ],
+      );
+      if (rows.isEmpty) return categories;
+      rows.sort((a, b) =>
+          ((a['sequence'] as num?) ?? 0).compareTo((b['sequence'] as num?) ?? 0));
+      final byId = {for (final c in categories) c.id: c};
+      final out = <Category>[];
+      final seen = <int>{};
+      var seq = 0;
+      for (final r in rows) {
+        final id = _id(r['pos_categ_id']);
+        if (id == null) continue;
+        final base = byId[id];
+        if (base == null) continue;
+        seen.add(id);
+        out.add(base.copyWith(
+          sequence: seq++,
+          active: r['visible'] != false,
+        ));
+      }
+      for (final c in categories) {
+        if (seen.contains(c.id)) continue;
+        out.add(c.copyWith(active: false, sequence: 10_000 + c.sequence));
+      }
+      return out;
+    } catch (_) {
+      // Addon not upgraded yet, or no read rights: keep the global layout.
+      return categories;
+    }
+  }
+
   /// The branch Odoo says this till's login belongs to, or null when Odoo has
   /// no say: no login authenticated yet, no branch addon on the server, no
   /// branch naming this user, or several of them (a floater's login decides
@@ -789,10 +863,12 @@ class OdooPuller {
         ],
       );
       if (rows.length != 1) return null;
+      final branch = rows.first['id'];
       final company = _id(rows.first['company_id']);
-      if (company == null) return null;
+      if (branch is! int || company == null) return null;
       return OdooBoundSite(
         name: (rows.first['name'] ?? '') as String,
+        branchId: branch,
         companyId: company,
         warehouseId: _id(rows.first['warehouse_id']),
       );
@@ -803,21 +879,61 @@ class OdooPuller {
     }
   }
 
-  /// What Odoo has for the three ids that say where this till books: the branches,
-  /// the points of sale and the warehouses, each with the name it is known by.
+  /// What Odoo has for the pickers on the server screen.
   ///
-  /// Nobody knows their warehouse's database id, so the alternative to this is a
-  /// manager guessing a number and a till quietly booking into the wrong place.
-  ///
-  /// Off every selling path, like [searchCustomers] and [searchProducts]: it fills
-  /// a picker on a settings screen, and a caller with no line gets empty lists to
-  /// fall back from rather than a wait. Each model degrades on its own, because
-  /// half a set of names is more use to a manager than none.
+  /// Branches come from `branch.simple` (one company, many outlets). Points of
+  /// sale and warehouses stay the standard models, narrowed on screen by the
+  /// company of the chosen branch.
   Future<OdooSiteChoices> siteChoices() async => OdooSiteChoices(
-        branches: await _siteOptions('res.company'),
+        branches: await _branchOptions(),
         pointsOfSale: await _siteOptions('pos.config', byCompany: true),
         warehouses: await _siteOptions('stock.warehouse', byCompany: true),
       );
+
+  /// `branch.simple` rows for the branch picker, with company and warehouse.
+  Future<List<OdooSiteOption>> _branchOptions() async {
+    try {
+      final rows = await _searchReadOptional(
+        'branch.simple',
+        ['id', 'name', 'company_id'],
+        [
+          'warehouse_id',
+          'code',
+          'consolidate_session_invoice',
+          'session_partner_id',
+        ],
+        const [],
+      );
+      if (rows.isNotEmpty) {
+        return [
+          for (final r in rows)
+            if (r['id'] is int)
+              OdooSiteOption(
+                id: r['id'] as int,
+                name: _branchLabel(r),
+                companyId: _id(r['company_id']),
+                warehouseId: _id(r['warehouse_id']),
+                consolidateSessionInvoice:
+                    r['consolidate_session_invoice'] == true,
+                sessionPartnerId: _id(r['session_partner_id']),
+                sessionPartnerName: _m2oName(r['session_partner_id']),
+              ),
+        ];
+      }
+    } catch (_) {
+      // Fall through to companies when the addon is not installed.
+    }
+    return _siteOptions('res.company');
+  }
+
+  String _branchLabel(Map<String, dynamic> r) {
+    final name = (r['name'] ?? '') as String;
+    final code = r['code'];
+    if (code is String && code.isNotEmpty && name.isNotEmpty) {
+      return '$name ($code)';
+    }
+    return name;
+  }
 
   /// One picker's rows. [byCompany] asks for the owning company as an optional
   /// field, so a model that will not give it still gives up its names and the
@@ -893,6 +1009,14 @@ class OdooPuller {
   static int? _id(dynamic v) {
     if (v is int) return v;
     if (v is List && v.isNotEmpty && v.first is int) return v.first as int;
+    return null;
+  }
+
+  static String? _m2oName(dynamic v) {
+    if (v is List && v.length > 1 && v[1] is String) {
+      final name = (v[1] as String).trim();
+      return name.isEmpty ? null : name;
+    }
     return null;
   }
 

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../core/auth/auth_service.dart';
+import '../../core/auth/fingerprint_service.dart';
+import '../../core/auth/fingerprint_store.dart';
 import '../../core/auth/user_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/dishflow_brand.dart';
+import 'fingerprint_or_pin_dialog.dart';
 
 /// PIN sign-in.
 ///
@@ -23,6 +26,8 @@ class LoginScreen extends StatefulWidget {
     required this.onSignedIn,
     this.provisioningPin,
     this.managersOnly = true,
+    this.fingerprints,
+    this.fingerprintStore,
   });
 
   final AuthService auth;
@@ -32,6 +37,12 @@ class LoginScreen extends StatefulWidget {
   /// When true (product default), only managers unlock the till. Cashiers appear
   /// after Attendance → Clock in and open tables with their own PIN.
   final bool managersOnly;
+
+  /// ZK reader when present: unlock by finger, else PIN.
+  final FingerprintService? fingerprints;
+
+  /// Local template bank — pushed into the agent before identify.
+  final FingerprintStore? fingerprintStore;
 
   /// The one-time PIN for the setup account, when this till has no real roster
   /// yet. Shown here because there is nowhere else to show it and no shipped
@@ -64,6 +75,58 @@ class _LoginScreenState extends State<LoginScreen> {
         // Say it is a lockout, not a wrong PIN, or the cashier keeps trying. The
         // wait doubles with each further failure, so it is quoted rather than
         // described as "a few minutes".
+        AuthLockedOut(:final until) =>
+          '${tr(context, 'Too many attempts. Try again in')} ${_wait(until)}.',
+      };
+    });
+    if (result is AuthOk) widget.onSignedIn(result.cashier);
+  }
+
+  Future<void> _submitFingerprint() async {
+    final fp = widget.fingerprints;
+    if (fp == null || _busy) return;
+    setState(() => _busy = true);
+    final result = await showFingerprintOrPin(
+      context,
+      fingerprints: fp,
+      title: tr(context, 'Sign in'),
+      message: tr(context, 'Fingerprint or manager PIN'),
+      prepareTemplates: widget.fingerprintStore?.pushToAgent,
+    );
+    if (!mounted) return;
+    if (result == null) {
+      setState(() => _busy = false);
+      return;
+    }
+    if (result.isFingerprint) {
+      final authResult =
+          await widget.auth.unlockByFingerprint(result.matchedUserId!);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _applyUnlock(authResult);
+      return;
+    }
+    final who = _selected;
+    if (who == null) {
+      setState(() {
+        _busy = false;
+        _message = tr(context, 'Pick who is signing in');
+      });
+      return;
+    }
+    final authResult = await widget.auth.unlock(who.id, result.pin!);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _applyUnlock(authResult);
+  }
+
+  void _applyUnlock(AuthResult result) {
+    setState(() {
+      _pin = '';
+      _message = switch (result) {
+        AuthOk() => null,
+        AuthRejected() => tr(context, 'Incorrect PIN'),
+        AuthMalformed() => tr(context, 'PIN must be 4 to 6 digits'),
         AuthLockedOut(:final until) =>
           '${tr(context, 'Too many attempts. Try again in')} ${_wait(until)}.',
       };
@@ -315,27 +378,47 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Widget _keypad() => SizedBox(
         width: 300,
-        child: GridView.count(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: 3,
-          childAspectRatio: 1.7,
-          mainAxisSpacing: 8,
-          crossAxisSpacing: 8,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            for (final d in ['1', '2', '3', '4', '5', '6', '7', '8', '9'])
-              _key(d, () => _press(d)),
-            _key('⌫', () => setState(() {
-                  if (_pin.isNotEmpty) _pin = _pin.substring(0, _pin.length - 1);
-                })),
-            _key('0', () => _press('0')),
-            FilledButton(
-              key: const Key('pin-ok'),
-              style: FilledButton.styleFrom(
-                  textStyle:
-                      const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-              onPressed: _selected == null || _busy ? null : _submit,
-              child: Text(tr(context, 'OK')),
+            if (widget.fingerprints != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    key: const Key('login-fingerprint'),
+                    onPressed: _busy ? null : _submitFingerprint,
+                    icon: const Icon(Icons.fingerprint),
+                    label: Text(tr(context, 'Use fingerprint')),
+                  ),
+                ),
+              ),
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 3,
+              childAspectRatio: 1.7,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              children: [
+                for (final d in ['1', '2', '3', '4', '5', '6', '7', '8', '9'])
+                  _key(d, () => _press(d)),
+                _key('⌫', () => setState(() {
+                      if (_pin.isNotEmpty) {
+                        _pin = _pin.substring(0, _pin.length - 1);
+                      }
+                    })),
+                _key('0', () => _press('0')),
+                FilledButton(
+                  key: const Key('pin-ok'),
+                  style: FilledButton.styleFrom(
+                      textStyle: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.w700)),
+                  onPressed: _selected == null || _busy ? null : _submit,
+                  child: Text(tr(context, 'OK')),
+                ),
+              ],
             ),
           ],
         ),

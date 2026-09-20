@@ -131,10 +131,9 @@ void main() {
     final held = orders.held().single;
     expect(held.orderNo, isNotNull,
         reason: 'the shell must hand the session a counter, or nothing is numbered');
-    // DDMM-SEQ-TAG, with the tag taken from this device's id.
-    expect(held.orderNo, matches(RegExp(r'^\d{4}-\d{3}-2C3$')));
-    expect(held.orderNo, endsWith('-001-2C3'));
-    expect(held.displayNo, held.orderNo);
+    // Plain daily sequence — same digits on kitchen, receipt and flash.
+    expect(held.orderNo, '1');
+    expect(held.displayNo, '1');
   });
 
   testWidgets('the second sale of the service takes the next number', (t) async {
@@ -162,8 +161,7 @@ void main() {
     await t.pumpAndSettle();
 
     final numbers = orders.held().map((o) => o.orderNo).toList()..sort();
-    expect(numbers.first, endsWith('-001-2C3'));
-    expect(numbers.last, endsWith('-002-2C3'));
+    expect(numbers, ['1', '2']);
   });
 
   testWidgets('a parked order keeps its number when it is recalled and paid',

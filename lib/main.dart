@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,9 @@ import 'app/till_activity.dart';
 import 'core/audit/audit_log.dart';
 import 'core/auth/auth_service.dart';
 import 'core/auth/bootstrap_cashier.dart';
+import 'core/auth/fingerprint_agent_launcher.dart';
+import 'core/auth/fingerprint_service.dart';
+import 'core/auth/fingerprint_store.dart';
 import 'core/auth/pin_hasher.dart';
 import 'core/auth/user_store.dart';
 import 'core/config/till_config.dart';
@@ -145,6 +149,12 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
 
   final settings = SettingsStore(db);
 
+  // ZKTeco USB reader via local agent (tools/zk_fingerprint_agent.py :9201).
+  // Soft-fail everywhere: missing agent / reader → PIN only.
+  final fingerprintService = FingerprintService();
+  FingerprintStore? fingerprintStore;
+  // Assembled with publish after LAN is known; wired below.
+
   // Whether this device shares state with the others in the shop. Off unless it was
   // asked for: the device's own switch decides, and the build's dart-define is only
   // what it falls back to, so a shop that adds a second till flips a setting rather
@@ -196,6 +206,11 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     db,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
   );
+  fingerprintStore = FingerprintStore(
+    db,
+    publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+    service: fingerprintService,
+  );
   final shifts = ShiftStore(db);
   // What the kitchen shouted, told to every device: an item off the menu is a fact
   // about the shop, so the 86 board is shared the same way a parked tab is.
@@ -230,11 +245,17 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   // The catalogue pull rides the same authenticated Odoo session as the order
   // push. Built here, before any endpoint is configured, but it reads the live
   // sender at call time, so a server entered later still refreshes the menu.
+  // SyncService is late so End-of-Day can stamp the SO number from every ack.
+  late final SyncService sync;
   final odoo = OdooWiring(
     outbox: outbox,
     post: post,
-    // Once the server books a sale, mark it synced so the history badge is honest.
-    onOrderBooked: orders.markSynced,
+    // Once the server books a sale, mark it synced so the history badge is honest
+    // and stamp the SO name for End of Day when this was a per-sale push.
+    onOrderBooked: (uuid, [id, name]) {
+      orders.markSynced(uuid, id);
+      sync.noteOdooAck(name: name, id: id);
+    },
     // A server-rejected sale is money taken but never booked; record it so it is
     // not visible only as a diagnostics count.
     onOrderRejected: (uuid, reason) =>
@@ -255,24 +276,37 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   Future<ServerCheckResult> checkTheServer(OdooEndpoint e) => checkServer(e, post);
 
   log.step('start the sync service');
-  final sync = SyncService(
+  final batchPush = BatchPush(
+    outboxStore: outboxStore,
+    send: odoo.pushPayload,
+    enabled: () =>
+        settings.mergeBatchIntoOneSaleOrder ||
+        settings.odooSessionPartnerId != null,
+    // The shift is the batch, and it already carries a uuid of its own. Read
+    // after the close, so it is the shift that was just counted.
+    batchUuid: () => ShiftStore(db).latestShift()?.uuid,
+    partnerId: () => settings.odooSessionPartnerId,
+    partnerName: () => settings.odooSessionPartnerName,
+    onOrderBooked: (uuid, [id, name]) {
+      orders.markSynced(uuid, id);
+      sync.noteOdooAck(name: name, id: id);
+    },
+  );
+  sync = SyncService(
     outbox: outbox,
     catalogue: catalogue,
     outboxStore: outboxStore,
     audit: audit,
     deviceId: deviceId,
     appVersion: appVersion,
-    // The branch is read at the moment of each pull, so a till moved to another
-    // branch has the right menu on its next refresh rather than its next restart.
-    //
-    // The warehouse, not the company. A branch here is an outlet, and an outlet is
-    // a warehouse: that is what a sale already carries, what a requisition calls
-    // the branch warehouse, and what this shop's twenty of them are named after.
-    // The company is one row, so filtering a menu on it selected everything and
-    // looked like the feature working.
+    // The branch.simple id is read at the moment of each pull, so a till moved
+    // to another outlet has the right menu on its next refresh rather than its
+    // next restart. One company can hold many branches; the company itself is
+    // what sales book into (see [SettingsStore.odooCompanyId]).
     puller: OdooPuller(
       call: odoo.catalogueCall,
-      branchId: () => settings.odooWarehouseId,
+      branchId: () => settings.odooBranchId,
+      companyId: () => settings.odooCompanyId,
       // Read at the moment of each pull too: the till authenticates lazily, so the
       // user is often not known yet when this is built.
       userId: () => odoo.uid,
@@ -286,17 +320,41 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       }
     },
     // The shop's option to have its night arrive as one sales order. Answers
-    // false and costs nothing while the switch is off, which is where it stays
-    // until jouma can take a batch: see docs/ODOO_SYNC.md.
-    mergeBatch: BatchPush(
-      outboxStore: outboxStore,
-      send: odoo.pushPayload,
-      enabled: () => settings.mergeBatchIntoOneSaleOrder,
-      // The shift is the batch, and it already carries a uuid of its own. Read
-      // after the close, so it is the shift that was just counted.
-      batchUuid: () => ShiftStore(db).latestShift()?.uuid,
-      onOrderBooked: orders.markSynced,
-    ).run,
+    // false and costs nothing while the switch is off. Close always passes the
+    // shift's ticket uuids so a backlog from another shift cannot ride along.
+    mergeBatch: ({Set<String>? onlyUuids}) async {
+      final ok = await batchPush.run(onlyUuids: onlyUuids);
+      sync.lastMergeSkipReason = batchPush.lastSkipReason;
+      if (ok) {
+        final ack = batchPush.lastAck;
+        sync.noteOdooAck(
+          name: ack?['name']?.toString(),
+          id: (ack?['id'] as num?)?.toInt(),
+        );
+      }
+      return ok;
+    },
+    // Same path Close session uses, so a failed close finishes as one SO rather
+    // than a pile of per-sale bookings without delivery lines.
+    closedShiftRetry: () async {
+      final shift = ShiftStore(db).latestShift();
+      if (shift == null) return null;
+      var shiftOrders = orders.awaitingSyncInShift(shift);
+      // Recovery: tickets outside the latest window (older failed closes) still
+      // need a path; Sync now / armed retry folds them under this shift's key.
+      if (shiftOrders.isEmpty) shiftOrders = orders.awaitingSync();
+      if (shiftOrders.isEmpty) {
+        return const ShiftFlushResult(merged: true, orderCount: 0);
+      }
+      return sync.flushClosedShift(
+        orderUuids: {for (final o in shiftOrders) o.uuid},
+        enqueueOrders: () async {
+          for (final o in shiftOrders) {
+            await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
+          }
+        },
+      );
+    },
     // So a close that failed at midnight is still owed in the morning. start()
     // reads it back before the first tick.
     arming: SettingsRetryArming(settings),
@@ -379,6 +437,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       printers: printers,
       endpoints: endpoints,
       attendance: attendance,
+      fingerprints: fingerprintStore,
       catalogue: catalogue,
       shifts: shifts,
       reservations: reservations,
@@ -386,8 +445,16 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       audit: audit,
       port: config.lanPort,
       beaconPort: config.lanBeaconPort,
+      onShopBundleApplied: () => dishflow.apply(settings),
     );
   }
+
+  // Start the ZK agent if Windows and nothing is on :9201, then load templates.
+  unawaited(() async {
+    await FingerprintAgentLauncher().ensureRunning();
+    await fingerprintStore!.pushToAgent();
+    await fingerprintService.warmUp();
+  }());
 
   // The last line of a launch that got everything it needed. If the log ends here
   // and there is still no window, the till started and the window is the problem,
@@ -422,6 +489,8 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     customers: CustomerStore(db),
     delivery: DeliveryStore(db),
     attendance: attendance,
+    fingerprints: fingerprintService,
+    fingerprintStore: fingerprintStore,
     reservations: reservations,
     assignments: assignments,
     lan: lan,

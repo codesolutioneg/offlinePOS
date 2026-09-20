@@ -157,3 +157,23 @@ enum DeviceRole {
 
   String get wire => name;
 }
+
+/// What this physical device is for in the shop (local to the PC — not LAN-synced).
+///
+/// [delivery] receives ecommerce store-order alerts; [counter] does not (manual
+/// Store orders menu still works on every station).
+enum StationType {
+  counter,
+  delivery;
+
+  static StationType fromWire(String? raw) {
+    switch (raw) {
+      case 'delivery':
+        return StationType.delivery;
+      default:
+        return StationType.counter;
+    }
+  }
+
+  String get wire => name;
+}

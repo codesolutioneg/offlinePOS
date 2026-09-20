@@ -331,6 +331,27 @@ void main() {
       expect(changed, 1);
     });
 
+    test('applySharedStationsFromMap keeps this till receipt, takes kitchen', () {
+      final secondary = PrinterRegistry(discovery: StillSubnet())
+        ..remember('receipt', host: '10.0.0.9')
+        ..remember('delivery', host: '10.0.0.9')
+        ..remember('old-kitchen', host: '10.0.0.2');
+
+      secondary.applySharedStationsFromMap({
+        'printers': [
+          {'name': 'kitchen', 'host': '192.168.1.50', 'port': 9100},
+          {'name': 'receipt', 'host': '192.168.1.51'},
+          {'name': 'delivery', 'host': '192.168.1.52'},
+        ],
+      });
+
+      expect(secondary['kitchen']!.host, '192.168.1.50');
+      expect(secondary['receipt']!.host, '10.0.0.9',
+          reason: 'this till must keep its own receipt after join');
+      expect(secondary['delivery']!.host, '10.0.0.9');
+      expect(secondary['old-kitchen'], isNull);
+    });
+
     test('a saved blob that got mangled does not stop the till printing', () async {
       final registry = PrinterRegistry.fromMap(
         {

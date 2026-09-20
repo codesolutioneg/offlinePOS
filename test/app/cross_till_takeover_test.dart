@@ -37,6 +37,7 @@ import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/order.dart';
+import 'package:offline_pos/domain/table_section_config.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
@@ -321,6 +322,8 @@ void main() {
 
   testWidgets('a till that does not answer keeps its tab', (t) async {
     final tab = tabOnTheOtherTill();
+    // Secondary / unset: unreachable owner must keep the tab.
+    settings.deviceRole = DeviceRole.secondary;
     final lan = node(peerReachable: false);
 
     await t.pumpWidget(app(lan));
@@ -333,6 +336,24 @@ void main() {
         reason: 'a till that cannot be asked cannot let go');
     expect(peerOrders.held().map((o) => o.uuid), [tab.uuid]);
     expect(find.textContaining('did not answer'), findsOneWidget);
+    await lan.dispose();
+  });
+
+  testWidgets('the primary seizes a tab when the owner does not answer',
+      (t) async {
+    final tab = tabOnTheOtherTill();
+    settings.deviceRole = DeviceRole.primary;
+    final lan = node(peerReachable: false);
+
+    await t.pumpWidget(app(lan));
+    await signIn(t);
+    await tapTableFive(t);
+    await t.tap(find.byKey(const Key('confirm-takeover')));
+    await t.pumpAndSettle();
+
+    expect(orders.byUuid(tab.uuid)!.deviceId, 'till-1');
+    expect(find.byType(SellScreen), findsOneWidget);
+    expect(find.textContaining('did not answer'), findsNothing);
     await lan.dispose();
   });
 

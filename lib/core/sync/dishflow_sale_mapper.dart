@@ -37,6 +37,7 @@ class DishflowSaleMapper {
     String? branchId,
     String? branchName,
     String? cashierName,
+    String? status,
   }) {
     final userId = mirrorUserId(order.deviceId);
     final orderNumber = order.orderNo ?? order.displayNo;
@@ -58,6 +59,7 @@ class DishflowSaleMapper {
         branchId: branchId,
         branchName: branchName,
         cashierName: cashierName,
+        status: status,
       ),
     };
   }
@@ -71,6 +73,7 @@ class DishflowSaleMapper {
     String? branchId,
     String? branchName,
     String? cashierName,
+    String? status,
   }) {
     final biz = order.businessDay.key;
     final sessionId = 'session_${biz}_offlinepos';
@@ -90,6 +93,8 @@ class DishflowSaleMapper {
 
     final discountAmount = order.discountMoney.abs();
     final isDelivery = order.type.isDelivery;
+    final resolvedStatus = status ??
+        (order.isRefund ? 'refund' : 'sale');
 
     return {
       'odooOrderId': 'pending_${order.uuid}',
@@ -105,10 +110,10 @@ class DishflowSaleMapper {
       'paymentMethod': paymentLabel,
       if (payments.isNotEmpty) 'payments': payments,
       'syncedToOdoo': order.state == OrderState.synced,
-      'status': 'sale',
+      'status': resolvedStatus,
       'source': 'offline_pos',
       'orderType': order.type.dishflowName,
-      if (isDelivery) 'delivery_status': 'received',
+      if (isDelivery) 'delivery_status': order.deliveryStatus.wireName,
       'businessDateKey': biz,
       'sessionDate': biz,
       'sessionId': sessionId,
@@ -125,12 +130,27 @@ class DishflowSaleMapper {
       if (order.companyOrderNo != null &&
           order.companyOrderNo!.trim().isNotEmpty)
         'delivery_company_order_no': order.companyOrderNo!.trim(),
+      if (order.driverId != null && order.driverId!.trim().isNotEmpty)
+        'driver_id': order.driverId!.trim(),
       if (order.driverName != null && order.driverName!.trim().isNotEmpty)
         'driver_name': order.driverName!.trim(),
+      if (order.driverPhone != null && order.driverPhone!.trim().isNotEmpty)
+        'driver_phone': order.driverPhone!.trim(),
+      if (order.driverId != null && order.driverId!.trim().isNotEmpty)
+        'assigned_at': DateTime.now().toUtc().toIso8601String(),
+      if (order.shippingZoneId != null && order.shippingZoneId!.trim().isNotEmpty)
+        'shippingZoneId': order.shippingZoneId!.trim(),
+      if (order.shippingZoneName != null &&
+          order.shippingZoneName!.trim().isNotEmpty)
+        'shippingZoneName': order.shippingZoneName!.trim(),
       if (order.tableLabel != null && order.tableLabel!.trim().isNotEmpty)
         'tableLabel': order.tableLabel!.trim(),
+      if (order.ecommerceOrderId != null &&
+          order.ecommerceOrderId!.trim().isNotEmpty)
+        'ecommerceOrderId': order.ecommerceOrderId!.trim(),
       if (order.deliveryCost > 0) 'deliveryFee': order.deliveryCost,
-      if (order.serviceCharge > 0) 'serviceFee': order.serviceCharge,
+      if (order.serviceFee > 0 || order.serviceCharge > 0)
+        'serviceFee': order.serviceFee + order.serviceCharge,
       if (order.discountPercent > 0) 'discountType': 'percent',
       if (order.discountPercent > 0) 'discountValue': order.discountPercent,
       if (discountAmount > 0) 'discountAmount': discountAmount,

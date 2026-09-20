@@ -105,6 +105,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     settings.askCashierOnOpen = false;
     settings.lanRolePromptDismissed = true;
     shifts = ShiftStore(db);
@@ -304,6 +305,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-shift')));
     await t.pumpAndSettle();
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
     await t.tap(find.byKey(const Key('close-shift')));
     await t.pumpAndSettle();
     for (final d in ['1', '0', '0']) {

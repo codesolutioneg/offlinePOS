@@ -1,4 +1,5 @@
 import 'business_day.dart';
+import 'delivery.dart';
 import 'identity.dart';
 
 /// Where the sale is served. Drives the sell screen, the kitchen ticket header,
@@ -426,11 +427,18 @@ class Order {
     this.deliveryCost = 0,
     this.deliveryChannel,
     this.companyOrderNo,
+    this.driverId,
     this.driverName,
+    this.driverPhone,
+    this.deliveryStatus = DeliveryStatus.received,
+    this.shippingZoneId,
+    this.shippingZoneName,
+    this.serviceFee = 0,
     this.serviceChargePercent = 0,
     this.tip = 0,
     this.kitchenStatus = KitchenStatus.pending,
     this.refundOfUuid,
+    this.ecommerceOrderId,
     int? businessDayCutoverHour,
     this.orderNo,
     List<OrderLine>? lines,
@@ -487,13 +495,26 @@ class Order {
   /// Which channel this delivery came through ("Talabat", "Phone"), the number that
   /// channel calls the order, and who is carrying it.
   ///
-  /// All three are local to the till and stripped from the server payload. The wire
-  /// contract is fixed: the sale is a delivery, and who it is for travels as the
-  /// partner. An aggregator's own reference and the name of the driver are how the
-  /// shop finds the order on its own floor, and the server has nowhere to put them.
+  /// Channel / company # stay local for Odoo. Driver id/name/phone and
+  /// delivery_status travel on the Dishflow mirror so the rider app and
+  /// settlement reports match Dishflow.
   String? deliveryChannel;
   String? companyOrderNo;
+  String? driverId;
   String? driverName;
+  String? driverPhone;
+  DeliveryStatus deliveryStatus;
+
+  /// Zone chosen for the fee preset (Dishflow shipping zone), when store delivery.
+  String? shippingZoneId;
+  String? shippingZoneName;
+
+  /// Flat service fee (Dishflow manual service charge), in addition to any %.
+  double serviceFee;
+
+  /// Firebase `ecommerce_orders` doc id when this bag was claimed from the store app.
+  /// Soft-completed on pay so the customer app advances.
+  String? ecommerceOrderId;
 
   /// The service percentage this bill carries, stamped when the order is created and
   /// re-stamped when its type changes, never read from settings at total time: a bill
@@ -535,8 +556,37 @@ class Order {
   /// What to print or show as this order's reference: its human number once it has
   /// one, and the tail of the uuid before that (a draft being rung has no number
   /// yet, and a slip still has to be identifiable).
-  String get displayNo =>
-      orderNo ?? uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
+  ///
+  /// Plain digits only. New numbers are a never-repeating sequence. Legacy
+  /// `DDMM-SEQ-TAG` values expose `DDMM`+`SEQ` without the till letters so two
+  /// days' `#6` never both print as `6` on the same flash.
+  String get displayNo {
+    final n = orderNo?.trim();
+    if (n == null || n.isEmpty) {
+      return uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
+    }
+    return shortOrderNumber(n);
+  }
+
+  /// Human-facing order number: plain digits, unique for legacy rows.
+  static String shortOrderNumber(String raw) {
+    final parts = raw.split('-');
+    // DDMM-SEQ-TAG → DDMMSEQ (e.g. 2009-006-D50 → 2009006), never just "6".
+    if (parts.length >= 2 &&
+        RegExp(r'^\d+$').hasMatch(parts[0]) &&
+        RegExp(r'^\d+$').hasMatch(parts[1])) {
+      final seq = parts[1].replaceFirst(RegExp(r'^0+(?=.)'), '');
+      return '${parts[0]}$seq';
+    }
+    if (RegExp(r'^\d+$').hasMatch(raw)) {
+      return raw.replaceFirst(RegExp(r'^0+(?=.)'), '');
+    }
+    final digits = raw.replaceAll(RegExp(r'\D'), '');
+    if (digits.isNotEmpty) {
+      return digits.replaceFirst(RegExp(r'^0+(?=.)'), '');
+    }
+    return raw;
+  }
 
   /// Cash the customer handed over, when it exceeds what was due. Kept only so the
   /// receipt can print the change; it is NOT the amount booked. The payment stores
@@ -577,7 +627,12 @@ class Order {
   /// been paying, and it is what the server books when it applies each product's
   /// tax to the price this sale is sent at.
   double get total =>
-      subtotal * discountFactor + serviceCharge + taxTotal + deliveryCost + tip;
+      subtotal * discountFactor +
+      serviceCharge +
+      serviceFee +
+      taxTotal +
+      deliveryCost +
+      tip;
 
   /// What part of this bill is charged: the given lines net of their own discounts,
   /// less the whole-order discount, plus the bill's service charge, plus the tax on
@@ -683,7 +738,14 @@ class Order {
         'delivery_cost': deliveryCost,
         'delivery_channel': deliveryChannel,
         'company_order_no': companyOrderNo,
+        'driver_id': driverId,
         'driver_name': driverName,
+        'driver_phone': driverPhone,
+        'delivery_status': deliveryStatus.wireName,
+        'shipping_zone_id': shippingZoneId,
+        'shipping_zone_name': shippingZoneName,
+        'service_fee': serviceFee,
+        'ecommerce_order_id': ecommerceOrderId,
         'service_charge_percent': serviceChargePercent,
         'tip': tip,
         'kitchen_status': kitchenStatus.name,
@@ -772,7 +834,16 @@ class Order {
     // dispatch record, so none of this has a field to land in.
     m.remove('delivery_channel');
     m.remove('company_order_no');
+    m.remove('driver_id');
     m.remove('driver_name');
+    m.remove('driver_phone');
+    m.remove('delivery_status');
+    m.remove('shipping_zone_id');
+    m.remove('shipping_zone_name');
+    // service_fee stays on the wire: the module books it tax-inclusive
+    // (OFFLINE_SERVICE_FEE), same as delivery_cost — net + VAT still total the
+    // amount the guest paid. Stripping it used to leave the SO short.
+    m.remove('ecommerce_order_id');
     // A locally-created customer has a synthetic negative id, not an Odoo partner.
     // Never send it as partner_id (it would fail the foreign key); the name and
     // phone still travel so the server can match or create the partner itself.
@@ -858,13 +929,20 @@ class Order {
         deliveryCost: (m['delivery_cost'] as num?)?.toDouble() ?? 0,
         deliveryChannel: m['delivery_channel'] as String?,
         companyOrderNo: m['company_order_no'] as String?,
+        driverId: m['driver_id'] as String?,
         driverName: m['driver_name'] as String?,
+        driverPhone: m['driver_phone'] as String?,
+        deliveryStatus: DeliveryStatus.parse(m['delivery_status'] as String?),
+        shippingZoneId: m['shipping_zone_id'] as String?,
+        shippingZoneName: m['shipping_zone_name'] as String?,
+        serviceFee: (m['service_fee'] as num?)?.toDouble() ?? 0,
         serviceChargePercent:
             (m['service_charge_percent'] as num?)?.toDouble() ?? 0,
         tip: (m['tip'] as num?)?.toDouble() ?? 0,
         kitchenStatus: KitchenStatus.values
             .byName((m['kitchen_status'] as String?) ?? KitchenStatus.pending.name),
         refundOfUuid: m['refund_of_uuid'] as String?,
+        ecommerceOrderId: m['ecommerce_order_id'] as String?,
         // An order saved before the cutover was configurable was rung under the old
         // fixed rule, so it keeps that one rather than adopting today's setting and
         // moving itself to another day.

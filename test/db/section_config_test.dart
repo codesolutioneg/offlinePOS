@@ -114,4 +114,31 @@ void main() {
     settings.moveRequiresKitchen = true;
     expect(settings.moveRequiresKitchen, isTrue);
   });
+
+  test('shop bundle round-trips dishflow mirror fields', () {
+    settings.dishflowMirrorEnabled = true;
+    settings.dishflowProjectId = 'odc-chat';
+    settings.dishflowApiKey = 'secret-key';
+    settings.dishflowOdooConnectionId = 'conn-42';
+    settings.dishflowBranchId = 'b1';
+    settings.dishflowBranchName = 'Main';
+    final bundle = settings.exportShopBundle();
+    expect(bundle['dishflow_mirror_enabled'], isTrue);
+    expect(bundle['dishflow_project_id'], 'odc-chat');
+    expect(bundle['dishflow_api_key'], 'secret-key');
+    expect(bundle['dishflow_odoo_connection_id'], 'conn-42');
+    expect(bundle['dishflow_branch_id'], 'b1');
+    expect(bundle['dishflow_branch_name'], 'Main');
+
+    final otherDb = Db.open(':memory:');
+    final other = SettingsStore(otherDb);
+    other.applyShopBundle(bundle);
+    expect(other.dishflowMirrorReady, isTrue);
+    expect(other.dishflowProjectId, 'odc-chat');
+    expect(other.dishflowApiKey, 'secret-key');
+    expect(other.dishflowOdooConnectionId, 'conn-42');
+    expect(other.dishflowBranchId, 'b1');
+    expect(other.dishflowBranchName, 'Main');
+    otherDb.close();
+  });
 }

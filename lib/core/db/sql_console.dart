@@ -85,8 +85,10 @@ class SqlConsole {
     PreparedStatement? stmt;
     try {
       stmt = _db.raw.prepare(trimmed);
-      if (stmt.columnCount > 0) {
-        final rs = stmt.select();
+      // select works for reads and for writes with RETURNING; a pure write comes
+      // back with no column names and we report how many rows changed instead.
+      final rs = stmt.select();
+      if (rs.columnNames.isNotEmpty) {
         final cols = List<String>.of(rs.columnNames);
         final rows = <List<String>>[];
         var truncated = false;
@@ -103,7 +105,6 @@ class SqlConsole {
           truncated: truncated,
         );
       }
-      stmt.execute();
       return SqlRunResult(changes: _db.raw.updatedRows);
     } on SqliteException catch (e) {
       return SqlRunResult(error: e.message);

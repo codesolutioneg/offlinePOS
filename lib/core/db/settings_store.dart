@@ -505,35 +505,27 @@ class SettingsStore {
 
   // ── the number a human calls an order ────────────────────────────
 
-  /// The next order number for this till, as `DDMM-SEQ-TAG`.
+  /// The next order number for this till: a plain never-repeating sequence
+  /// (`1`, `2`, `3`, …).
   ///
-  /// The sequence is per trading day and per device: it restarts at 1 at the
-  /// business-day cutover (so a service that runs past midnight keeps counting, and
-  /// tomorrow starts at 1 again), and it carries a tag derived from the device id so
-  /// two tills serving the same room never hand out the same number. Local, and
-  /// deliberately not a server document number: the till has to be able to name an
-  /// order with the line down.
+  /// Does **not** restart each trading day — a flash spanning yesterday and today
+  /// (or a shift left open overnight) must not list two different sales as `#6`.
+  /// Digits only, same value on kitchen, receipt, flash and screens via
+  /// [Order.displayNo].
   ///
-  /// [now] is injectable for the rollover test; production reads the clock.
-  String nextOrderNumber(String deviceId, {DateTime? now}) {
-    final day = BusinessDay.of(now ?? DateTime.now());
-    // A different trading day than the last number handed out means the counter
-    // starts again, which is what makes the numbers short enough to say out loud.
-    final seq = getString(_orderNoDay) == day.key
-        ? (int.tryParse(getString(_orderNoSeq) ?? '') ?? 0) + 1
-        : 1;
-    setString(_orderNoDay, day.key);
+  /// [atLeast]: when set, the returned number is greater than this (used to climb
+  /// past numbers already issued on another till / older format).
+  /// [now] is unused; kept so call sites and tests keep compiling.
+  String nextOrderNumber(String deviceId, {DateTime? now, int? atLeast}) {
+    var seq = (int.tryParse(getString(_orderNoSeq) ?? '') ?? 0) + 1;
+    if (atLeast != null && seq <= atLeast) seq = atLeast + 1;
     setString(_orderNoSeq, '$seq');
-    String two(int n) => n.toString().padLeft(2, '0');
-    final d = day.date;
-    return '${two(d.day)}${two(d.month)}-${seq.toString().padLeft(3, '0')}-'
-        '${tillTagFor(deviceId)}';
+    // deviceId / day key kept out of the printed number on purpose.
+    return '$seq';
   }
 
   /// A short, stable tag for a device: the last three alphanumeric characters of its
-  /// id, uppercased. The id is a client-generated uuid, so its tail is as good as a
-  /// hash, and three characters keep the number sayable while making a clash between
-  /// the two or three tills in one shop vanishingly unlikely.
+  /// id, uppercased. Kept for diagnostics / legacy rows that still carry a tag.
   static String tillTagFor(String deviceId) {
     final letters =
         deviceId.toUpperCase().replaceAll(RegExp('[^A-Z0-9]'), '');
@@ -625,6 +617,16 @@ class SettingsStore {
   /// instead of a device id nobody can act on.
   String? get lanDeviceName => getString('lan_device_name');
   set lanDeviceName(String? v) => setString('lan_device_name', v?.trim());
+
+  /// What this PC is for: counter (default) or delivery station.
+  ///
+  /// Device-local — not in the LAN shop bundle. Only [StationType.delivery]
+  /// auto-polls and alerts on new ecommerce store orders.
+  StationType get stationType => StationType.fromWire(getString('station_type'));
+  set stationType(StationType v) =>
+      setString('station_type', v == StationType.counter ? null : v.wire);
+
+  bool get receivesStoreOrderAlerts => stationType == StationType.delivery;
 
   /// The key the devices in one shop share, which is what makes them a shop rather
   /// than whatever else is plugged into the switch. Held here because this database
@@ -914,6 +916,14 @@ class SettingsStore {
   /// customer a second priced slip.
   bool get subReceiptHidePrices => getBool('sub_receipt_hide_prices', fallback: true);
   set subReceiptHidePrices(bool v) => setBool('sub_receipt_hide_prices', v);
+
+  /// Printer name for delivery customer / driver receipts (bag slip + paid
+  /// receipt). Defaults to `delivery`. Empty means use the main receipt
+  /// printer.
+  String get deliveryReceiptPrinter =>
+      getString('delivery_receipt_printer') ?? 'delivery';
+  set deliveryReceiptPrinter(String v) =>
+      setString('delivery_receipt_printer', v.trim());
 
   // ── what the printer can spell ───────────────────────────────────
 
@@ -1340,10 +1350,17 @@ class SettingsStore {
           for (final e in productStations.entries) '${e.key}': e.value,
         },
         'odoo_branch_id': odooBranchId,
+        'odoo_company_id': odooCompanyId,
         'odoo_restaurant_id': odooRestaurantId,
         'odoo_warehouse_id': odooWarehouseId,
         'odoo_discount_product_id': odooDiscountProductId,
         'odoo_local_product_id': odooLocalProductId,
+        'dishflow_mirror_enabled': dishflowMirrorEnabled,
+        'dishflow_project_id': dishflowProjectId,
+        'dishflow_api_key': dishflowApiKey,
+        'dishflow_odoo_connection_id': dishflowOdooConnectionId,
+        'dishflow_branch_id': dishflowBranchId,
+        'dishflow_branch_name': dishflowBranchName,
       };
 
   /// Apply a primary's [exportShopBundle] on this till (no LAN echo).
@@ -1451,6 +1468,9 @@ class SettingsStore {
     if (bundle['odoo_branch_id'] != null) {
       odooBranchId = int.tryParse('${bundle['odoo_branch_id']}');
     }
+    if (bundle['odoo_company_id'] != null) {
+      odooCompanyId = int.tryParse('${bundle['odoo_company_id']}');
+    }
     if (bundle['odoo_restaurant_id'] != null) {
       odooRestaurantId = int.tryParse('${bundle['odoo_restaurant_id']}');
     }
@@ -1463,7 +1483,41 @@ class SettingsStore {
     if (bundle['odoo_local_product_id'] != null) {
       odooLocalProductId = int.tryParse('${bundle['odoo_local_product_id']}');
     }
+    if (bundle['dishflow_mirror_enabled'] is bool) {
+      dishflowMirrorEnabled = bundle['dishflow_mirror_enabled'] as bool;
+    }
+    if (bundle.containsKey('dishflow_project_id')) {
+      final v = bundle['dishflow_project_id'];
+      dishflowProjectId = v == null ? null : '$v';
+    }
+    if (bundle.containsKey('dishflow_api_key')) {
+      final v = bundle['dishflow_api_key'];
+      dishflowApiKey = v == null ? null : '$v';
+    }
+    if (bundle.containsKey('dishflow_odoo_connection_id')) {
+      final v = bundle['dishflow_odoo_connection_id'];
+      dishflowOdooConnectionId = v == null ? null : '$v';
+    }
+    if (bundle.containsKey('dishflow_branch_id')) {
+      final v = bundle['dishflow_branch_id'];
+      dishflowBranchId = v == null ? null : '$v';
+    }
+    if (bundle.containsKey('dishflow_branch_name')) {
+      final v = bundle['dishflow_branch_name'];
+      dishflowBranchName = v == null ? null : '$v';
+    }
     publishOdooSite();
+  }
+
+  /// Record uuid for shop-wide settings the primary pushes to secondaries.
+  static const shopBundleRecord = 'shop-bundle';
+
+  /// Primary publishes the shop bundle (Dishflow mirror, roles, …) to peers.
+  /// No-op on secondary or with the fabric off. Settings must already be saved.
+  void publishShopBundle() {
+    final publish = _publish;
+    if (publish == null || !isLanPrimary) return;
+    publish(LanEventKind.shopBundle, shopBundleRecord, exportShopBundle());
   }
 
   // ── LAN join PIN bank (primary only) ─────────────────────────────
@@ -1652,12 +1706,17 @@ class SettingsStore {
 
   // ── where this till's sales belong in Odoo ───────────────────────
 
-  /// The branch (a `res.company` in jouma), the point of sale (`pos.config`) and
-  /// the warehouse (`stock.warehouse`) this till books into. Null until a manager
-  /// sets them, and then nothing extra travels: a shop that has one of everything
-  /// does not have to name it.
+  /// The outlet (`branch.simple`) this till sells for: filters the menu and the
+  /// tenders. Null until a manager picks one (or Odoo binds the login).
+  ///
+  /// Separate from [odooCompanyId]: one company holds many branches.
   int? get odooBranchId => _positiveId('odoo_branch_id');
   set odooBranchId(int? v) => _setOdooId('odoo_branch_id', v);
+
+  /// The company (`res.company`) sales book into. Set automatically when a
+  /// `branch.simple` is chosen, or typed when the shop has no branch addon yet.
+  int? get odooCompanyId => _positiveId('odoo_company_id');
+  set odooCompanyId(int? v) => _setOdooId('odoo_company_id', v);
 
   int? get odooRestaurantId => _positiveId('odoo_restaurant_id');
   set odooRestaurantId(int? v) => _setOdooId('odoo_restaurant_id', v);
@@ -1688,6 +1747,20 @@ class SettingsStore {
   bool get mergeBatchIntoOneSaleOrder => getBool('merge_batch_one_sale_order');
   set mergeBatchIntoOneSaleOrder(bool v) =>
       setBool('merge_batch_one_sale_order', v);
+
+  /// Odoo partner the consolidated End-of-Day invoice books under (Dishflow's
+  /// session-report customer). Positive id only; unset means merge still needs
+  /// two or more sales and keeps each ticket's own partner on the nested headers.
+  int? get odooSessionPartnerId => _positiveId('odoo_session_partner_id');
+  set odooSessionPartnerId(int? v) => _setOdooId('odoo_session_partner_id', v);
+
+  /// Display name for [odooSessionPartnerId], so settings and close screens do
+  /// not need a live catalogue lookup to say who the night is invoiced to.
+  String? get odooSessionPartnerName => getString('odoo_session_partner_name');
+  set odooSessionPartnerName(String? v) {
+    final t = v?.trim();
+    setString('odoo_session_partner_name', (t == null || t.isEmpty) ? null : t);
+  }
 
   /// The branches, points of sale and warehouses this till last saw in Odoo, so
   /// the three pickers still show names on a till with no line.
@@ -1729,9 +1802,13 @@ class SettingsStore {
   /// settings, and a sale pushed after the change must carry the new ids.
   void publishOdooSite() {
     OdooSite.shared = OdooSite(
-      branchId: odooBranchId,
+      // Booking payload wants the company, not the branch.simple id.
+      branchId: odooCompanyId,
       restaurantId: odooRestaurantId,
       warehouseId: odooWarehouseId,
+      // Outlet id travels as branch_id so End-of-Day can read session partner
+      // from Offline POS ▸ Branches.
+      outletId: odooBranchId,
     );
     // Read when a sale is turned into a payload, so it belongs beside the ids that
     // are read at the same moment.

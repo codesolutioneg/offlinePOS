@@ -128,4 +128,17 @@ class LanClaimDesk {
         '${cashier == null ? '' : ' by $cashier'}');
     return order;
   }
+
+  /// Primary till: seize a parked tab whose owner did not answer.
+  ///
+  /// Rewrites the local replica and announces the claim so peers that rejoin drop
+  /// ownership. Null when there is no held (or seated draft) replica here to take.
+  Order? seizeUnreachable(String orderUuid, {String? cashier}) {
+    final moved = _orders.seizeFromUnreachable(orderUuid, deviceId);
+    if (moved == null) return null;
+    _audit?.call('order.claim.seized',
+        '$orderUuid from unreachable owner'
+        '${cashier == null ? '' : ' by $cashier'}');
+    return moved;
+  }
 }

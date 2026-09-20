@@ -1,4 +1,5 @@
 import '../../domain/order.dart';
+import '../auth/fingerprint_store.dart';
 import '../db/attendance_store.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
@@ -39,7 +40,9 @@ class LanApplier {
     required TableAssignmentStore assignments,
     required LanEventLog log,
     AttendanceStore? attendance,
+    FingerprintStore? fingerprints,
     ShiftStore? shifts,
+    void Function()? onShopBundleApplied,
     LanLog? onRefused,
   })  : _orders = orders,
         _tables = tables,
@@ -47,7 +50,9 @@ class LanApplier {
         _reservations = reservations,
         _assignments = assignments,
         _attendance = attendance,
+        _fingerprints = fingerprints,
         _shifts = shifts,
+        _onShopBundleApplied = onShopBundleApplied,
         _log = log,
         _onRefused = onRefused;
 
@@ -60,7 +65,9 @@ class LanApplier {
   final ReservationStore _reservations;
   final TableAssignmentStore _assignments;
   final AttendanceStore? _attendance;
+  final FingerprintStore? _fingerprints;
   final ShiftStore? _shifts;
+  final void Function()? _onShopBundleApplied;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -171,8 +178,10 @@ class LanApplier {
         LanEventKind.tableAssignment => _applyAssignment(event),
         LanEventKind.tablePreorders => _applyPreorders(event),
         LanEventKind.sectionConfig => _applySectionConfig(event),
+        LanEventKind.shopBundle => _applyShopBundle(event),
         LanEventKind.shiftLifecycle => _applyShiftNotice(event),
         LanEventKind.attendanceUpsert => _applyAttendance(event),
+        LanEventKind.fingerprintUpsert => _applyFingerprint(event),
         LanEventKind.cartDisplay => _applyCart(event),
       };
       if (!written) return _Landing.refused;
@@ -252,17 +261,37 @@ class LanApplier {
     return true;
   }
 
-  /// A till telling the shop its day is over. Written to the board the floor reads,
-  /// and the open drawer on this till is closed quietly so a peer cash-up is not
-  /// left hanging as "shift open from an earlier day".
+  /// A till telling the shop the shift opened or the day closed.
+  ///
+  /// Open: quiet-open the local drawer when none is open (cash float stays local).
+  /// Close: remember for warn/block UI and quiet-close any open drawer here.
   bool _applyShiftNotice(LanEvent event) {
-    LanShiftBoard(_settings).remember(LanShiftNotice.fromMap(event.payload));
+    final notice = LanShiftNotice.fromMap(event.payload);
+    if (notice.action == LanShiftAction.open) {
+      LanShiftBoard(_settings).forgetClosed(notice.businessDate);
+      _shifts?.openQuietly(cashierId: notice.cashierId ?? 'system');
+      return true;
+    }
+    LanShiftBoard(_settings).remember(notice);
     _shifts?.closeOpenQuietly();
+    return true;
+  }
+
+  bool _applyShopBundle(LanEvent event) {
+    _settings.applyShopBundle(event.payload);
+    _onShopBundleApplied?.call();
     return true;
   }
 
   bool _applyAttendance(LanEvent event) {
     final store = _attendance;
+    if (store == null) return false;
+    store.applyRemote(event.payload);
+    return true;
+  }
+
+  bool _applyFingerprint(LanEvent event) {
+    final store = _fingerprints;
     if (store == null) return false;
     store.applyRemote(event.payload);
     return true;
