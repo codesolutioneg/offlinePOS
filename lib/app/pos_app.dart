@@ -3328,7 +3328,7 @@ class _PosAppState extends State<PosApp> {
     return pool.where((u) => onDuty.contains(u.id)).map((u) => u.id).toList();
   }
 
-  /// Pick who opens the table: fingerprint when the reader is up, else PIN.
+  /// Pick who opens the table: staff list first, then PIN/fingerprint if required.
   ///
   /// Manager PIN is not a substitute here: attribution must match who is
   /// actually opening. Managers elevate elsewhere (resume lock, voids, etc.).
@@ -3345,12 +3345,23 @@ class _PosAppState extends State<PosApp> {
       return null;
     }
 
+    final picked = await _pickOpenerList(
+      context,
+      tr(context, 'Who is opening this table?'),
+      ids,
+    );
+    if (picked == null || !context.mounted) return null;
+
+    if (!widget.settings.tableOpenRequireAuth) return picked;
+
+    final user = widget.users.byId(picked);
+    final name = user?.name ?? picked;
     final fp = widget.fingerprints;
     if (fp != null) {
       final result = await showFingerprintOrPin(
         context,
         fingerprints: fp,
-        title: tr(context, 'Who is opening this table?'),
+        title: name,
         message: tr(context, 'Fingerprint or this person\'s PIN'),
         prepareTemplates: () async {
           await FingerprintAgentLauncher().ensureRunning();
@@ -3360,43 +3371,18 @@ class _PosAppState extends State<PosApp> {
       if (result == null || !context.mounted) return null;
       if (result.isFingerprint) {
         final uid = result.matchedUserId!;
-        if (!ids.contains(uid)) {
+        if (uid != picked) {
           showToast(
             context,
-            tr(context, 'That person is not clocked in'),
+            tr(context, 'Fingerprint does not match the selected person'),
             kind: ToastKind.error,
           );
           return null;
         }
-        return uid;
-      }
-      // PIN path: pick who, then verify with the PIN they already typed.
-      final picked = await _pickOpenerDropdown(
-        context,
-        tr(context, 'Who is opening this table?'),
-        ids,
-      );
-      if (picked == null || !context.mounted) return null;
-      final pin = result.pin ?? '';
-      if (pin.isEmpty) {
-        final user = widget.users.byId(picked);
-        final typed = await _promptPin(
-          context,
-          tr(context, 'Confirm with PIN'),
-          tr(context, 'Enter this person\'s PIN'),
-          subject: user?.name ?? picked,
-        );
-        if (typed == null || typed.isEmpty) return null;
-        final ok = await widget.auth.authorizeCashier(picked, typed);
-        if (!ok) {
-          if (context.mounted) {
-            showToast(context, tr(context, 'Incorrect PIN'),
-                kind: ToastKind.error);
-          }
-          return null;
-        }
         return picked;
       }
+      final pin = (result.pin ?? '').trim();
+      if (pin.isEmpty) return null;
       final ok = await widget.auth.authorizeCashier(picked, pin);
       if (!ok) {
         if (context.mounted) {
@@ -3408,18 +3394,11 @@ class _PosAppState extends State<PosApp> {
       return picked;
     }
 
-    final picked = await _pickOpenerDropdown(
-      context,
-      tr(context, 'Who is opening this table?'),
-      ids,
-    );
-    if (picked == null || !context.mounted) return null;
-    final user = widget.users.byId(picked);
     final pin = await _promptPin(
       context,
       tr(context, 'Confirm with PIN'),
       tr(context, 'Enter this person\'s PIN'),
-      subject: user?.name ?? picked,
+      subject: name,
     );
     if (pin == null || pin.isEmpty) return null;
     final ok = await widget.auth.authorizeCashier(picked, pin);
@@ -3432,46 +3411,38 @@ class _PosAppState extends State<PosApp> {
     return picked;
   }
 
-  /// Dropdown of who may open the table (on-duty staff).
-  Future<String?> _pickOpenerDropdown(
+  /// Vertical list of who may open the table (on-duty staff). Tap = pick.
+  Future<String?> _pickOpenerList(
       BuildContext context, String title, List<String> ids) {
     final byId = {for (final u in widget.users.active()) u.id: u.name};
-    String? selected = ids.length == 1 ? ids.first : null;
     return showDialog<String>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: Text(title),
-          content: DropdownButtonFormField<String>(
-            key: const Key('opener-dropdown'),
-            value: selected,
-            isExpanded: true,
-            decoration: InputDecoration(
-              labelText: tr(ctx, 'Select user'),
-              border: const OutlineInputBorder(),
-            ),
-            items: [
-              for (final id in ids)
-                DropdownMenuItem<String>(
-                  value: id,
-                  child: Text(byId[id] ?? id),
-                ),
-            ],
-            onChanged: (v) => setLocal(() => selected = v),
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.separated(
+            key: const Key('opener-list'),
+            shrinkWrap: true,
+            itemCount: ids.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (ctx, i) {
+              final id = ids[i];
+              return ListTile(
+                key: Key('opener-$id'),
+                title: Text(byId[id] ?? id),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.pop(ctx, id),
+              );
+            },
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(tr(ctx, 'Cancel')),
-            ),
-            FilledButton(
-              key: const Key('opener-ok'),
-              onPressed:
-                  selected == null ? null : () => Navigator.pop(ctx, selected),
-              child: Text(tr(ctx, 'OK')),
-            ),
-          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+        ],
       ),
     );
   }
@@ -3734,7 +3705,7 @@ class _PosAppState extends State<PosApp> {
       ),
       SettingsEntry(
         title: 'Shop & receipt',
-        subtitle: 'Name, tax id, footer',
+        subtitle: 'Name, table open PIN, tax id, footer',
         icon: Icons.store,
         keyValue: 'set-shop',
         group: 'Shop',

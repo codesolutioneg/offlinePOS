@@ -1487,6 +1487,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           if (!(await widget.authorize?.call() ?? true)) return;
           if (!mounted) return;
           setState(() => settings.tableSecurity = !settings.tableSecurity);
+        } else if (value == 'open-auth' && settings != null) {
+          if (!(await widget.authorize?.call() ?? true)) return;
+          if (!mounted) return;
+          setState(
+              () => settings.tableOpenRequireAuth = !settings.tableOpenRequireAuth);
         } else if (value == 'transfer') {
           widget.onTransferTables?.call();
         } else if (value == 'preorders') {
@@ -1514,6 +1519,13 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             value: 'security',
             checked: settings.tableSecurity,
             child: Text(tr(ctx, 'Ask before opening someone else\'s tab')),
+          ),
+        if (settings != null)
+          CheckedPopupMenuItem(
+            key: const Key('floor-table-open-auth'),
+            value: 'open-auth',
+            checked: settings.tableOpenRequireAuth,
+            child: Text(tr(ctx, 'Require PIN or fingerprint to open a table')),
           ),
         if (widget.onEditPreorders != null)
           PopupMenuItem(

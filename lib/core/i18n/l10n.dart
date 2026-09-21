@@ -204,6 +204,8 @@ const Map<String, String> _ar = {
   'Reprint receipt': 'إعادة طباعة الإيصال',
   // settings
   'Shop & receipt': 'المتجر والإيصال',
+  'Name, table open PIN, tax id, footer':
+      'الاسم، رمز فتح الطاولة، الرقم الضريبي، التذييل',
   'Category colours': 'ألوان الأقسام',
   'Quick notes': 'ملاحظات سريعة',
   'Discount reasons': 'أسباب الخصم',
@@ -472,6 +474,15 @@ const Map<String, String> _ar = {
   'Who is opening this table?': 'من يفتح هذه الطاولة؟',
   'Fingerprint or this person\'s PIN': 'بصمة أو الرقم السري لهذا الشخص',
   'That person is not clocked in': 'هذا الشخص غير مسجّل حضور',
+  'Fingerprint does not match the selected person':
+      'البصمة لا تطابق الشخص المختار',
+  'Require PIN or fingerprint to open a table':
+      'طلب رمز سري أو بصمة عند فتح الطاولة',
+  'After choosing the waiter. Turn off to assign by name only.':
+      'بعد اختيار النادل. أوقفها للتعيين بالاسم فقط.',
+  'Ask who is opening the table': 'اسأل من يفتح الطاولة',
+  'On a shared till, assigns the table to them':
+      'على جهاز مشترك، تُسند الطاولة إليه',
   'No staff yet': 'لا يوجد موظفون بعد',
   'on the clock': 'على رأس العمل',
   'Since': 'منذ',

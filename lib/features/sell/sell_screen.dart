@@ -2685,10 +2685,12 @@ class _SellScreenState extends State<SellScreen> {
     if (allowCats.isNotEmpty) {
       final selected = _categoryId;
       if (selected != null && !allowCats.contains(selected)) {
-        // Schedule clear â€” never mutate selection mid-build.
+        // Jump to the first allowed rail tab — never mutate selection mid-build.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
-          if (_categoryId == selected) setState(() => _categoryId = null);
+          if (_categoryId != selected) return;
+          final fallback = _railCategories().map((c) => c.id).where(allowCats.contains);
+          setState(() => _categoryId = fallback.isEmpty ? null : fallback.first);
         });
         products = s.catalogue.products(search: _search);
         if (_favesOnly) {
@@ -3043,8 +3045,8 @@ class _SellScreenState extends State<SellScreen> {
       );
   }
 
-  /// Vertical rail of square category tiles on the right (Dishflow side layout).
-  Widget _categoryRail() {
+  /// Categories shown on the right rail (stocked / allowed / currently selected).
+  List<({int id, String name})> _railCategories() {
     final stocked = s.catalogue.categoryIdsWithProducts();
     final allowRaw = widget.allowedCategoryIds;
     final allow = allowRaw.isEmpty
@@ -3052,12 +3054,38 @@ class _SellScreenState extends State<SellScreen> {
         : s.catalogue.expandCategoryAllowList(allowRaw);
     // Keep parent picks visible even when products sit only on children, and keep
     // any selected id so a stale filter cannot blank the rail.
-    final cats = s.catalogue.categories().where((c) {
-      if (allow.isNotEmpty && !allow.contains(c.id)) return false;
-      return stocked.contains(c.id) ||
-          c.id == _categoryId ||
-          allowRaw.contains(c.id);
-    }).toList();
+    return s.catalogue
+        .categories()
+        .where((c) {
+          if (allow.isNotEmpty && !allow.contains(c.id)) return false;
+          return stocked.contains(c.id) ||
+              c.id == _categoryId ||
+              allowRaw.contains(c.id);
+        })
+        .map((c) => (id: c.id, name: c.name))
+        .toList();
+  }
+
+  /// No "All" tab — land on the first real category when nothing is selected.
+  void _ensureCategorySelection(List<({int id, String name})> cats) {
+    if (_favesOnly) return;
+    if (cats.isEmpty) return;
+    final stillValid =
+        _categoryId != null && cats.any((c) => c.id == _categoryId);
+    if (stillValid) return;
+    final first = cats.first.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _favesOnly) return;
+      final valid =
+          _categoryId != null && cats.any((c) => c.id == _categoryId);
+      if (!valid) setState(() => _categoryId = first);
+    });
+  }
+
+  /// Vertical rail of square category tiles on the right (Dishflow side layout).
+  Widget _categoryRail() {
+    final cats = _railCategories();
+    _ensureCategorySelection(cats);
     return ColoredBox(
       color: AppColors.background,
       child: ListView(
@@ -3074,24 +3102,15 @@ class _SellScreenState extends State<SellScreen> {
             ),
             const SizedBox(height: 8),
           ],
-          _categorySquare(
-            label: tr(context, 'All'),
-            selected: _categoryId == null && !_favesOnly,
-            color: AppColors.primary,
-            onTap: () => setState(() {
-              _categoryId = null;
-              _favesOnly = false;
-            }),
-          ),
-          for (final c in cats) ...[
-            const SizedBox(height: 8),
+          for (var i = 0; i < cats.length; i++) ...[
+            if (i > 0) const SizedBox(height: 8),
             _categorySquare(
-              key: Key('cat-chip-${c.id}'),
-              label: c.name,
-              selected: _categoryId == c.id && !_favesOnly,
-              color: _colorFor(c.id) ?? AppColors.primary,
+              key: Key('cat-chip-${cats[i].id}'),
+              label: cats[i].name,
+              selected: _categoryId == cats[i].id && !_favesOnly,
+              color: _colorFor(cats[i].id) ?? AppColors.primary,
               onTap: () => setState(() {
-                _categoryId = c.id;
+                _categoryId = cats[i].id;
                 _favesOnly = false;
               }),
             ),

@@ -157,16 +157,14 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  /// Pick who opens the table and confirm their PIN.
-  Future<void> pickOpener(WidgetTester t, String id, String pin) async {
+  /// Pick who opens the table and confirm their PIN (when auth is required).
+  Future<void> pickOpener(WidgetTester t, String id, String pin,
+      {bool requireAuth = true}) async {
     expect(find.text('Who is opening this table?'), findsOneWidget);
-    final names = {'sara': 'Sara', 'ana': 'Ana', 'mo': 'Mo'};
-    await t.tap(find.byKey(const Key('opener-dropdown')));
+    expect(find.byKey(const Key('opener-list')), findsOneWidget);
+    await t.tap(find.byKey(Key('opener-$id')));
     await t.pumpAndSettle();
-    await t.tap(find.text(names[id] ?? id).last);
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('opener-ok')));
-    await t.pumpAndSettle();
+    if (!requireAuth) return;
     for (final d in pin.split('')) {
       await t.tap(find.byKey(Key('key-$d')).last);
       await t.pump();
@@ -189,6 +187,23 @@ void main() {
     // The table opens and is now Ana's, on the same assignment the floor shows.
     expect(find.byType(SellScreen), findsOneWidget);
     expect(assignments.cashierFor(tableFive), 'ana');
+  });
+
+  testWidgets('opening without auth still picks the waiter from the list',
+      (t) async {
+    settings.askCashierOnOpen = true;
+    settings.tableOpenRequireAuth = false;
+
+    await t.pumpWidget(app());
+    await signIn(t, 'sara', '1234');
+    await tapFive(t);
+    await t.pumpAndSettle();
+
+    await pickOpener(t, 'ana', '4321', requireAuth: false);
+
+    expect(find.byType(SellScreen), findsOneWidget);
+    expect(assignments.cashierFor(tableFive), 'ana');
+    expect(find.byKey(const Key('tab-pin-ok')), findsNothing);
   });
 
   testWidgets('a waiter is stopped at a table that is not theirs', (t) async {

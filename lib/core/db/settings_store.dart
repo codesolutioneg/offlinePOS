@@ -552,6 +552,12 @@ class SettingsStore {
   bool get askCashierOnOpen => getBool('ask_cashier_on_open', fallback: true);
   set askCashierOnOpen(bool v) => setBool('ask_cashier_on_open', v);
 
+  /// After choosing who opens a table, require their PIN or fingerprint.
+  /// Off = name pick only (still assigns the table to them).
+  bool get tableOpenRequireAuth =>
+      getBool('table_open_require_auth', fallback: true);
+  set tableOpenRequireAuth(bool v) => setBool('table_open_require_auth', v);
+
   /// Whether moving a dine-in bill to another table waits until a line has been
   /// sent to the kitchen. Off by default: the till can reseat before the pass has
   /// the ticket, which is what a shop does when guests change tables as they sit.
@@ -1341,6 +1347,7 @@ class SettingsStore {
         'table_security': tableSecurity,
         'ask_guest_count': askGuestCount,
         'ask_cashier_on_open': askCashierOnOpen,
+        'table_open_require_auth': tableOpenRequireAuth,
         'move_requires_kitchen': moveRequiresKitchen,
         'floor_sections_side': floorSectionsSide,
         'category_stations': {
@@ -1438,6 +1445,9 @@ class SettingsStore {
     }
     if (bundle['ask_cashier_on_open'] is bool) {
       askCashierOnOpen = bundle['ask_cashier_on_open'] as bool;
+    }
+    if (bundle['table_open_require_auth'] is bool) {
+      tableOpenRequireAuth = bundle['table_open_require_auth'] as bool;
     }
     if (bundle['move_requires_kitchen'] is bool) {
       moveRequiresKitchen = bundle['move_requires_kitchen'] as bool;

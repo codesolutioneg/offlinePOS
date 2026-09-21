@@ -30,6 +30,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late bool _showTax;
   late bool _askGuests;
   late bool _askCashierOnOpen;
+  late bool _tableOpenRequireAuth;
   late bool _moveRequiresKitchen;
   late bool _askSessionStaff;
   late int _cutoverHour;
@@ -47,6 +48,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _showTax = widget.settings.receiptShowTax;
     _askGuests = widget.settings.askGuestCount;
     _askCashierOnOpen = widget.settings.askCashierOnOpen;
+    _tableOpenRequireAuth = widget.settings.tableOpenRequireAuth;
     _moveRequiresKitchen = widget.settings.moveRequiresKitchen;
     _askSessionStaff = widget.settings.askSessionStaff;
     _cutoverHour = widget.settings.businessDayCutoverHour;
@@ -84,6 +86,7 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.receiptShowTax = _showTax;
     widget.settings.askGuestCount = _askGuests;
     widget.settings.askCashierOnOpen = _askCashierOnOpen;
+    widget.settings.tableOpenRequireAuth = _tableOpenRequireAuth;
     widget.settings.moveRequiresKitchen = _moveRequiresKitchen;
     widget.settings.askSessionStaff = _askSessionStaff;
     widget.settings.businessDayCutoverHour = _cutoverHour;
@@ -105,6 +108,32 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Text(
+            tr(context, 'Tables'),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          SwitchListTile(
+            key: const Key('ask-cashier-on-open'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Ask who is opening the table')),
+            subtitle: Text(tr(context, 'On a shared till, assigns the table to them')),
+            value: _askCashierOnOpen,
+            onChanged: (v) => setState(() => _askCashierOnOpen = v),
+          ),
+          SwitchListTile(
+            key: const Key('table-open-require-auth'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Require PIN or fingerprint to open a table')),
+            subtitle: Text(tr(
+              context,
+              'After choosing the waiter. Turn off to assign by name only.',
+            )),
+            value: _tableOpenRequireAuth,
+            onChanged: _askCashierOnOpen
+                ? (v) => setState(() => _tableOpenRequireAuth = v)
+                : null,
+          ),
+          const Divider(height: 28),
           TextField(
             key: const Key('shop-name'),
             controller: _shopName,
@@ -146,13 +175,6 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             subtitle: Text(tr(context, 'When a table is seated from the floor')),
             value: _askGuests,
             onChanged: (v) => setState(() => _askGuests = v),
-          ),
-          SwitchListTile(
-            key: const Key('ask-cashier-on-open'),
-            title: Text(tr(context, 'Ask who is opening the table')),
-            subtitle: Text(tr(context, 'On a shared till, assigns the table to them')),
-            value: _askCashierOnOpen,
-            onChanged: (v) => setState(() => _askCashierOnOpen = v),
           ),
           SwitchListTile(
             key: const Key('move-requires-kitchen'),
