@@ -90,7 +90,7 @@ class OdooPuller {
   /// instead: a till showing a few extra dishes is a nuisance, and a till
   /// showing none cannot trade.
   Future<List<Map<String, dynamic>>> _productsForBranch() async {
-    const fields = ['id', 'display_name', 'lst_price', 'pos_categ_ids', 'barcode',
+    const fields = ['id', 'name', 'display_name', 'lst_price', 'pos_categ_ids', 'barcode',
         'active', 'to_weight', 'taxes_id', 'product_tmpl_id'];
     final extras = ['standard_price', if (_wantsImages) 'image_128'];
     const inPos = ['available_in_pos', '=', true];
@@ -224,7 +224,7 @@ class OdooPuller {
       products: products
           .map((p) => Product(
                 id: p['id'] as int,
-                name: (p['display_name'] ?? p['name'] ?? '') as String,
+                name: _productLabel(p),
                 price: _num(p['lst_price']),
                 categoryId: _ids(p['pos_categ_ids']).firstOrNull,
                 barcode: p['barcode'] is String ? p['barcode'] as String : null,
@@ -1010,6 +1010,13 @@ class OdooPuller {
     if (v is int) return v;
     if (v is List && v.isNotEmpty && v.first is int) return v.first as int;
     return null;
+  }
+
+  /// Prefer Odoo's plain `name`; fall back to `display_name` without `[CODE]`.
+  static String _productLabel(Map<String, dynamic> p) {
+    final plain = '${p['name'] ?? ''}'.trim();
+    if (plain.isNotEmpty) return plain;
+    return stripCatalogueCodePrefix('${p['display_name'] ?? ''}');
   }
 
   static String? _m2oName(dynamic v) {

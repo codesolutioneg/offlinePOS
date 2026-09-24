@@ -1,5 +1,15 @@
 // The things the till sells, as held on the device.
 
+/// Odoo `display_name` is often `[CODE] Dish name`. Cashiers want the dish only.
+String stripCatalogueCodePrefix(String raw) {
+  final t = raw.trim();
+  if (!t.startsWith('[')) return t;
+  final end = t.indexOf(']');
+  if (end <= 0 || end >= t.length - 1) return t;
+  final rest = t.substring(end + 1).trim();
+  return rest.isEmpty ? t : rest;
+}
+
 /// Who owns a menu row: a catalogue pull, or a person standing at this till.
 ///
 /// The whole point of the distinction is precedence. A pull is seeding, never an
@@ -86,6 +96,9 @@ class Product {
   final bool active;
   final bool soldByWeight;
   final double taxRate;
+
+  /// Name without a leading Odoo `[CODE]` prefix — what cashiers see on the grid.
+  String get displayName => stripCatalogueCodePrefix(name);
 
   /// The `product.product` this sells as in Odoo, or null for a product typed on the
   /// till that nobody has linked yet. Captured onto the order line at the moment of

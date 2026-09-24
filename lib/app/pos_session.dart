@@ -115,7 +115,7 @@ class PosSession {
       // Captured now, like the price: what this line books against in Odoo must not
       // change because somebody relinked the product afterwards.
       odooProductId: product.odooId,
-      name: product.name,
+      name: product.displayName,
       quantity: qty,
       unitPrice: product.price,
       categoryId: product.categoryId,

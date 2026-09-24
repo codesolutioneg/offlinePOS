@@ -407,7 +407,7 @@ class _SellScreenState extends State<SellScreen> {
       return;
     }
     _changed(() => s.addProduct(product));
-    showToast(context, '${tr(context, 'Added')} ${product.name}',
+    showToast(context, '${tr(context, 'Added')} ${product.displayName}',
         kind: ToastKind.success,
         key: const Key('scanned'),
         duration: const Duration(milliseconds: 900));
@@ -428,7 +428,7 @@ class _SellScreenState extends State<SellScreen> {
   /// Block adding a sold-out item; otherwise ring it as normal.
   void _tapProduct(Product product) {
     if (widget.unavailableProducts.contains(product.id)) {
-      showToast(context, '${product.name}: ${tr(context, 'sold out')}',
+      showToast(context, '${product.displayName}: ${tr(context, 'sold out')}',
           kind: ToastKind.error);
       return;
     }
@@ -443,7 +443,7 @@ class _SellScreenState extends State<SellScreen> {
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(title: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold))),
+          ListTile(title: Text(product.displayName, style: const TextStyle(fontWeight: FontWeight.bold))),
           if (widget.onToggleAvailable != null)
             ListTile(
               key: const Key('menu-86'),
@@ -520,7 +520,7 @@ class _SellScreenState extends State<SellScreen> {
 
   Future<double?> _askWeight(Product product) => promptNumber(
         context,
-        title: '${tr(context, 'Weight for')} ${product.name}',
+        title: '${tr(context, 'Weight for')} ${product.displayName}',
         decimal: true,
         confirmLabel: tr(context, 'Add'),
       );
@@ -3833,7 +3833,7 @@ class _ProductTile extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(product.name,
+                  Text(product.displayName,
                       textAlign: TextAlign.center,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
