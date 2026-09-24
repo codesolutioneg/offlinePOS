@@ -22,8 +22,8 @@ void main() {
 
   const fromOdoo = OdooSiteChoices(
     branches: [
-      OdooSiteOption(id: 1, name: 'Downtown'),
-      OdooSiteOption(id: 2, name: 'Riverside'),
+      OdooSiteOption(id: 10, name: 'Downtown', companyId: 1, warehouseId: 2),
+      OdooSiteOption(id: 11, name: 'Riverside', companyId: 2, warehouseId: 3),
     ],
     pointsOfSale: [
       OdooSiteOption(id: 7, name: 'Counter', companyId: 1),
@@ -104,14 +104,15 @@ void main() {
     await open(t, load: () async => fromOdoo);
 
     final branches = await optionsOf(t, 'branch');
-    expect(branches, contains('Downtown (1)'));
-    expect(branches, contains('Riverside (2)'));
+    expect(branches, contains('Downtown (10)'));
+    expect(branches, contains('Riverside (11)'));
 
-    await pick(t, 'branch', 'Riverside (2)');
+    await pick(t, 'branch', 'Riverside (11)');
     await pick(t, 'warehouse', 'Cold store (3)');
     await save(t);
 
-    expect(settings.odooBranchId, 2);
+    expect(settings.odooBranchId, 11);
+    expect(settings.odooCompanyId, 2);
     expect(settings.odooWarehouseId, 3);
   });
 
@@ -172,7 +173,7 @@ void main() {
     settings.odooWarehouseId = 3;
     await open(t, load: () async => fromOdoo);
 
-    await pick(t, 'branch', 'Downtown (1)');
+    await pick(t, 'branch', 'Downtown (10)');
 
     final warehouses = await optionsOf(t, 'warehouse');
     expect(warehouses, contains('Main (2)'),
@@ -180,6 +181,8 @@ void main() {
     expect(warehouses, contains('Cold store (3)'),
         reason: 'and the one already configured stays selectable whatever branch '
             'is chosen, or picking a branch would silently unset it');
+    await save(t);
+    expect(settings.odooCompanyId, 1);
   });
 
   testWidgets('a build with no way to ask still shows and keeps the ids',

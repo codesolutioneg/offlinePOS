@@ -1,4 +1,4 @@
-/// Where in Odoo this till's sales belong: the branch, the point of sale and the
+/// Where in Odoo this till's sales belong: the company, the point of sale and the
 /// warehouse the stock leaves from.
 ///
 /// Published by [SettingsStore] the way the print profile and the catalogue pull
@@ -8,13 +8,22 @@
 ///
 /// Ids only. A name would have to be resolved against a server the till cannot
 /// assume is there, and the shop is identified on the wire by what Odoo keys on.
+///
+/// The *menu* branch (`branch.simple`) is stored separately on the till: one
+/// company can hold many outlets, and products / tenders are filtered by that
+/// outlet id, while booking still needs the company.
 class OdooSite {
-  const OdooSite({this.branchId, this.restaurantId, this.warehouseId});
+  const OdooSite({
+    this.branchId,
+    this.restaurantId,
+    this.warehouseId,
+    this.outletId,
+  });
 
   static OdooSite shared = const OdooSite();
 
-  /// The branch, which in jouma is a company: its branch reports filter
-  /// `account.move` on `company_id`, so a branch id is a `res.company` id.
+  /// The company sales book into (`res.company`). Kept as [branchId] on the wire
+  /// name for the payload field history; it is not the `branch.simple` id.
   final int? branchId;
 
   /// The point of sale (`pos.config`) this till sells through. The one id the
@@ -26,8 +35,14 @@ class OdooSite {
   /// The warehouse (`stock.warehouse`) the sold stock comes out of.
   final int? warehouseId;
 
+  /// The outlet (`branch.simple`) for menu filters and End-of-Day session close.
+  final int? outletId;
+
   bool get isEmpty =>
-      branchId == null && restaurantId == null && warehouseId == null;
+      branchId == null &&
+      restaurantId == null &&
+      warehouseId == null &&
+      outletId == null;
 
   /// What rides on a pushed sale.
   ///
@@ -38,6 +53,7 @@ class OdooSite {
         if (branchId != null) 'company_id': branchId,
         if (restaurantId != null) 'config_id': restaurantId,
         if (warehouseId != null) 'warehouse_id': warehouseId,
+        if (outletId != null) 'branch_id': outletId,
       };
 }
 
@@ -47,6 +63,7 @@ class OdooSite {
 class OdooBoundSite {
   const OdooBoundSite({
     required this.name,
+    required this.branchId,
     required this.companyId,
     this.warehouseId,
   });
@@ -54,7 +71,10 @@ class OdooBoundSite {
   /// The branch's display name, for the audit trail and the settings screen.
   final String name;
 
-  /// The branch's company, which is what the till stores as its branch id.
+  /// The `branch.simple` id: what filters the menu and the tenders.
+  final int branchId;
+
+  /// The branch's company: what sales book into.
   final int companyId;
 
   /// The branch's warehouse, when the shop set one on the branch record.
@@ -68,7 +88,15 @@ class OdooBoundSite {
 /// knows their warehouse's database id, so a picker has to show something else;
 /// what travels on a sale is still [OdooSite], which is ids alone.
 class OdooSiteOption {
-  const OdooSiteOption({required this.id, required this.name, this.companyId});
+  const OdooSiteOption({
+    required this.id,
+    required this.name,
+    this.companyId,
+    this.warehouseId,
+    this.consolidateSessionInvoice = false,
+    this.sessionPartnerId,
+    this.sessionPartnerName,
+  });
 
   final int id;
   final String name;
@@ -78,13 +106,39 @@ class OdooSiteOption {
   /// shop that has chosen a branch.
   final int? companyId;
 
-  Map<String, dynamic> toMap() =>
-      {'id': id, 'name': name, 'company_id': companyId};
+  /// For a `branch.simple` row: the warehouse that branch sells from.
+  final int? warehouseId;
+
+  /// Branch End-of-Day setting: push the shift as one invoice (Dishflow).
+  final bool consolidateSessionInvoice;
+
+  /// Branch session invoice customer (`res.partner` id).
+  final int? sessionPartnerId;
+
+  /// Display name for [sessionPartnerId].
+  final String? sessionPartnerName;
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'name': name,
+        'company_id': companyId,
+        'warehouse_id': warehouseId,
+        'consolidate_session_invoice': consolidateSessionInvoice,
+        'session_partner_id': sessionPartnerId,
+        'session_partner_name': sessionPartnerName,
+      };
 
   factory OdooSiteOption.fromMap(Map<String, dynamic> m) => OdooSiteOption(
         id: m['id'] as int,
         name: (m['name'] ?? '') as String,
         companyId: m['company_id'] is int ? m['company_id'] as int : null,
+        warehouseId:
+            m['warehouse_id'] is int ? m['warehouse_id'] as int : null,
+        consolidateSessionInvoice: m['consolidate_session_invoice'] == true,
+        sessionPartnerId: m['session_partner_id'] is int
+            ? m['session_partner_id'] as int
+            : null,
+        sessionPartnerName: m['session_partner_name'] as String?,
       );
 }
 

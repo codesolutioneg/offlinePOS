@@ -3,12 +3,20 @@ import 'dart:io';
 
 import '../../domain/order.dart';
 import '../audit/audit_log.dart';
+import '../auth/bootstrap_cashier.dart';
+import '../auth/fingerprint_store.dart';
+import '../auth/user_store.dart';
+import '../db/attendance_store.dart';
+import '../db/catalogue_store.dart';
 import '../db/database.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
+import '../db/shift_store.dart';
 import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
+import '../printing/printer_registry.dart';
+import '../sync/odoo_endpoint.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
 import 'lan_claim.dart';
@@ -53,12 +61,16 @@ class LanNode {
     required LanHttpClient client,
     required LanClaimDesk claims,
     required this.peers,
+    /// Primary is the shop authority: when an owning till cannot answer, only the
+    /// primary may seize the local replica so a dead handheld cannot strand a bill.
+    required bool Function() isPrimary,
   })  : _log = log,
         _fabric = fabric,
         _host = host,
         _beacon = beacon,
         _client = client,
-        _claims = claims;
+        _claims = claims,
+        _isPrimary = isPrimary;
 
   /// Builds every part and joins them up. Nothing binds or announces until
   /// [start] is called.
@@ -76,6 +88,13 @@ class LanNode {
     required OrderStore orders,
     required TableStore tables,
     required SettingsStore settings,
+    required UserStore users,
+    required PrinterRegistry printers,
+    required OdooEndpointStore endpoints,
+    AttendanceStore? attendance,
+    FingerprintStore? fingerprints,
+    CatalogueStore? catalogue,
+    ShiftStore? shifts,
     required ReservationStore reservations,
     required TableAssignmentStore assignments,
     required AuditLog audit,
@@ -91,6 +110,8 @@ class LanNode {
     /// other and prove a tab really changes hands, without a shop network. Null on
     /// a till, which is the whole point.
     LanHttpClient? client,
+    /// After a peer shop bundle lands (Dishflow mirror, …), re-wire senders.
+    void Function()? onShopBundleApplied,
   }) {
     // Every fabric refusal, dead peer and failed announce lands in the audit trail
     // under 'system', which is where support already looks. A shop that quietly
@@ -107,7 +128,11 @@ class LanNode {
       settings: settings,
       reservations: reservations,
       assignments: assignments,
+      attendance: attendance,
+      fingerprints: fingerprints,
+      shifts: shifts,
       log: eventLog,
+      onShopBundleApplied: onShopBundleApplied,
       onRefused: log,
     );
     final credential = LanCredential.rotating(shopKey);
@@ -115,9 +140,11 @@ class LanNode {
     final claims = LanClaimDesk(
       deviceId: deviceId,
       orders: orders,
-      // Read at the moment of the ask, so a manager who switches takeovers off has
-      // switched them off for the request that arrives a second later.
-      allowed: () => settings.lanAllowTakeover,
+      // Shop-wide switch, or the waiter who opened the tab / a manager.
+      mayGrant: ({required order, requesterId, asManager = false}) =>
+          settings.lanAllowTakeover ||
+          asManager ||
+          (requesterId != null && requesterId == order.cashierId),
       audit: log,
     );
     final fabric = LanFabric(
@@ -129,6 +156,44 @@ class LanNode {
       notify: (peer, events) => http.notify(peer, events, deviceId),
       onError: log,
     );
+    Map<String, dynamic>? joinGate({
+      required String pin,
+      required String peerDeviceId,
+    }) {
+      if (!settings.isLanPrimary) return null;
+      if (!settings.consumeJoinPin(pin)) return null;
+      final key = settings.lanShopKey;
+      if (key == null || key.isEmpty) return null;
+      log('lan.device.joined', peerDeviceId);
+      return {
+        'shop_key': key,
+        'section_configs': {
+          for (final e in settings.allSectionConfigs().entries)
+            e.key: e.value.toMap(),
+        },
+        'shop_bundle': settings.exportShopBundle(),
+        // Real roster only — Setup is a local bootstrap account, never shared.
+        'users': [
+          for (final u in users.all())
+            if (u.id != BootstrapCashier.id) u.toMap(),
+        ],
+        // Same shop LAN → same ESC/POS hosts (receipt / kitchen / stations).
+        'printers': printers.toMap(),
+        // Endpoint so the secondary can refresh later; catalogue so it can sell
+        // immediately even offline / before the first Odoo pull finishes.
+        'odoo_endpoint': endpoints.load()?.toMap(),
+        'attendance_open': attendance?.exportOpen() ?? const [],
+        'fingerprints': fingerprints?.agentPayload() ?? const [],
+        if (catalogue != null) 'catalogue': catalogue.exportLanSnapshot(),
+        'tables': [for (final t in tables.all()) t.toMap()],
+        // Full open floor — every till's held/seated tabs — so a rejoining
+        // secondary matches the shop, not only what this primary owns.
+        'open_orders': [
+          for (final o in orders.occupyingAnywhere()) o.toMap(),
+        ],
+      };
+    }
+
     return LanNode(
       deviceId: deviceId,
       deviceName: deviceName,
@@ -137,6 +202,7 @@ class LanNode {
       peers: peers,
       client: http,
       claims: claims,
+      isPrimary: () => settings.isLanPrimary,
       host: LanHost(
         protocol: LanProtocol(
           deviceId: deviceId,
@@ -144,6 +210,7 @@ class LanNode {
           applier: applier,
           credential: credential,
           claims: claims,
+          onJoin: joinGate,
           onRefused: log,
         ),
         port: port,
@@ -177,6 +244,9 @@ class LanNode {
   final LanBeacon _beacon;
   final LanHttpClient _client;
   final LanClaimDesk _claims;
+  // Kept for API/wiring; seize-on-unreachable is available on every till now.
+  // ignore: unused_field
+  final bool Function() _isPrimary;
 
   /// The start in flight, or the one that finished. Held so two callers cannot each
   /// bind the same port: the app shell starts the node, and the LAN switch can ask
@@ -249,6 +319,10 @@ class LanNode {
   /// One catch-up pass now, for the Sync now button on the settings screen.
   Future<void> pass() => _fabric.pass();
 
+  /// Present a join PIN to [primary] and return shop_key + section_configs.
+  Future<Map<String, dynamic>> joinWithPrimary(LanPeer primary, String pin) =>
+      _client.join(primary, pin: pin, deviceId: deviceId);
+
   /// Tell the shop this till has closed its trading day.
   ///
   /// Advisory and one-way: nothing waits for an answer, nothing is retried beyond
@@ -259,6 +333,9 @@ class LanNode {
   /// on is "that till is done for today", one fact per device: a second close
   /// replaces the first instead of leaving two notices to disagree.
   String get dayCloseRecord => 'day-close-$deviceId';
+
+  /// Shared record for shop-shift open so the latest open wins across tills.
+  static const shopShiftRecord = 'shop-shift';
 
   void announceDayClose({
     required String businessDate,
@@ -273,31 +350,55 @@ class LanNode {
           businessDate: businessDate,
           at: DateTime.now().toUtc(),
           cashierId: cashierId,
+          action: LanShiftAction.close,
+        ).toMap(),
+      );
+
+  /// Tell peers a shop shift opened here so they quiet-open a local drawer.
+  void announceShiftOpen({
+    required String businessDate,
+    String? cashierId,
+  }) =>
+      publish(
+        LanEventKind.shiftLifecycle,
+        shopShiftRecord,
+        LanShiftNotice(
+          deviceId: deviceId,
+          deviceName: deviceName,
+          businessDate: businessDate,
+          at: DateTime.now().toUtc(),
+          cashierId: cashierId,
+          action: LanShiftAction.open,
         ).toMap(),
       );
 
   /// Take a tab another till has parked, with that till's agreement.
   ///
-  /// The owner has to answer: it is the one that gives the tab up, and it does so
-  /// in the same breath as agreeing, so there is never an instant where two tills
-  /// could each settle it. An owner that is off, asleep or on the wrong side of a
-  /// dead switch is therefore a refusal and not a delay, because the alternative is
-  /// a bill paid twice.
+  /// Prefer asking the owner so it lets go in the same breath. When the owner is
+  /// unreachable, this till seizes its local replica (caller already gated:
+  /// opener / manager / shop-wide takeovers) and announces the claim so the dead
+  /// peer drops ownership when it rejoins. Previously only the primary could seize,
+  /// which stranded bills on secondaries whenever a handheld went offline.
   ///
   /// Never on a selling path: this is a deliberate action behind a manager gate,
   /// and the till it runs on is not mid-sale.
-  Future<LanClaimResult> claim(Order order, {String? cashier}) async {
+  Future<LanClaimResult> claim(
+    Order order, {
+    String? cashier,
+    bool asManager = false,
+  }) async {
     final owner = _peerFor(order.deviceId);
     if (owner == null) {
-      return (
-        order: null,
-        refusal: LanClaimRefusal.ownerUnreachable,
-        detail: order.deviceId,
-      );
+      return _unreachableClaim(order, cashier: cashier, detail: order.deviceId);
     }
     try {
-      final payload = await _client.claim(owner,
-          orderUuid: order.uuid, deviceId: deviceId, cashier: cashier);
+      final payload = await _client.claim(
+        owner,
+        orderUuid: order.uuid,
+        deviceId: deviceId,
+        cashier: cashier,
+        asManager: asManager,
+      );
       final taken = _claims.accept(payload, cashier: cashier);
       if (taken == null) {
         return (
@@ -310,15 +411,29 @@ class LanNode {
     } on LanTabRefused catch (e) {
       return (order: null, refusal: LanClaimRefusal.refused, detail: e.reason);
     } catch (e) {
-      // Anything that is not an answer is an unreachable till, which is the case
-      // where the tab has to stay exactly where it is: the owner could not let go
-      // of it, so nobody else may pick it up.
+      return _unreachableClaim(order, cashier: cashier, detail: '$e');
+    }
+  }
+
+  /// Owner silent: seize the local replica and announce ownership.
+  LanClaimResult _unreachableClaim(
+    Order order, {
+    String? cashier,
+    required String detail,
+  }) {
+    final seized = _claims.seizeUnreachable(order.uuid, cashier: cashier);
+    if (seized != null) {
       return (
-        order: null,
-        refusal: LanClaimRefusal.ownerUnreachable,
-        detail: '$e',
+        order: seized,
+        refusal: null,
+        detail: 'seized unreachable owner ($detail)',
       );
     }
+    return (
+      order: null,
+      refusal: LanClaimRefusal.ownerUnreachable,
+      detail: detail,
+    );
   }
 
   /// The peer that owns [deviceId], or null when this device has not seen it

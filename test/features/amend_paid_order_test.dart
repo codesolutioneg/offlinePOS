@@ -339,7 +339,7 @@ void main() {
     expect(slips, hasLength(1));
     expect(slips.single, contains('REMOVED ON EDIT'));
     // The two units that came off, at what they were sold for.
-    expect(slips.single, contains('2 x Cola'));
+    expect(slips.single, contains('2 Cola'));
     expect(slips.single, contains('60.00'));
     expect(orders.byUuid(sale.uuid)!.total, 280);
   });

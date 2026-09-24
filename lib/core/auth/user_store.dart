@@ -27,6 +27,28 @@ class Cashier {
 
   /// Whether approving with this account also takes a code from their phone.
   bool get hasSecondFactor => (totpSecret ?? '').isNotEmpty;
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'name': name,
+        'pin_salt': pinSalt,
+        'pin_hash': pinHash,
+        'role': role,
+        'active': active,
+        'totp_secret': totpSecret,
+      };
+
+  factory Cashier.fromMap(Map<String, dynamic> m) => Cashier(
+        id: '${m['id']}',
+        name: '${m['name'] ?? ''}',
+        pinSalt: '${m['pin_salt'] ?? ''}',
+        pinHash: '${m['pin_hash'] ?? ''}',
+        role: '${m['role'] ?? 'cashier'}',
+        active: m['active'] != false && m['active'] != 0,
+        totpSecret: m['totp_secret'] == null || '${m['totp_secret']}'.isEmpty
+            ? null
+            : '${m['totp_secret']}',
+      );
 }
 
 /// Cashiers as held on the till, so a shift change works with no network.

@@ -19,12 +19,16 @@ class OrderHistoryScreen extends StatefulWidget {
     required this.onReprint,
     this.onRefund,
     this.onEdit,
+    this.thisDeviceId,
   });
 
   /// Already sorted newest first by the caller (recent()); this screen does
   /// not re-sort, so a caller that wants a different order gets it.
   final List<Order> orders;
   final String Function(double) formatAmount;
+
+  /// This till's device id, so rows from another till can be labelled.
+  final String? thisDeviceId;
 
   /// Reprints the receipt for [order]. Awaited so the confirmation snackbar
   /// only fires once the job has actually been handed to the printer.
@@ -145,7 +149,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                     title: tr(context, 'No orders yet'),
                     message: tr(context, 'Completed sales will show up here'),
                   )
-                : ListView.separated(
+                    : ListView.separated(
                     itemCount: shown.length,
                     separatorBuilder: (context, index) => const Divider(height: 1),
                     itemBuilder: (context, i) => _HistoryTile(
@@ -155,6 +159,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                       onReprint: widget.onReprint,
                       onRefund: widget.onRefund,
                       onEdit: widget.onEdit,
+                      thisDeviceId: widget.thisDeviceId,
                     ),
                   ),
           ),
@@ -172,6 +177,7 @@ class _HistoryTile extends StatelessWidget {
     required this.onReprint,
     this.onRefund,
     this.onEdit,
+    this.thisDeviceId,
   });
 
   final Order order;
@@ -179,6 +185,7 @@ class _HistoryTile extends StatelessWidget {
   final Future<void> Function(Order order) onReprint;
   final Future<void> Function(Order order)? onRefund;
   final Future<void> Function(Order order)? onEdit;
+  final String? thisDeviceId;
 
   /// synced: the server has it. paid: tendered but still queued. Nothing else
   /// reaches this screen, since a draft or held order was never a completed
@@ -195,10 +202,17 @@ class _HistoryTile extends StatelessWidget {
     final time =
         '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
     final badge = _syncBadge;
+    final fromOther = thisDeviceId != null &&
+        order.deviceId.isNotEmpty &&
+        order.deviceId != thisDeviceId;
+    final typeLabel = tr(context, order.type.label);
+    final subtitle = fromOther
+        ? '$typeLabel · ${tr(context, 'Other till')} ${order.deviceId.length > 8 ? order.deviceId.substring(0, 8) : order.deviceId}'
+        : typeLabel;
     return ListTile(
       title: Text(
           '$time  ${order.displayNo}  ${formatAmount(order.total)}'),
-      subtitle: Text(tr(context, order.type.label)),
+      subtitle: Text(subtitle),
       trailing: badge == null
           ? null
           : Chip(

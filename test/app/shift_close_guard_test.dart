@@ -97,7 +97,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       config: const TillConfig(),
@@ -146,19 +146,6 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  /// Press Close and key the counted cash into the pad, which is as far as a cashier
-  /// gets before the guards have their say.
-  Future<void> countTheDrawer(WidgetTester t, String amount) async {
-    await t.tap(find.byKey(const Key('close-shift')));
-    await t.pumpAndSettle();
-    for (final d in amount.split('')) {
-      await t.tap(find.byKey(Key('key-$d')));
-      await t.pump();
-    }
-    await t.tap(find.byKey(const Key('keypad-ok')));
-    await t.pumpAndSettle();
-  }
-
   /// Off the floor, through the drawer, onto the shift screen: the way a cashier
   /// reaches the cash-up.
   Future<void> openShiftScreen(WidgetTester t) async {
@@ -169,6 +156,22 @@ void main() {
     await t.tap(find.byKey(const Key('nav-shift')));
     await t.pumpAndSettle();
     expect(find.byType(ShiftScreen), findsOneWidget);
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
+    await t.pumpAndSettle();
+  }
+
+  /// Press Close and key the counted cash into the pad, which is as far as a cashier
+  /// gets before the guards have their say.
+  Future<void> countTheDrawer(WidgetTester t, String amount) async {
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
+    await t.tap(find.byKey(const Key('close-shift')));
+    await t.pumpAndSettle();
+    for (final d in amount.split('')) {
+      await t.tap(find.byKey(Key('key-$d')));
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('keypad-ok')));
+    await t.pumpAndSettle();
   }
 
   testWidgets('a Z over a parked tab is refused outright', (t) async {
@@ -209,10 +212,11 @@ void main() {
     expect(find.textContaining('Steak'), findsOneWidget);
   });
 
-  testWidgets('a paid sale whose late course has not fired still counts',
+  testWidgets('a paid sale whose late course has not fired does not block close',
       (t) async {
     // Paid and waiting for the shift-close batch, with the mains held back: the
-    // money is in, the food is not out, and closing the day is not the end of it.
+    // money is in. Kitchen timers keep firing after Z; they must not stop End of
+    // Day when every table already looks free.
     final order = Order(
       deviceId: 'till-1',
       cashierId: 'sara',
@@ -233,9 +237,30 @@ void main() {
     await t.tap(find.byKey(const Key('close-shift')));
     await t.pumpAndSettle();
 
-    expect(find.byKey(const Key('open-work')), findsOneWidget);
-    expect(find.text('Parked tabs'), findsNothing);
-    expect(find.textContaining('Lamb'), findsOneWidget);
+    expect(find.byKey(const Key('open-work')), findsNothing);
+    expect(find.textContaining('Lamb'), findsNothing);
+  });
+
+  testWidgets('an empty held claim is discarded and does not block close',
+      (t) async {
+    final ghost = Order(
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      type: OrderType.dineIn,
+      tableLabel: '12',
+    );
+    ghost.state = OrderState.held;
+    orders.save(ghost);
+
+    await t.pumpWidget(app(await cashierOnTheTill()));
+    await signIn(t);
+    await openShiftScreen(t);
+
+    await t.tap(find.byKey(const Key('close-shift')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('open-work')), findsNothing);
+    expect(orders.held(), isEmpty);
   });
 
   testWidgets('not even a manager can close over a parked tab', (t) async {

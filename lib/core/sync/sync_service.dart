@@ -7,6 +7,7 @@ import '../../domain/catalogue.dart';
 import '../db/catalogue_store.dart';
 import '../db/sqlite_outbox_store.dart';
 import 'device_status.dart';
+import 'dishflow_mirror.dart';
 import 'odoo_puller.dart';
 import 'outbox.dart';
 
@@ -82,6 +83,7 @@ class SyncService {
     Future<bool> Function()? probe,
     this.reconcile,
     this.mergeBatch,
+    this.closedShiftRetry,
     RetryArmingStore? arming,
     this.catalogueMaxAge = const Duration(minutes: 30),
     this.retryWindow = const Duration(hours: 12),
@@ -146,15 +148,38 @@ class SyncService {
   final Future<void> Function()? reconcile;
 
   /// Sends the queued sales as one merged sales order and returns true when it
-  /// did, leaving nothing for the drain behind it. Null on a build that cannot
-  /// merge, and it answers false whenever the shop has not asked for merging or
-  /// the batch is not one that can be merged safely, which is the normal case.
+  /// did. [onlyUuids] restricts the merge to those tickets (the shift just
+  /// closed); other pending sales stay queued for their own close.
   ///
-  /// Injected rather than built here for the same reason [reconcile] is: this
-  /// class stays free of order and settings types. It runs on a batch push (a
-  /// shift close, a manual sync) and on the retry that finishes one, never on the
-  /// read-only timer pass.
-  final Future<bool> Function()? mergeBatch;
+  /// Null on a build that cannot merge. Answers false when the shop has not
+  /// asked for merging or the batch cannot be merged safely.
+  ///
+  /// Runs on shift close and on the retry that finishes one — never on the
+  /// read-only timer, and never as a silent fall-through to per-sale booking.
+  final Future<bool> Function({Set<String>? onlyUuids})? mergeBatch;
+
+  /// Retry a failed close the same way Close session books: shift-scoped merge.
+  /// Injected from main so this class stays free of OrderStore / ShiftStore.
+  final Future<ShiftFlushResult?> Function()? closedShiftRetry;
+
+  /// Why the last [mergeBatch] declined, for the End-of-Day message.
+  String? lastMergeSkipReason;
+
+  /// Odoo document name/id from the last successful consolidated push, for the
+  /// End-of-Day done screen. Cleared at the start of each sales flush.
+  String? lastOdooOrderRef;
+
+  /// Remember the SO number (or `#id`) from a module ack so Close session can
+  /// show it even when sales went out one-by-one instead of as a merge.
+  void noteOdooAck({String? name, int? id}) {
+    if (name != null && name.isNotEmpty) {
+      lastOdooOrderRef = name;
+      return;
+    }
+    if (id != null) {
+      lastOdooOrderRef ??= '#$id';
+    }
+  }
 
   /// Whether the server is currently reachable. Drives the online/offline badge on
   /// the sell screen. Starts false: a till has not proven it can reach anything
@@ -165,6 +190,12 @@ class SyncService {
   /// Sales still on the till, for anything that has to decide whether losing this
   /// device would lose money. The update gate is the caller that matters.
   int get pendingSales => _outboxStore.pendingSalesCount;
+
+  /// Paid sales still waiting to reach the Dishflow owner view.
+  int get pendingDishflow => _outboxStore.pendingDishflowCount;
+
+  /// Badge number: Odoo queue plus Dishflow mirror queue.
+  int get pendingToSync => pendingSales + pendingDishflow;
 
   /// True when something is registered that can actually deliver.
   ///
@@ -216,6 +247,10 @@ class SyncService {
 
   Timer? _timer;
   SyncState _state = SyncState.idle;
+
+  /// Completes when the in-flight [tick] finishes, so a second flush (End of Day
+  /// overlapping the timer) waits instead of returning a silent no-op.
+  Completer<void>? _flushDone;
   String? lastError;
   int sentThisRun = 0;
 
@@ -275,13 +310,35 @@ class SyncService {
     unawaited(periodicPass());
   }
 
-  /// One turn of the periodic loop: the read-only [refresh], then, only while a
-  /// failed batch push is armed, one bounded attempt to finish it. Kept as its own
-  /// method so the two stay separate: [refresh] is what the loop does every time
-  /// and it must remain incapable of pushing an order.
+  /// One turn of the periodic loop: the read-only [refresh], the owner-mirror
+  /// drain (Dishflow only), then, only while a failed batch push is armed, one
+  /// bounded attempt to finish Odoo. Kept as its own method so [refresh] stays
+  /// incapable of booking an Odoo order.
   Future<void> periodicPass() async {
     await refresh();
+    await drainDishflowMirror();
     await retryArmedFlush();
+  }
+
+  /// Push paid sales to Dishflow when online. Never touches `order.push`.
+  Future<void> drainDishflowMirror() async {
+    if (!online.value) return;
+    if (!_outbox.hasSenderFor(DishflowMirror.kind)) return;
+    if (_state == SyncState.working) return;
+    try {
+      final sent = await _outbox.drain(
+        maxBatches: 5,
+        kinds: const {
+          DishflowMirror.kind,
+          DishflowMirror.driverOrderKind,
+        },
+      );
+      if (sent > 0) {
+        _outboxStore.pruneSent();
+      }
+    } catch (e) {
+      lastError = e.toString();
+    }
   }
 
   void stop() {
@@ -410,36 +467,27 @@ class SyncService {
     }
   }
 
-  /// One full push: hand the audit trail and heartbeat to the outbox, drain it, and
-  /// refresh the catalogue. This is the batch that runs at shift close and on a
-  /// manual sync, never on the timer. Failures are recorded, never thrown.
+  /// One full push of non-sale outbox rows (audit + heartbeat) and an optional
+  /// catalogue refresh. **Never** books `order.push` — sales leave only through
+  /// [flushClosedShift] (Close session / Sync now retry of a closed shift).
   Future<void> tick() async {
-    if (_state == SyncState.working) return;
+    if (_state == SyncState.working) {
+      final wait = _flushDone;
+      if (wait != null) await wait.future;
+    }
     _state = SyncState.working;
+    final done = Completer<void>();
+    _flushDone = done;
     try {
-      // Sweep any paid order that never made it onto the wire back into the outbox
-      // before draining, so a sale can never be stranded on the till.
-      await reconcilePending();
-      // Hand the audit trail to the outbox before draining. With one shared Odoo
-      // login every order there says the same user rang it, so this log is the only
-      // record of who actually did what and it has to reach the server too.
       await _queueAudit();
       await _queueHeartbeat();
-      // Before the ordinary drain, because merging is about how these same sales
-      // reach the server, not about sending them twice. When it delivers, the
-      // sales are already marked and the drain below only carries the audit trail
-      // and the heartbeat.
-      await _mergeBatchIfAsked();
-      sentThisRun = await _outbox.drain();
+      sentThisRun = await _outbox.drain(kinds: _nonSaleKinds);
       if (sentThisRun > 0) {
-        // Acknowledged entries are kept a while so a duplicate push is still
-        // recognisable, then cleared. Without this the table only ever grows.
         _outboxStore.pruneSent();
       }
       if (_puller != null && catalogueNeedsRefresh) {
         final pull = await _puller.pull();
         _noteCatalogue(pull);
-        // Never overwrite a working catalogue with an empty pull.
         if (pull.isUsable) {
           final groups = _groupsFrom(pull);
           _catalogue.replaceAll(
@@ -457,16 +505,100 @@ class SyncService {
       }
       lastError = null;
       _state = SyncState.idle;
-      // A completed push is the strongest proof of being online.
       online.value = true;
-      _armRetryIfIncomplete(null);
+    } catch (e) {
+      lastError = e.toString();
+      _state = SyncState.offline;
+      online.value = false;
+    } finally {
+      if (!done.isCompleted) done.complete();
+      if (_flushDone == done) _flushDone = null;
+    }
+  }
+
+  /// Book the shift's unpaid tickets as **one** Odoo sales order.
+  ///
+  /// [orderUuids] must be the paid tickets inside that shift's window (see
+  /// [OrderStore.awaitingSyncInShift]). Rebuilds their wire payloads via
+  /// [enqueueOrders] first so delivery/tip/service fees are not stale zeros.
+  ///
+  /// Does **not** fall back to per-sale booking: a refused merge leaves the
+  /// tickets queued and returns [ShiftFlushResult.merged] false so the cashier
+  /// sees the real reason instead of a green "one sale order" lie.
+  Future<ShiftFlushResult> flushClosedShift({
+    required Set<String> orderUuids,
+    required Future<void> Function() enqueueOrders,
+  }) async {
+    if (_state == SyncState.working) {
+      final wait = _flushDone;
+      if (wait != null) await wait.future;
+    }
+    _state = SyncState.working;
+    final done = Completer<void>();
+    _flushDone = done;
+    lastOdooOrderRef = null;
+    lastMergeSkipReason = null;
+    try {
+      await enqueueOrders();
+      await _queueAudit();
+      await _queueHeartbeat();
+      final merged = orderUuids.isEmpty
+          ? true
+          : await _mergeBatchIfAsked(onlyUuids: orderUuids);
+      // Audit/heartbeat only — never drain order.push one-by-one after a close.
+      sentThisRun = await _outbox.drain(kinds: _nonSaleKinds);
+      if (sentThisRun > 0) _outboxStore.pruneSent();
+      lastError = null;
+      _state = SyncState.idle;
+      online.value = true;
+      if (orderUuids.isEmpty) {
+        _disarmRetry('no sales in closed shift');
+        return const ShiftFlushResult(merged: true, orderCount: 0);
+      }
+      if (merged &&
+          (lastOdooOrderRef != null && lastOdooOrderRef!.isNotEmpty)) {
+        _disarmRetry('shift booked as $lastOdooOrderRef');
+        return ShiftFlushResult(
+          merged: true,
+          orderCount: orderUuids.length,
+          odooRef: lastOdooOrderRef,
+        );
+      }
+      if (merged) {
+        // Module ack without a name — still treat as success for the queue.
+        _disarmRetry('shift merge acknowledged');
+        return ShiftFlushResult(
+          merged: true,
+          orderCount: orderUuids.length,
+          odooRef: lastOdooOrderRef,
+        );
+      }
+      _armRetryIfIncomplete(
+          lastMergeSkipReason ?? 'shift merge did not complete');
+      return ShiftFlushResult(
+        merged: false,
+        orderCount: orderUuids.length,
+        skipReason: lastMergeSkipReason ?? lastError,
+      );
     } catch (e) {
       lastError = e.toString();
       _state = SyncState.offline;
       online.value = false;
       _armRetryIfIncomplete(e.toString());
+      return ShiftFlushResult(
+        merged: false,
+        orderCount: orderUuids.length,
+        skipReason: e.toString(),
+      );
+    } finally {
+      if (!done.isCompleted) done.complete();
+      if (_flushDone == done) _flushDone = null;
     }
   }
+
+  /// Kinds that may leave on the timer / Sync-now housekeeping path. Sales are
+  /// deliberately absent: they only leave through [flushClosedShift].
+  static const Set<String> _nonSaleKinds = {'audit.push', 'device.status'};
 
   /// Decide, at the end of a batch push, whether the timer has to come back and
   /// finish the job. A failed shift close used to sit there until somebody noticed
@@ -602,25 +734,30 @@ class SyncService {
 
     _lastRetryAt = now;
     _retryAttempts++;
-    _state = SyncState.working;
     try {
-      // Same sweep the batch push does, in case the sale that was lost from the
-      // outbox is the reason the close came up short.
+      // Finish the same way Close session does: one merged SO for the shift's
+      // tickets — never drain order.push one-by-one (that booked food without
+      // delivery and lied about "one sale order").
+      final plan = closedShiftRetry;
+      if (plan != null) {
+        final result = await plan();
+        if (result != null && result.merged) {
+          online.value = true;
+          lastError = null;
+        }
+        return;
+      }
+      _state = SyncState.working;
       await reconcilePending();
-      // A close that merged and then failed has to be finished the same way. Left
-      // to the drain, the same sales would go out one at a time under their own
-      // uuids, and a batch the server had already committed but never
-      // acknowledged would then be booked a second time as individual sales.
       await _mergeBatchIfAsked();
-      sentThisRun = await _outbox.drain(maxBatches: _retryMaxBatches);
+      sentThisRun = await _outbox.drain(
+        maxBatches: _retryMaxBatches,
+        kinds: _nonSaleKinds,
+      );
       if (sentThisRun > 0) {
         _outboxStore.pruneSent();
-        // Something was accepted, which is the only proof of a line worth acting
-        // on. Nothing sent proves nothing, so the badge is left to the probe.
         online.value = true;
       }
-      // The drain swallows a sender failure, so what is left in the queue is the
-      // honest answer about whether the books are up to date.
       final left = pendingSales;
       _state = left == 0 || sentThisRun > 0 ? SyncState.idle : SyncState.offline;
       if (left == 0) {
@@ -634,9 +771,10 @@ class SyncService {
     }
   }
 
-  Future<void> _mergeBatchIfAsked() async {
+  Future<bool> _mergeBatchIfAsked({Set<String>? onlyUuids}) async {
     final merge = mergeBatch;
-    if (merge != null) await merge();
+    if (merge == null) return false;
+    return await merge(onlyUuids: onlyUuids);
   }
 
   /// Re-queue paid orders that are not yet on the wire. Exposed so a caller can run
@@ -647,11 +785,25 @@ class SyncService {
     if (r != null) await r();
   }
 
-  /// Alias read at the call sites that push a batch (shift close, manual sync), so
-  /// their intent reads as "flush what is queued" rather than an anonymous tick.
+  /// Housekeeping only (audit / heartbeat). Sales leave via [flushClosedShift].
   Future<void> flush() => tick();
 
   /// Batches one retry attempt will take. A long backlog is worked through over
   /// several attempts rather than one long run behind a cashier who is mid-sale.
   static const int _retryMaxBatches = 10;
+}
+
+/// Result of booking a closed shift's sales as one Odoo SO.
+class ShiftFlushResult {
+  const ShiftFlushResult({
+    required this.merged,
+    required this.orderCount,
+    this.odooRef,
+    this.skipReason,
+  });
+
+  final bool merged;
+  final int orderCount;
+  final String? odooRef;
+  final String? skipReason;
 }

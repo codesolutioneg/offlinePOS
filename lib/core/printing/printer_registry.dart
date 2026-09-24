@@ -77,7 +77,7 @@ class ConfiguredPrinter {
     return ConfiguredPrinter(
       name: name,
       host: map['host'] is String ? map['host'] as String : null,
-      port: map['port'] is int ? map['port'] as int : 9100,
+      port: map['port'] is num ? (map['port'] as num).toInt() : 9100,
       identity: map['identity'] is String ? map['identity'] as String : null,
       lastSeenAt: seen is String ? DateTime.tryParse(seen) : null,
       backup: map['backup'] is String && (map['backup'] as String).isNotEmpty
@@ -282,6 +282,54 @@ class PrinterRegistry {
   Map<String, Object?> toMap() => {
         'printers': [for (final printer in _printers.values) printer.toMap()],
       };
+
+  /// Printer names that belong to **this till only** (cash drawer / bag slip).
+  /// Kitchen / bar / grill stations are shared across the shop LAN; these are not.
+  static const Set<String> deviceLocalPrinterNames = {
+    'receipt',
+    'delivery',
+  };
+
+  /// Replace this till's printers with a primary's snapshot (same LAN shop).
+  ///
+  /// Wipes everything, including receipt — prefer [applySharedStationsFromMap]
+  /// on join so each till keeps its own receipt printer.
+  void applyFromMap(Map<String, Object?> saved) {
+    _printers.clear();
+    _sweepFailedAt.clear();
+    _identityAsked.clear();
+    final rows = saved['printers'];
+    if (rows is Iterable) {
+      for (final row in rows) {
+        if (row is! Map) continue;
+        final printer = ConfiguredPrinter.fromMap(row.cast<String, Object?>());
+        if (printer != null) _printers[printer.name] = printer;
+      }
+    }
+    onChanged?.call();
+  }
+
+  /// Join / shop sync: take shared station printers from [saved], keep this
+  /// till's [deviceLocalPrinterNames] (`receipt`, `delivery`) so three counters
+  /// on one kitchen LAN each kick their own drawer without stealing the
+  /// primary's receipt IP.
+  void applySharedStationsFromMap(
+    Map<String, Object?> saved, {
+    Set<String> keepLocalNames = deviceLocalPrinterNames,
+  }) {
+    final kept = <String, ConfiguredPrinter>{
+      for (final name in keepLocalNames)
+        if (_printers[name] != null) name: _printers[name]!,
+    };
+    applyFromMap(saved);
+    for (final name in keepLocalNames) {
+      _printers.remove(name);
+    }
+    for (final e in kept.entries) {
+      _printers[e.key] = e.value;
+    }
+    onChanged?.call();
+  }
 
   Future<String?> _locate(String name, {required bool tryLastKnown}) async {
     final printer = _printers[name];

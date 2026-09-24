@@ -1,11 +1,44 @@
 /// The three lists a delivery shop keeps on the till: where it drives to, who
 /// sends it the order, and who carries the bag.
 ///
-/// All of it is local. None of it is on the wire: the server is told the sale is a
-/// delivery and who the customer is, and the rest is how the shop runs its own
-/// floor. Nothing here carries a timer or a dispatch state, which is deliberate:
-/// this is the slice a cashier needs, not a dispatch system.
+/// Zones / channels / drivers live on the device. Dishflow mirror carries
+/// driver id/name/phone, fees, and delivery_status so the rider app and
+/// «حساب الطيار» reports match Dishflow.
 library;
+
+/// Ops lifecycle on a delivery bag (Dishflow `delivery_status`). Separate from
+/// sale state: financial close does not wait for `delivered`.
+enum DeliveryStatus {
+  received,
+  sent,
+  onTheWay,
+  delivered;
+
+  String get label => switch (this) {
+        received => 'Received',
+        sent => 'Assigned',
+        onTheWay => 'On the way',
+        delivered => 'Delivered',
+      };
+
+  /// Wire / Firestore value Dishflow already reads.
+  String get wireName => switch (this) {
+        received => 'received',
+        sent => 'sent',
+        onTheWay => 'on_the_way',
+        delivered => 'delivered',
+      };
+
+  static DeliveryStatus parse(String? raw) {
+    final v = (raw ?? '').trim().toLowerCase();
+    return switch (v) {
+      'sent' || 'assigned' => sent,
+      'on_the_way' || 'on the way' || 'ontheway' => onTheWay,
+      'delivered' || 'done' || 'completed' => delivered,
+      _ => received,
+    };
+  }
+}
 
 /// A named area with the charge the shop bills for driving to it.
 class DeliveryZone {
@@ -31,8 +64,8 @@ class DeliveryChannel {
   final int? partnerId;
 }
 
-/// Someone who takes the bag out. Name and phone is the whole model: the till has
-/// to be able to say who has the order and ring them, and nothing more.
+/// Someone who takes the bag out. Id + name + phone: assign stamps all three on
+/// the sale so settlement reports and the rider app can join on `driver_id`.
 class Driver {
   const Driver({
     required this.id,
@@ -48,4 +81,11 @@ class Driver {
   /// A driver who has left stays on file (old orders still name them) but drops
   /// out of the picker.
   final bool active;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Driver && other.id == id;
+
+  @override
+  int get hashCode => id.hashCode;
 }

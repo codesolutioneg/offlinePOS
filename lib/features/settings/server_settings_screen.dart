@@ -7,6 +7,7 @@ import '../../core/i18n/l10n.dart';
 import '../../core/sync/odoo_endpoint.dart';
 import '../../core/sync/odoo_site.dart';
 import '../../core/sync/server_probe.dart';
+import '../../domain/catalogue.dart';
 
 /// Point this till at an Odoo server.
 ///
@@ -22,6 +23,7 @@ class ServerSettingsScreen extends StatefulWidget {
     this.check,
     this.settings,
     this.loadChoices,
+    this.sessionPartners = const [],
   });
 
   final OdooEndpointStore store;
@@ -45,6 +47,10 @@ class ServerSettingsScreen extends StatefulWidget {
   /// case the ids already saved stand.
   final Future<OdooSiteChoices> Function()? loadChoices;
 
+  /// Odoo partners from the catalogue, for the End-of-Day consolidated invoice
+  /// customer. Empty leaves a free-typed partner id box instead.
+  final List<Customer> sessionPartners;
+
   @override
   State<ServerSettingsScreen> createState() => _ServerSettingsScreenState();
 }
@@ -57,15 +63,30 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
   late final TextEditingController _discountProduct;
   late final TextEditingController _localProduct;
   late bool _mergeBatch;
+  int? _sessionPartnerId;
+  late final TextEditingController _sessionPartnerIdField;
   String? _message;
   bool _checking = false;
 
   /// The three ids as chosen on screen. Held as ids rather than as text, because
   /// they are picked from a list now, and null means "let Odoo decide", which is
   /// what an empty box used to mean.
+  ///
+  /// [_branchId] is a `branch.simple` id. The company sales book into is derived
+  /// from that row and stored separately on save.
   int? _branchId;
   int? _restaurantId;
   int? _warehouseId;
+
+  /// Company of the currently selected branch, for narrowing POS / warehouse.
+  int? get _selectedBranchCompany {
+    final id = _branchId;
+    if (id == null) return null;
+    for (final o in _choices.branches) {
+      if (o.id == id) return o.companyId;
+    }
+    return widget.settings?.odooCompanyId;
+  }
 
   /// What the pickers offer. Seeded from the till's cache so a manager sees names
   /// before, and without, any answer from the server.
@@ -105,6 +126,16 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     _localProduct =
         TextEditingController(text: s?.odooLocalProductId?.toString() ?? '');
     _mergeBatch = s?.mergeBatchIntoOneSaleOrder ?? false;
+    _sessionPartnerId = s?.odooSessionPartnerId;
+    if (_sessionPartnerId != null &&
+        widget.sessionPartners.isNotEmpty &&
+        !widget.sessionPartners.any((p) => p.id == _sessionPartnerId)) {
+      // Keep the id in the free-typed field rather than dropping a partner the
+      // catalogue no longer lists.
+      _sessionPartnerId = null;
+    }
+    _sessionPartnerIdField = TextEditingController(
+        text: s?.odooSessionPartnerId?.toString() ?? '');
     // Opening a settings screen is the one moment asking the server is free. It is
     // deliberately not awaited: nothing on this screen waits for it, and nothing
     // that takes money can reach it.
@@ -119,6 +150,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     _pass.dispose();
     _discountProduct.dispose();
     _localProduct.dispose();
+    _sessionPartnerIdField.dispose();
     super.dispose();
   }
 
@@ -176,11 +208,53 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     final s = widget.settings;
     if (s != null) {
       s.odooBranchId = _branchId;
+      OdooSiteOption? branch;
+      if (_branchId != null) {
+        for (final o in _choices.branches) {
+          if (o.id == _branchId) {
+            branch = o;
+            break;
+          }
+        }
+      }
+      if (branch?.companyId != null) s.odooCompanyId = branch!.companyId;
+      if (_warehouseId == null && branch?.warehouseId != null) {
+        _warehouseId = branch!.warehouseId;
+      }
       s.odooRestaurantId = _restaurantId;
       s.odooWarehouseId = _warehouseId;
       s.odooDiscountProductId = int.tryParse(_discountProduct.text.trim());
       s.odooLocalProductId = int.tryParse(_localProduct.text.trim());
+      // Prefer the branch's Session close tab (Odoo) when it consolidates.
+      if (branch != null && branch.consolidateSessionInvoice) {
+        _mergeBatch = true;
+        if (branch.sessionPartnerId != null) {
+          _sessionPartnerId = branch.sessionPartnerId;
+          _sessionPartnerIdField.text = '${branch.sessionPartnerId}';
+        }
+      }
       s.mergeBatchIntoOneSaleOrder = _mergeBatch;
+      final partnerId = widget.sessionPartners.isNotEmpty
+          ? _sessionPartnerId
+          : int.tryParse(_sessionPartnerIdField.text.trim());
+      s.odooSessionPartnerId = partnerId;
+      if (partnerId == null) {
+        s.odooSessionPartnerName = null;
+      } else {
+        String? name = branch?.sessionPartnerName;
+        for (final p in widget.sessionPartners) {
+          if (p.id == partnerId) {
+            name = p.name;
+            break;
+          }
+        }
+        s.odooSessionPartnerName = name ?? s.odooSessionPartnerName;
+        if (!_mergeBatch) {
+          _mergeBatch = true;
+          s.mergeBatchIntoOneSaleOrder = true;
+        }
+      }
+      s.publishOdooSite();
     }
     widget.onSaved(e);
     setState(() => _message = tr(context, 'Saved. Queued sales will sync on the next attempt.'));
@@ -222,6 +296,49 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
           '${tr(context, 'The server is up, but it refused this login.')}'
               '${result.detail == null ? '' : ' (${result.detail})'}',
       };
+    });
+    if (result.outcome == ServerCheck.ok &&
+        widget.loadChoices != null &&
+        mounted) {
+      await _fetchChoices();
+      if (mounted) await _promptBranchIfNeeded();
+    }
+  }
+
+  /// After a successful connect, ask for a branch when the shop has outlets and
+  /// this till has not picked one yet.
+  Future<void> _promptBranchIfNeeded() async {
+    if (_branchId != null || _choices.branches.isEmpty) return;
+    if (_choices.branches.length == 1) {
+      final only = _choices.branches.first;
+      setState(() {
+        _branchId = only.id;
+        if (only.warehouseId != null) _warehouseId = only.warehouseId;
+      });
+      return;
+    }
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(tr(ctx, 'Choose branch')),
+        children: [
+          for (final o in _choices.branches)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, o.id),
+              child: Text(_optionLabel(o)),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _branchId = picked;
+      for (final o in _choices.branches) {
+        if (o.id == picked && o.warehouseId != null) {
+          _warehouseId = o.warehouseId;
+          break;
+        }
+      }
     });
   }
 
@@ -290,7 +407,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
               ),
             _picker(
               name: 'branch',
-              label: tr(context, 'Branch (company)'),
+              label: tr(context, 'Branch'),
               options: _choices.branches,
               value: _branchId,
               onPicked: (v) => _branchId = v,
@@ -302,7 +419,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
               options: _choices.pointsOfSale,
               value: _restaurantId,
               onPicked: (v) => _restaurantId = v,
-              withinBranch: _branchId,
+              withinCompany: _selectedBranchCompany,
               unread: _pointsOfSaleUnread && !_allChoicesUnread,
             ),
             _picker(
@@ -311,7 +428,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
               options: _choices.warehouses,
               value: _warehouseId,
               onPicked: (v) => _warehouseId = v,
-              withinBranch: _branchId,
+              withinCompany: _selectedBranchCompany,
               unread: _warehousesUnread && !_allChoicesUnread,
             ),
             _field(
@@ -354,8 +471,53 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
               onChanged: (v) => setState(() => _mergeBatch = v),
               title: Text(tr(context, 'Send a shift as one sales order')),
               subtitle: Text(tr(context,
-                  'Needs a change in Odoo first. Leave off until it is deployed.')),
+                  'Like Dishflow: the night books as one invoice under the '
+                  'session customer below.')),
             ),
+            if (widget.sessionPartners.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: DropdownButtonFormField<int?>(
+                  key: const Key('session-partner'),
+                  initialValue: _sessionPartnerId,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: tr(context, 'Session invoice customer'),
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  items: [
+                    DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text(tr(context, 'No session customer'))),
+                    for (final p in widget.sessionPartners)
+                      DropdownMenuItem<int?>(
+                          value: p.id, child: Text(p.name)),
+                  ],
+                  onChanged: (v) => setState(() => _sessionPartnerId = v),
+                ),
+              )
+            else
+              _field(
+                  _sessionPartnerIdField,
+                  tr(context, 'Session invoice customer id (Odoo partner)'),
+                  '',
+                  'session-partner-id',
+                  numeric: true),
+            if (_mergeBatch && _sessionPartnerId == null &&
+                int.tryParse(_sessionPartnerIdField.text.trim()) == null)
+              Container(
+                key: const Key('session-partner-warning'),
+                color: Colors.amber.shade100,
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  tr(context,
+                      'Pick a session customer so the closed shift invoices '
+                      'as one order under that name. Without one, sales still '
+                      'go out one ticket at a time.'),
+                ),
+              ),
             Container(
               key: const Key('merge-batch-warning'),
               color: Colors.amber.shade100,
@@ -364,11 +526,9 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
               child: Text(
                 tr(context,
                     'Turned on, a shift close sends the whole night as one sales '
-                    'order carrying the branch, restaurant and warehouse. Odoo '
-                    'has to be changed to accept it. Until that change is live, '
-                    'the night books as one document with no record of which sale '
-                    'was which and no protection against a retry booking it '
-                    'twice. Ask whoever looks after Odoo before turning this on.'),
+                    'order carrying the branch, restaurant and warehouse under '
+                    'the session customer. Odoo has to accept a batch payload; '
+                    'ask whoever looks after Odoo before turning this on.'),
               ),
             ),
           ],
@@ -417,18 +577,20 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     required List<OdooSiteOption> options,
     required int? value,
     required void Function(int?) onPicked,
-    int? withinBranch,
+    int? withinCompany,
     bool unread = false,
   }) {
-    final offered = _offer(options, value, withinBranch);
+    final offered = _offer(options, value, withinCompany);
     // Kept rather than cleared when the branch changes under it, because silently
     // unsetting a configured id is the failure this screen exists to avoid. Said
     // out loud instead: these ids ride on every sale, so one left pointing at the
     // branch before last books this till's takings into another branch's books.
-    final elsewhere = withinBranch != null &&
+    final elsewhere = withinCompany != null &&
         value != null &&
         options.any((o) =>
-            o.id == value && o.companyId != null && o.companyId != withinBranch);
+            o.id == value &&
+            o.companyId != null &&
+            o.companyId != withinCompany);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -478,23 +640,16 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     );
   }
 
-  /// The rows one picker offers: what Odoo listed, narrowed to the chosen branch
-  /// where the records say which branch they belong to, and always including
-  /// [selected] even when it is in neither.
-  ///
-  /// That last part is the rule this screen turns on. A list that could not be
-  /// fetched, a warehouse that moved company, an id typed in before this screen had
-  /// pickers at all: none of them may make a configured id unselectable, because
-  /// dropping it silently re-points the till at whatever Odoo would have picked.
+  /// The rows one picker offers: what Odoo listed, narrowed to the chosen
+  /// branch's company where the records say which company they belong to, and
+  /// always including [selected] even when it is in neither.
   List<OdooSiteOption> _offer(
-      List<OdooSiteOption> options, int? selected, int? branch) {
+      List<OdooSiteOption> options, int? selected, int? company) {
     final narrowed = [
       for (final o in options)
-        // A record naming no company belongs to every branch as far as this screen
-        // is concerned, which is the reading that hides the least.
-        if (branch == null ||
+        if (company == null ||
             o.companyId == null ||
-            o.companyId == branch ||
+            o.companyId == company ||
             o.id == selected)
           o,
     ];

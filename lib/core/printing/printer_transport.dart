@@ -203,4 +203,8 @@ class SpooledPrinter implements PrinterTransport {
       _flushing = false;
     }
   }
+
+  /// Discard every held job without printing. Stops a reconnect flood after a
+  /// long outage when the paper is no longer wanted.
+  Future<int> clearHeld() => _spool.clearAll();
 }

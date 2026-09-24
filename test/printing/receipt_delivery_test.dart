@@ -18,7 +18,7 @@ void main() {
       Order(
         deviceId: 'till-1',
         cashierId: 'sara',
-        type: OrderType.delivery,
+        type: OrderType.storeDelivery,
         customerName: 'Nadia',
         customerPhone: phone,
         customerAddress: address,

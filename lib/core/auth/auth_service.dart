@@ -104,16 +104,17 @@ class AuthService {
 
   /// Enrol or update a cashier from a roster sync, hashing the PIN locally.
   /// Authorise a privileged action (discount, void, refund, drawer) with a manager
-  /// PIN. Returns true if the PIN matches any active manager. A separate check from
-  /// [unlock] because the signed-in cashier need not sign out to get approval.
+  /// PIN. Returns the matching active manager, or null when the PIN (or second
+  /// factor) does not check out. Separate from [unlock] so the signed-in cashier
+  /// need not sign out to get approval.
   ///
   /// A manager who has enrolled an authenticator must also give its current [code].
   /// The second factor is checked only after their PIN has matched, so it adds a
   /// step and takes none away: a manager with no authenticator approves exactly as
   /// before, and a wrong code is a refusal rather than a fallback to the PIN alone.
   /// Every part of this is offline: the code comes from the clock, not a server.
-  Future<bool> authorizeManager(String pin, {String? code}) async {
-    if (!_policy.isWellFormed(pin)) return false;
+  Future<Cashier?> authorizeManager(String pin, {String? code}) async {
+    if (!_policy.isWellFormed(pin)) return null;
     for (final m in _users.active().where((u) => u.isManager)) {
       if (!await _hasher.verify(pin, m.pinSalt, m.pinHash)) continue;
       if (m.hasSecondFactor && !Totp.verify(m.totpSecret!, code ?? '')) {
@@ -121,13 +122,13 @@ class AuthService {
         // stolen PIN being tried and a manager fumbling their phone is the whole
         // reason for the second factor.
         _audit.record(m.id, 'manager.totp_rejected');
-        return false;
+        return null;
       }
       _audit.record(m.id, 'manager.authorized');
-      return true;
+      return m;
     }
     _audit.record('unknown', 'manager.authorization_failed');
-    return false;
+    return null;
   }
 
   /// Prove one particular cashier is standing at the till, without signing them in.
@@ -159,6 +160,48 @@ class AuthService {
     _audit.record(cashierId, 'cashier.authorized');
     return true;
   }
+
+  /// Unlock by ZK identify: the matched active cashier becomes [signedIn].
+  Future<AuthResult> unlockByFingerprint(String matchedUserId) async {
+    final user = _users.byId(matchedUserId);
+    if (user == null || !user.active) {
+      _audit.record(matchedUserId, 'fingerprint.rejected');
+      return const AuthRejected();
+    }
+    _guard.recordSuccess(matchedUserId);
+    _signedIn = user;
+    _audit.record(matchedUserId, 'fingerprint.unlock');
+    return AuthOk(user);
+  }
+
+  /// Manager approval via fingerprint (no PIN / TOTP when the print matches).
+  Future<Cashier?> authorizeManagerByFingerprint(String matchedUserId) async {
+    final user = _users.byId(matchedUserId);
+    if (user == null || !user.active || !user.isManager) {
+      _audit.record(matchedUserId, 'fingerprint.manager_rejected');
+      return null;
+    }
+    _audit.record(user.id, 'fingerprint.manager_authorized');
+    return user;
+  }
+
+  /// Prove [cashierId] is present via fingerprint (must match that id).
+  Future<bool> authorizeCashierByFingerprint(
+      String cashierId, String matchedUserId) async {
+    if (cashierId != matchedUserId) {
+      _audit.record(matchedUserId, 'fingerprint.cashier_mismatch');
+      return false;
+    }
+    final user = _users.byId(cashierId);
+    if (user == null || !user.active) {
+      _audit.record(cashierId, 'fingerprint.rejected');
+      return false;
+    }
+    _guard.recordSuccess(cashierId);
+    _audit.record(cashierId, 'fingerprint.cashier_authorized');
+    return true;
+  }
+
   /// Whether anyone who could approve an action on this till has a second factor,
   /// so the approval dialog knows whether to ask for a code at all. A shop that has
   /// enrolled none never sees the field.

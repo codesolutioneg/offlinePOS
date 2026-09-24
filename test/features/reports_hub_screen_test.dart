@@ -117,7 +117,7 @@ void main() {
     await t.pumpWidget(hubWith([
       order('sara', OrderType.dineIn),
       order('sara', OrderType.takeaway),
-      order('omar', OrderType.delivery),
+      order('omar', OrderType.storeDelivery),
     ]));
 
     // All three of today's orders before any filter.
@@ -136,7 +136,7 @@ void main() {
     await t.pumpWidget(hubWith([
       order('sara', OrderType.dineIn),
       order('sara', OrderType.takeaway),
-      order('omar', OrderType.delivery),
+      order('omar', OrderType.storeDelivery),
     ]));
 
     await t.tap(find.byKey(const Key('report-type-filter')));

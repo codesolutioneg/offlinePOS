@@ -40,7 +40,10 @@ extension SalesChannelLabel on SalesChannel {
 /// it rolls up with take away rather than table service; delivery is its own; the
 /// rest (dine-in) is table service.
 SalesChannel channelFor(OrderType type) => switch (type) {
-      OrderType.delivery => SalesChannel.delivery,
+      OrderType.deliveryFromCompany ||
+      OrderType.storeDelivery ||
+      OrderType.carDelivery =>
+        SalesChannel.delivery,
       OrderType.takeaway || OrderType.toGo => SalesChannel.takeAway,
       OrderType.dineIn => SalesChannel.tableService,
     };

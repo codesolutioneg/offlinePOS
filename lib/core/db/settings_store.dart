@@ -1,10 +1,14 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
+import 'dart:math';
+
 import '../../domain/business_day.dart';
 import '../../domain/order.dart'
-    show DiscountBooking, LocalProductBooking, OrderType;
+    show DiscountBooking, LocalProductBooking, OrderType, OrderTypeLabel;
 import '../../domain/table_preorder.dart';
+import '../../domain/table_section_config.dart';
 import '../auth/permissions.dart';
 import '../email/smtp_config.dart';
 import '../lan/lan_event.dart';
@@ -81,6 +85,9 @@ class SettingsStore {
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
   static const _tablePreorders = 'table_preorders';
+  static const _sectionConfigs = 'section_configs';
+  static const _deviceRole = 'device_role';
+  static const _joinPinBank = 'lan_join_pin_bank';
 
   /// Set to 'pending' by the schema migration that turned the till's tenders into
   /// journals, and to 'done' once the settings keyed on the old ids have been moved.
@@ -245,7 +252,7 @@ class SettingsStore {
       return (jsonDecode(v) as Map).map((k, val) => MapEntry(
             int.parse(k as String),
             (val as Map).map((t, r) =>
-                MapEntry(OrderType.values.byName(t as String), (r as num).toDouble())),
+                MapEntry(OrderTypeLabel.parse(t as String), (r as num).toDouble())),
           ));
     } catch (_) {
       return const {};
@@ -297,7 +304,7 @@ class SettingsStore {
     if (raw == null) return const {OrderType.dineIn};
     try {
       final names = (jsonDecode(raw) as List).map((e) => e.toString()).toSet();
-      return OrderType.values.where((t) => names.contains(t.name)).toSet();
+      return OrderTypeLabel.parseSet(names);
     } catch (_) {
       return const {OrderType.dineIn};
     }
@@ -498,35 +505,27 @@ class SettingsStore {
 
   // ── the number a human calls an order ────────────────────────────
 
-  /// The next order number for this till, as `DDMM-SEQ-TAG`.
+  /// The next order number for this till: a plain never-repeating sequence
+  /// (`1`, `2`, `3`, …).
   ///
-  /// The sequence is per trading day and per device: it restarts at 1 at the
-  /// business-day cutover (so a service that runs past midnight keeps counting, and
-  /// tomorrow starts at 1 again), and it carries a tag derived from the device id so
-  /// two tills serving the same room never hand out the same number. Local, and
-  /// deliberately not a server document number: the till has to be able to name an
-  /// order with the line down.
+  /// Does **not** restart each trading day — a flash spanning yesterday and today
+  /// (or a shift left open overnight) must not list two different sales as `#6`.
+  /// Digits only, same value on kitchen, receipt, flash and screens via
+  /// [Order.displayNo].
   ///
-  /// [now] is injectable for the rollover test; production reads the clock.
-  String nextOrderNumber(String deviceId, {DateTime? now}) {
-    final day = BusinessDay.of(now ?? DateTime.now());
-    // A different trading day than the last number handed out means the counter
-    // starts again, which is what makes the numbers short enough to say out loud.
-    final seq = getString(_orderNoDay) == day.key
-        ? (int.tryParse(getString(_orderNoSeq) ?? '') ?? 0) + 1
-        : 1;
-    setString(_orderNoDay, day.key);
+  /// [atLeast]: when set, the returned number is greater than this (used to climb
+  /// past numbers already issued on another till / older format).
+  /// [now] is unused; kept so call sites and tests keep compiling.
+  String nextOrderNumber(String deviceId, {DateTime? now, int? atLeast}) {
+    var seq = (int.tryParse(getString(_orderNoSeq) ?? '') ?? 0) + 1;
+    if (atLeast != null && seq <= atLeast) seq = atLeast + 1;
     setString(_orderNoSeq, '$seq');
-    String two(int n) => n.toString().padLeft(2, '0');
-    final d = day.date;
-    return '${two(d.day)}${two(d.month)}-${seq.toString().padLeft(3, '0')}-'
-        '${tillTagFor(deviceId)}';
+    // deviceId / day key kept out of the printed number on purpose.
+    return '$seq';
   }
 
   /// A short, stable tag for a device: the last three alphanumeric characters of its
-  /// id, uppercased. The id is a client-generated uuid, so its tail is as good as a
-  /// hash, and three characters keep the number sayable while making a clash between
-  /// the two or three tills in one shop vanishingly unlikely.
+  /// id, uppercased. Kept for diagnostics / legacy rows that still carry a tag.
   static String tillTagFor(String deviceId) {
     final letters =
         deviceId.toUpperCase().replaceAll(RegExp('[^A-Z0-9]'), '');
@@ -550,8 +549,21 @@ class SettingsStore {
   /// Whether opening a fresh table asks which cashier is opening it, and assigns the
   /// table to them. Off by default: a single-operator till has nobody to choose
   /// between. A shop that shares one screen between waiters turns it on.
-  bool get askCashierOnOpen => getBool('ask_cashier_on_open');
+  bool get askCashierOnOpen => getBool('ask_cashier_on_open', fallback: true);
   set askCashierOnOpen(bool v) => setBool('ask_cashier_on_open', v);
+
+  /// After choosing who opens a table, require their PIN or fingerprint.
+  /// Off = name pick only (still assigns the table to them).
+  bool get tableOpenRequireAuth =>
+      getBool('table_open_require_auth', fallback: true);
+  set tableOpenRequireAuth(bool v) => setBool('table_open_require_auth', v);
+
+  /// Whether moving a dine-in bill to another table waits until a line has been
+  /// sent to the kitchen. Off by default: the till can reseat before the pass has
+  /// the ticket, which is what a shop does when guests change tables as they sit.
+  /// A shop that wants the other till's rule turns it on.
+  bool get moveRequiresKitchen => getBool('move_requires_kitchen');
+  set moveRequiresKitchen(bool v) => setBool('move_requires_kitchen', v);
 
   /// Whether opening a shift asks who is working this session and clocks them in.
   /// Off by default: a single-operator till has only the person who opened it.
@@ -612,6 +624,16 @@ class SettingsStore {
   String? get lanDeviceName => getString('lan_device_name');
   set lanDeviceName(String? v) => setString('lan_device_name', v?.trim());
 
+  /// What this PC is for: counter (default) or delivery station.
+  ///
+  /// Device-local — not in the LAN shop bundle. Only [StationType.delivery]
+  /// auto-polls and alerts on new ecommerce store orders.
+  StationType get stationType => StationType.fromWire(getString('station_type'));
+  set stationType(StationType v) =>
+      setString('station_type', v == StationType.counter ? null : v.wire);
+
+  bool get receivesStoreOrderAlerts => stationType == StationType.delivery;
+
   /// The key the devices in one shop share, which is what makes them a shop rather
   /// than whatever else is plugged into the switch. Held here because this database
   /// is encrypted at rest; it is a pairing secret between tills, never a server
@@ -628,6 +650,32 @@ class SettingsStore {
   bool get lanAllowTakeover => getBool('lan_allow_takeover');
   set lanAllowTakeover(bool v) => setBool('lan_allow_takeover', v);
 
+  /// Whether this till is the shop's primary (mints join PINs, owns section
+  /// config writes), a secondary, or not chosen yet.
+  DeviceRole get deviceRole => DeviceRole.fromWire(getString(_deviceRole));
+  set deviceRole(DeviceRole role) =>
+      setString(_deviceRole, role == DeviceRole.unset ? null : role.wire);
+
+  bool get isLanPrimary => deviceRole == DeviceRole.primary;
+
+  /// Shown once on a fresh till until the cashier picks Primary, joins, or skips.
+  bool get lanRolePromptDismissed => getBool('lan_role_prompt_dismissed');
+  set lanRolePromptDismissed(bool v) => setBool('lan_role_prompt_dismissed', v);
+
+  /// Forget this till's place on the shop LAN so it can become primary again or
+  /// re-join with a new PIN. Does not wipe the menu or staff — the next join
+  /// snapshot replaces those; a primary keeps typing its own.
+  void clearLanPairing() {
+    deviceRole = DeviceRole.unset;
+    lanShopKey = null;
+    _writeJoinPins(const []);
+    setString('lan_shift_notices', null);
+    lanRolePromptDismissed = false;
+    // Belt-and-braces: delete even if a setter no-op'd on an already-empty value.
+    setString('lan_shop_key', null);
+    setString(_deviceRole, null);
+  }
+
   // ── the floor with more than one person on it ────────────────────
 
   /// Whether a tab opened by one cashier asks before another one picks it up.
@@ -636,7 +684,7 @@ class SettingsStore {
   /// between a waiter and their own table is friction for nothing. A shop where
   /// several people share a till and each answers for their own drawer wants the
   /// other answer: the cashier who opened the tab unlocks it, or a manager does.
-  bool get tableSecurity => getBool('table_security');
+  bool get tableSecurity => getBool('table_security', fallback: true);
   set tableSecurity(bool v) => setBool('table_security', v);
 
   /// Minutes of no touch before the till locks back to the PIN screen; 0 turns
@@ -687,7 +735,7 @@ class SettingsStore {
 
   /// Which character the receipt's separator lines are drawn with: 'line',
   /// 'equals', 'dots' or 'stars'.
-  String get receiptDividerStyle => getString('receipt_divider_style') ?? 'line';
+  String get receiptDividerStyle => getString('receipt_divider_style') ?? 'equals';
   set receiptDividerStyle(String v) => setString('receipt_divider_style', v);
 
   // ── what a tender is called on paper ─────────────────────────────
@@ -874,6 +922,14 @@ class SettingsStore {
   /// customer a second priced slip.
   bool get subReceiptHidePrices => getBool('sub_receipt_hide_prices', fallback: true);
   set subReceiptHidePrices(bool v) => setBool('sub_receipt_hide_prices', v);
+
+  /// Printer name for delivery customer / driver receipts (bag slip + paid
+  /// receipt). Defaults to `delivery`. Empty means use the main receipt
+  /// printer.
+  String get deliveryReceiptPrinter =>
+      getString('delivery_receipt_printer') ?? 'delivery';
+  set deliveryReceiptPrinter(String v) =>
+      setString('delivery_receipt_printer', v.trim());
 
   // ── what the printer can spell ───────────────────────────────────
 
@@ -1150,6 +1206,383 @@ class SettingsStore {
         (map['tables']?.isNotEmpty ?? false);
   }
 
+  // ── per-section menu / payment rules ─────────────────────────────
+
+  Map<String, TableSectionConfig> get _sectionConfigMap {
+    final v = getString(_sectionConfigs);
+    if (v == null) return {};
+    try {
+      final root = (jsonDecode(v) as Map).cast<String, dynamic>();
+      return {
+        for (final e in root.entries)
+          e.key: TableSectionConfig.fromMap(
+            {...(e.value as Map).cast<String, dynamic>(), 'name': e.key},
+          ),
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  void _writeSectionConfigMap(Map<String, TableSectionConfig> map) =>
+      setString(
+        _sectionConfigs,
+        map.isEmpty
+            ? null
+            : jsonEncode({for (final e in map.entries) e.key: e.value.toMap()}),
+      );
+
+  /// Rules for [section], or a blank unrestricted config when none were saved.
+  TableSectionConfig sectionConfig(String section) =>
+      _sectionConfigMap[section] ?? TableSectionConfig(name: section);
+
+  /// Every stored section config (only sections that were edited).
+  Map<String, TableSectionConfig> allSectionConfigs() =>
+      Map.unmodifiable(_sectionConfigMap);
+
+  static String sectionConfigRecord(String section) => 'sectioncfg:$section';
+
+  void setSectionConfig(TableSectionConfig config) {
+    // Secondaries receive section rules from the primary; local edits would
+    // diverge the shop until the next snapshot.
+    if (deviceRole == DeviceRole.secondary) return;
+    final publish = _publish;
+    announcedWrite(
+      _db,
+      () => _applySectionConfig(config),
+      publish == null || !isLanPrimary
+          ? null
+          : () => publish(
+                LanEventKind.sectionConfig,
+                sectionConfigRecord(config.name),
+                config.toMap(),
+              ),
+    );
+  }
+
+  void applySectionConfig(Map<String, dynamic> payload) {
+    final cfg = TableSectionConfig.fromMap(payload);
+    if (cfg.name.isEmpty) {
+      throw FormatException('section config missing name');
+    }
+    _applySectionConfig(cfg);
+  }
+
+  void _applySectionConfig(TableSectionConfig config) {
+    final map = _sectionConfigMap;
+    final empty = !config.isStaffSection &&
+        config.allowedCategoryIds.isEmpty &&
+        config.allowedPaymentMethodIds.isEmpty &&
+        config.employeeAllowedCategories.isEmpty &&
+        config.requireGuestCount == null &&
+        config.defaultOrderType == null;
+    if (empty) {
+      map.remove(config.name);
+    } else {
+      map[config.name] = config;
+    }
+    _writeSectionConfigMap(map);
+  }
+
+  /// Move preorders + section config when a floor section is renamed.
+  void renameSectionSettings(String from, String to) {
+    final target = to.trim();
+    if (from == target || target.isEmpty) return;
+    final pre = _preorderMap;
+    final lines = pre['sections']!.remove(from);
+    if (lines != null) {
+      pre['sections']![target] = lines;
+      _writePreorderMap(pre);
+    }
+    final cfgs = _sectionConfigMap;
+    final cfg = cfgs.remove(from);
+    if (cfg != null) {
+      cfgs[target] = cfg.copyWith(name: target);
+      _writeSectionConfigMap(cfgs);
+    }
+  }
+
+  /// Drop preorders + section config when a floor section is deleted.
+  void deleteSectionSettings(String section) {
+    final pre = _preorderMap;
+    if (pre['sections']!.remove(section) != null) {
+      _writePreorderMap(pre);
+    }
+    final cfgs = _sectionConfigMap;
+    if (cfgs.remove(section) != null) {
+      _writeSectionConfigMap(cfgs);
+    }
+  }
+
+  /// Replace every section config from a primary join snapshot (no LAN echo).
+  void applySectionConfigSnapshot(Map<String, dynamic> configs) {
+    final mapped = <String, TableSectionConfig>{
+      for (final e in configs.entries)
+        e.key: TableSectionConfig.fromMap(
+          {...(e.value as Map).cast<String, dynamic>(), 'name': e.key},
+        ),
+    };
+    _writeSectionConfigMap(mapped);
+  }
+
+  /// Shop-wide prefs the primary hands a joining secondary so staff, roles and
+  /// payment rules match without re-entering them.
+  Map<String, dynamic> exportShopBundle() => {
+        'shop_name': shopName,
+        'tax_id': taxId,
+        'receipt_footer': receiptFooter,
+        'receipt_show_tax': receiptShowTax,
+        'quick_comments': quickComments,
+        'discount_reasons': discountReasons,
+        'discount_percents': discountPercents,
+        'max_discount_percent': maxDiscountPercent,
+        'allow_amount_discount': allowAmountDiscount,
+        'custom_roles': customRoles,
+        'role_permissions': {
+          for (final e in _rolePermissionMap.entries) e.key: e.value.toList(),
+        },
+        'role_order_types': getString(_roleOrderTypes),
+        'shop_order_types': getString(_shopOrderTypes),
+        'disabled_payment_methods': disabledPaymentMethodIds.toList(),
+        'table_security': tableSecurity,
+        'ask_guest_count': askGuestCount,
+        'ask_cashier_on_open': askCashierOnOpen,
+        'table_open_require_auth': tableOpenRequireAuth,
+        'move_requires_kitchen': moveRequiresKitchen,
+        'floor_sections_side': floorSectionsSide,
+        'category_stations': {
+          for (final e in categoryStations.entries) '${e.key}': e.value,
+        },
+        'product_stations': {
+          for (final e in productStations.entries) '${e.key}': e.value,
+        },
+        'odoo_branch_id': odooBranchId,
+        'odoo_company_id': odooCompanyId,
+        'odoo_restaurant_id': odooRestaurantId,
+        'odoo_warehouse_id': odooWarehouseId,
+        'odoo_discount_product_id': odooDiscountProductId,
+        'odoo_local_product_id': odooLocalProductId,
+        'dishflow_mirror_enabled': dishflowMirrorEnabled,
+        'dishflow_project_id': dishflowProjectId,
+        'dishflow_api_key': dishflowApiKey,
+        'dishflow_odoo_connection_id': dishflowOdooConnectionId,
+        'dishflow_branch_id': dishflowBranchId,
+        'dishflow_branch_name': dishflowBranchName,
+      };
+
+  /// Apply a primary's [exportShopBundle] on this till (no LAN echo).
+  void applyShopBundle(Map<String, dynamic> bundle) {
+    if (bundle['shop_name'] != null) shopName = '${bundle['shop_name']}';
+    if (bundle['tax_id'] != null) taxId = '${bundle['tax_id']}';
+    if (bundle['receipt_footer'] != null) {
+      receiptFooter = '${bundle['receipt_footer']}';
+    }
+    if (bundle['receipt_show_tax'] is bool) {
+      receiptShowTax = bundle['receipt_show_tax'] as bool;
+    }
+    if (bundle['quick_comments'] is List) {
+      quickComments = [
+        for (final e in bundle['quick_comments'] as List) '$e',
+      ];
+    }
+    if (bundle['discount_reasons'] is List) {
+      discountReasons = [
+        for (final e in bundle['discount_reasons'] as List) '$e',
+      ];
+    }
+    if (bundle['discount_percents'] is List) {
+      discountPercents = [
+        for (final e in bundle['discount_percents'] as List)
+          if (e is num) e.toDouble() else double.tryParse('$e') ?? 0,
+      ].where((e) => e > 0).toList();
+    }
+    if (bundle['max_discount_percent'] is num) {
+      maxDiscountPercent = (bundle['max_discount_percent'] as num).toDouble();
+    }
+    if (bundle['allow_amount_discount'] is bool) {
+      allowAmountDiscount = bundle['allow_amount_discount'] as bool;
+    }
+    if (bundle['custom_roles'] is List) {
+      setStringList(_customRoles, [
+        for (final e in bundle['custom_roles'] as List) '$e',
+      ]);
+    }
+    if (bundle['role_permissions'] is Map) {
+      final raw = (bundle['role_permissions'] as Map).cast<String, dynamic>();
+      setString(
+        _rolePermissions,
+        jsonEncode({
+          for (final e in raw.entries)
+            e.key: [
+              for (final p in (e.value is List ? e.value as List : const []))
+                '$p',
+            ],
+        }),
+      );
+    }
+    if (bundle['role_order_types'] is String) {
+      setString(_roleOrderTypes, bundle['role_order_types'] as String);
+    }
+    if (bundle['shop_order_types'] is String) {
+      setString(_shopOrderTypes, bundle['shop_order_types'] as String);
+    }
+    if (bundle['disabled_payment_methods'] is List) {
+      disabledPaymentMethodIds = {
+        for (final e in bundle['disabled_payment_methods'] as List)
+          if (e is int)
+            e
+          else if (e is num)
+            e.toInt()
+          else if (int.tryParse('$e') != null)
+            int.parse('$e'),
+      };
+    }
+    if (bundle['table_security'] is bool) {
+      tableSecurity = bundle['table_security'] as bool;
+    }
+    if (bundle['ask_guest_count'] is bool) {
+      askGuestCount = bundle['ask_guest_count'] as bool;
+    }
+    if (bundle['ask_cashier_on_open'] is bool) {
+      askCashierOnOpen = bundle['ask_cashier_on_open'] as bool;
+    }
+    if (bundle['table_open_require_auth'] is bool) {
+      tableOpenRequireAuth = bundle['table_open_require_auth'] as bool;
+    }
+    if (bundle['move_requires_kitchen'] is bool) {
+      moveRequiresKitchen = bundle['move_requires_kitchen'] as bool;
+    }
+    if (bundle['floor_sections_side'] is bool) {
+      floorSectionsSide = bundle['floor_sections_side'] as bool;
+    }
+    if (bundle['category_stations'] is Map) {
+      categoryStations = {
+        for (final e in (bundle['category_stations'] as Map).entries)
+          if (int.tryParse('${e.key}') != null)
+            int.parse('${e.key}'): [
+              for (final s in (e.value is List ? e.value as List : const []))
+                '$s',
+            ],
+      };
+    }
+    if (bundle['product_stations'] is Map) {
+      productStations = {
+        for (final e in (bundle['product_stations'] as Map).entries)
+          if (int.tryParse('${e.key}') != null)
+            int.parse('${e.key}'): [
+              for (final s in (e.value is List ? e.value as List : const []))
+                '$s',
+            ],
+      };
+    }
+    if (bundle['odoo_branch_id'] != null) {
+      odooBranchId = int.tryParse('${bundle['odoo_branch_id']}');
+    }
+    if (bundle['odoo_company_id'] != null) {
+      odooCompanyId = int.tryParse('${bundle['odoo_company_id']}');
+    }
+    if (bundle['odoo_restaurant_id'] != null) {
+      odooRestaurantId = int.tryParse('${bundle['odoo_restaurant_id']}');
+    }
+    if (bundle['odoo_warehouse_id'] != null) {
+      odooWarehouseId = int.tryParse('${bundle['odoo_warehouse_id']}');
+    }
+    if (bundle['odoo_discount_product_id'] != null) {
+      odooDiscountProductId = int.tryParse('${bundle['odoo_discount_product_id']}');
+    }
+    if (bundle['odoo_local_product_id'] != null) {
+      odooLocalProductId = int.tryParse('${bundle['odoo_local_product_id']}');
+    }
+    if (bundle['dishflow_mirror_enabled'] is bool) {
+      dishflowMirrorEnabled = bundle['dishflow_mirror_enabled'] as bool;
+    }
+    if (bundle.containsKey('dishflow_project_id')) {
+      final v = bundle['dishflow_project_id'];
+      dishflowProjectId = v == null ? null : '$v';
+    }
+    if (bundle.containsKey('dishflow_api_key')) {
+      final v = bundle['dishflow_api_key'];
+      dishflowApiKey = v == null ? null : '$v';
+    }
+    if (bundle.containsKey('dishflow_odoo_connection_id')) {
+      final v = bundle['dishflow_odoo_connection_id'];
+      dishflowOdooConnectionId = v == null ? null : '$v';
+    }
+    if (bundle.containsKey('dishflow_branch_id')) {
+      final v = bundle['dishflow_branch_id'];
+      dishflowBranchId = v == null ? null : '$v';
+    }
+    if (bundle.containsKey('dishflow_branch_name')) {
+      final v = bundle['dishflow_branch_name'];
+      dishflowBranchName = v == null ? null : '$v';
+    }
+    publishOdooSite();
+  }
+
+  /// Record uuid for shop-wide settings the primary pushes to secondaries.
+  static const shopBundleRecord = 'shop-bundle';
+
+  /// Primary publishes the shop bundle (Dishflow mirror, roles, …) to peers.
+  /// No-op on secondary or with the fabric off. Settings must already be saved.
+  void publishShopBundle() {
+    final publish = _publish;
+    if (publish == null || !isLanPrimary) return;
+    publish(LanEventKind.shopBundle, shopBundleRecord, exportShopBundle());
+  }
+
+  // ── LAN join PIN bank (primary only) ─────────────────────────────
+
+  List<Map<String, dynamic>> get _joinPins {
+    final v = getString(_joinPinBank);
+    if (v == null) return [];
+    try {
+      return [
+        for (final e in (jsonDecode(v) as List))
+          (e as Map).cast<String, dynamic>(),
+      ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  void _writeJoinPins(List<Map<String, dynamic>> pins) =>
+      setString(_joinPinBank, pins.isEmpty ? null : jsonEncode(pins));
+
+  static String hashJoinPin(String pin) =>
+      sha256.convert(utf8.encode(pin.trim())).toString();
+
+  /// Mint a one-time 6-digit join PIN. Returns the plaintext once; only the hash
+  /// is stored. Null when this till is not primary.
+  String? issueJoinPin({Duration ttl = const Duration(hours: 12)}) {
+    if (!isLanPrimary) return null;
+    final pin = (100000 + Random.secure().nextInt(900000)).toString();
+    final pins = _joinPins;
+    pins.add({
+      'hash': hashJoinPin(pin),
+      'expires_at': DateTime.now().toUtc().add(ttl).toIso8601String(),
+    });
+    _writeJoinPins(pins);
+    return pin;
+  }
+
+  /// Consume a join PIN if it matches and is not expired. True only once.
+  bool consumeJoinPin(String pin) {
+    final hash = hashJoinPin(pin);
+    final now = DateTime.now().toUtc();
+    final pins = _joinPins;
+    final idx = pins.indexWhere((p) {
+      if (p['hash'] != hash) return false;
+      final exp = DateTime.tryParse('${p['expires_at']}');
+      return exp == null || !exp.isBefore(now);
+    });
+    if (idx < 0) return false;
+    pins.removeAt(idx);
+    _writeJoinPins(pins);
+    return true;
+  }
+
+  int get joinPinBankCount => _joinPins.length;
+
   // ── roles the shop invented ──────────────────────────────────────
   // A restaurant is not two job titles. A supervisor who may void and discount but
   // not touch the server, a runner who may do neither: both are ordinary and both
@@ -1283,12 +1716,17 @@ class SettingsStore {
 
   // ── where this till's sales belong in Odoo ───────────────────────
 
-  /// The branch (a `res.company` in jouma), the point of sale (`pos.config`) and
-  /// the warehouse (`stock.warehouse`) this till books into. Null until a manager
-  /// sets them, and then nothing extra travels: a shop that has one of everything
-  /// does not have to name it.
+  /// The outlet (`branch.simple`) this till sells for: filters the menu and the
+  /// tenders. Null until a manager picks one (or Odoo binds the login).
+  ///
+  /// Separate from [odooCompanyId]: one company holds many branches.
   int? get odooBranchId => _positiveId('odoo_branch_id');
   set odooBranchId(int? v) => _setOdooId('odoo_branch_id', v);
+
+  /// The company (`res.company`) sales book into. Set automatically when a
+  /// `branch.simple` is chosen, or typed when the shop has no branch addon yet.
+  int? get odooCompanyId => _positiveId('odoo_company_id');
+  set odooCompanyId(int? v) => _setOdooId('odoo_company_id', v);
 
   int? get odooRestaurantId => _positiveId('odoo_restaurant_id');
   set odooRestaurantId(int? v) => _setOdooId('odoo_restaurant_id', v);
@@ -1319,6 +1757,20 @@ class SettingsStore {
   bool get mergeBatchIntoOneSaleOrder => getBool('merge_batch_one_sale_order');
   set mergeBatchIntoOneSaleOrder(bool v) =>
       setBool('merge_batch_one_sale_order', v);
+
+  /// Odoo partner the consolidated End-of-Day invoice books under (Dishflow's
+  /// session-report customer). Positive id only; unset means merge still needs
+  /// two or more sales and keeps each ticket's own partner on the nested headers.
+  int? get odooSessionPartnerId => _positiveId('odoo_session_partner_id');
+  set odooSessionPartnerId(int? v) => _setOdooId('odoo_session_partner_id', v);
+
+  /// Display name for [odooSessionPartnerId], so settings and close screens do
+  /// not need a live catalogue lookup to say who the night is invoiced to.
+  String? get odooSessionPartnerName => getString('odoo_session_partner_name');
+  set odooSessionPartnerName(String? v) {
+    final t = v?.trim();
+    setString('odoo_session_partner_name', (t == null || t.isEmpty) ? null : t);
+  }
 
   /// The branches, points of sale and warehouses this till last saw in Odoo, so
   /// the three pickers still show names on a till with no line.
@@ -1360,9 +1812,13 @@ class SettingsStore {
   /// settings, and a sale pushed after the change must carry the new ids.
   void publishOdooSite() {
     OdooSite.shared = OdooSite(
-      branchId: odooBranchId,
+      // Booking payload wants the company, not the branch.simple id.
+      branchId: odooCompanyId,
       restaurantId: odooRestaurantId,
       warehouseId: odooWarehouseId,
+      // Outlet id travels as branch_id so End-of-Day can read session partner
+      // from Offline POS ▸ Branches.
+      outletId: odooBranchId,
     );
     // Read when a sale is turned into a payload, so it belongs beside the ids that
     // are read at the same moment.
@@ -1375,7 +1831,7 @@ class SettingsStore {
   /// Light, dark, or whatever the device is set to. Stored as the key rather than
   /// the enum so this file stays free of Flutter's widget layer; [AppTheme] turns it
   /// back into a [ThemeMode].
-  String get themeMode => getString('theme_mode') ?? 'system';
+  String get themeMode => getString('theme_mode') ?? 'dark';
   set themeMode(String v) => setString('theme_mode', v);
 
   /// Show the product picture on its grid tile.
@@ -1447,7 +1903,7 @@ class SettingsStore {
       final map = jsonDecode(raw) as Map;
       if (!map.containsKey(role)) return OrderType.values.toSet();
       final names = (map[role] as List).map((e) => e.toString()).toSet();
-      final allowed = OrderType.values.where((t) => names.contains(t.name)).toSet();
+      final allowed = OrderTypeLabel.parseSet(names);
       // A role that may ring nothing could take no money at all, so an empty set
       // reads as unrestricted rather than as a till nobody can sell on.
       return allowed.isEmpty ? OrderType.values.toSet() : allowed;
@@ -1495,7 +1951,7 @@ class SettingsStore {
     if (raw == null) return OrderType.values.toSet();
     try {
       final names = (jsonDecode(raw) as List).map((e) => e.toString()).toSet();
-      final offered = OrderType.values.where((t) => names.contains(t.name)).toSet();
+      final offered = OrderTypeLabel.parseSet(names);
       // A shop that offers nothing could take no money at all, so an empty saved
       // value reads as "everything" rather than as a till nobody can sell on.
       return offered.isEmpty ? OrderType.values.toSet() : offered;
@@ -1549,4 +2005,35 @@ class SettingsStore {
 
   set cashVarianceTolerance(double v) => setString(
       'cash_variance_tolerance', v <= 0 ? null : v.toStringAsFixed(2));
+
+  // ── Dishflow owner mirror ─────────────────────────────────────────
+
+  bool get dishflowMirrorEnabled => getBool('dishflow_mirror_enabled');
+  set dishflowMirrorEnabled(bool v) => setBool('dishflow_mirror_enabled', v);
+
+  String? get dishflowProjectId => getString('dishflow_project_id');
+  set dishflowProjectId(String? v) =>
+      setString('dishflow_project_id', v?.trim());
+
+  String? get dishflowApiKey => getString('dishflow_api_key');
+  set dishflowApiKey(String? v) => setString('dishflow_api_key', v?.trim());
+
+  String? get dishflowOdooConnectionId =>
+      getString('dishflow_odoo_connection_id');
+  set dishflowOdooConnectionId(String? v) =>
+      setString('dishflow_odoo_connection_id', v?.trim());
+
+  String? get dishflowBranchId => getString('dishflow_branch_id');
+  set dishflowBranchId(String? v) => setString('dishflow_branch_id', v?.trim());
+
+  String? get dishflowBranchName => getString('dishflow_branch_name');
+  set dishflowBranchName(String? v) =>
+      setString('dishflow_branch_name', v?.trim());
+
+  /// Switch on, and every field the writer needs is filled in.
+  bool get dishflowMirrorReady =>
+      dishflowMirrorEnabled &&
+      (dishflowProjectId ?? '').isNotEmpty &&
+      (dishflowApiKey ?? '').isNotEmpty &&
+      (dishflowOdooConnectionId ?? '').isNotEmpty;
 }

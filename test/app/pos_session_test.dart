@@ -67,7 +67,7 @@ void main() {
   test('startFresh discards an empty draft rather than leaving it behind', () {
     // An empty order that has been persisted (e.g. a type was set) then a fresh
     // start: the old empty draft must not linger to be restored later.
-    session.setOrderType(OrderType.delivery);
+    session.setOrderType(OrderType.storeDelivery);
     final staleUuid = session.current.uuid;
     expect(orders.drafts().length, 1);
 
@@ -254,6 +254,29 @@ void main() {
     expect(session.current.lines.length, 3);
     expect(session.current.lines.every((l) => l.quantity == 1), isTrue);
     expect(session.total, 750);
+  });
+
+  test('voiding one unit of a consolidated line leaves the rest', () {
+    session.addProduct(pizza);
+    session.addProduct(pizza);
+    session.addProduct(pizza); // qty 3
+    final uuid = session.current.lines.single.uuid;
+    session.current.lines.single.printedToKitchen = true;
+    final voided = session.voidQuantity(uuid, 1, 'Customer changed');
+    expect(voided, isNotNull);
+    expect(voided!.quantity, 1);
+    expect(voided.name, pizza.name);
+    expect(session.current.lines.single.quantity, 2);
+    expect(session.total, 500);
+  });
+
+  test('voiding the full quantity removes the line', () {
+    session.addProduct(pizza);
+    session.addProduct(pizza);
+    final uuid = session.current.lines.single.uuid;
+    final voided = session.voidQuantity(uuid, 2, 'Wrong item');
+    expect(voided!.quantity, 2);
+    expect(session.hasLines, isFalse);
   });
 
   test('assigning a guest to a consolidated line peels one unit onto that guest', () {

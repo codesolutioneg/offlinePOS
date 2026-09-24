@@ -120,7 +120,7 @@ void main() {
     odoo = OdooWiring(
       outbox: outbox,
       post: fakeOdoo,
-      onOrderBooked: orders.markSynced,
+      onOrderBooked: (uuid, [id, name]) => orders.markSynced(uuid, id),
     );
     return PosApp(
       auth: AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit),
@@ -148,7 +148,7 @@ void main() {
           send: odoo.pushPayload,
           enabled: () => settings.mergeBatchIntoOneSaleOrder,
           batchUuid: () => shifts.latestShift()?.uuid,
-          onOrderBooked: orders.markSynced,
+          onOrderBooked: (uuid, [id, name]) => orders.markSynced(uuid, id),
         ).run,
       ),
       outboxStore: outboxStore,
@@ -263,7 +263,7 @@ void main() {
     testWidgets('a delivery with a charge and a tip declares both on the wire',
         (t) async {
       orders.save(
-        Order(deviceId: 'till-1', cashierId: 'sara', type: OrderType.delivery)
+        Order(deviceId: 'till-1', cashierId: 'sara', type: OrderType.storeDelivery)
           ..lines.add(
               OrderLine(productId: 10, name: 'Pizza', quantity: 2, unitPrice: 100)),
         announce: false,
@@ -386,7 +386,7 @@ void main() {
       expect(orders.awaitingSync(), isEmpty);
     });
 
-    testWidgets('the switch says on screen that Odoo has to change first',
+    testWidgets('the switch says on screen that Odoo has to accept a batch',
         (t) async {
       await signIn(t);
       await openServerSettings(t);
@@ -394,7 +394,7 @@ void main() {
       await t.pumpAndSettle();
 
       expect(find.byKey(const Key('merge-batch-warning')), findsOneWidget);
-      expect(find.textContaining('has to be changed to accept it'), findsOneWidget);
+      expect(find.textContaining('accept a batch payload'), findsOneWidget);
     });
   });
 }

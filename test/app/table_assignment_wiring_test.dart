@@ -53,6 +53,7 @@ void main() {
   late TableStore tables;
   late TableAssignmentStore assignments;
   late ShiftStore shifts;
+  late AttendanceStore attendance;
   late String tableFive;
 
   setUpAll(useSystemSqlite);
@@ -64,12 +65,15 @@ void main() {
     shifts.openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     // These are about who may open a table, not about the covers, so seating stays
     // one tap: a guest prompt in the way would only be a second thing to answer.
     settings.askGuestCount = false;
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     tables = TableStore(db);
     assignments = TableAssignmentStore(db);
+    attendance = AttendanceStore(db);
     tableFive = tables.add(name: '5').id;
     tables.add(name: '6');
     CatalogueStore(db).replaceAll(
@@ -86,6 +90,7 @@ void main() {
     await auth.enrol(id: 'mo', name: 'Mo', pin: '9999', role: 'manager');
     for (final id in ['sara', 'ana', 'mo']) {
       WizardStore(db).dismiss(WizardId.firstSale, id);
+      attendance.clockIn(id);
     }
   });
   tearDown(() => db.close());
@@ -116,8 +121,9 @@ void main() {
       tables: tables,
       settings: settings,
       customers: CustomerStore(db),
-      attendance: AttendanceStore(db),
+      attendance: attendance,
       assignments: assignments,
+      loginManagersOnly: false,
       config: const TillConfig(),
     );
   }
@@ -143,8 +149,27 @@ void main() {
   }
 
   Future<void> managerPin(WidgetTester t, String pin) async {
-    await t.enterText(find.byKey(const Key('manager-pin')), pin);
+    for (final d in pin.split('')) {
+      await t.tap(find.byKey(Key('key-$d')).last);
+      await t.pump();
+    }
     await t.tap(find.byKey(const Key('manager-ok')));
+    await t.pumpAndSettle();
+  }
+
+  /// Pick who opens the table and confirm their PIN (when auth is required).
+  Future<void> pickOpener(WidgetTester t, String id, String pin,
+      {bool requireAuth = true}) async {
+    expect(find.text('Who is opening this table?'), findsOneWidget);
+    expect(find.byKey(const Key('opener-list')), findsOneWidget);
+    await t.tap(find.byKey(Key('opener-$id')));
+    await t.pumpAndSettle();
+    if (!requireAuth) return;
+    for (final d in pin.split('')) {
+      await t.tap(find.byKey(Key('key-$d')).last);
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('tab-pin-ok')));
     await t.pumpAndSettle();
   }
 
@@ -157,14 +182,28 @@ void main() {
     await tapFive(t);
     await t.pumpAndSettle();
 
-    // The prompt lists the staff; pick Ana.
-    expect(find.text('Who is opening this table?'), findsOneWidget);
-    await t.tap(find.byKey(const Key('transfer-ana')));
-    await t.pumpAndSettle();
+    await pickOpener(t, 'ana', '4321');
 
     // The table opens and is now Ana's, on the same assignment the floor shows.
     expect(find.byType(SellScreen), findsOneWidget);
     expect(assignments.cashierFor(tableFive), 'ana');
+  });
+
+  testWidgets('opening without auth still picks the waiter from the list',
+      (t) async {
+    settings.askCashierOnOpen = true;
+    settings.tableOpenRequireAuth = false;
+
+    await t.pumpWidget(app());
+    await signIn(t, 'sara', '1234');
+    await tapFive(t);
+    await t.pumpAndSettle();
+
+    await pickOpener(t, 'ana', '4321', requireAuth: false);
+
+    expect(find.byType(SellScreen), findsOneWidget);
+    expect(assignments.cashierFor(tableFive), 'ana');
+    expect(find.byKey(const Key('tab-pin-ok')), findsNothing);
   });
 
   testWidgets('a waiter is stopped at a table that is not theirs', (t) async {
@@ -175,7 +214,7 @@ void main() {
 
     // Seen and named on the plan, so Sara knows it is Ana's rather than broken.
     expect(find.byKey(Key('table-locked-$tableFive')), findsOneWidget);
-    expect(find.text('Ana'), findsOneWidget);
+    expect(find.text('Ana'), findsWidgets);
 
     await tapFive(t);
     expect(find.byKey(const Key('foreign-table-dialog')), findsOneWidget);
@@ -196,6 +235,8 @@ void main() {
     await t.tap(find.byKey(const Key('foreign-table-approve')));
     await t.pumpAndSettle();
     await managerPin(t, '9999');
+    // After the foreign-table gate, opener + PIN still stamp who owns the new tab.
+    await pickOpener(t, 'sara', '1234');
 
     expect(find.byType(SellScreen), findsOneWidget);
   });
@@ -216,12 +257,15 @@ void main() {
 
   testWidgets('a waiter opens their own assigned table with no prompt', (t) async {
     assignments.assign(tableFive, 'sara', by: 'mo');
+    // Own assignment skips the foreign-table dialog; opener + PIN still apply.
+    settings.askCashierOnOpen = true;
 
     await t.pumpWidget(app());
     await signIn(t, 'sara', '1234');
 
     expect(find.byKey(Key('table-locked-$tableFive')), findsNothing);
     await tapFive(t);
+    await pickOpener(t, 'sara', '1234');
 
     expect(find.byKey(const Key('foreign-table-dialog')), findsNothing);
     expect(find.byType(SellScreen), findsOneWidget);
@@ -235,6 +279,7 @@ void main() {
     await signIn(t, 'sara', '1234');
     await t.tap(find.byKey(Key('table-tile-${six.id}')));
     await t.pumpAndSettle();
+    await pickOpener(t, 'sara', '1234');
 
     expect(find.byType(SellScreen), findsOneWidget);
   });
@@ -247,6 +292,8 @@ void main() {
 
     expect(find.byKey(Key('table-locked-$tableFive')), findsNothing);
     await tapFive(t);
+    // No foreign-table dialog for a manager; opener PIN still confirms authorship.
+    await pickOpener(t, 'mo', '9999');
 
     expect(find.byKey(const Key('foreign-table-dialog')), findsNothing);
     expect(find.byType(SellScreen), findsOneWidget);
@@ -272,7 +319,7 @@ void main() {
     expect(trail.any((e) => e['detail'] == '5|ana'), isTrue);
     // And it is on the tile straight away: the manager has to see the room fill up as
     // they share it out, not after leaving the screen and coming back.
-    expect(find.text('Ana'), findsOneWidget);
+    expect(find.text('Ana'), findsWidgets);
     expect(find.byKey(const Key('floor-assign-hint')), findsNothing);
   });
 
@@ -334,6 +381,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byType(ShiftScreen), findsOneWidget);
 
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
     await t.tap(find.byKey(const Key('close-shift')));
     await t.pumpAndSettle();
     for (final d in '100'.split('')) {
@@ -370,6 +418,7 @@ void main() {
     // Sara opens her own table, then tries to pull table 5 onto it.
     await t.tap(find.byKey(Key('table-tile-${six.id}')));
     await t.pumpAndSettle();
+    await pickOpener(t, 'sara', '1234');
     expect(find.byType(SellScreen), findsOneWidget);
     // A bill needs a line before it can absorb another one.
     await t.tap(find.byKey(const Key('product-10')));
@@ -379,7 +428,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('bill-merge')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(Key('merge-${theirs.uuid}')));
+    await t.tap(find.byKey(Key('merge-table-${theirs.uuid}')));
     await t.pumpAndSettle();
 
     expect(find.byKey(const Key('manager-pin')), findsOneWidget);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/db/shift_store.dart';
@@ -6,7 +8,9 @@ import '../../core/theme/app_colors.dart';
 import '../../core/widgets/numeric_keypad.dart';
 import '../../domain/shift.dart';
 
-/// Open a shift with a float, record cash in/out, and close with the X/Z count.
+/// Open a shift with a float, record cash in/out, and close with an End-of-Day
+/// ceremony shaped like Dishflow's session close: idle summary → blockers →
+/// count → progress while syncing → done with Z totals.
 class ShiftScreen extends StatefulWidget {
   const ShiftScreen({
     super.key,
@@ -23,11 +27,36 @@ class ShiftScreen extends StatefulWidget {
     this.cashVarianceTolerance = 0,
     this.expenseCategories = const ['Transport', 'Food', 'Supplies', 'Maintenance', 'Other'],
     this.onShiftOpened,
+    this.onNavigateToFloor,
+    this.pendingSyncCount,
+    this.sessionPartnerName,
+    this.onPrepareCloseSync,
+    this.startCloseOnOpen = false,
   });
+
+  /// When true and a shift is already open, jump straight into the End-of-Day
+  /// close ceremony (Dishflow "End shift" from the floor).
+  final bool startCloseOnOpen;
 
   /// Called right after a shift is opened, so the host can ask who is working this
   /// session and clock them in. Null skips the prompt.
   final VoidCallback? onShiftOpened;
+
+  /// Leave the cash-up and go finish unfinished floor work (Dishflow's
+  /// "go to tables"). Null keeps only the "Go back" action on the blockers dialog.
+  final VoidCallback? onNavigateToFloor;
+
+  /// How many paid sales are still waiting to reach Odoo. Shown as a warning on
+  /// the idle card the way Dishflow names local unsynced orders before close.
+  final int Function()? pendingSyncCount;
+
+  /// Session-report customer name (Dishflow). Shown on End of Day so the cashier
+  /// sees who the consolidated invoice will book under. Null means none set.
+  final String? Function()? sessionPartnerName;
+
+  /// Dishflow gate before counting cash: returns null to proceed, or an error
+  /// message that blocks close (e.g. consolidated mode without a session partner).
+  final Future<String?> Function()? onPrepareCloseSync;
 
   final ShiftStore store;
   final String cashierId;
@@ -79,13 +108,24 @@ class ShiftScreen extends StatefulWidget {
   State<ShiftScreen> createState() => _ShiftScreenState();
 }
 
+enum _Phase { idle, closing, done }
+
 class _ShiftScreenState extends State<ShiftScreen> {
   Shift? _shift;
+  _Phase _phase = _Phase.idle;
+  Shift? _closed;
+  String? _syncMessage;
+  String? _odooOrderRef;
 
   @override
   void initState() {
     super.initState();
     _shift = widget.store.currentOpenShift();
+    if (widget.startCloseOnOpen && _shift != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_runCloseCeremony());
+      });
+    }
   }
 
   void _refresh() => setState(() => _shift = widget.store.currentOpenShift());
@@ -105,9 +145,6 @@ class _ShiftScreenState extends State<ShiftScreen> {
     return (v != null && v >= 0) ? v : null;
   }
 
-  /// An amount plus a short reason, so a paid-in/out is auditable rather than an
-  /// unexplained swing in the drawer. Returns null if cancelled or the amount is
-  /// not a number.
   /// An amount plus a short reason, and for a paid-out an expense category, so a
   /// drawer swing is auditable. [categories] non-empty shows the category picker.
   Future<({double amount, String reason, String? category})?> _promptMovement(
@@ -125,23 +162,21 @@ class _ShiftScreenState extends State<ShiftScreen> {
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
               controller: amountC,
-              autofocus: true,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration:
-                  InputDecoration(labelText: tr(ctx, 'Amount'), border: const OutlineInputBorder()),
+              decoration: InputDecoration(
+                  labelText: tr(ctx, 'Amount'), border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             if (categories.isNotEmpty)
               DropdownButtonFormField<String>(
-                key: const Key('expense-category'),
                 initialValue: category,
-                decoration: InputDecoration(
-                    labelText: tr(ctx, 'Category'), border: const OutlineInputBorder()),
                 items: [
                   for (final c in categories)
                     DropdownMenuItem(value: c, child: Text(tr(ctx, c))),
                 ],
                 onChanged: (v) => setLocal(() => category = v),
+                decoration: InputDecoration(
+                    labelText: tr(ctx, 'Category'), border: const OutlineInputBorder()),
               ),
             if (categories.isNotEmpty) const SizedBox(height: 8),
             TextField(
@@ -173,86 +208,131 @@ class _ShiftScreenState extends State<ShiftScreen> {
     );
   }
 
-  Widget _row(String k, String v, {bool bold = false}) => Padding(
+  Widget _row(String k, String v, {bool bold = false, Color? valueColor}) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(children: [
-          Text(k),
-          const Spacer(),
-          Text(v, style: TextStyle(fontWeight: bold ? FontWeight.bold : FontWeight.normal)),
+          Expanded(child: Text(k)),
+          Text(v,
+              style: TextStyle(
+                fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+                color: valueColor,
+              )),
         ]),
       );
 
   @override
   Widget build(BuildContext context) {
-    final s = _shift;
+    final title = switch (_phase) {
+      _Phase.closing => tr(context, 'Closing session'),
+      _Phase.done => tr(context, 'Session closed'),
+      _Phase.idle => tr(context, 'End of Day'),
+    };
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Shift'))),
+      appBar: AppBar(title: Text(title)),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: s == null ? _closedView() : _openView(s),
+        child: switch (_phase) {
+          _Phase.closing => _closingView(),
+          _Phase.done => _doneView(),
+          _Phase.idle => _shift == null ? _closedView() : _openView(_shift!),
+        },
       ),
     );
   }
 
-  Widget _closedView() => Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(tr(context, 'No shift is open'), style: const TextStyle(fontSize: 18)),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 52,
-            child: FilledButton.icon(
-              key: const Key('open-shift'),
-              icon: const Icon(Icons.play_arrow),
-              label: Text(tr(context, 'Open shift')),
-              onPressed: () async {
-                final f = await _promptAmount(tr(context, 'Open shift'), label: tr(context, 'Opening float'));
-                if (!mounted) return;
-                if (f != null) {
-                  widget.store.openShift(openingFloat: f, cashierId: widget.cashierId);
-                  _refresh();
-                  widget.onShiftOpened?.call();
-                }
-              },
+  Widget _closedView() {
+    final previous = widget.store.recentClosed();
+    return ListView(
+      children: [
+        const SizedBox(height: 24),
+        Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(tr(context, 'No shift is open'), style: const TextStyle(fontSize: 18)),
+            const SizedBox(height: 8),
+            Text(
+              tr(context,
+                  'Open a shift first. After sales, End shift → Close session & send to Odoo.'),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
-          ),
-        ]),
-      );
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 52,
+              child: FilledButton.icon(
+                key: const Key('open-shift'),
+                icon: const Icon(Icons.play_arrow),
+                label: Text(tr(context, 'Open shift')),
+                onPressed: () async {
+                  final f = await _promptAmount(tr(context, 'Open shift'),
+                      label: tr(context, 'Opening float'));
+                  if (!mounted) return;
+                  if (f != null) {
+                    widget.store.openShift(openingFloat: f, cashierId: widget.cashierId);
+                    widget.onShiftOpened?.call();
+                    // Land on the floor right after open — that is where service starts.
+                    if (widget.onNavigateToFloor != null) {
+                      widget.onNavigateToFloor!();
+                    } else {
+                      _refresh();
+                    }
+                  }
+                },
+              ),
+            ),
+          ]),
+        ),
+        if (previous.isNotEmpty) ...[
+          const SizedBox(height: 28),
+          Text(tr(context, 'Previous sessions'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          ...previous.map(_previousSessionTile),
+        ],
+      ],
+    );
+  }
 
+  Widget _previousSessionTile(Shift s) {
+    final sum = widget.store.summary(s, cashMethodIds: widget.cashMethodIds);
+    final closed = s.closedAt;
+    return Card(
+      key: Key('previous-session-${s.id}'),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: const Icon(Icons.receipt_long),
+        title: Text(
+          closed == null ? s.id : '${tr(context, 'Closed')} ${_stamp(closed)}',
+        ),
+        subtitle: Text(
+          '${tr(context, 'Orders')}: ${sum.salesCount}  ·  '
+          '${tr(context, 'Total')}: ${widget.formatAmount(sum.salesTotal)}  ·  '
+          '${tr(context, 'Cashier')}: ${s.cashierId}',
+        ),
+        trailing: widget.onPrintReport == null
+            ? null
+            : IconButton(
+                key: Key('reprint-z-${s.id}'),
+                tooltip: tr(context, 'Print Z'),
+                icon: const Icon(Icons.print),
+                onPressed: () => widget.onPrintReport!(
+                    'Z Report', _rows(sum, withVariance: true)),
+              ),
+      ),
+    );
+  }
+
+  /// Dishflow-style idle card: session header, totals, payment mix, cash drawer,
+  /// unfinished-work banner, then cash movements and close.
   Widget _openView(Shift s) {
     final sum = widget.store.summary(s, cashMethodIds: widget.cashMethodIds);
+    final pending = widget.pendingSyncCount?.call() ?? 0;
+    final work = widget.openWork?.call();
+    final scheme = Theme.of(context).colorScheme;
+
     return ListView(children: [
-      Text('${tr(context, 'Open since')} ${_stamp(s.openedAt)}',
-          style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
-      const Divider(),
-      _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),
-      _row('${tr(context, 'Sales')} (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
-      _row(tr(context, 'Cash sales'), widget.formatAmount(sum.cashSales)),
-      _row(tr(context, 'Cash in'), widget.formatAmount(sum.cashIn)),
-      _row(tr(context, 'Cash out'), widget.formatAmount(sum.cashOut)),
-      const Divider(),
-      _row(tr(context, 'Expected in drawer'), widget.formatAmount(sum.expectedCash), bold: true),
-      if (sum.tenders.isNotEmpty) ...[
-        const Divider(),
-        Text(tr(context, 'Payment mix'), style: const TextStyle(fontWeight: FontWeight.bold)),
-        // Tender names come from the catalogue, so only the untendered cash row has
-        // a translation to find.
-        ...sum.tenders.map((t) => _row(tr(context, t.label), widget.formatAmount(t.amount))),
-      ],
-      if (s.movements.isNotEmpty) ...[
-        const Divider(),
-        Text(tr(context, 'Cash movements'), style: const TextStyle(fontWeight: FontWeight.bold)),
-        ...s.movements.map((m) {
-          final tag = m.category != null ? tr(context, m.category!) : null;
-          final note = [
-            ?tag,
-            if (m.reason.isNotEmpty) m.reason,
-          ].join(' - ');
-          return _row(
-            '${m.type == 'in' ? tr(context, 'In') : tr(context, 'Out')}${note.isEmpty ? '' : ' ($note)'}',
-            widget.formatAmount(m.amount),
-          );
-        }),
-      ],
+      _sessionCard(s, sum, pending: pending, work: work, scheme: scheme),
       const SizedBox(height: 16),
       Wrap(spacing: 8, children: [
         SizedBox(
@@ -290,6 +370,21 @@ class _ShiftScreenState extends State<ShiftScreen> {
           ),
         ),
       ]),
+      if (s.movements.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        Text(tr(context, 'Cash movements'), style: const TextStyle(fontWeight: FontWeight.bold)),
+        ...s.movements.map((m) {
+          final tag = m.category != null ? tr(context, m.category!) : null;
+          final note = [
+            ?tag,
+            if (m.reason.isNotEmpty) m.reason,
+          ].join(' - ');
+          return _row(
+            '${m.type == 'in' ? tr(context, 'In') : tr(context, 'Out')}${note.isEmpty ? '' : ' ($note)'}',
+            widget.formatAmount(m.amount),
+          );
+        }),
+      ],
       const SizedBox(height: 16),
       if (widget.onPrintReport != null)
         Wrap(spacing: 8, children: [
@@ -306,52 +401,430 @@ class _ShiftScreenState extends State<ShiftScreen> {
             onPressed: _printCashierFlash,
           ),
         ]),
-      const SizedBox(height: 8),
-      _whyBlocked(),
-      SizedBox(
-        height: 60,
-        child: FilledButton.icon(
-          key: const Key('close-shift'),
-          style: FilledButton.styleFrom(backgroundColor: AppColors.error),
-          icon: const Icon(Icons.stop),
-          label: Text(tr(context, 'Close shift (Z)')),
-          onPressed: () async {
-            // Before anything else, including the cash count: a tab still on a table
-            // is a reason not to be closing at all, and finding that out after
-            // counting the drawer wastes the count.
-            if (!await _clearOpenWork()) return;
-            if (!mounted) return;
-            final counted = await _promptAmount(tr(context, 'Close shift'), label: tr(context, 'Counted cash'));
-            if (counted == null) return;
-            if (!mounted) return;
-            if (!await _drawerAddsUp(counted)) return;
-            if (!mounted) return;
-            final confirmed = await _confirmCloseShift(counted);
-            if (confirmed != true || !mounted) return;
-            // Authorise BEFORE the irreversible close, not after: a failed approval
-            // must leave the shift open.
-            if (widget.authorizeClose != null && !await widget.authorizeClose!()) return;
-            if (!mounted) return;
-            final closed = widget.store.closeShift(countedCash: counted);
-            _handOverZ(closed);
-            if (mounted) _showZ(closed);
-            _refresh();
-            // Push the day's orders to Odoo now, as one batch. The message tells the
-            // cashier whether it landed or is safely held for later.
-            if (widget.onCloseSync != null) {
-              final message = await widget.onCloseSync!();
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  key: const Key('close-sync-result'),
-                  content: Text(message),
-                  duration: const Duration(seconds: 5),
-                ));
-              }
-            }
-          },
-        ),
+      const SizedBox(height: 12),
+      Text(
+        tr(context,
+            'Full Z count stays on this till; peers close quietly without recounting.'),
+        style: TextStyle(color: scheme.onSurfaceVariant),
+      ),
+      Text(
+        tr(context,
+            'Each till syncs its own Odoo outbox on close or Sync now.'),
+        style: TextStyle(color: scheme.onSurfaceVariant),
       ),
     ]);
+  }
+
+  String _pendingSyncBanner(int pending) {
+    final name = widget.sessionPartnerName?.call();
+    if (name == null || name.isEmpty) {
+      return tr(context,
+          'There are $pending order(s) waiting to sync — close will push them '
+          'to Odoo as one sale order using the branch session customer.');
+    }
+    return tr(context,
+        'There are $pending order(s) waiting to sync — close will push them '
+        'to Odoo as one sale order under $name.');
+  }
+
+  Widget _sessionCard(
+    Shift s,
+    ShiftSummary sum, {
+    required int pending,
+    required OpenWork? work,
+    required ColorScheme scheme,
+  }) {
+    return Card(
+      key: const Key('session-close-card'),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: AppColors.error.withValues(alpha: 0.35), width: 1.5),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: AppColors.error.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(Icons.lock, color: AppColors.error),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(tr(context, 'End of Day'),
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text('${tr(context, 'Open since')} ${_stamp(s.openedAt)}',
+                    style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+              ]),
+            ),
+          ]),
+          const SizedBox(height: 16),
+          Row(children: [
+            Expanded(
+              child: _statTile(
+                label: tr(context, 'Total'),
+                value: widget.formatAmount(sum.salesTotal),
+                primary: true,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _statTile(
+                label: tr(context, 'Orders'),
+                value: '${sum.salesCount}',
+                primary: false,
+              ),
+            ),
+          ]),
+          if (sum.tenders.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(tr(context, 'Payment mix'),
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            ...sum.tenders.map((t) => _row(
+                  tr(context, t.label),
+                  widget.formatAmount(t.amount),
+                )),
+          ],
+          const Divider(height: 24),
+          Text(tr(context, 'Cash handling'),
+              style: const TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),
+          _row(tr(context, 'Cash sales'), widget.formatAmount(sum.cashSales)),
+          _row(tr(context, 'Cash in'), widget.formatAmount(sum.cashIn)),
+          _row(tr(context, 'Cash out'), widget.formatAmount(sum.cashOut)),
+          _row(tr(context, 'Expected in drawer'), widget.formatAmount(sum.expectedCash),
+              bold: true),
+          if (work != null && !work.isEmpty) ...[
+            const SizedBox(height: 12),
+            _blockerBanner(work),
+          ],
+          if (pending > 0) ...[
+            const SizedBox(height: 12),
+            Container(
+              key: const Key('unsynced-warning'),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.red.withValues(alpha: 0.4)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.warning_amber, color: Colors.red, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _pendingSyncBanner(pending),
+                    style: const TextStyle(fontSize: 12, color: Colors.red, height: 1.4),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+          if ((widget.sessionPartnerName?.call() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              key: const Key('session-partner-label'),
+              '${tr(context, 'Session invoice customer')}: '
+              '${widget.sessionPartnerName!.call()}',
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
+          ],
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 56,
+            width: double.infinity,
+            child: FilledButton.icon(
+              key: const Key('close-shift'),
+              style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+              icon: const Icon(Icons.lock),
+              label: Text(pending > 0
+                  ? tr(context, 'Close session & send to Odoo')
+                  : tr(context, 'Close session')),
+              onPressed: _runCloseCeremony,
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _statTile({required String label, required String value, required bool primary}) {
+    final bg = primary
+        ? AppColors.primary.withValues(alpha: 0.1)
+        : Theme.of(context).colorScheme.surfaceContainerHighest;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            )),
+        const SizedBox(height: 4),
+        Text(value,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: primary ? AppColors.primary : null,
+            )),
+      ]),
+    );
+  }
+
+  Widget _blockerBanner(OpenWork work) => Card(
+        key: const Key('close-blocked-why'),
+        color: AppColors.error.withValues(alpha: 0.08),
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              const Icon(Icons.block, color: AppColors.error),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '${tr(context, 'Cannot close: still open on this till')} (${work.count})',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.error),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            Text(
+              tr(context,
+                  '${work.count} unfinished item(s). Resolve each one before retrying.'),
+              style: const TextStyle(fontSize: 12, color: AppColors.error),
+            ),
+            if (widget.onNavigateToFloor != null) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton.icon(
+                  key: const Key('go-to-floor'),
+                  onPressed: widget.onNavigateToFloor,
+                  icon: const Icon(Icons.table_restaurant),
+                  label: Text(tr(context, 'Go to floor')),
+                ),
+              ),
+            ],
+          ]),
+        ),
+      );
+
+  Widget _closingView() => Center(
+        key: const Key('session-closing'),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(
+            width: 48,
+            height: 48,
+            child: CircularProgressIndicator(strokeWidth: 3),
+          ),
+          const SizedBox(height: 20),
+          Text(tr(context, 'Closing session'),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Text(
+            tr(context, 'Syncing sales to Odoo…'),
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ),
+        ]),
+      );
+
+  Widget _doneView() {
+    final closed = _closed;
+    if (closed == null) return const SizedBox.shrink();
+    final sum = widget.store.summary(closed, cashMethodIds: widget.cashMethodIds);
+    final variance = sum.variance ?? 0;
+    return ListView(
+      key: const Key('session-done'),
+      children: [
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: Colors.green.shade600.withValues(alpha: 0.4)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
+                Icon(Icons.check_circle, color: Colors.green.shade700, size: 40),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(tr(context, 'Session closed'),
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ),
+              ]),
+              if (_syncMessage != null) ...[
+                const SizedBox(height: 12),
+                Text(_syncMessage!,
+                    key: const Key('close-sync-result-text'),
+                    style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ],
+              if (_odooOrderRef != null) ...[
+                const SizedBox(height: 16),
+                Container(
+                  key: const Key('odoo-order-ref'),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.green.shade400),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(tr(context, 'Odoo order'),
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.green.shade800)),
+                      const SizedBox(height: 4),
+                      SelectableText(
+                        _odooOrderRef!,
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green.shade900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const Divider(height: 28),
+              Text(tr(context, 'Z report'),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 8),
+              _row('${tr(context, 'Sales')} (${sum.salesCount})',
+                  widget.formatAmount(sum.salesTotal),
+                  bold: true),
+              for (final t in sum.tenders)
+                _row('  ${tr(context, t.label)}', widget.formatAmount(t.amount)),
+              _row(tr(context, 'Cash sales'), widget.formatAmount(sum.cashSales)),
+              _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),
+              _row(tr(context, 'Cash in'), widget.formatAmount(sum.cashIn)),
+              _row(tr(context, 'Cash out'), widget.formatAmount(sum.cashOut)),
+              _row(tr(context, 'Expected in drawer'), widget.formatAmount(sum.expectedCash)),
+              _row(tr(context, 'Counted'), widget.formatAmount(sum.countedCash ?? 0)),
+              _row(
+                tr(context, 'Variance'),
+                widget.formatAmount(variance),
+                bold: true,
+                valueColor: variance.abs() < 0.01 ? Colors.green.shade700 : Colors.red,
+              ),
+            ]),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          if (widget.onPrintReport != null)
+            OutlinedButton.icon(
+              key: const Key('print-z'),
+              icon: const Icon(Icons.print),
+              label: Text(tr(context, 'Print')),
+              onPressed: () =>
+                  widget.onPrintReport!('Z Report', _rows(sum, withVariance: true)),
+            ),
+          FilledButton(
+            key: const Key('session-done-ok'),
+            onPressed: () => Navigator.of(context).maybePop(),
+            child: Text(tr(context, 'Done')),
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Future<void> _runCloseCeremony() async {
+    // Before anything else, including the cash count: a tab still on a table
+    // is a reason not to be closing at all, and finding that out after
+    // counting the drawer wastes the count.
+    if (!await _clearOpenWork()) return;
+    if (!mounted) return;
+    // Dishflow: consolidated close needs a session customer before the drawer
+    // count starts — otherwise the night would book under Walk-in or split.
+    if (!await _prepareCloseSync()) return;
+    if (!mounted) return;
+    final pending = widget.pendingSyncCount?.call() ?? 0;
+    final counted = await _promptAmount(
+        pending > 0
+            ? tr(context, 'Close session & send to Odoo')
+            : tr(context, 'Close session'),
+        label: tr(context, 'Counted cash'));
+    if (counted == null) return;
+    if (!mounted) return;
+    if (!await _drawerAddsUp(counted)) return;
+    if (!mounted) return;
+    final confirmed = await _confirmCloseShift(counted);
+    if (confirmed != true || !mounted) return;
+    // Authorise BEFORE the irreversible close, not after: a failed approval
+    // must leave the shift open.
+    if (widget.authorizeClose != null && !await widget.authorizeClose!()) return;
+    if (!mounted) return;
+
+    final closed = widget.store.closeShift(countedCash: counted);
+    _handOverZ(closed);
+    setState(() {
+      _closed = closed;
+      _shift = null;
+      _phase = _Phase.closing;
+      _syncMessage = null;
+    });
+
+    // Dishflow shows a progress state while the batch lands; same here.
+    var message = tr(context, 'No orders to sync.');
+    if (widget.onCloseSync != null) {
+      message = await widget.onCloseSync!();
+    }
+    if (!mounted) return;
+    setState(() {
+      _syncMessage = message;
+      _odooOrderRef = _parseOdooOrderRef(message);
+      _phase = _Phase.done;
+    });
+  }
+
+  /// Pulls "Odoo order: NAME" out of the sync result for the big label on done.
+  static String? _parseOdooOrderRef(String message) {
+    final match = RegExp(r'Odoo order:\s*(.+)$', multiLine: true).firstMatch(message);
+    final ref = match?.group(1)?.trim();
+    return (ref == null || ref.isEmpty) ? null : ref;
+  }
+
+  /// Dishflow session-close precondition: partner configured when sales will sync.
+  Future<bool> _prepareCloseSync() async {
+    final prepare = widget.onPrepareCloseSync;
+    if (prepare == null) return true;
+    final block = await prepare();
+    if (block == null) return true;
+    widget.onCloseBlocked?.call('shift.close.blocked.session_partner');
+    if (!mounted) return false;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('session-partner-required'),
+        title: Text(tr(ctx, 'Cannot close session')),
+        content: Text(block),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr(ctx, 'OK')),
+          ),
+        ],
+      ),
+    );
+    return false;
   }
 
   /// Hand the closed Z to whoever wants a copy of it (the mail queue).
@@ -371,12 +844,6 @@ class _ShiftScreenState extends State<ShiftScreen> {
   }
 
   /// Whether the Z may go ahead over whatever is still open on the till.
-  ///
-  /// Nothing open, or nothing being checked, and this is a no-op. Otherwise the list
-  /// is shown in full and the close does not happen. There is no override: a parked
-  /// tab is a bill nobody has taken money for, so closing the day over it produces a
-  /// Z that is wrong on the paper and wrong in Odoo, and no approval fixes that.
-  /// Settling or discarding the tab is the only way past.
   Future<bool> _clearOpenWork() async {
     final work = widget.openWork?.call();
     if (work == null || work.isEmpty) return true;
@@ -386,13 +853,11 @@ class _ShiftScreenState extends State<ShiftScreen> {
   }
 
   /// Everything still open, named, so the cashier knows exactly what to go and
-  /// finish. Informational: the only way out of it is back to the floor.
+  /// finish. Dishflow-style: sectioned list + optional jump back to the floor.
   Future<void> _showOpenWork(OpenWork work) => showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           key: const Key('open-work'),
-          // The count leads the title: whatever else is skimmed, how many things
-          // are in the way is the number that matters.
           title: Text('${tr(ctx, 'Still open on this till')} (${work.count})'),
           content: SingleChildScrollView(
             child: Column(
@@ -419,6 +884,15 @@ class _ShiftScreenState extends State<ShiftScreen> {
             ),
           ),
           actions: [
+            if (widget.onNavigateToFloor != null)
+              TextButton(
+                key: const Key('open-work-floor'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  widget.onNavigateToFloor!();
+                },
+                child: Text(tr(ctx, 'Go to floor')),
+              ),
             FilledButton(
                 key: const Key('open-work-back'),
                 onPressed: () => Navigator.pop(ctx),
@@ -427,12 +901,6 @@ class _ShiftScreenState extends State<ShiftScreen> {
         ),
       );
 
-  /// Whether the counted drawer is close enough to the expected drawer to close on.
-  ///
-  /// "Close enough" is an exact match to the cent unless the shop has set an
-  /// allowance. Over it, the Z does not happen: the numbers are shown side by side
-  /// so the cashier can recount, or book the difference as a cash in / cash out and
-  /// have the drawer add up honestly.
   Future<bool> _drawerAddsUp(double counted) async {
     final s = _shift;
     if (s == null) return false;
@@ -475,36 +943,6 @@ class _ShiftScreenState extends State<ShiftScreen> {
     return false;
   }
 
-  /// The reason the close button is going to refuse, on the screen beside it rather
-  /// than only in the dialog it opens. A cash variance is not knowable until the
-  /// drawer has been counted, so this names the work still open and the allowance
-  /// the count will be held to.
-  Widget _whyBlocked() {
-    final work = widget.openWork?.call();
-    if (work == null || work.isEmpty) return const SizedBox.shrink();
-    return Card(
-      key: const Key('close-blocked-why'),
-      color: AppColors.error.withValues(alpha: 0.08),
-      margin: const EdgeInsets.only(bottom: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(children: [
-          Icon(Icons.block, color: AppColors.error),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              '${tr(context, 'Cannot close: still open on this till')} (${work.count})',
-              style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.error),
-            ),
-          ),
-        ]),
-      ),
-    );
-  }
-
-  /// A last check before a Z closes the shift and pushes the day's sales: it shows
-  /// the drawer numbers that are about to be locked in, so a mistap is caught
-  /// before the shift (and the day's till) is gone for good.
   Future<bool?> _confirmCloseShift(double counted) {
     final s = _shift;
     if (s == null) return Future.value(false);
@@ -513,7 +951,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(tr(ctx, 'Close the shift?')),
+        title: Text(tr(ctx, 'Close the session?')),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('${tr(ctx, 'Expected in drawer')}: ${widget.formatAmount(sum.expectedCash)}'),
           Text('${tr(ctx, 'Counted')}: ${widget.formatAmount(counted)}'),
@@ -532,16 +970,13 @@ class _ShiftScreenState extends State<ShiftScreen> {
             key: const Key('confirm-close-shift'),
             style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(tr(ctx, 'Close shift')),
+            child: Text(tr(ctx, 'Close session')),
           ),
         ],
       ),
     );
   }
 
-  /// The report rows for an X (interim) or Z (close) reading. The tender rows sit
-  /// indented under the sales figure they break down, because a receipt is too
-  /// narrow for a headed section of its own.
   List<(String, String)> _rows(ShiftSummary sum, {bool withVariance = false}) => [
         ('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
         for (final t in sum.tenders) ('  ${t.label}', widget.formatAmount(t.amount)),
@@ -554,7 +989,6 @@ class _ShiftScreenState extends State<ShiftScreen> {
         if (withVariance) ('Variance', widget.formatAmount(sum.variance ?? 0)),
       ];
 
-  /// Print an interim X reading without closing the shift.
   Future<void> _printX() async {
     final s = _shift;
     if (s == null || widget.onPrintReport == null) return;
@@ -566,17 +1000,12 @@ class _ShiftScreenState extends State<ShiftScreen> {
     }
   }
 
-  /// One cashier's takings inside the shift. The drawer lines are left off on
-  /// purpose: the float and the paid-ins belong to the shift, not to a person, and
-  /// printing them against a name would invite a count nobody can reconcile.
   List<(String, String)> _cashierRows(ShiftSummary sum) => [
         ('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
         for (final t in sum.tenders) ('  ${t.label}', widget.formatAmount(t.amount)),
         ('Cash sales', widget.formatAmount(sum.cashSales)),
       ];
 
-  /// Print what one cashier took during this shift, so a till shared by two people
-  /// over a service can be settled per person without closing it twice.
   Future<void> _printCashierFlash() async {
     final s = _shift;
     if (s == null || widget.onPrintReport == null) return;
@@ -609,42 +1038,5 @@ class _ShiftScreenState extends State<ShiftScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(tr(context, 'Cashier flash sent to printer'))));
     }
-  }
-
-  void _showZ(Shift closed) {
-    final sum = widget.store.summary(closed, cashMethodIds: widget.cashMethodIds);
-    final variance = sum.variance ?? 0;
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(tr(ctx, 'Z report')),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('${tr(ctx, 'Sales')}: ${sum.salesCount}   ${widget.formatAmount(sum.salesTotal)}'),
-          // Indented under the sales total they break down, in the same order as the
-          // printed ticket, so the paper and the screen read the same.
-          for (final t in sum.tenders)
-            Text('  ${tr(ctx, t.label)}: ${widget.formatAmount(t.amount)}'),
-          Text('${tr(ctx, 'Cash sales')}: ${widget.formatAmount(sum.cashSales)}'),
-          Text('${tr(ctx, 'Opening float')}: ${widget.formatAmount(sum.openingFloat)}'),
-          Text('${tr(ctx, 'Cash in')}: ${widget.formatAmount(sum.cashIn)}    ${tr(ctx, 'Cash out')}: ${widget.formatAmount(sum.cashOut)}'),
-          Text('${tr(ctx, 'Expected')}: ${widget.formatAmount(sum.expectedCash)}'),
-          Text('${tr(ctx, 'Counted')}: ${widget.formatAmount(sum.countedCash ?? 0)}'),
-          Text('${tr(ctx, 'Variance')}: ${widget.formatAmount(variance)}',
-              style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: variance.abs() < 0.01 ? Colors.green.shade700 : Colors.red)),
-        ]),
-        actions: [
-          if (widget.onPrintReport != null)
-            TextButton.icon(
-              key: const Key('print-z'),
-              icon: const Icon(Icons.print),
-              label: Text(tr(ctx, 'Print')),
-              onPressed: () => widget.onPrintReport!('Z Report', _rows(sum, withVariance: true)),
-            ),
-          FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Done'))),
-        ],
-      ),
-    );
   }
 }

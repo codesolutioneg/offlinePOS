@@ -91,6 +91,7 @@ void main() {
       settings: SettingsStore(db),
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
+      loginManagersOnly: false,
       config: const TillConfig(),
     );
   }
@@ -126,7 +127,10 @@ void main() {
   }
 
   Future<void> approve(WidgetTester t, {required String pin, String? code}) async {
-    await t.enterText(find.byKey(const Key('manager-pin')), pin);
+    for (final d in pin.split('')) {
+      await t.tap(find.byKey(Key('key-$d')).last);
+      await t.pump();
+    }
     if (code != null) {
       await t.enterText(find.byKey(const Key('manager-code')), code);
     }

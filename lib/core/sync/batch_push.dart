@@ -29,6 +29,8 @@ class BatchPush {
     required this.enabled,
     required this.batchUuid,
     required this.onOrderBooked,
+    this.partnerId,
+    this.partnerName,
     this.maxOrders = 500,
   });
 
@@ -37,7 +39,10 @@ class BatchPush {
   /// Delivers one merged payload under its own uuid. Throws the way the order
   /// sender does: transient keeps the sales, permanent parks nothing here (the
   /// sales stay queued and go out one at a time on the next pass).
-  final Future<void> Function(String uuid, Map<String, dynamic> payload) send;
+  ///
+  /// Returns the module status dict when the server answers (`id`, `name`, …).
+  final Future<Map<String, dynamic>?> Function(
+      String uuid, Map<String, dynamic> payload) send;
 
   /// Whether the shop has turned merging on. Read every time rather than captured,
   /// because a manager can change it between two closes.
@@ -48,8 +53,16 @@ class BatchPush {
   final String? Function() batchUuid;
 
   /// Marks one constituent sale synced, so the history badge is honest and the
-  /// pre-push sweep does not queue it all over again.
-  final void Function(String uuid) onOrderBooked;
+  /// pre-push sweep does not queue it all over again. [serverName] is the Odoo
+  /// document name (`S04741`) when the module returned it.
+  final void Function(String uuid, [int? serverId, String? serverName])
+      onOrderBooked;
+
+  /// Session-report customer (Dishflow): the merged invoice books under this
+  /// Odoo partner. Null leaves each ticket's own partner on the nested headers
+  /// and requires two or more sales before a merge runs.
+  final int? Function()? partnerId;
+  final String? Function()? partnerName;
 
   /// How many queued entries a merged payload may be built over. A week of
   /// backlog is a lot of json for one request, and a batch that times out on its
@@ -59,29 +72,64 @@ class BatchPush {
 
   /// Try to deliver the queue as one sale. Returns true when it did, in which case
   /// there are no sales left for the drain behind it.
-  Future<bool> run() async {
-    if (!enabled()) return false;
+  ///
+  /// [onlyUuids] limits the merge to those tickets (the shift just closed). Other
+  /// pending sales stay queued for their own close.
+  ///
+  /// [lastAck] holds the server's status dict for that push (`name`, `id`), so
+  /// End of Day can show the cashier the Odoo document number.
+  /// [lastSkipReason] explains why nothing was merged when [run] returns false.
+  Map<String, dynamic>? lastAck;
+  String? lastSkipReason;
+
+  Future<bool> run({Set<String>? onlyUuids}) async {
+    lastAck = null;
+    lastSkipReason = null;
+    if (!enabled()) {
+      lastSkipReason = 'merge not enabled';
+      return false;
+    }
     // No shift is no key, and a batch with no stable key is the one thing this
     // must never send.
     final uuid = batchUuid();
-    if (uuid == null) return false;
+    if (uuid == null) {
+      lastSkipReason = 'no shift uuid';
+      return false;
+    }
     // One row over the bound means there may be more behind it, and a batch built
     // over a window that was cut short is a batch that leaves sales out. Leaving
     // sales out under a key the server has already seen is how a re-cut loses
     // them, so the whole queue is either in view or nothing is merged.
     final pending = await outboxStore.pending(limit: maxOrders + 1);
-    if (pending.length > maxOrders) return false;
-    final sales = pending.where((e) => e.kind == 'order.push').toList();
-    final batch = mergeOrderPushes(sales, batchUuid: uuid).batch;
-    if (batch == null) return false;
+    if (pending.length > maxOrders) {
+      lastSkipReason = 'more than $maxOrders sales queued';
+      return false;
+    }
+    var sales = pending.where((e) => e.kind == 'order.push').toList();
+    if (onlyUuids != null) {
+      sales = sales.where((e) => onlyUuids.contains(e.payloadUuid)).toList();
+    }
+    final outcome = mergeOrderPushes(
+      sales,
+      batchUuid: uuid,
+      partnerId: partnerId?.call(),
+      partnerName: partnerName?.call(),
+    );
+    final batch = outcome.batch;
+    if (batch == null) {
+      lastSkipReason = outcome.notMerged?.reason ?? 'nothing to merge';
+      return false;
+    }
     // Nothing is marked until the server has it, so a failure anywhere above
     // leaves the night queued rather than half booked and half forgotten.
-    await send(batch.uuid, batch.payload);
+    lastAck = await send(batch.uuid, batch.payload);
     for (final id in batch.entryIds) {
       await outboxStore.markSent(id);
     }
+    final serverId = (lastAck?['id'] as num?)?.toInt();
+    final serverName = lastAck?['name']?.toString();
     for (final orderUuid in batch.orderUuids) {
-      onOrderBooked(orderUuid);
+      onOrderBooked(orderUuid, serverId, serverName);
     }
     return true;
   }

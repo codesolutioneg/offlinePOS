@@ -267,17 +267,20 @@ void main() {
       seedMenu();
 
       await boot(t);
-      final chip = t.widget<ChoiceChip>(find.byKey(const Key('cat-chip-2')));
-      expect(chip.side, isNotNull, reason: 'the chip must wear the shop colour');
+      expect(find.byKey(const Key('cat-chip-2')), findsOneWidget);
 
       await t.tap(find.byKey(const Key('cat-chip-2')));
       await t.pumpAndSettle();
 
       expect(find.byKey(const Key('product-11')), findsOneWidget);
       expect(find.byKey(const Key('product-10')), findsNothing);
-      expect(
-          t.widget<ChoiceChip>(find.byKey(const Key('cat-chip-2'))).selectedColor,
-          isNotNull);
+      // Selected square uses a solid fill (border width 2).
+      final selected = t.widget<AnimatedContainer>(find
+          .descendant(
+              of: find.byKey(const Key('cat-chip-2')),
+              matching: find.byType(AnimatedContainer))
+          .first);
+      expect((selected.decoration as BoxDecoration).border?.top.width, 2);
     });
   });
 

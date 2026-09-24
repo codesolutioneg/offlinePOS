@@ -14,6 +14,7 @@ import '../../core/printing/receipt_builder.dart' show PartialPayment;
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/numeric_keypad.dart';
+import '../../core/widgets/select_pill.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/delivery.dart';
 import '../../domain/order.dart';
@@ -52,6 +53,7 @@ class SellScreen extends StatefulWidget {
     this.maxDiscountPercent = 0,
     this.allowAmountDiscount = false,
     this.authorize,
+    this.authorizeVoidManager,
     this.authorizeTabTable,
     this.unavailableProducts = const {},
     this.onToggleAvailable,
@@ -75,17 +77,27 @@ class SellScreen extends StatefulWidget {
       OrderType.dineIn,
       OrderType.takeaway,
       OrderType.toGo,
-      OrderType.delivery,
+      OrderType.deliveryFromCompany,
+      OrderType.storeDelivery,
+      OrderType.carDelivery,
     },
     this.payLaterMethodId,
     this.shiftOpen,
     this.onOpenShift,
     this.settings,
+    this.allowedCategoryIds = const [],
+    this.allowedPaymentMethodIds = const [],
   });
 
   /// Reads which payment methods the shop offers at the till. Null (as in some
   /// tests) offers every method the catalogue carries.
   final SettingsStore? settings;
+
+  /// Section (and optional staff) category allow-list. Empty = every category.
+  final List<int> allowedCategoryIds;
+
+  /// Section payment allow-list. Empty = every method still offered globally.
+  final List<int> allowedPaymentMethodIds;
 
   final PosSession session;
   final String Function(double) formatAmount;
@@ -143,8 +155,10 @@ class SellScreen extends StatefulWidget {
   final VoidCallback? onOpenOrders;
 
   /// A line was voided with a reason, so the shell can print a kitchen cancel slip
-  /// if the line had already been fired.
-  final void Function(OrderLine line, String reason)? onLineVoided;
+  /// if the line had already been fired. [approvedBy] is the manager who entered
+  /// their PIN when the void was gated.
+  final void Function(OrderLine line, String reason, {String? approvedBy})?
+      onLineVoided;
 
   /// Whether the server is reachable, for the status badge. Orders sell and queue
   /// the same either way; this only tells the cashier what will happen at close.
@@ -183,6 +197,10 @@ class SellScreen extends StatefulWidget {
   /// needs and returns true if the cashier's role allows it or a manager approves.
   /// When null, actions are not gated.
   final Future<bool> Function(Permission)? authorize;
+
+  /// Void always asks for a manager PIN and returns that manager's name for the
+  /// audit / deletion slip. Null falls back to [authorize] with [Permission.voidLine].
+  final Future<String?> Function()? authorizeVoidManager;
 
   /// Clears the gate to work a parked tab sitting on a table that belongs to another
   /// waiter. Null asks nobody, which is a shop that has assigned no tables and every
@@ -294,12 +312,33 @@ class _SellScreenState extends State<SellScreen> {
   // Keeps the course-fire countdown badges ticking down while the cart is open.
   Timer? _fireTick;
 
+  /// Dishflow: fees/customer dialog has been saved once this visit, so kitchen
+  /// send does not re-ask when contact is already on the bag.
+  bool _deliveryDetailsConfirmed = false;
+
   @override
   void initState() {
     super.initState();
     widget.catalogueChanged?.addListener(_onCatalogueChanged);
     _fireTick = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted && s.current.lines.any((l) => l.isTimed)) setState(() {});
+    });
+    // New company/store delivery: open the customer dialog immediately, same as
+    // Dishflow when the type is picked with nothing filled yet. A resumed bag
+    // that already has contact skips the dialog and counts as fees-confirmed.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final t = s.current.type;
+      if (!t.needsDeliveryCustomer) return;
+      final o = s.current;
+      final empty = (o.customerName ?? '').trim().isEmpty &&
+          (o.customerPhone ?? '').trim().isEmpty &&
+          (o.customerAddress ?? '').trim().isEmpty;
+      if (!empty) {
+        _deliveryDetailsConfirmed = true;
+        return;
+      }
+      unawaited(_deliveryDetails());
     });
   }
 
@@ -368,7 +407,7 @@ class _SellScreenState extends State<SellScreen> {
       return;
     }
     _changed(() => s.addProduct(product));
-    showToast(context, '${tr(context, 'Added')} ${product.name}',
+    showToast(context, '${tr(context, 'Added')} ${product.displayName}',
         kind: ToastKind.success,
         key: const Key('scanned'),
         duration: const Duration(milliseconds: 900));
@@ -389,7 +428,7 @@ class _SellScreenState extends State<SellScreen> {
   /// Block adding a sold-out item; otherwise ring it as normal.
   void _tapProduct(Product product) {
     if (widget.unavailableProducts.contains(product.id)) {
-      showToast(context, '${product.name}: ${tr(context, 'sold out')}',
+      showToast(context, '${product.displayName}: ${tr(context, 'sold out')}',
           kind: ToastKind.error);
       return;
     }
@@ -404,7 +443,7 @@ class _SellScreenState extends State<SellScreen> {
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(title: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold))),
+          ListTile(title: Text(product.displayName, style: const TextStyle(fontWeight: FontWeight.bold))),
           if (widget.onToggleAvailable != null)
             ListTile(
               key: const Key('menu-86'),
@@ -481,7 +520,7 @@ class _SellScreenState extends State<SellScreen> {
 
   Future<double?> _askWeight(Product product) => promptNumber(
         context,
-        title: '${tr(context, 'Weight for')} ${product.name}',
+        title: '${tr(context, 'Weight for')} ${product.displayName}',
         decimal: true,
         confirmLabel: tr(context, 'Add'),
       );
@@ -751,92 +790,113 @@ class _SellScreenState extends State<SellScreen> {
     }
   }
 
-  // ── per-line actions: note, discount, void with reason ───────────
+  // â”€â”€ per-line actions: note, discount, void with reason â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> _lineActions(OrderLine line) async {
     // Only an item that actually carries choices offers the entry; on anything else
     // it would be a row that opens an empty sheet.
     final modifierGroups = s.catalogue.modifierGroupsFor(line.productId);
     final kitchenHasLine = line.printedToKitchen || line.firedStations.isNotEmpty;
-    final action = await showModalBottomSheet<String>(
+    // Centered card over a dark scrim — same shape as the coach wizard popup, not a
+    // bottom sheet that hugs the till chrome.
+    final action = await showDialog<String>(
       context: context,
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        // Scrollable so the menu never overflows a short sheet as options grow.
-        child: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (modifierGroups.isNotEmpty)
-            ListTile(
-              key: const Key('line-modifiers'),
-              leading: const Icon(Icons.tune),
-              title: Text(tr(ctx, 'Modifiers')),
-              // On a fired line the entry stays and carries the reason. A greyed-out
-              // row tells a cashier nothing; this one tells them what to do instead.
-              subtitle: Text(kitchenHasLine
-                  ? tr(ctx, 'The kitchen already has this. Void it and ring it again.')
-                  : line.modifiers.isEmpty
-                      ? tr(ctx, 'Nothing chosen yet')
-                      : line.modifiers.map((m) => m.name).join(', ')),
-              onTap: () => Navigator.pop(ctx, 'modifiers'),
+      barrierColor: const Color(0x99000000),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.white,
+        elevation: 12,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (modifierGroups.isNotEmpty)
+                    _lineActionTile(
+                      key: const Key('line-modifiers'),
+                      icon: Icons.tune,
+                      title: tr(ctx, 'Modifiers'),
+                      subtitle: kitchenHasLine
+                          ? tr(ctx,
+                              'The kitchen already has this. Void it and ring it again.')
+                          : line.modifiers.isEmpty
+                              ? tr(ctx, 'Nothing chosen yet')
+                              : line.modifiers.map((m) => m.name).join(', '),
+                      onTap: () => Navigator.pop(ctx, 'modifiers'),
+                    ),
+                  _lineActionTile(
+                    key: const Key('line-note'),
+                    icon: Icons.sticky_note_2_outlined,
+                    title: tr(ctx, 'Note for kitchen'),
+                    subtitle: line.note,
+                    onTap: () => Navigator.pop(ctx, 'note'),
+                  ),
+                  _lineActionTile(
+                    key: const Key('line-price'),
+                    icon: Icons.sell_outlined,
+                    title: tr(ctx, 'Change the price'),
+                    subtitle:
+                        '${tr(ctx, 'Now')} ${widget.formatAmount(line.unitPrice)}',
+                    onTap: () => Navigator.pop(ctx, 'price'),
+                  ),
+                  _lineActionTile(
+                    key: const Key('line-discount'),
+                    icon: Icons.percent,
+                    title: tr(ctx, 'Line discount'),
+                    subtitle: line.discountPercent > 0
+                        ? '${line.discountPercent.toStringAsFixed(0)}%'
+                        : null,
+                    onTap: () => Navigator.pop(ctx, 'discount'),
+                  ),
+                  if (s.current.type == OrderType.dineIn)
+                    _lineActionTile(
+                      key: const Key('line-seat'),
+                      icon: Icons.person_pin_circle_outlined,
+                      title: tr(ctx, 'Assign to guest'),
+                      subtitle: line.seat != null
+                          ? '${tr(ctx, 'Guest')} ${line.seat}'
+                          : null,
+                      onTap: () => Navigator.pop(ctx, 'seat'),
+                    ),
+                  if (line.quantity > 1 &&
+                      line.quantity == line.quantity.roundToDouble())
+                    _lineActionTile(
+                      key: const Key('line-split-units'),
+                      icon: Icons.splitscreen_outlined,
+                      title: tr(ctx, 'Split into single items'),
+                      subtitle: tr(ctx, 'So you can change one on its own'),
+                      onTap: () => Navigator.pop(ctx, 'split-units'),
+                    ),
+                  if (!line.printedToKitchen)
+                    _lineActionTile(
+                      key: const Key('line-timer'),
+                      icon: Icons.timer_outlined,
+                      title: tr(ctx, 'Fire timing'),
+                      subtitle: line.fireAt != null
+                          ? '${tr(ctx, 'Fires in')} ${_minsUntil(line.fireAt!)}'
+                          : tr(ctx, 'Send to the kitchen after a delay'),
+                      onTap: () => Navigator.pop(ctx, 'timer'),
+                    ),
+                  _lineActionTile(
+                    key: const Key('line-void'),
+                    icon: Icons.remove_circle_outline,
+                    title: line.quantity > 1
+                        ? tr(ctx, 'Void units…')
+                        : tr(ctx, 'Void this line'),
+                    subtitle: line.quantity > 1
+                        ? '${tr(ctx, 'Pick how many')} (1–${line.quantity.toStringAsFixed(0)})'
+                        : null,
+                    danger: true,
+                    onTap: () => Navigator.pop(ctx, 'void'),
+                  ),
+                ],
+              ),
             ),
-          ListTile(
-            key: const Key('line-note'),
-            leading: const Icon(Icons.sticky_note_2_outlined),
-            title: Text(tr(ctx, 'Note for kitchen')),
-            subtitle: line.note != null ? Text(line.note!) : null,
-            onTap: () => Navigator.pop(ctx, 'note'),
           ),
-          ListTile(
-            key: const Key('line-price'),
-            leading: const Icon(Icons.sell_outlined),
-            title: Text(tr(ctx, 'Change the price')),
-            subtitle: Text('${tr(ctx, 'Now')} ${widget.formatAmount(line.unitPrice)}'),
-            onTap: () => Navigator.pop(ctx, 'price'),
-          ),
-          ListTile(
-            key: const Key('line-discount'),
-            leading: const Icon(Icons.percent),
-            title: Text(tr(ctx, 'Line discount')),
-            subtitle: line.discountPercent > 0
-                ? Text('${line.discountPercent.toStringAsFixed(0)}%')
-                : null,
-            onTap: () => Navigator.pop(ctx, 'discount'),
-          ),
-          if (s.current.type == OrderType.dineIn)
-            ListTile(
-              key: const Key('line-seat'),
-              leading: const Icon(Icons.person_pin_circle_outlined),
-              title: Text(tr(ctx, 'Assign to guest')),
-              subtitle: line.seat != null
-                  ? Text('${tr(ctx, 'Guest')} ${line.seat}')
-                  : null,
-              onTap: () => Navigator.pop(ctx, 'seat'),
-            ),
-          if (line.quantity > 1 && line.quantity == line.quantity.roundToDouble())
-            ListTile(
-              key: const Key('line-split-units'),
-              leading: const Icon(Icons.splitscreen_outlined),
-              title: Text(tr(ctx, 'Split into single items')),
-              subtitle: Text(tr(ctx, 'So you can change one on its own')),
-              onTap: () => Navigator.pop(ctx, 'split-units'),
-            ),
-          if (!line.printedToKitchen)
-            ListTile(
-              key: const Key('line-timer'),
-              leading: const Icon(Icons.timer_outlined),
-              title: Text(tr(ctx, 'Fire timing')),
-              subtitle: line.fireAt != null
-                  ? Text('${tr(ctx, 'Fires in')} ${_minsUntil(line.fireAt!)}')
-                  : Text(tr(ctx, 'Send to the kitchen after a delay')),
-              onTap: () => Navigator.pop(ctx, 'timer'),
-            ),
-          ListTile(
-            key: const Key('line-void'),
-            leading: const Icon(Icons.remove_circle_outline, color: Colors.red),
-            title: Text(tr(ctx, 'Void this line')),
-            onTap: () => Navigator.pop(ctx, 'void'),
-          ),
-        ]),
         ),
       ),
     );
@@ -850,6 +910,38 @@ class _SellScreenState extends State<SellScreen> {
     if (action == 'split-units') _changed(() => s.splitLineToUnits(line.uuid));
     if (action == 'timer') await _setFireTiming(lineUuid: line.uuid);
     if (action == 'void') await _voidLine(line);
+  }
+
+  /// One row in the line-actions wizard card.
+  Widget _lineActionTile({
+    Key? key,
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required VoidCallback onTap,
+    bool danger = false,
+  }) {
+    final color = danger ? AppColors.error : AppColors.brandNavy;
+    final muted = danger
+        ? AppColors.error.withValues(alpha: 0.75)
+        : AppColors.textMutedLight;
+    return ListTile(
+      key: key,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+      leading: Icon(icon, color: color, size: 24),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 15,
+          color: color,
+        ),
+      ),
+      subtitle: subtitle == null || subtitle.isEmpty
+          ? null
+          : Text(subtitle, style: TextStyle(fontSize: 13, color: muted)),
+      onTap: onTap,
+    );
   }
 
   /// Reopen the picker on a line already in the cart, prefilled with what it
@@ -1121,19 +1213,109 @@ class _SellScreenState extends State<SellScreen> {
     _changed(() => s.setLineDiscount(line.uuid, applied));
   }
 
-  Future<void> _voidLine(OrderLine line) async {
-    // Voiding a line is a privileged action, so it needs the void permission first.
-    if (widget.authorize != null && !await widget.authorize!(Permission.voidLine)) return;
+  /// Void [units] of [line], or ask how many when [units] is null and qty > 1.
+  Future<void> _voidLine(OrderLine line, {double? units}) async {
+    // Void always wants a manager PIN when the shell wires [authorizeVoidManager];
+    // otherwise it falls back to the role / manager gate for voidLine.
+    String? approvedBy;
+    if (widget.authorizeVoidManager != null) {
+      approvedBy = await widget.authorizeVoidManager!();
+      if (approvedBy == null) return;
+    } else if (widget.authorize != null &&
+        !await widget.authorize!(Permission.voidLine)) {
+      return;
+    }
     if (!mounted) return;
-    final reason = await _askReason('Void ${line.name}');
+    // Multi-unit: either a fixed peel (inline minus → 1) or a picker. A
+    // weighed/fractional line has no "one unit", so it still voids in full.
+    var qty = units ?? line.quantity;
+    final canPartial = units == null &&
+        line.quantity > 1 &&
+        line.quantity == line.quantity.roundToDouble();
+    if (canPartial) {
+      final picked = await _askVoidQuantity(line);
+      if (picked == null) return;
+      qty = picked;
+    }
+    final reason = await _askReason(
+        qty < line.quantity
+            ? 'Void ${qty.toStringAsFixed(0)}× ${line.name}'
+            : 'Void ${line.name}');
     if (reason == null) return;
+    OrderLine? voided;
     _changed(() {
-      s.voidLine(line.uuid, reason);
+      voided =
+          s.voidQuantity(line.uuid, qty, reason, approvedBy: approvedBy);
     });
+    if (voided == null) return;
     // Every void is reported so the shell can print the till's deletion slip; the
     // shell decides separately whether the line also needs a kitchen cancel slip
-    // (only when the kitchen already has a copy).
-    widget.onLineVoided?.call(line, reason);
+    // (only when the kitchen already has a copy). Pass the voided snapshot so a
+    // partial void prints qty 1 of 8, not the whole consolidated line.
+    widget.onLineVoided?.call(voided!, reason, approvedBy: approvedBy);
+  }
+
+  /// How many units to take off a consolidated line. Returns null on cancel.
+  Future<double?> _askVoidQuantity(OrderLine line) {
+    final max = line.quantity.round();
+    var picked = 1;
+    return showDialog<double>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: Text(tr(ctx, 'How many to void?')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${line.name} — ${tr(ctx, 'on the order')}: $max',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    key: const Key('void-qty-minus'),
+                    icon: const Icon(Icons.remove_circle_outline),
+                    onPressed:
+                        picked > 1 ? () => setSt(() => picked--) : null,
+                  ),
+                  Text(
+                    '$picked',
+                    key: const Key('void-qty-value'),
+                    style: const TextStyle(
+                        fontSize: 28, fontWeight: FontWeight.w800),
+                  ),
+                  IconButton(
+                    key: const Key('void-qty-plus'),
+                    icon: const Icon(Icons.add_circle_outline),
+                    onPressed:
+                        picked < max ? () => setSt(() => picked++) : null,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                key: const Key('void-qty-all'),
+                onPressed: () => setSt(() => picked = max),
+                child: Text('${tr(ctx, 'Void all')} ($max)'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(tr(ctx, 'Cancel'))),
+            FilledButton(
+              key: const Key('confirm-void-qty'),
+              onPressed: () => Navigator.pop(ctx, picked.toDouble()),
+              child: Text(tr(ctx, 'Next')),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// A required reason, with quick picks. Returns null on cancel.
@@ -1225,10 +1407,15 @@ class _SellScreenState extends State<SellScreen> {
     // so clearing the text removes a mistakenly assigned table.
     final label = await _pickTable();
     if (label == null) return;
+    if (label.isEmpty) {
+      _changed(() => s.clearTableToTakeaway());
+      return;
+    }
     // Do not seat this order on a table another open tab already holds, or two bills
     // collide on one table and the floor can only recall one of them. Sending the
-    // cashier to recall the existing tab is the safe path.
-    if (label.isNotEmpty && label != s.current.tableLabel) {
+    // cashier to recall the existing tab is the safe path. A new check on a busy
+    // table is opened from the floor tile, where every tab is visible.
+    if (label != s.current.tableLabel) {
       final taken = (widget.heldOrders?.call() ?? const <Order>[])
           .any((o) => o.tableLabel == label && o.lines.isNotEmpty);
       if (taken) {
@@ -1346,12 +1533,57 @@ class _SellScreenState extends State<SellScreen> {
     );
   }
 
+  /// Dishflow soft gate: company/store delivery need contact details (and a
+  /// company order # for aggregator) before kitchen, hold, or pay. Car skips.
+  ///
+  /// Kitchen also wants the details dialog confirmed once (fees may be zero),
+  /// matching Dishflow's `_feesConfirmed` before send.
+  Future<bool> _ensureDeliveryReady({bool forKitchen = false}) async {
+    final t = s.current.type;
+    if (!t.needsDeliveryCustomer) return true;
+    final o = s.current;
+    final hasContact = (o.customerName ?? '').trim().isNotEmpty ||
+        (o.customerPhone ?? '').trim().isNotEmpty ||
+        (o.customerAddress ?? '').trim().isNotEmpty;
+    final hasCompanyNo =
+        !t.needsCompanyOrderNo || (o.companyOrderNo ?? '').trim().isNotEmpty;
+    final needsDialog = !hasContact ||
+        !hasCompanyNo ||
+        (forKitchen && !_deliveryDetailsConfirmed);
+    if (needsDialog) {
+      await _deliveryDetails();
+      if (!mounted) return false;
+    }
+    final after = s.current;
+    final okContact = (after.customerName ?? '').trim().isNotEmpty ||
+        (after.customerPhone ?? '').trim().isNotEmpty ||
+        (after.customerAddress ?? '').trim().isNotEmpty;
+    final okCompany = !after.type.needsCompanyOrderNo ||
+        (after.companyOrderNo ?? '').trim().isNotEmpty;
+    if (!okContact || !okCompany) {
+      showToast(
+        context,
+        tr(
+          context,
+          !okCompany
+              ? 'Company order number is required'
+              : 'Add customer details for delivery',
+        ),
+        kind: ToastKind.error,
+      );
+      return false;
+    }
+    return true;
+  }
+
   Future<void> _deliveryDetails() async {
     final name = TextEditingController(text: s.current.customerName ?? '');
     final phone = TextEditingController(text: s.current.customerPhone ?? '');
     final addr = TextEditingController(text: s.current.customerAddress ?? '');
     final cost = TextEditingController(
         text: s.current.deliveryCost > 0 ? s.current.deliveryCost.toStringAsFixed(2) : '');
+    final serviceFee = TextEditingController(
+        text: s.current.serviceFee > 0 ? s.current.serviceFee.toStringAsFixed(2) : '');
     final companyNo =
         TextEditingController(text: s.current.companyOrderNo ?? '');
     final zones = widget.deliveryZones?.call() ?? const <DeliveryZone>[];
@@ -1362,15 +1594,23 @@ class _SellScreenState extends State<SellScreen> {
     final wasOn =
         channels.where((c) => c.name == s.current.deliveryChannel).firstOrNull;
     var channel = wasOn;
-    // A driver taken off the roster mid-delivery stays selectable on the order they
-    // are already carrying, so saving the dialog cannot quietly drop their name.
-    final driverNames = <String>[
-      for (final d in drivers) d.name,
-      if (s.current.driverName != null &&
-          !drivers.any((d) => d.name == s.current.driverName))
-        s.current.driverName!,
+    DeliveryZone? zone = zones
+        .where((z) => z.id == s.current.shippingZoneId)
+        .firstOrNull;
+    final driverList = <Driver>[
+      ...drivers,
+      if (s.current.driverId != null &&
+          !drivers.any((d) => d.id == s.current.driverId))
+        Driver(
+          id: s.current.driverId!,
+          name: s.current.driverName ?? s.current.driverId!,
+          phone: s.current.driverPhone,
+          active: false,
+        ),
     ];
-    var driver = s.current.driverName;
+    var driver = driverList
+        .where((d) => d.id == s.current.driverId || d.name == s.current.driverName)
+        .firstOrNull;
     // The existing customer picked, so the delivery links to that partner rather
     // than being saved as a free-typed name (which would duplicate them in Odoo).
     Customer? picked;
@@ -1436,7 +1676,7 @@ class _SellScreenState extends State<SellScreen> {
             // Zones price the drive, so the charge is a tap rather than a number
             // remembered per area and typed again on every order. The field below
             // stays editable: a zone is a preset, not a rule.
-            if (zones.isNotEmpty) ...[
+            if (s.current.type.usesDeliveryZones && zones.isNotEmpty) ...[
               const SizedBox(height: 8),
               Align(
                 alignment: Alignment.centerLeft,
@@ -1445,8 +1685,10 @@ class _SellScreenState extends State<SellScreen> {
                     ActionChip(
                       key: Key('delivery-zone-${z.id}'),
                       label: Text('${z.name}  ${widget.formatAmount(z.fee)}'),
-                      onPressed: () => setSt(
-                          () => cost.text = z.fee.toStringAsFixed(2)),
+                      onPressed: () => setSt(() {
+                        zone = z;
+                        cost.text = z.fee.toStringAsFixed(2);
+                      }),
                     ),
                 ]),
               ),
@@ -1457,24 +1699,36 @@ class _SellScreenState extends State<SellScreen> {
                 controller: cost,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(labelText: tr(ctx, 'Delivery charge'), border: const OutlineInputBorder(), isDense: true)),
+            const SizedBox(height: 8),
+            TextField(
+                key: const Key('delivery-service-fee'),
+                controller: serviceFee,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                    labelText: tr(ctx, 'Service fee'),
+                    border: const OutlineInputBorder(),
+                    isDense: true)),
             // Which app sent the order, and the number that app calls it by, which
             // is what the rider and the call centre quote when they ring.
-            if (channels.isNotEmpty) ...[
+            // Company delivery always needs the aggregator reference; channel chips
+            // still name which company when more than one is configured.
+            if (channels.isNotEmpty || s.current.type.needsCompanyOrderNo) ...[
               const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Wrap(spacing: 6, runSpacing: 4, children: [
-                  for (final c in channels)
-                    ChoiceChip(
-                      key: Key('delivery-channel-${c.id}'),
-                      label: Text(c.name),
-                      selected: channel?.id == c.id,
-                      onSelected: (on) =>
-                          setSt(() => channel = on ? c : null),
-                    ),
-                ]),
-              ),
-              if (channel != null) ...[
+              if (channels.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(spacing: 6, runSpacing: 4, children: [
+                    for (final c in channels)
+                      ChoiceChip(
+                        key: Key('delivery-channel-${c.id}'),
+                        label: Text(c.name),
+                        selected: channel?.id == c.id,
+                        onSelected: (on) =>
+                            setSt(() => channel = on ? c : null),
+                      ),
+                  ]),
+                ),
+              if (channel != null || s.current.type.needsCompanyOrderNo) ...[
                 const SizedBox(height: 8),
                 TextField(
                     key: const Key('delivery-company-no'),
@@ -1485,9 +1739,9 @@ class _SellScreenState extends State<SellScreen> {
                         isDense: true)),
               ],
             ],
-            if (driverNames.isNotEmpty) ...[
+            if (driverList.isNotEmpty) ...[
               const SizedBox(height: 8),
-              DropdownButtonFormField<String?>(
+              DropdownButtonFormField<Driver?>(
                 key: const Key('delivery-driver'),
                 initialValue: driver,
                 isExpanded: true,
@@ -1496,10 +1750,10 @@ class _SellScreenState extends State<SellScreen> {
                     border: const OutlineInputBorder(),
                     isDense: true),
                 items: [
-                  DropdownMenuItem<String?>(
+                  DropdownMenuItem<Driver?>(
                       value: null, child: Text(tr(ctx, 'No driver yet'))),
-                  for (final n in driverNames)
-                    DropdownMenuItem<String?>(value: n, child: Text(n)),
+                  for (final d in driverList)
+                    DropdownMenuItem<Driver?>(value: d, child: Text(d.name)),
                 ],
                 onChanged: (v) => setSt(() => driver = v),
               ),
@@ -1508,7 +1762,29 @@ class _SellScreenState extends State<SellScreen> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr(ctx, 'Save'))),
+          FilledButton(
+            onPressed: () {
+              if (s.current.type.needsCompanyOrderNo &&
+                  companyNo.text.trim().isEmpty) {
+                showToast(ctx, tr(ctx, 'Company order number is required'),
+                    kind: ToastKind.error);
+                return;
+              }
+              if (s.current.type.needsDeliveryCustomer) {
+                final hasContact = name.text.trim().isNotEmpty ||
+                    phone.text.trim().isNotEmpty ||
+                    addr.text.trim().isNotEmpty;
+                if (!hasContact) {
+                  showToast(
+                      ctx, tr(ctx, 'Add customer details for delivery'),
+                      kind: ToastKind.error);
+                  return;
+                }
+              }
+              Navigator.pop(ctx, true);
+            },
+            child: Text(tr(ctx, 'Save')),
+          ),
         ],
         ),
       ),
@@ -1524,7 +1800,11 @@ class _SellScreenState extends State<SellScreen> {
         }
         s.setDeliveryCustomer(
             name: name.text, phone: phone.text, address: addr.text);
+        if (zone != null) {
+          s.setShippingZone(zone);
+        }
         s.setDeliveryCost(double.tryParse(cost.text.trim()) ?? 0);
+        s.setServiceFee(double.tryParse(serviceFee.text.trim()) ?? 0);
         // Last, so an aggregator's own partner wins over whoever was picked above:
         // the company is who the shop invoices, and the typed name stays on the
         // slip as the person the driver is looking for.
@@ -1532,6 +1812,7 @@ class _SellScreenState extends State<SellScreen> {
             companyOrderNo: companyNo.text, previous: wasOn);
         s.setDriver(driver);
       });
+      _deliveryDetailsConfirmed = true;
     }
   }
 
@@ -1558,7 +1839,7 @@ class _SellScreenState extends State<SellScreen> {
               leading: const Icon(Icons.delivery_dining),
               title: Text(d.name),
               subtitle: d.phone == null ? null : Text(d.phone!),
-              onTap: () => Navigator.pop(ctx, d.name),
+              onTap: () => Navigator.pop(ctx, d),
             ),
           // Distinguishable from backing out, exactly as walk-in is on the customer
           // picker: one takes the driver off, the other leaves them on.
@@ -1572,11 +1853,16 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (chosen == null) return;
-    _changed(() => s.setDriver(chosen == 'clear' ? null : chosen as String));
+    _changed(() =>
+        s.setDriver(chosen == 'clear' ? null : chosen as Driver));
   }
 
-  void _hold() {
+  Future<void> _hold() async {
     if (!s.hasLines) return;
+    // Same Dishflow gate as kitchen: company/store need contact (+ company #)
+    // before the bag leaves the counter.
+    if (!await _ensureDeliveryReady()) return;
+    if (!mounted) return;
     widget.onHold?.call();
     setState(() {});
     // With a floor home the shell has already put the cashier on the plan and says
@@ -1604,15 +1890,24 @@ class _SellScreenState extends State<SellScreen> {
 
   Future<void> _sendToKitchen() async {
     if (!s.hasLines) return;
+    if (!await _ensureDeliveryReady(forKitchen: true)) return;
     final fire = widget.onSendToKitchen;
     if (fire == null) return;
     // Nothing on screen is blocked while the printer is tried: the order is already
     // saved and the cashier can keep ringing. What waits is only the message, because
     // "Sent to kitchen" before the printer has answered is the lie this fixes.
+    final deliveryType =
+        s.current.type.isDelivery ? s.current.type : null;
     final result = await fire();
     if (!mounted) return;
     setState(() {});
     _tellKitchenOutcome(result, key: const Key('sent-kitchen'));
+    // Dishflow: after kitchen, every delivery bag auto-suspends so the till is
+    // free for the next call. Park even when the printer spool failed — the
+    // lines are marked and the waiting list is where the cashier resumes to pay.
+    if (deliveryType != null && widget.onHold != null) {
+      widget.onHold!();
+    }
   }
 
   /// Say what actually happened to the ticket. Green only when a printer took it;
@@ -1676,14 +1971,21 @@ class _SellScreenState extends State<SellScreen> {
   List<PaymentMethod> _offeredMethods() {
     final all = s.catalogue.paymentMethods();
     final settings = widget.settings;
-    if (settings == null) return all;
-    final offered =
-        all.where((m) => settings.isPaymentMethodOffered(m.id)).toList();
-    return offered.isEmpty ? all : offered;
+    var offered = settings == null
+        ? all
+        : all.where((m) => settings.isPaymentMethodOffered(m.id)).toList();
+    if (offered.isEmpty) offered = all;
+    final sectionPays = widget.allowedPaymentMethodIds;
+    if (sectionPays.isEmpty) return offered;
+    final filtered =
+        offered.where((m) => sectionPays.contains(m.id)).toList();
+    return filtered.isEmpty ? offered : filtered;
   }
 
-  void _pay() {
+  Future<void> _pay() async {
     if (!s.hasLines) return;
+    if (!await _ensureDeliveryReady()) return;
+    if (!mounted) return;
     // If shares were already taken (even split), the main Pay settles what is left,
     // not the whole total again.
     final partPaid = s.current.amountPaid > 0.001;
@@ -1806,7 +2108,7 @@ class _SellScreenState extends State<SellScreen> {
         duration: const Duration(seconds: 3));
   }
 
-  // ── dine-in bill: split by guest, pay selected, move, merge ──────
+  // â”€â”€ dine-in bill: split by guest, pay selected, move, merge â”€â”€â”€â”€â”€â”€
 
   /// The charge for a subset of the current order's lines: the session's own figure,
   /// which is exactly what payCheck books. Deriving it here instead once quoted the
@@ -1915,48 +2217,66 @@ class _SellScreenState extends State<SellScreen> {
   /// another table in, hold the order back from the kitchen. Everything about taking
   /// money moved to the payment sheet, where a cashier looks for it.
   Future<void> _billOptions() async {
-    final action = await showModalBottomSheet<String>(
+    final action = await showDialog<String>(
       context: context,
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        // Scrollable so the menu never overflows a short sheet as options grow.
-        child: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (widget.onPrintBill != null)
-            ListTile(
-              key: const Key('bill-print'),
-              leading: const Icon(Icons.receipt_long_outlined),
-              title: Text(tr(ctx, 'Print bill')),
-              subtitle: Text(tr(ctx, 'The check to take to the table, before payment')),
-              onTap: () => Navigator.pop(ctx, 'print'),
-            ),
-          ListTile(
-            key: const Key('bill-move-order'),
-            leading: const Icon(Icons.table_restaurant_outlined),
-            title: Text(tr(ctx, 'Move the whole order to another table')),
-            onTap: () => Navigator.pop(ctx, 'move-order'),
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Order')),
+        contentPadding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (widget.onPrintBill != null)
+                ListTile(
+                  key: const Key('bill-print'),
+                  leading: const Icon(Icons.receipt_long_outlined),
+                  title: Text(tr(ctx, 'Print bill')),
+                  subtitle: Text(
+                      tr(ctx, 'The check to take to the table, before payment')),
+                  onTap: () => Navigator.pop(ctx, 'print'),
+                ),
+              ListTile(
+                key: const Key('bill-move-order'),
+                leading: const Icon(Icons.table_restaurant_outlined),
+                title: Text(tr(ctx, 'Move the whole order to another table')),
+                onTap: () => Navigator.pop(ctx, 'move-order'),
+              ),
+              ListTile(
+                key: const Key('bill-move'),
+                leading: const Icon(Icons.drive_file_move_outline),
+                title: Text(tr(ctx, 'Move items to another table')),
+                onTap: () => Navigator.pop(ctx, 'move'),
+              ),
+              ListTile(
+                key: const Key('bill-merge'),
+                leading: const Icon(Icons.merge_type),
+                title: Text(tr(ctx, 'Merge another table in')),
+                onTap: () => Navigator.pop(ctx, 'merge'),
+              ),
+              if (s.current.linkedOrderUuids.isNotEmpty)
+                ListTile(
+                  key: const Key('bill-split-table'),
+                  leading: const Icon(Icons.call_split),
+                  title: Text(tr(ctx, 'Split this bill onto another table')),
+                  onTap: () => Navigator.pop(ctx, 'split-table'),
+                ),
+              ListTile(
+                key: const Key('bill-timing'),
+                leading: const Icon(Icons.timer_outlined),
+                title: Text(tr(ctx, 'Course timing (whole order)')),
+                subtitle: Text(tr(
+                    ctx, 'Hold the order back a set time before the kitchen')),
+                onTap: () => Navigator.pop(ctx, 'timing'),
+              ),
+            ]),
           ),
-          ListTile(
-            key: const Key('bill-move'),
-            leading: const Icon(Icons.drive_file_move_outline),
-            title: Text(tr(ctx, 'Move items to another table')),
-            onTap: () => Navigator.pop(ctx, 'move'),
-          ),
-          ListTile(
-            key: const Key('bill-merge'),
-            leading: const Icon(Icons.merge_type),
-            title: Text(tr(ctx, 'Merge another table in')),
-            onTap: () => Navigator.pop(ctx, 'merge'),
-          ),
-          ListTile(
-            key: const Key('bill-timing'),
-            leading: const Icon(Icons.timer_outlined),
-            title: Text(tr(ctx, 'Course timing (whole order)')),
-            subtitle: Text(tr(ctx, 'Hold the order back a set time before the kitchen')),
-            onTap: () => Navigator.pop(ctx, 'timing'),
-          ),
-        ]),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+        ],
       ),
     );
     if (!mounted) return;
@@ -1971,6 +2291,8 @@ class _SellScreenState extends State<SellScreen> {
         await _moveItems();
       case 'merge':
         await _mergeTable();
+      case 'split-table':
+        await _splitTabToTable();
     }
   }
 
@@ -2202,10 +2524,19 @@ class _SellScreenState extends State<SellScreen> {
   /// (merged if it already had one). Reuses the same move the item picker commits.
   Future<void> _moveWholeOrder() async {
     if (!s.hasLines) return;
+    if (!_mayMoveTable()) return;
     final label = await _pickTable(exclude: s.current.tableLabel);
-    if (label == null || label.isEmpty || !mounted) return;
+    if (label == null || !mounted) return;
+    if (label.isEmpty) {
+      _changed(() => s.clearTableToTakeaway());
+      return;
+    }
+    final dest = await _targetTabOn(label);
+    if (!mounted) return;
+    if (dest == 'cancel') return;
     final ids = s.current.lines.map((l) => l.uuid).toSet();
-    _changed(() => s.moveLinesToTable(ids, label));
+    _changed(() => s.moveLinesToTable(ids, label,
+        targetOrderUuid: dest is String ? dest : null));
     if (!mounted) return;
     showToast(context, '${tr(context, 'Order moved to table')} $label',
         kind: ToastKind.success, key: const Key('order-moved'));
@@ -2219,11 +2550,21 @@ class _SellScreenState extends State<SellScreen> {
         // Choose the destination first; only peel the quantities once a table is
         // actually picked, so backing out of the picker leaves the bill whole.
         final label = await _pickTable(exclude: s.current.tableLabel);
-        if (label == null || label.isEmpty || !mounted) return;
+        if (label == null || !mounted) return;
+        if (label.isEmpty) {
+          showToast(context, tr(context, 'Pick a table to move items onto'),
+              kind: ToastKind.error);
+          return;
+        }
+        if (!_mayMoveTable()) return;
+        final dest = await _targetTabOn(label);
+        if (!mounted) return;
+        if (dest == 'cancel') return;
         final lines = _peelPicks(picks);
         if (lines.isEmpty) return;
         final ids = lines.map((l) => l.uuid).toSet();
-        _changed(() => s.moveLinesToTable(ids, label));
+        _changed(() => s.moveLinesToTable(ids, label,
+            targetOrderUuid: dest is String ? dest : null));
         if (!mounted) return;
         showToast(context, '${lines.length} ${tr(context, 'item(s) moved to table')} $label',
             kind: ToastKind.success);
@@ -2246,26 +2587,90 @@ class _SellScreenState extends State<SellScreen> {
         child: ListView(shrinkWrap: true, children: [
           for (final o in others)
             ListTile(
-              key: Key('merge-${o.uuid}'),
-              leading: const Icon(Icons.table_bar),
+              key: Key('merge-table-${o.uuid}'),
               title: Text(o.tableLabel ?? tr(ctx, 'Tab')),
-              subtitle: Text('${o.lines.length} ${tr(ctx, 'item(s)')}'),
-              trailing: Text(widget.formatAmount(o.total)),
+              subtitle: Text(widget.formatAmount(o.total)),
               onTap: () => Navigator.pop(ctx, o.uuid),
             ),
         ]),
       ),
     );
-    if (uuid == null) return;
-    // Merging takes another table's lines and its money onto this bill, so it is as
-    // much "opening" that table as tapping its tile is. Without this the floor could
-    // refuse a waiter a colleague's table and this sheet would hand it over anyway.
+    if (uuid == null || !mounted) return;
     final source = others.firstWhere((o) => o.uuid == uuid);
     if (!(await widget.authorizeTabTable?.call(source) ?? true)) return;
     if (!mounted) return;
-    _changed(() => s.mergeOrderInto(uuid));
+    final how = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            key: const Key('merge-one-bill'),
+            title: Text(tr(ctx, 'Merge into one bill')),
+            onTap: () => Navigator.pop(ctx, 'one'),
+          ),
+          ListTile(
+            key: const Key('merge-separate'),
+            title: Text(tr(ctx, 'Keep separate bills on this table')),
+            onTap: () => Navigator.pop(ctx, 'separate'),
+          ),
+        ]),
+      ),
+    );
+    if (how == null || !mounted) return;
+    if (how == 'separate') {
+      if (s.current.tableLabel == null || s.current.tableLabel!.isEmpty) {
+        showToast(context, tr(context, 'Seat this order on a table first'),
+            kind: ToastKind.error);
+        return;
+      }
+      _changed(() => s.mergeAsSeparateCarts(uuid));
+    } else {
+      _changed(() => s.mergeOrderInto(uuid));
+    }
     if (!mounted) return;
     showToast(context, tr(context, 'Tables merged'), kind: ToastKind.success);
+  }
+
+  Future<void> _splitTabToTable() async {
+    final label = await _pickTable(exclude: s.current.tableLabel);
+    if (label == null || label.isEmpty || !mounted) return;
+    _changed(() => s.splitTabToTable(label));
+  }
+
+  bool _mayMoveTable() {
+    if (!(widget.settings?.moveRequiresKitchen ?? false)) return true;
+    if (s.current.lines.any((l) => l.printedToKitchen)) return true;
+    showToast(
+      context,
+      tr(context, 'Order can only be transferred after sending to kitchen'),
+      kind: ToastKind.error,
+    );
+    return false;
+  }
+
+  /// Which check on [label] to drop lines onto. Null means open a new one.
+  /// `'cancel'` means the waiter backed out.
+  Future<Object?> _targetTabOn(String label) async {
+    final tabs = (widget.heldOrders?.call() ?? const <Order>[])
+        .where((o) => o.tableLabel == label && o.uuid != s.current.uuid)
+        .toList();
+    if (tabs.length <= 1) return tabs.firstOrNull?.uuid;
+    final pick = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(shrinkWrap: true, children: [
+          for (final o in tabs)
+            ListTile(
+              key: Key('move-onto-${o.uuid}'),
+              title: Text(o.orderNo ?? o.uuid.substring(0, 6).toUpperCase()),
+              subtitle: Text(widget.formatAmount(o.total)),
+              onTap: () => Navigator.pop(ctx, o.uuid),
+            ),
+        ]),
+      ),
+    );
+    if (pick == null) return 'cancel';
+    return pick;
   }
 
   @override
@@ -2273,6 +2678,29 @@ class _SellScreenState extends State<SellScreen> {
     var products = s.catalogue.products(categoryId: _categoryId, search: _search);
     if (_favesOnly) {
       products = products.where((p) => widget.favourites.contains(p.id)).toList();
+    }
+    final allowCats = widget.allowedCategoryIds.isEmpty
+        ? const <int>{}
+        : s.catalogue.expandCategoryAllowList(widget.allowedCategoryIds);
+    if (allowCats.isNotEmpty) {
+      final selected = _categoryId;
+      if (selected != null && !allowCats.contains(selected)) {
+        // Jump to the first allowed rail tab — never mutate selection mid-build.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (_categoryId != selected) return;
+          final fallback = _railCategories().map((c) => c.id).where(allowCats.contains);
+          setState(() => _categoryId = fallback.isEmpty ? null : fallback.first);
+        });
+        products = s.catalogue.products(search: _search);
+        if (_favesOnly) {
+          products =
+              products.where((p) => widget.favourites.contains(p.id)).toList();
+        }
+      }
+      products = products
+          .where((p) => p.categoryId != null && allowCats.contains(p.categoryId))
+          .toList();
     }
     final o = s.current;
     final title = o.tableLabel != null
@@ -2338,9 +2766,9 @@ class _SellScreenState extends State<SellScreen> {
                         // The bill on its own raised surface, so the two halves of
                         // the screen read as "the order" and "the menu" at a glance.
                         SizedBox(
-                          width: 360,
-                          child: Material(
-                            color: Theme.of(context).colorScheme.surface,
+                          width: 380,
+                          child: ColoredBox(
+                            color: Colors.white,
                             child: _orderPanel(),
                           ),
                         ),
@@ -2528,7 +2956,7 @@ class _SellScreenState extends State<SellScreen> {
               ),
             ),
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
             child: TextField(
               key: const Key('search'),
               focusNode: _searchFocus,
@@ -2541,128 +2969,211 @@ class _SellScreenState extends State<SellScreen> {
               onChanged: (v) => setState(() => _search = v),
             ),
           ),
-          SizedBox(height: 44, child: _categoryStrip()),
+          // Dishflow side layout: products centre, category squares on the right.
           Expanded(
-            child: products.isEmpty
-                ? EmptyState(
-                    icon: Icons.inventory_2_outlined,
-                    title: tr(context, 'No products'),
-                    message: tr(context, 'Try a different search or category'),
-                  )
-                : GridView.builder(
-                    padding: const EdgeInsets.all(8),
-                    // A fixed column count when the manager set a grid density,
-                    // otherwise fit tiles by width.
-                    gridDelegate: widget.gridColumns > 0
-                        ? SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: widget.gridColumns,
-                            childAspectRatio: 1.3,
-                            mainAxisSpacing: 8,
-                            crossAxisSpacing: 8)
-                        : const SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: 168,
-                            childAspectRatio: 1.05,
-                            mainAxisSpacing: 10,
-                            crossAxisSpacing: 10),
-                    itemCount: products.length,
-                    itemBuilder: (_, i) => _ProductTile(
-                      product: products[i],
-                      price: widget.formatAmount(products[i].price),
-                      color: _tileColorFor(products[i]),
-                      modifiers: marks[products[i].id],
-                      image: widget.productImages[products[i].id],
-                      unavailable: widget.unavailableProducts.contains(products[i].id),
-                      favourite: widget.favourites.contains(products[i].id),
-                      onTap: () => _tapProduct(products[i]),
-                      onLongPress: (widget.onToggleAvailable == null && widget.onToggleFavourite == null)
-                          ? null
-                          : () => _productMenu(products[i]),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 4, 8),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.brandNavy.withValues(alpha: 0.06),
+                            blurRadius: 12,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: products.isEmpty
+                            ? EmptyState(
+                                icon: Icons.inventory_2_outlined,
+                                title: tr(context, 'No products'),
+                                message: tr(context,
+                                    'Try a different search or category'),
+                              )
+                            : GridView.builder(
+                                padding: const EdgeInsets.all(10),
+                                gridDelegate: widget.gridColumns > 0
+                                    ? SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: widget.gridColumns,
+                                        childAspectRatio: 0.92,
+                                        mainAxisSpacing: 10,
+                                        crossAxisSpacing: 10)
+                                    : const SliverGridDelegateWithMaxCrossAxisExtent(
+                                        maxCrossAxisExtent: 168,
+                                        childAspectRatio: 0.92,
+                                        mainAxisSpacing: 10,
+                                        crossAxisSpacing: 10),
+                                itemCount: products.length,
+                                itemBuilder: (_, i) => _ProductTile(
+                                  product: products[i],
+                                  price:
+                                      widget.formatAmount(products[i].price),
+                                  color: _tileColorFor(products[i]),
+                                  modifiers: marks[products[i].id],
+                                  image:
+                                      widget.productImages[products[i].id],
+                                  unavailable: widget.unavailableProducts
+                                      .contains(products[i].id),
+                                  favourite: widget.favourites
+                                      .contains(products[i].id),
+                                  onTap: () => _tapProduct(products[i]),
+                                  onLongPress: (widget.onToggleAvailable ==
+                                              null &&
+                                          widget.onToggleFavourite == null)
+                                      ? null
+                                      : () => _productMenu(products[i]),
+                                ),
+                              ),
+                      ),
                     ),
                   ),
+                ),
+                const VerticalDivider(width: 1),
+                SizedBox(width: 132, child: _categoryRail()),
+              ],
+            ),
           ),
         ],
       );
   }
 
-  Widget _categoryStrip() {
-    // A category with nothing filed under it on this till is left off the strip.
-    // Tapping one can only ever show an empty grid, and on a branch till that is
-    // most of them: the menu is filtered by branch and the categories are not, so
-    // the chain's whole list arrives whatever this shop sells. The categories are
-    // still pulled and still stored, because they cost nothing and one that is
-    // empty here today may not be tomorrow; only the tab is held back, and it
-    // comes back by itself on the refresh that brings the first dish.
+  /// Categories shown on the right rail (stocked / allowed / currently selected).
+  List<({int id, String name})> _railCategories() {
     final stocked = s.catalogue.categoryIdsWithProducts();
-    final cats = s.catalogue
+    final allowRaw = widget.allowedCategoryIds;
+    final allow = allowRaw.isEmpty
+        ? const <int>{}
+        : s.catalogue.expandCategoryAllowList(allowRaw);
+    // Keep parent picks visible even when products sit only on children, and keep
+    // any selected id so a stale filter cannot blank the rail.
+    return s.catalogue
         .categories()
-        // The one being shown always stays, so a category that empties under a
-        // cashier does not take its own chip away and leave them with no way back.
-        .where((c) => stocked.contains(c.id) || c.id == _categoryId)
+        .where((c) {
+          if (allow.isNotEmpty && !allow.contains(c.id)) return false;
+          return stocked.contains(c.id) ||
+              c.id == _categoryId ||
+              allowRaw.contains(c.id);
+        })
+        .map((c) => (id: c.id, name: c.name))
         .toList();
-    return ListView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      children: [
-        if (widget.favourites.isNotEmpty) ...[
-          ChoiceChip(
-            key: const Key('cat-favourites'),
-            avatar: const Icon(Icons.star, size: 16),
-            label: Text(tr(context, 'Favourites')),
-            selected: _favesOnly,
-            onSelected: (_) => setState(() => _favesOnly = !_favesOnly),
-          ),
-          const SizedBox(width: 6),
+  }
+
+  /// No "All" tab — land on the first real category when nothing is selected.
+  void _ensureCategorySelection(List<({int id, String name})> cats) {
+    if (_favesOnly) return;
+    if (cats.isEmpty) return;
+    final stillValid =
+        _categoryId != null && cats.any((c) => c.id == _categoryId);
+    if (stillValid) return;
+    final first = cats.first.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _favesOnly) return;
+      final valid =
+          _categoryId != null && cats.any((c) => c.id == _categoryId);
+      if (!valid) setState(() => _categoryId = first);
+    });
+  }
+
+  /// Vertical rail of square category tiles on the right (Dishflow side layout).
+  Widget _categoryRail() {
+    final cats = _railCategories();
+    _ensureCategorySelection(cats);
+    return ColoredBox(
+      color: AppColors.background,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+        children: [
+          if (widget.favourites.isNotEmpty) ...[
+            _categorySquare(
+              key: const Key('cat-favourites'),
+              label: tr(context, 'Favourites'),
+              selected: _favesOnly,
+              color: AppColors.warning,
+              icon: Icons.star,
+              onTap: () => setState(() => _favesOnly = !_favesOnly),
+            ),
+            const SizedBox(height: 8),
+          ],
+          for (var i = 0; i < cats.length; i++) ...[
+            if (i > 0) const SizedBox(height: 8),
+            _categorySquare(
+              key: Key('cat-chip-${cats[i].id}'),
+              label: cats[i].name,
+              selected: _categoryId == cats[i].id && !_favesOnly,
+              color: _colorFor(cats[i].id) ?? AppColors.primary,
+              onTap: () => setState(() {
+                _categoryId = cats[i].id;
+                _favesOnly = false;
+              }),
+            ),
+          ],
         ],
-        ChoiceChip(
-          label: Text(tr(context, 'All')),
-          selected: _categoryId == null && !_favesOnly,
-          onSelected: (_) => setState(() {
-            _categoryId = null;
-            _favesOnly = false;
-          }),
-        ),
-        for (final c in cats) ...[
-          const SizedBox(width: 6),
-          _categoryChip(id: c.id, name: c.name),
-        ],
-      ],
+      ),
     );
   }
 
-  /// A category chip in that category's own colour: a dot of it when the chip is
-  /// idle, the whole chip filled with it when it is the one being shown. The strip
-  /// and the grid then read as one thing, which is the point of colouring either.
-  Widget _categoryChip({required int id, required String name}) {
-    final selected = _categoryId == id && !_favesOnly;
-    final color = _colorFor(id);
-    return ChoiceChip(
-      key: Key('cat-chip-$id'),
-      avatar: color == null || selected
-          ? null
-          : CircleAvatar(backgroundColor: color, radius: 6),
-      label: Text(name),
-      selected: selected,
-      selectedColor: color?.withValues(alpha: 0.9),
-      // White on the shop's colour rather than on the theme's, so a dark chip is
-      // still readable whichever colour the manager picked.
-      labelStyle: selected && color != null
-          ? const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)
-          : null,
-      showCheckmark: false,
-      side: color == null
-          ? null
-          : BorderSide(color: color.withValues(alpha: selected ? 0.9 : 0.4)),
-      onSelected: (_) => setState(() {
-        _categoryId = id;
-        _favesOnly = false;
-      }),
+  Widget _categorySquare({
+    Key? key,
+    required String label,
+    required bool selected,
+    required Color color,
+    required VoidCallback onTap,
+    IconData? icon,
+  }) {
+    return Material(
+      key: key,
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 72),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? color : color.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? color : color.withValues(alpha: 0.45),
+              width: selected ? 2 : 1.2,
+            ),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 18, color: selected ? Colors.white : color),
+                const SizedBox(height: 4),
+              ],
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.15,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                  color: selected ? Colors.white : AppColors.brandNavy,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
   Widget _orderPanel() => Theme(
-        // The whole panel runs dense: chips and buttons shed Material's 48px
-        // minimum tap padding, which is what let three rows of context chips
-        // and the type strip stop crowding the bill out of its own panel.
         data: Theme.of(context).copyWith(
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           chipTheme: Theme.of(context).chipTheme.copyWith(
@@ -2674,90 +3185,244 @@ class _SellScreenState extends State<SellScreen> {
                     ?.copyWith(fontSize: 12.5),
               ),
         ),
-        child: Column(
-        children: [
-          _orderTypeStrip(),
-          _contextBar(),
-          const Divider(height: 1),
-          Expanded(
-            child: !s.hasLines
-                ? EmptyState(
-                    icon: Icons.shopping_cart_outlined,
-                    title: tr(context, 'Start adding products'),
-                    message: tr(context, 'Tap a product to add it to the order'),
-                  )
-                : ListView(
-                    children: [
-                      for (final line in s.current.lines)
-                        _LineTile(
-                          key: Key('line-${line.uuid}'),
-                          line: line,
-                          amount: widget.formatAmount(line.total),
-                          format: widget.formatAmount,
-                          onRemove: () => _changed(() => s.removeLine(line.uuid)),
-                          onQty: (q) => _changed(() => s.setQuantity(line.uuid, q)),
-                          onTapLine: () => _lineActions(line),
-                          onVoid: () => _voidLine(line),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Column(
+                children: [
+                  _orderTypeStrip(),
+                  _orderMetaHeader(),
+                  if (s.current.type.needsDeliveryCustomer) _deliveryHeader(),
+                  if (s.current.type == OrderType.dineIn &&
+                      s.current.tableLabel == null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.tonalIcon(
+                          key: const Key('choose-table'),
+                          icon: const Icon(Icons.table_restaurant),
+                          label: Text(tr(context, 'Choose a table')),
+                          onPressed: _setTable,
                         ),
-                    ],
+                      ),
+                    ),
+                  const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                  Expanded(
+                    child: !s.hasLines
+                        ? EmptyState(
+                            icon: Icons.shopping_cart_outlined,
+                            title: tr(context, 'Start adding products'),
+                            message: tr(context,
+                                'Tap a product to add it to the order'),
+                          )
+                        : ListView(
+                            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                            children: [
+                              for (final line in s.current.lines)
+                                _LineTile(
+                                  key: Key('line-${line.uuid}'),
+                                  line: line,
+                                  amount: widget.formatAmount(line.total),
+                                  format: widget.formatAmount,
+                                  onRemove: () =>
+                                      _changed(() => s.removeLine(line.uuid)),
+                                  onQty: (q) => _changed(
+                                      () => s.setQuantity(line.uuid, q)),
+                                  onTapLine: () => _lineActions(line),
+                                  onVoid: () => _voidLine(
+                                    line,
+                                    // Red minus on a multi-qty sent line = peel
+                                    // one unit; the line menu still asks how many.
+                                    units: line.quantity > 1 &&
+                                            line.quantity ==
+                                                line.quantity.roundToDouble()
+                                        ? 1
+                                        : null,
+                                  ),
+                                ),
+                            ],
+                          ),
                   ),
+                  const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                        maxHeight: MediaQuery.of(context).size.height * 0.32),
+                    child: SingleChildScrollView(child: _totals()),
+                  ),
+                  _addNoteField(),
+                  _actions(),
+                ],
+              ),
+            ),
           ),
-          const Divider(height: 1),
-          // Chrome above the navigator (the shift nudge) takes height off every
-          // screen, and a delivery with a customer and a discount is a tall summary.
-          // The totals give way and scroll rather than clip: a total a cashier
-          // cannot read is worse than one they have to nudge into view. The action
-          // buttons below stay put, because a Pay button that scrolls away is not a
-          // Pay button. A hard cap rather than a Flexible, deliberately: a loose
-          // flex child is granted a share of the free space whether it uses it or
-          // not, and the unused share came out as a dead band under Pay instead of
-          // going to the item list.
-          ConstrainedBox(
-            constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.35),
-            child: SingleChildScrollView(child: _totals()),
-          ),
-          _actions(),
-        ],
-      ),
+        ),
       );
 
   /// Where the sale is served. Changing it reshapes what the context bar asks for
   /// (a table for dine-in, an address and charge for delivery).
-  Widget _orderTypeStrip() => Material(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withValues(alpha: 0.4),
-        child: SizedBox(
-          height: 40,
-          // Scrolls rather than overflows: the chips do not all fit a narrow till
-          // panel, and a clipped selector is worse than a scrollable one.
-          child: ListView(
-            key: const Key('order-type-strip'),
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            children: [
-              // Only the types this role rings, plus whatever the order in hand
-              // already is: a tab handed over from another till has to stay
-              // settleable even when this cashier could not have opened it.
-              for (final t in OrderType.values)
-                if (widget.allowedOrderTypes.contains(t) || s.current.type == t) ...[
-                ChoiceChip(
-                  key: Key('order-type-${t.name.toLowerCase()}'),
-                  // Tight enough that all four kinds fit a 360px panel at once,
-                  // so no order type hides behind a scroll.
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 2),
-                  label: Text(tr(context, t.label)),
-                  selected: s.current.type == t,
-                  onSelected: (_) => _changed(() => s.setOrderType(t)),
+  Widget _orderTypeStrip() => SizedBox(
+        height: 44,
+        child: ListView(
+          key: const Key('order-type-strip'),
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+          children: [
+            for (final t in OrderType.values)
+              if (widget.allowedOrderTypes.contains(t) ||
+                  s.current.type == t) ...[
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: SelectPill(
+                    key: Key('order-type-${t.name.toLowerCase()}'),
+                    label: tr(context, t.label),
+                    selected: s.current.type == t,
+                    compact: true,
+                    selectedColor: AppColors.primary,
+                    onTap: () {
+                      _changed(() => s.setOrderType(t));
+                      // Dishflow: open delivery details when switching onto
+                      // company/store with nothing filled yet.
+                      if (t.needsDeliveryCustomer) {
+                        _deliveryDetailsConfirmed = false;
+                        final o = s.current;
+                        final empty = (o.customerName ?? '').trim().isEmpty &&
+                            (o.customerPhone ?? '').trim().isEmpty &&
+                            (o.customerAddress ?? '').trim().isEmpty;
+                        if (empty) unawaited(_deliveryDetails());
+                      } else {
+                        _deliveryDetailsConfirmed = false;
+                      }
+                    },
+                  ),
                 ),
-                const SizedBox(width: 4),
               ],
+          ],
+        ),
+      );
+
+  /// Order # / Table / Guests â€” mock header under the type pills.
+  Widget _orderMetaHeader() {
+    final o = s.current;
+    final muted = AppColors.textMutedLight;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 2, 8, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '${tr(context, 'Order')} #${o.displayNo}',
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 14,
+                color: AppColors.brandNavy,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (o.type == OrderType.dineIn || o.type == OrderType.toGo)
+            _metaLink(
+              key: const Key('table'),
+              icon: Icons.table_bar,
+              label: o.tableLabel == null
+                  ? tr(context, 'Table')
+                  : '${tr(context, 'Table')} ${o.tableLabel}',
+              onTap: _setTable,
+              color: muted,
+            ),
+          if (o.type == OrderType.dineIn) ...[
+            const SizedBox(width: 8),
+            _metaLink(
+              key: const Key('guests'),
+              icon: Icons.groups,
+              label: o.guestCount == null
+                  ? tr(context, 'Guests')
+                  : '${o.guestCount} ${tr(context, 'guests')}',
+              onTap: _setGuests,
+              color: muted,
+            ),
+          ],
+          if (!o.type.isDelivery)
+            IconButton(
+              key: const Key('customer-chip'),
+              tooltip: tr(context, 'Customer'),
+              icon: Icon(
+                Icons.person_outline,
+                size: 20,
+                color: o.customerName != null
+                    ? AppColors.primary
+                    : muted,
+              ),
+              onPressed: _chooseCustomer,
+              visualDensity: VisualDensity.compact,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metaLink({
+    Key? key,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    required Color color,
+  }) =>
+      InkWell(
+        key: key,
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: color),
+              const SizedBox(width: 4),
+              Text(label,
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: color)),
             ],
           ),
         ),
       );
+
+  Widget _deliveryHeader() {
+    final o = s.current;
+    return ListTile(
+      dense: true,
+      leading: const Icon(Icons.person_pin_circle_outlined),
+      title: Text(o.customerName ?? tr(context, 'Delivery customer')),
+      subtitle: _deliveryLine(o).isEmpty ? null : Text(_deliveryLine(o)),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.drivers != null)
+            TextButton(
+              key: const Key('driver-chip'),
+              onPressed: _chooseDriver,
+              child: Text(o.driverName ?? tr(context, 'Driver')),
+            ),
+          TextButton(
+            key: const Key('customer'),
+            onPressed: _deliveryDetails,
+            child: Text(o.customerName == null
+                ? tr(context, 'Add')
+                : tr(context, 'Change')),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// The one line under a delivery's name: where it goes, how to ring, and which
   /// channel sent it, which is the block a cashier reads back to a rider.
@@ -2766,174 +3431,121 @@ class _SellScreenState extends State<SellScreen> {
         o.customerAddress,
         o.deliveryChannel,
         if (o.companyOrderNo != null) '#${o.companyOrderNo}',
-      ].whereType<String>().where((e) => e.isNotEmpty).join('  ·  ');
+      ].whereType<String>().where((e) => e.isNotEmpty).join('  Â·  ');
 
-  /// Customer, table, guests, note: the details the order type calls for.
-  Widget _contextBar() {
-    final o = s.current;
-    return Column(children: [
-      // Delivery gets the full block, because it needs an address and a charge as
-      // well as a name; every other type gets the customer chip below.
-      if (o.type == OrderType.delivery)
-        ListTile(
-          dense: true,
-          leading: const Icon(Icons.person_pin_circle_outlined),
-          title: Text(o.customerName ?? tr(context, 'Delivery customer')),
-          subtitle: _deliveryLine(o).isEmpty ? null : Text(_deliveryLine(o)),
-          trailing: TextButton(
-            key: const Key('customer'),
-            onPressed: _deliveryDetails,
-            child: Text(o.customerName == null ? tr(context, 'Add') : tr(context, 'Change')),
-          ),
-        ),
-      // Dine-in starts at the table: if none is chosen, nudge to pick one first.
-      if (o.type == OrderType.dineIn && o.tableLabel == null)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
-          child: SizedBox(
-            width: double.infinity,
-            child: FilledButton.tonalIcon(
-              key: const Key('choose-table'),
-              icon: const Icon(Icons.table_restaurant),
-              label: Text(tr(context, 'Choose a table')),
-              onPressed: _setTable,
+  Widget _addNoteField() {
+    final note = s.current.note;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      child: Material(
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          key: const Key('order-note'),
+          onTap: _orderNote,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Icon(Icons.notes,
+                    size: 18,
+                    color: note == null
+                        ? AppColors.textMutedLight
+                        : AppColors.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    note ?? tr(context, 'Add note...'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      color: note == null
+                          ? AppColors.textMutedLight
+                          : AppColors.brandNavy,
+                      fontWeight:
+                          note == null ? FontWeight.w500 : FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        child: Wrap(spacing: 6, runSpacing: 3, children: [
-          // A named customer is not a delivery-only idea: a takeaway regular and a
-          // dine-in booking are both worth booking against the partner rather than
-          // as an anonymous sale. First in the row, where delivery puts its own
-          // customer block, so the till reads the same whatever the order type.
-          if (o.type != OrderType.delivery)
-            ActionChip(
-              key: const Key('customer-chip'),
-              avatar: const Icon(Icons.person_outline, size: 16),
-              label: Text(o.customerName ?? tr(context, 'Customer')),
-              onPressed: _chooseCustomer,
-            ),
-          // A to-go can sit at a table while it is packed, so it carries the same
-          // table chip. Optional, unlike a dine-in: the chip offers a table rather
-          // than nagging for one, and covers and splitting stay with the bills that
-          // are actually eaten and shared in the room.
-          if (o.type == OrderType.toGo)
-            ActionChip(
-              key: const Key('table'),
-              avatar: const Icon(Icons.table_bar, size: 16),
-              label: Text(o.tableLabel == null
-                  ? tr(context, 'Table')
-                  : '${tr(context, 'Table')} ${o.tableLabel}'),
-              onPressed: _setTable,
-            ),
-          if (o.type == OrderType.dineIn) ...[
-            if (o.tableLabel != null)
-              ActionChip(
-                key: const Key('table'),
-                avatar: const Icon(Icons.table_bar, size: 16),
-                label: Text('${tr(context, 'Table')} ${o.tableLabel}'),
-                onPressed: _setTable,
-              ),
-            ActionChip(
-              key: const Key('guests'),
-              avatar: const Icon(Icons.groups, size: 16),
-              label: Text(o.guestCount == null
-                  ? tr(context, 'Guests')
-                  : '${o.guestCount} ${tr(context, 'guests')}'),
-              onPressed: _setGuests,
-            ),
-            if (s.hasLines)
-              ActionChip(
-                key: const Key('bill-options'),
-                avatar: const Icon(Icons.drive_file_move_outline, size: 16),
-                label: Text(tr(context, 'Move / merge')),
-                onPressed: _billOptions,
-              ),
-          ],
-          if (o.type == OrderType.delivery) ...[
-            ActionChip(
-              key: const Key('delivery'),
-              avatar: const Icon(Icons.delivery_dining, size: 16),
-              label: Text(o.deliveryCost > 0
-                  ? '${tr(context, 'Delivery')} ${widget.formatAmount(o.deliveryCost)}'
-                  : tr(context, 'Delivery details')),
-              onPressed: _deliveryDetails,
-            ),
-            // Assigning the bag is its own moment, later than ringing it, so it is
-            // one tap from the order rather than buried in the details dialog.
-            if (widget.drivers != null)
-              ActionChip(
-                key: const Key('driver-chip'),
-                avatar: const Icon(Icons.two_wheeler, size: 16),
-                label: Text(o.driverName ?? tr(context, 'Driver')),
-                onPressed: _chooseDriver,
-              ),
-          ],
-          ActionChip(
-            key: const Key('order-note'),
-            avatar: const Icon(Icons.notes, size: 16),
-            label: Text(o.note == null ? tr(context, 'Note') : tr(context, 'Note added')),
-            onPressed: _orderNote,
-          ),
-        ]),
       ),
-    ]);
+    );
   }
 
   Widget _totals() => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
         child: Column(
           children: [
-            if (s.current.discountPercent > 0 ||
-                s.current.deliveryCost > 0) ...[
-              _totalRow('Subtotal', widget.formatAmount(s.current.subtotal), muted: true),
-              if (s.current.discountPercent > 0)
-                _totalRow(
-                    'Discount ${s.current.discountPercent.toStringAsFixed(0)}%',
-                    '-${widget.formatAmount(s.current.subtotal * s.current.discountPercent / 100)}',
-                    key: const Key('discount-line'), green: true),
-              if (s.current.deliveryCost > 0)
-                _totalRow('Delivery', widget.formatAmount(s.current.deliveryCost), muted: true),
-              const SizedBox(height: 6),
-            ],
-            // Charged on top of the net prices, so it is a row of the sum the
-            // cashier reads out, not a note about what is inside the total.
-            if (s.current.taxTotal > 0.001)
-              _totalRow('VAT', widget.formatAmount(s.current.taxTotal),
-                  key: const Key('tax-line'), muted: true),
+            _totalRow('Subtotal', widget.formatAmount(s.current.subtotal),
+                muted: true),
+            _totalRow(
+              s.current.discountPercent > 0
+                  ? 'Discount ${s.current.discountPercent.toStringAsFixed(0)}%'
+                  : 'Discount',
+              s.current.discountPercent > 0
+                  ? '-${widget.formatAmount(s.current.subtotal * s.current.discountPercent / 100)}'
+                  : widget.formatAmount(0),
+              key: const Key('discount-line'),
+              green: s.current.discountPercent > 0,
+              muted: s.current.discountPercent <= 0,
+            ),
+            if (s.current.deliveryCost > 0)
+              _totalRow('Delivery', widget.formatAmount(s.current.deliveryCost),
+                  muted: true),
+            if (s.current.serviceFee > 0)
+              _totalRow('Service fee', widget.formatAmount(s.current.serviceFee),
+                  muted: true),
+            if (s.current.serviceCharge > 0)
+              _totalRow('Service', widget.formatAmount(s.current.serviceCharge),
+                  muted: true),
+            _totalRow(
+              'VAT',
+              widget.formatAmount(s.current.taxTotal),
+              key: const Key('tax-line'),
+              muted: true,
+            ),
+            const SizedBox(height: 4),
             Row(children: [
-              Text(tr(context, 'TOTAL'),
+              Text(tr(context, 'Total'),
                   style: const TextStyle(
-                      fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
+                      color: AppColors.brandNavy)),
               const Spacer(),
               Text(widget.formatAmount(s.total),
                   key: const Key('total'),
-                  style: TextStyle(
-                      fontSize: 23,
+                  style: const TextStyle(
+                      fontSize: 24,
                       fontWeight: FontWeight.w800,
-                      color: Theme.of(context).colorScheme.primary)),
+                      color: AppColors.primary)),
             ]),
-            // On an even/part-paid open tab, show what has been taken and what is
-            // still owed, so the running balance is visible while the table is open.
             if (s.current.amountPaid > 0.001) ...[
+              const SizedBox(height: 4),
               _totalRow('Paid', '-${widget.formatAmount(s.current.amountPaid)}',
                   key: const Key('paid-line'), green: true),
               _totalRow('Balance', widget.formatAmount(s.current.balance),
                   key: const Key('balance-line')),
             ],
-            if (s.hasLines)
-              Row(children: [
-                TextButton.icon(
-                  key: const Key('discount'),
-                  onPressed: _openDiscount,
-                  icon: const Icon(Icons.percent, size: 16),
-                  label: Text(s.current.discountPercent > 0
-                      ? tr(context, 'Edit discount')
-                      : tr(context, 'Add discount')),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                key: const Key('discount'),
+                onPressed: _openDiscount,
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
                 ),
-                const Spacer(),
-              ]),
+                icon: const Icon(Icons.percent, size: 15),
+                label: Text(s.current.discountPercent > 0
+                    ? tr(context, 'Edit discount')
+                    : tr(context, 'Add discount')),
+              ),
+            ),
           ],
         ),
       );
@@ -2941,11 +3553,12 @@ class _SellScreenState extends State<SellScreen> {
   Widget _totalRow(String label, String amount,
       {Key? key, bool muted = false, bool green = false}) {
     final style = TextStyle(
+        fontSize: 13,
         color: green
             ? AppColors.success
-            : (muted ? Theme.of(context).colorScheme.onSurfaceVariant : null));
+            : (muted ? AppColors.textMutedLight : AppColors.brandNavy));
     return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.only(bottom: 3),
       child: Row(children: [
         Text(tr(context, label), key: key, style: style),
         const Spacer(),
@@ -2958,108 +3571,164 @@ class _SellScreenState extends State<SellScreen> {
     final unsent = s.current.lines.where((l) => !l.printedToKitchen).length;
     final canFire = s.hasLines && widget.onSendToKitchen != null && unsent > 0;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
       child: Column(children: [
         Row(children: [
-          // Where a waiter looks when the table asks for the bill. It lives with the
-          // actions rather than in the summary above, because the summary scrolls
-          // when the chrome squeezes it and a bill nobody can reach is not a feature.
-          // Nothing to bill on an empty order, so it stays away until there is.
-          if (widget.onPrintBill != null && s.hasLines) ...[
-            SizedBox(
-              height: 46,
-              width: 48,
-              child: OutlinedButton(
-                key: const Key('print-bill'),
-                style: OutlinedButton.styleFrom(
-                    padding: EdgeInsets.zero, minimumSize: const Size(48, 46)),
-                onPressed: _printBill,
-                child: const Icon(Icons.receipt_long_outlined, size: 20),
-              ),
-            ),
-            const SizedBox(width: 6),
-          ],
           Expanded(
-            flex: 3,
             child: SizedBox(
-              height: 46,
-              child: OutlinedButton(
-                key: const Key('send-kitchen'),
-                // Reads its state by colour and count: blue with "(N)" when there is
-                // food to fire, muted once everything is already in the kitchen. The
-                // tight padding is what keeps the count on screen in a 360px panel:
-                // "Kitc..." tells a cashier nothing about what has not been fired.
+              height: 44,
+              child: OutlinedButton.icon(
+                key: const Key('hold'),
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  textStyle:
-                      const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  foregroundColor: canFire ? AppColors.info : Colors.grey,
-                  side: BorderSide(
-                      color: canFire ? AppColors.info : Colors.grey.shade400),
+                  foregroundColor: AppColors.held,
+                  side: const BorderSide(color: AppColors.held, width: 1.4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
                 ),
-                onPressed: canFire ? _sendToKitchen : null,
-                // Long-press re-fires the whole ticket (a lost or re-requested KOT).
-                onLongPress: (s.hasLines && widget.onResendToKitchen != null)
-                    ? _resendToKitchen
-                    : null,
-                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(unsent > 0 ? Icons.soup_kitchen : Icons.check_circle, size: 18),
-                  const SizedBox(width: 4),
-                  Flexible(
-                    child: Text(
-                        unsent > 0
-                            ? '${tr(context, 'Kitchen')} ($unsent)'
-                            : tr(context, 'All sent'),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                  ),
-                ]),
+                onPressed: s.hasLines ? _hold : null,
+                icon: const Icon(Icons.notifications_active_outlined, size: 18),
+                label: Text(tr(context, 'Hold'),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
             ),
           ),
           const SizedBox(width: 6),
-          Expanded(
-            flex: 2,
-            child: SizedBox(
-              height: 46,
-              child: OutlinedButton(
-                key: const Key('hold'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  textStyle:
-                      const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  foregroundColor: AppColors.held,
-                  side: BorderSide(color: AppColors.held.withValues(alpha: 0.6)),
-                ),
-                onPressed: s.hasLines ? _hold : null,
-                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  const Icon(Icons.pause_circle_outline, size: 18),
-                  const SizedBox(width: 4),
-                  Flexible(
-                    child: Text(tr(context, 'Hold'),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
+          if (widget.onPrintBill != null)
+            Expanded(
+              child: SizedBox(
+                height: 44,
+                child: OutlinedButton.icon(
+                  key: const Key('print-bill'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    side: const BorderSide(color: AppColors.primary, width: 1.4),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
                   ),
-                ]),
+                  onPressed: s.hasLines ? _printBill : null,
+                  icon: const Icon(Icons.print_outlined, size: 18),
+                  label: Text(tr(context, 'Print'),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+              ),
+            ),
+          if (widget.onPrintBill != null) const SizedBox(width: 6),
+          Expanded(
+            child: SizedBox(
+              height: 44,
+              child: OutlinedButton(
+                key: const Key('send-kitchen'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor:
+                      canFire ? AppColors.primary : Colors.grey,
+                  side: BorderSide(
+                      color: canFire
+                          ? AppColors.primary
+                          : Colors.grey.shade400,
+                      width: 1.4),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                ),
+                onPressed: canFire ? _sendToKitchen : null,
+                onLongPress: (s.hasLines && widget.onResendToKitchen != null)
+                    ? _resendToKitchen
+                    : null,
+                child: Text(
+                  unsent > 0
+                      ? '${tr(context, 'Kitchen')} ($unsent)'
+                      : tr(context, 'Kitchen'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
               ),
             ),
           ),
+          const SizedBox(width: 4),
+          SizedBox(
+            height: 44,
+            width: 44,
+            child: OutlinedButton(
+              key: const Key('bill-options'),
+              style: OutlinedButton.styleFrom(
+                padding: EdgeInsets.zero,
+                foregroundColor: AppColors.brandNavy,
+                side: const BorderSide(color: Color(0xFFE2E8F0)),
+              ),
+              onPressed: s.current.type == OrderType.dineIn && s.hasLines
+                  ? _billOptions
+                  : _orderMoreMenu,
+              child: const Icon(Icons.more_horiz, size: 22),
+            ),
+          ),
         ]),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
-          height: 56,
+          height: 52,
           child: FilledButton.icon(
             key: const Key('pay'),
             style: FilledButton.styleFrom(
               backgroundColor: AppColors.primary,
-              textStyle: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              textStyle:
+                  const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
             ),
             onPressed: s.hasLines ? _pay : null,
-            icon: const Icon(Icons.payments, size: 24),
-            label: Text('${tr(context, 'Pay')}  ${widget.formatAmount(s.total)}'),
+            icon: const Icon(Icons.credit_card, size: 22),
+            label: Text(
+                '${tr(context, 'Pay')}  ${widget.formatAmount(s.total)}'),
           ),
         ),
       ]),
     );
+  }
+
+  Future<void> _orderMoreMenu() async {
+    final pick = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.person_outline),
+              title: Text(tr(ctx, 'Customer')),
+              onTap: () => Navigator.pop(ctx, 'customer'),
+            ),
+            if (s.current.type.isDelivery && widget.drivers != null)
+              ListTile(
+                leading: const Icon(Icons.two_wheeler),
+                title: Text(tr(ctx, 'Driver')),
+                onTap: () => Navigator.pop(ctx, 'driver'),
+              ),
+            if (s.current.type.isDelivery)
+              ListTile(
+                leading: const Icon(Icons.delivery_dining),
+                title: Text(tr(ctx, 'Delivery details')),
+                onTap: () => Navigator.pop(ctx, 'delivery'),
+              ),
+            if (s.current.type == OrderType.dineIn && s.hasLines)
+              ListTile(
+                key: const Key('bill-options-sheet'),
+                leading: const Icon(Icons.drive_file_move_outline),
+                title: Text(tr(ctx, 'Move / merge')),
+                onTap: () => Navigator.pop(ctx, 'merge'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || pick == null) return;
+    switch (pick) {
+      case 'customer':
+        await _chooseCustomer();
+      case 'driver':
+        await _chooseDriver();
+      case 'delivery':
+        await _deliveryDetails();
+      case 'merge':
+        await _billOptions();
+    }
   }
 }
 
@@ -3118,21 +3787,25 @@ class _ProductTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tile = Card(
+    final accent = color ?? AppColors.primary;
+    final tile = Material(
+      color: unavailable ? Colors.grey.shade200 : Colors.white,
+      elevation: 0,
+      shadowColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+          color: unavailable ? Colors.grey.shade400 : const Color(0xFFE2E8F0),
+          width: 1,
+        ),
+      ),
       clipBehavior: Clip.antiAlias,
-      // A tinted fill plus a coloured top stripe, so the category reads at a
-      // glance without hurting the legibility of the name and price.
-      color: unavailable ? Colors.grey.shade300 : color?.withValues(alpha: 0.12),
       child: InkWell(
         key: Key('product-${product.id}'),
         onTap: onTap,
-        // Long-press opens the 86 / favourite menu (manager-gated).
         onLongPress: onLongPress,
         child: Stack(
           children: [
-            // Positioned rather than laid out, so the tile is sized by its words
-            // exactly as it was before pictures existed. Decoding happens off this
-            // frame: the grid is drawn and tappable before the first one arrives.
             if (_onPicture) ...[
               Positioned.fill(
                 child: Image.memory(
@@ -3140,8 +3813,6 @@ class _ProductTile extends StatelessWidget {
                   key: Key('product-image-${product.id}'),
                   fit: BoxFit.cover,
                   gaplessPlayback: true,
-                  // A picture that will not decode leaves the tile as it would have
-                  // been rather than blanking it, which reads as a missing product.
                   errorBuilder: (_, _, _) => const SizedBox.shrink(),
                 ),
               ),
@@ -3151,73 +3822,73 @@ class _ProductTile extends StatelessWidget {
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: [Colors.black26, Colors.black87],
+                      colors: [Colors.black12, Colors.black54],
                     ),
                   ),
                 ),
               ),
             ],
-            Container(
-              decoration: (color == null || unavailable)
-                  ? null
-                  : BoxDecoration(border: Border(top: BorderSide(color: color!, width: 4))),
-              padding: const EdgeInsets.all(10),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 12, 10, 36),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(product.name,
+                  Text(product.displayName,
                       textAlign: TextAlign.center,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                       style: unavailable
                           ? const TextStyle(
                               color: Colors.black45,
-                              fontSize: 15,
+                              fontSize: 14,
                               height: 1.15,
                               decoration: TextDecoration.lineThrough)
                           : TextStyle(
-                              fontSize: 15,
+                              fontSize: 14,
                               height: 1.15,
-                              fontWeight: FontWeight.w500,
-                              color: _onPicture ? Colors.white : null,
+                              fontWeight: FontWeight.w700,
+                              color: _onPicture
+                                  ? Colors.white
+                                  : AppColors.brandNavy,
                               shadows: _onPicture ? _readable : null)),
                   const SizedBox(height: 8),
                   if (unavailable)
                     Text(tr(context, 'Sold out'),
                         key: Key('soldout-${product.id}'),
-                        style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold, fontSize: 13))
+                        style: TextStyle(
+                            color: Colors.red.shade700,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13))
                   else
                     Text(price,
                         style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 17,
-                            color: _onPicture ? Colors.white : null,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                            color: _onPicture
+                                ? Colors.white
+                                : AppColors.primary,
                             shadows: _onPicture ? _readable : null)),
                 ],
               ),
             ),
             if (favourite)
               const Positioned(
-                top: 2,
-                right: 2,
+                top: 6,
+                left: 6,
                 child: Icon(Icons.star, size: 14, color: Colors.amber),
               ),
-            // The bottom leading corner, so it clears the favourite star at the top
-            // and follows the text direction into Arabic. A required group is drawn
-            // in the attention colour and an optional one in the neutral: the
-            // cashier's question is not "does this have extras" but "will this stop
-            // me", and the badge answers that before the tile is tapped.
             if (modifiers != null && !unavailable)
               PositionedDirectional(
-                bottom: 2,
-                start: 2,
+                bottom: 6,
+                start: 6,
                 child: Container(
                   key: Key('product-mods-${product.id}'),
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                   decoration: BoxDecoration(
                     color: modifiers!.required
                         ? AppColors.warning
-                        : Colors.black.withValues(alpha: 0.55),
+                        : AppColors.brandNavy.withValues(alpha: 0.75),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -3231,6 +3902,21 @@ class _ProductTile extends StatelessWidget {
                               fontWeight: FontWeight.bold)),
                     ],
                   ]),
+                ),
+              ),
+            if (!unavailable)
+              PositionedDirectional(
+                bottom: 8,
+                end: 8,
+                child: Material(
+                  color: accent,
+                  shape: const CircleBorder(),
+                  elevation: 1,
+                  child: const SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: Icon(Icons.add, size: 18, color: Colors.white),
+                  ),
                 ),
               ),
           ],
@@ -3385,157 +4071,167 @@ class _LineTile extends StatelessWidget {
     // removed: taking it off must go through the Void action (manager gate, reason,
     // deletion slip, kitchen cancel, audit), never a silent quantity edit.
     final kitchenHasIt = line.printedToKitchen || line.firedStations.isNotEmpty;
-    final edge = sent ? AppColors.sent : AppColors.draft;
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        border: Border(left: BorderSide(color: edge, width: 4)),
-      ),
-      // The wash is the Material's own so the tap ripple stays visible on it. A
-      // quiet fill either way, so each item reads as its own card with room for
-      // its modifiers and note under the name.
-      child: Material(
-        color: sent
-            ? AppColors.sent.withValues(alpha: 0.06)
-            : Theme.of(context)
-                .colorScheme
-                .surfaceContainerHighest
-                .withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: onTapLine,
-          child: Padding(
-            padding: const EdgeInsetsDirectional.fromSTEB(6, 7, 2, 7),
-            child: Row(children: [
-              // The quantity controls sit where the quantity is read, so a simple
-              // item costs the bill one line, not a strip of three: on a small
-              // panel that is the difference between seeing two items and six.
-              if (!kitchenHasIt) ...[
-                _step(Icons.remove_circle_outline, AppColors.error,
-                    () => onQty(line.quantity - 1)),
-                Container(
-                  constraints: const BoxConstraints(minWidth: 22),
-                  alignment: Alignment.center,
-                  child: Text(_qtyText,
-                      style: const TextStyle(
-                          fontSize: 14.5, fontWeight: FontWeight.w800)),
-                ),
-                _step(Icons.add_circle_outline, AppColors.success,
-                    () => onQty(line.quantity + 1)),
-                const SizedBox(width: 4),
-              ] else ...[
-                const SizedBox(width: 4),
-                Text('$_qtyText×',
-                    style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.primary)),
-                const SizedBox(width: 6),
-              ],
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(children: [
-                      if (line.seat != null) ...[
-                        _tag('G${line.seat}', AppColors.info,
-                            key: Key('seat-badge-${line.uuid}')),
-                        const SizedBox(width: 5),
-                      ],
-                      Expanded(
-                        child: Text(line.name,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 14.5, fontWeight: FontWeight.w600)),
-                      ),
-                      if (sent) ...[
-                        const SizedBox(width: 4),
-                        StatusChip(tr(context, 'Sent'), AppColors.sent,
-                            icon: Icons.check),
-                      ] else if (line.isTimed) ...[
-                        const SizedBox(width: 4),
-                        StatusChip(_fireCountdown(line.fireAt!), AppColors.pending,
-                            icon: Icons.timer_outlined),
-                      ],
-                    ]),
-                    for (final m in line.modifiers)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(
-                            '+ ${m.name}${m.quantity > 1 ? ' ×${m.quantity.toStringAsFixed(0)}' : ''}'
-                            '${m.unitPrice == 0 ? '  (${tr(context, 'free')})' : '  ${format(m.total * line.quantity)}'}',
-                            style: TextStyle(
-                                fontSize: 12.5,
-                                color: m.unitPrice == 0
-                                    ? AppColors.modifierFree
-                                    : AppColors.modifierPaid)),
-                      ),
-                    if (line.discountPercent > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(
-                            '-${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
-                            style: const TextStyle(
-                                fontSize: 12.5, color: AppColors.warning)),
-                      ),
-                    if (line.note != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(line.note!,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 12.5, fontStyle: FontStyle.italic)),
-                      ),
-                  ],
-                ),
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    // Rows sit inside the basket card — no nested card chrome, only a hairline
+    // separator so the outer product-style border stays the frame.
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTapLine,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.fromLTRB(4, 10, 0, 10),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: dark
+                    ? AppColors.surfaceLightDark.withValues(alpha: 0.5)
+                    : const Color(0xFFE2E8F0),
               ),
-              const SizedBox(width: 4),
-              Text(amount,
-                  style: const TextStyle(
-                      fontSize: 14.5, fontWeight: FontWeight.w700)),
-              // A sent line shows the Void affordance instead of a free trash:
-              // removing it is a permissioned, audited, slip-printing action,
-              // not a silent delete.
-              if (kitchenHasIt)
-                IconButton(
-                    key: Key('line-void-inline-${line.uuid}'),
-                    icon: const Icon(Icons.remove_circle_outline, size: 22),
-                    color: AppColors.error,
-                    padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints(minWidth: 36, minHeight: 36),
-                    visualDensity: VisualDensity.compact,
-                    tooltip: tr(context, 'Void this line'),
-                    onPressed: onVoid)
-              else
-                IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 22),
-                    color: AppColors.error,
-                    padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints(minWidth: 36, minHeight: 36),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: onRemove),
-            ]),
+            ),
           ),
+          child: Row(children: [
+            if (!kitchenHasIt) ...[
+              _qtyBtn(Icons.remove, AppColors.error,
+                  () => onQty(line.quantity - 1)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(_qtyText,
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w800)),
+              ),
+              _qtyBtn(Icons.add, AppColors.success,
+                  () => onQty(line.quantity + 1)),
+              const SizedBox(width: 8),
+            ] else ...[
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text('$_qtyText×',
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.primaryDark)),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    if (line.seat != null) ...[
+                      _tag('G${line.seat}', AppColors.info,
+                          key: Key('seat-badge-${line.uuid}')),
+                      const SizedBox(width: 5),
+                    ],
+                    Expanded(
+                      child: Text(line.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              height: 1.2)),
+                    ),
+                    if (sent) ...[
+                      const SizedBox(width: 4),
+                      StatusChip(tr(context, 'Sent'), AppColors.sent,
+                          icon: Icons.check),
+                    ] else if (line.isTimed) ...[
+                      const SizedBox(width: 4),
+                      StatusChip(_fireCountdown(line.fireAt!),
+                          AppColors.pending,
+                          icon: Icons.timer_outlined),
+                    ],
+                  ]),
+                  for (final m in line.modifiers)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                          '+ ${m.name}${m.quantity > 1 ? ' ×${m.quantity.toStringAsFixed(0)}' : ''}'
+                          '${m.unitPrice == 0 ? '  (${tr(context, 'free')})' : '  ${format(m.total * line.quantity)}'}',
+                          style: TextStyle(
+                              fontSize: 12.5,
+                              color: m.unitPrice == 0
+                                  ? AppColors.modifierFree
+                                  : AppColors.modifierPaid)),
+                    ),
+                  if (line.discountPercent > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                          '-${line.discountPercent.toStringAsFixed(0)}% ${tr(context, 'discount')}',
+                          style: const TextStyle(
+                              fontSize: 12.5, color: AppColors.warning)),
+                    ),
+                  if (line.note != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(line.note!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 12.5,
+                              fontStyle: FontStyle.italic,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant)),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(amount,
+                style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.primary)),
+            if (kitchenHasIt)
+              IconButton(
+                  key: Key('line-void-inline-${line.uuid}'),
+                  icon: const Icon(Icons.remove_circle, size: 22),
+                  color: AppColors.error,
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 36, minHeight: 36),
+                  visualDensity: VisualDensity.compact,
+                  tooltip: line.quantity > 1
+                      ? tr(context, 'Void one unit')
+                      : tr(context, 'Void this line'),
+                  onPressed: onVoid)
+            else
+              IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 22),
+                  color: AppColors.error,
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 36, minHeight: 36),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onRemove),
+          ]),
         ),
       ),
     );
   }
 
-  /// One compact quantity key. An InkWell rather than an IconButton so the tap
-  /// target stays a tight 32px square instead of Material's 48px minimum, which
-  /// is what let the stepper move up into the line itself.
-  Widget _step(IconData icon, Color color, VoidCallback onTap) => InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(5),
-          child: Icon(icon, size: 22, color: color),
+  Widget _qtyBtn(IconData icon, Color color, VoidCallback onTap) => Material(
+        color: color,
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 30,
+            height: 30,
+            child: Icon(icon, size: 17, color: Colors.white),
+          ),
         ),
       );
 
@@ -3773,7 +4469,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
           if (partPaid) ...[
             const SizedBox(height: 4),
             Text(
-              '${tr(context, 'Bill')} ${widget.format(bill)}  ·  '
+              '${tr(context, 'Bill')} ${widget.format(bill)}  Â·  '
               '${tr(context, 'Paid')} ${widget.format(widget.alreadyPaid)}',
               key: const Key('running-balance'),
               style: TextStyle(
@@ -3904,7 +4600,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   IconData _methodIcon(PaymentMethod m) {
     if (m.isCash) return Icons.payments_outlined;
     final name = m.name.toLowerCase();
-    if (name.contains('wallet') || name.contains('محفظة')) {
+    if (name.contains('wallet') || name.contains('Ù…Ø­ÙØ¸Ø©')) {
       return Icons.account_balance_wallet_outlined;
     }
     if (name.contains('transfer') || name.contains('bank')) {

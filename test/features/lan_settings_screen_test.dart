@@ -7,6 +7,7 @@ import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/i18n/l10n.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
 import 'package:offline_pos/core/lan/lan_wiring.dart';
+import 'package:offline_pos/domain/table_section_config.dart';
 import 'package:offline_pos/features/settings/lan_settings_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -229,5 +230,23 @@ void main() {
 
     expect(settings.lanShopKey, isNot('the-old-key'));
     expect(find.text(settings.lanShopKey!), findsOneWidget);
+  });
+
+  testWidgets('Unlink clears role and shop key and leaves them cleared',
+      (t) async {
+    settings.deviceRole = DeviceRole.secondary;
+    settings.lanShopKey = 'paired-shop-key';
+    settings.lanRolePromptDismissed = true;
+    await open(t);
+
+    await t.tap(find.byKey(const Key('lan-unlink')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('lan-unlink-confirm-yes')));
+    await t.pumpAndSettle();
+
+    expect(settings.deviceRole, DeviceRole.unset);
+    expect(settings.lanShopKey, isNull);
+    expect(settings.lanRolePromptDismissed, isFalse);
+    expect(find.textContaining('Unlinked'), findsOneWidget);
   });
 }

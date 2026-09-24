@@ -34,7 +34,7 @@ void main() {
       deviceId: 'till-1',
       cashierId: 'sara',
     );
-    session.setOrderType(OrderType.delivery);
+    session.setOrderType(OrderType.storeDelivery);
     session.addProduct(pizza);
   });
   tearDown(() => db.close());
@@ -78,5 +78,27 @@ void main() {
     expect(session.current.driverName, 'Hany');
     session.setDriver(null);
     expect(session.current.driverName, isNull);
+  });
+
+  test('switching delivery subtypes drops what only the previous kind used', () {
+    session.setDeliveryChannel(talabat, companyOrderNo: 'TLB-9');
+    session.setDeliveryCost(25);
+    session.setDriver('Hany');
+    session.setDeliveryCustomer(name: 'Ali', phone: '010', address: 'Nasr City');
+
+    session.setOrderType(OrderType.carDelivery);
+    expect(session.current.companyOrderNo, isNull);
+    expect(session.current.deliveryChannel, isNull);
+    expect(session.current.deliveryCost, 0);
+    expect(session.current.driverName, isNull);
+    expect(session.current.customerAddress, isNull);
+    // Name/phone can stay — car is still a sale that may name a guest.
+    expect(session.current.customerName, 'Ali');
+
+    session.setOrderType(OrderType.deliveryFromCompany);
+    session.setDeliveryChannel(talabat, companyOrderNo: 'TLB-2');
+    session.setOrderType(OrderType.storeDelivery);
+    expect(session.current.companyOrderNo, isNull);
+    expect(session.current.deliveryChannel, isNull);
   });
 }

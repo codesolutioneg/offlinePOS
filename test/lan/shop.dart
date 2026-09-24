@@ -6,6 +6,7 @@ import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/reservation_store.dart';
 import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
+import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/db/table_assignment_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
@@ -18,6 +19,7 @@ import 'package:offline_pos/core/lan/lan_event_log.dart';
 import 'package:offline_pos/core/lan/lan_fabric.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
 import 'package:offline_pos/core/lan/lan_transport.dart';
+import 'package:offline_pos/core/sync/dishflow_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/domain/order.dart';
 
@@ -67,6 +69,8 @@ class TestTill {
     );
     settings = SettingsStore(db)
       ..publish = (kind, uuid, payload) => fabric.publish(kind, uuid, payload);
+    shifts = ShiftStore(db);
+    dishflow = DishflowWiring(outbox: outbox)..apply(settings);
     reservations = ReservationStore(
       db,
       publish: (kind, uuid, payload) => fabric.publish(kind, uuid, payload),
@@ -83,13 +87,18 @@ class TestTill {
       settings: settings,
       reservations: reservations,
       assignments: assignments,
+      shifts: shifts,
       log: log,
+      onShopBundleApplied: () => dishflow.apply(settings),
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
     claims = LanClaimDesk(
       deviceId: deviceId,
       orders: orders,
-      allowed: () => settings.lanAllowTakeover,
+      mayGrant: ({required order, requesterId, asManager = false}) =>
+          settings.lanAllowTakeover ||
+          asManager ||
+          (requesterId != null && requesterId == order.cashierId),
       audit: (event, detail) => audited.add('$event: $detail'),
     );
     protocol = LanProtocol(
@@ -139,6 +148,8 @@ class TestTill {
   late final OrderStore orders;
   late final TableStore tables;
   late final SettingsStore settings;
+  late final ShiftStore shifts;
+  late final DishflowWiring dishflow;
   late final ReservationStore reservations;
   late final TableAssignmentStore assignments;
   late final LanApplier applier;

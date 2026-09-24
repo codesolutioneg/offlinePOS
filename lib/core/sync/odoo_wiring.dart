@@ -20,10 +20,11 @@ class OdooWiring {
   final Outbox _outbox;
   final HttpPostFn _post;
 
-  /// Called with a sale's uuid once the server has booked it (created or a safe
-  /// duplicate), so the till can mark the order synced and the history badge is
-  /// truthful rather than always saying "queued".
-  final void Function(String uuid)? onOrderBooked;
+  /// Called with a sale's uuid (and optional Odoo id / document name) once the
+  /// server has booked it, so the till can mark the order synced and End of Day
+  /// can show the SO number on the close screen.
+  final void Function(String uuid, [int? serverId, String? serverName])?
+      onOrderBooked;
 
   /// Called when the server permanently refused a sale, so the money impact of a
   /// parked order reaches the audit trail instead of only the diagnostics count.
@@ -49,7 +50,7 @@ class OdooWiring {
     _outbox.register('order.push', _orderSender);
     // Audit and heartbeat have no server sink yet, so they are acknowledged locally
     // and drained. They must NOT go through the order sender: that posts to
-    // sale.order/create_from_offline_pos, which would book audit rows as sales. The
+    // pos.order/create_from_offline_pos, which would book audit rows as sales. The
     // local audit log stays the record; a dedicated endpoint is the follow-up.
     _outbox.register('audit.push', (_) async {});
     _outbox.register('device.status', (_) async {});
@@ -69,37 +70,34 @@ class OdooWiring {
   /// reading of the server's answer as a single sale, so the merged path cannot
   /// drift from the one it stands in for.
   ///
-  /// No booked/rejected callback: a batch stands for many sales and the caller is
-  /// the one that knows which, so marking them is its job.
-  Future<void> pushPayload(String uuid, Map<String, dynamic> payload) =>
-      _deliver(OutboxEntry(
-          id: -1, kind: 'order.push', payloadUuid: uuid, payload: payload));
+  /// Returns the module status dict (`id`, `name`, `status`) so End of Day can
+  /// show the cashier the Odoo document that was booked.
+  Future<Map<String, dynamic>?> pushPayload(
+      String uuid, Map<String, dynamic> payload) async {
+    final sender = _sender;
+    final endpoint = _endpoint;
+    if (sender == null || endpoint == null) {
+      throw TransientSyncError('no Odoo endpoint configured');
+    }
+    if (!sender.isAuthenticated) {
+      await sender.authenticate(endpoint.login, endpoint.password ?? '');
+    }
+    return sender.bookOrder(OutboxEntry(
+        id: -1, kind: 'order.push', payloadUuid: uuid, payload: payload));
+  }
 
   Future<void> _orderSender(OutboxEntry entry) async {
     try {
-      await _deliver(entry);
+      final ack = await pushPayload(entry.payloadUuid, entry.payload);
       // Only order.push is routed here (audit and heartbeat have their own local
       // sinks), so a clean return means the server booked this sale.
-      onOrderBooked?.call(entry.payloadUuid);
+      final id = (ack?['id'] as num?)?.toInt();
+      final name = ack?['name']?.toString();
+      onOrderBooked?.call(entry.payloadUuid, id, name);
     } on PermanentlyRejected catch (e) {
       onOrderRejected?.call(entry.payloadUuid, e.toString());
       rethrow;
     }
-  }
-
-  Future<void> _deliver(OutboxEntry entry) async {
-    final sender = _sender;
-    final endpoint = _endpoint;
-    if (sender == null || endpoint == null) {
-      // Not configured yet. Transient, so the sale stays queued rather than parked.
-      throw TransientSyncError('no Odoo endpoint configured');
-    }
-    if (!sender.isAuthenticated) {
-      // Authenticate lazily and only when the line is up. A failure here is
-      // transient (server down / wrong-for-now), so the sale is kept and retried.
-      await sender.authenticate(endpoint.login, endpoint.password ?? '');
-    }
-    await sender.orderSender(entry);
   }
 
   /// A `call` for the catalogue [OdooPuller]: authenticates on demand against the

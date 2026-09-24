@@ -97,6 +97,7 @@ void main() {
       settings: settings,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
+      loginManagersOnly: false,
       config: const TillConfig(),
     );
   }
@@ -167,7 +168,10 @@ void main() {
     await t.pumpAndSettle();
 
     expect(find.byKey(const Key('manager-pin')), findsOneWidget);
-    await t.enterText(find.byKey(const Key('manager-pin')), '9999');
+    for (final d in '9999'.split('')) {
+      await t.tap(find.byKey(Key('key-$d')).last);
+      await t.pump();
+    }
     await t.tap(find.byKey(const Key('manager-ok')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('line-price-value')), findsOneWidget);

@@ -44,6 +44,7 @@ const Map<String, String> _ar = {
   'Save': 'حفظ',
   'Add': 'إضافة',
   'OK': 'موافق',
+  'Back': 'رجوع',
   'Set': 'تعيين',
   'Apply': 'تطبيق',
   'Confirm': 'تأكيد',
@@ -52,6 +53,7 @@ const Map<String, String> _ar = {
   'Delete': 'حذف',
   'Edit': 'تعديل',
   'Approve': 'اعتماد',
+  'Approved': 'اعتمد',
   'Search': 'بحث',
   'Saved': 'تم الحفظ',
   // selling
@@ -66,6 +68,11 @@ const Map<String, String> _ar = {
   'Add discount': 'إضافة خصم',
   'Edit discount': 'تعديل الخصم',
   'Delivery': 'توصيل',
+  'Delivery from company': 'دليفري شركة',
+  'Store delivery': 'دليفري متجر',
+  'Car delivery': 'دليفري عربية',
+  'Company order number is required': 'رقم طلب الشركة مطلوب',
+  'Add customer details for delivery': 'أضف بيانات العميل للتوصيل',
   'Tip': 'إكرامية',
   'Total due': 'المبلغ المستحق',
   'Amount received': 'المبلغ المستلم',
@@ -75,9 +82,50 @@ const Map<String, String> _ar = {
   'Walk-in customer': 'عميل عابر',
   'Customer': 'العميل',
   'End shift': 'إنهاء الوردية',
+  'End of Day': 'نهاية اليوم',
+  'Close session': 'إغلاق الجلسة',
+  'Close session & send to Odoo': 'إغلاق الجلسة وإرسال لأودو',
+  'Session closed': 'تم إغلاق الجلسة',
+  'Open a shift first. After sales, End shift → Close session & send to Odoo.':
+      'افتح وردية أولاً. بعد البيع: إنهاء الوردية ← إغلاق الجلسة وإرسال لأودو.',
+  'Cannot close session': 'لا يمكن إغلاق الجلسة',
+  'Odoo order': 'أمر البيع في أودو',
+  'Sent to Odoo': 'أُرسل إلى أودو',
   'New order': 'طلب جديد',
   'Open orders': 'الطلبات المفتوحة',
+  'Store orders': 'طلبات المتجر',
+  'New store order': 'طلب متجر جديد',
+  '{n} new store orders waiting': '{n} طلبات متجر جديدة بانتظار الاستلام',
+  'A customer order is waiting to be claimed.':
+      'طلب عميل بانتظار الاستلام.',
+  'View orders': 'عرض الطلبات',
+  'Later': 'لاحقاً',
+  'No store orders waiting': 'لا توجد طلبات متجر بانتظار الاستلام',
+  'Tap to claim': 'اضغط للاستلام',
+  'Could not claim this order': 'تعذر استلام هذا الطلب',
+  'Turn on Dishflow mirror in Settings first.':
+      'فعّل مرآة Dishflow من الإعدادات أولاً.',
+  'Turn on Dishflow mirror in Settings to receive store orders.':
+      'فعّل مرآة Dishflow من الإعدادات لاستقبال طلبات المتجر.',
+  'Could not load store orders': 'تعذر تحميل طلبات المتجر',
+  'This device type': 'نوع هذا الجهاز',
+  'Counter': 'كاشير',
+  'Delivery station': 'محطة دليفري',
+  'Delivery gets sound and banner alerts for new store / app orders. '
+          'Counter stays silent; Store orders is still in the menu on both.':
+      'محطة الدليفري تستقبل صوت وتنبيه لطلبات التطبيق الجديدة. '
+          'الكاشير بدون تنبيه؛ قائمة طلبات المتجر متاحة على الاثنين.',
+  'Store-order alerts: on': 'تنبيهات طلبات المتجر: مفعّلة',
+  'Store-order alerts: off': 'تنبيهات طلبات المتجر: متوقفة',
+  'This device will beep when a new app order arrives.':
+      'هذا الجهاز سيُصدر تنبيهًا عند وصول طلب من التطبيق.',
+  'This device will not alert. Open Store orders from the menu if needed.':
+      'هذا الجهاز لن يُنبّه. افتح طلبات المتجر من القائمة عند الحاجة.',
+  'Delivery station — store-order alerts on':
+      'محطة دليفري — تنبيهات الطلبات مفعّلة',
+  'Counter — store-order alerts off': 'كاشير — تنبيهات الطلبات متوقفة',
   'Note': 'ملاحظة',
+  'Add note...': 'أضف ملاحظة...',
   'Note added': 'تمت إضافة ملاحظة',
   'Order note': 'ملاحظة الطلب',
   'Guests': 'الضيوف',
@@ -85,6 +133,12 @@ const Map<String, String> _ar = {
   'Note for kitchen': 'ملاحظة للمطبخ',
   'Line discount': 'خصم على الصنف',
   'Void this line': 'إلغاء هذا الصنف',
+  'Void one unit': 'إلغاء وحدة واحدة',
+  'Void units…': 'إلغاء وحدات…',
+  'How many to void?': 'كم وحدة تلغي؟',
+  'Pick how many': 'اختَر العدد',
+  'on the order': 'في الطلب',
+  'Void all': 'إلغاء الكل',
   'Reason': 'السبب',
   'Manager approval': 'موافقة المدير',
   'Manager PIN': 'رمز المدير',
@@ -101,11 +155,36 @@ const Map<String, String> _ar = {
   'Settings': 'الإعدادات',
   'Support & printers': 'الدعم والطابعات',
   'Order history': 'سجل الطلبات',
+  'Other till': 'جهاز آخر',
+  'Completed sales will show up here':
+      'المبيعات المكتملة تظهر هنا — بما فيها من الأجهزة الأخرى على الشبكة',
   // tables
   'Kitchen': 'المطبخ',
   'No open tables': 'لا توجد طاولات مفتوحة',
   'Occupied': 'مشغولة',
   'Free': 'متاحة',
+  'Sent to kitchen': 'أُرسل للمطبخ',
+  'Bill printed': 'طُبع الحساب',
+  'No table': 'بدون طاولة',
+  'bills': 'فواتير',
+  'New bill on this table': 'فاتورة جديدة على هذه الطاولة',
+  'Merge into one bill': 'دمج في فاتورة واحدة',
+  'Keep separate bills on this table': 'فواتير منفصلة على نفس الطاولة',
+  'Split this bill onto another table': 'نقل هذه الفاتورة لطاولة أخرى',
+  'Seat this order on a table first': 'اجلس الطلب على طاولة أولاً',
+  'Order can only be transferred after sending to kitchen':
+      'لا يُنقل الطلب إلا بعد إرساله للمطبخ',
+  'Pick a table to move items onto': 'اختر طاولة لنقل الأصناف إليها',
+  'Display label': 'اسم العرض',
+  'Optional, e.g. a staff name': 'اختياري، مثل اسم الموظف',
+  'Shop default': 'إعداد المحل',
+  'Ask': 'اسأل',
+  'Skip (1 guest)': 'تخطي (ضيف واحد)',
+  'Default order type': 'نوع الطلب الافتراضي',
+  'Waiter picks': 'يختار الويتر',
+  'Move table only after kitchen': 'نقل الطاولة بعد المطبخ فقط',
+  'A dine-in bill cannot change tables until a line is sent':
+      'لا تُنقل فاتورة الصالة قبل إرسال صنف للمطبخ',
   'Section': 'قسم',
   'Seats': 'المقاعد',
   // shift
@@ -125,6 +204,8 @@ const Map<String, String> _ar = {
   'Reprint receipt': 'إعادة طباعة الإيصال',
   // settings
   'Shop & receipt': 'المتجر والإيصال',
+  'Name, table open PIN, tax id, footer':
+      'الاسم، رمز فتح الطاولة، الرقم الضريبي، التذييل',
   'Category colours': 'ألوان الأقسام',
   'Quick notes': 'ملاحظات سريعة',
   'Discount reasons': 'أسباب الخصم',
@@ -138,10 +219,15 @@ const Map<String, String> _ar = {
   'Receipt footer': 'تذييل الإيصال',
   'Add staff': 'إضافة موظف',
   'Add printer': 'إضافة طابعة',
+  'receipt / delivery = this till only. kitchen / bar = shared on LAN join.':
+      'إيصال / دليفري = لهذا الجهاز فقط. مطبخ / بار = مشتركة عند الانضمام للشبكة.',
   'Add table': 'إضافة طاولة',
   'Name / number': 'الاسم / الرقم',
   // the shop network
   'Shop network': 'شبكة المتجر',
+  'Join hit a sync bug. Close the app fully, open the '
+          'newest build, Unlink, then Join again.':
+      'فشل الربط بسبب خطأ مزامنة. اقفل التطبيق بالكامل، افتح أحدث نسخة، Unlink، ثم Join من جديد.',
   'Share open tabs, tickets and the floor plan':
       'مشاركة الطلبات المفتوحة وطلبات المطبخ ومخطط الصالة',
   'Share with the other devices': 'المشاركة مع الأجهزة الأخرى',
@@ -295,7 +381,13 @@ const Map<String, String> _ar = {
   'Avg order': 'متوسط الطلب',
   'Overall': 'الإجمالي',
   'Print summary': 'طباعة الملخص',
+  'Select period': 'اختر الفترة',
+  'Pick a report, then choose its period':
+      'اختر التقرير ثم حدد فترته',
   'Summary sent to printer': 'أُرسل الملخص للطابعة',
+  'Sent to receipt printer': 'أُرسل لطابعة الإيصال',
+  'Print failed': 'فشلت الطباعة',
+  'Print again': 'طباعة مرة أخرى',
   'Custom': 'مخصص',
   // shift
   'Open since': 'مفتوحة منذ',
@@ -370,12 +462,35 @@ const Map<String, String> _ar = {
   'Print the whole ticket again?': 'طباعة التذكرة كاملة من جديد؟',
   // attendance
   'Attendance': 'الحضور',
+  'Manage': 'إدارة',
+  'Nobody clocked in — roster will be offered':
+      'لا أحد مسجّل حضور — سيُعرض الطاقم كاملًا',
+  'Confirm with PIN': 'تأكيد بالرمز السري',
+  "Enter this person's PIN, or a manager PIN.":
+      'أدخل رمز هذا الشخص، أو رمز المدير.',
+  "Enter this person's PIN": 'أدخل رمز هذا الشخص',
+  'Clock in from Attendance before opening a table':
+      'سجّل الحضور من Attendance قبل فتح طاولة',
+  'Who is opening this table?': 'من يفتح هذه الطاولة؟',
+  'Fingerprint or this person\'s PIN': 'بصمة أو الرقم السري لهذا الشخص',
+  'That person is not clocked in': 'هذا الشخص غير مسجّل حضور',
+  'Fingerprint does not match the selected person':
+      'البصمة لا تطابق الشخص المختار',
+  'Require PIN or fingerprint to open a table':
+      'طلب رمز سري أو بصمة عند فتح الطاولة',
+  'After choosing the waiter. Turn off to assign by name only.':
+      'بعد اختيار النادل. أوقفها للتعيين بالاسم فقط.',
+  'Ask who is opening the table': 'اسأل من يفتح الطاولة',
+  'On a shared till, assigns the table to them':
+      'على جهاز مشترك، تُسند الطاولة إليه',
   'No staff yet': 'لا يوجد موظفون بعد',
   'on the clock': 'على رأس العمل',
   'Since': 'منذ',
   'Off the clock': 'خارج الدوام',
   'Clock in': 'تسجيل حضور',
   'Clock out': 'تسجيل انصراف',
+  'Enter PIN to clock in': 'أدخل الرمز السري لتسجيل الحضور',
+  'Enter PIN to clock out': 'أدخل الرمز السري لتسجيل الانصراف',
   // status colours / dine-in visuals
   'Sent': 'أُرسل',
   'All sent': 'تم إرسال الكل',
@@ -478,7 +593,6 @@ const Map<String, String> _ar = {
   'Tap a product to add it to the order': 'اضغط على منتج لإضافته للطلب',
   'Try a different search or category': 'جرّب بحثاً أو قسماً آخر',
   'Orders sent to the kitchen will show up here': 'ستظهر الطلبات المُرسلة للمطبخ هنا',
-  'Completed sales will show up here': 'ستظهر المبيعات المكتملة هنا',
   'Cashier totals will show up once orders come in':
       'ستظهر إجماليات الكاشير عند ورود الطلبات',
   'No categories yet': 'لا توجد أقسام بعد',
@@ -500,6 +614,32 @@ const Map<String, String> _ar = {
   'People & customers': 'الموظفون والعملاء',
   'Server': 'الخادم',
   'Language': 'اللغة',
+  'Dishflow owner mirror': 'مرآة الأونر في ديش فلو',
+  'Show paid sales in owner Flash when online':
+      'عرض المبيعات المدفوعة في فلاش الأونر عند توفر النت',
+  'Mirror paid sales to Dishflow': 'رفع المبيعات المدفوعة إلى ديش فلو',
+  'When online, paid orders appear in owner Flash and reports. Selling never waits on the network.':
+      'عند توفر النت تظهر الطلبات المدفوعة في فلاش وتقارير الأونر. البيع لا ينتظر الشبكة.',
+  'Dishflow mirror is owned by the primary till. Join as primary to edit.':
+      'مرآة ديش فلو من جهاز الماستر فقط. ادخل كـ primary للتعديل.',
+  'Firebase project id': 'معرّف مشروع Firebase',
+  'Firebase web API key': 'مفتاح Firebase للويب',
+  'Odoo connection id': 'معرّف اتصال أودو',
+  'Must match the branch connection id Dishflow reports filter on.':
+      'لازم يطابق معرّف اتصال الفرع اللي تقارير ديش فلو بتفلتر عليه.',
+  'Branch id (optional)': 'معرّف الفرع (اختياري)',
+  'Branch name (optional)': 'اسم الفرع (اختياري)',
+  'Testing…': 'جاري الاختبار…',
+  'Connected. A ping was written to diagnostics.':
+      'تم الاتصال. اتكتب ping في diagnostics.',
+  'Full Z count stays on this till; peers close quietly without recounting.':
+      'عدّ النقد الكامل على هذا الجهاز؛ الباقي بتقفل بهدوء بدون إعادة عدّ.',
+  'Each till syncs its own Odoo outbox on close or Sync now.':
+      'كل جهاز يرحّل أودو من الـ outbox بتاعه عند القفل أو Sync now.',
+  'Opening here opens a local drawer on every till on the network.':
+      'الفتح هنا بيفتح درج محلي على كل الأجهزة على الشبكة.',
+  'Section rules are owned by the primary till. Join as primary to edit.':
+      'قواعد الأقسام من جهاز الماستر فقط. ادخل كـ primary للتعديل.',
   // customers CRUD
   'Add customer': 'إضافة عميل',
   'No customers': 'لا يوجد عملاء',
@@ -580,7 +720,9 @@ const Map<String, String> _ar = {
   'Paid': 'المدفوع',
   'balance': 'المتبقي',
   'Search your name': 'ابحث عن اسمك',
+  'Select user': 'اختر المستخدم',
   'Tap your name, then enter your PIN': 'اضغط على اسمك ثم أدخل الرقم السري',
+  'Select your name, then enter your PIN': 'اختر اسمك ثم أدخل الرقم السري',
   'Signing in as': 'تسجيل الدخول باسم',
   ", then enrol the real roster. This code is new on every launch and stops appearing once staff are enrolled.": "، ثم سجّل الطاقم الحقيقي. هذا الرمز جديد عند كل تشغيل ويختفي بمجرد تسجيل الموظفين.",
   "4 to 6 digits": "من 4 إلى 6 أرقام",
@@ -630,6 +772,7 @@ const Map<String, String> _ar = {
   "Login": "تسجيل الدخول",
   "Looking...": "جارٍ البحث...",
   "Name (receipt, kitchen, bar)": "الاسم (إيصال، مطبخ، بار)",
+  "Name (receipt, kitchen, delivery, bar)": "الاسم (إيصال، مطبخ، دليفري، بار)",
   "New PIN (leave blank to keep current)": "رمز جديد (اتركه فارغًا للإبقاء على الحالي)",
   "New quick note": "ملاحظة سريعة جديدة",
   "No cashiers on this device yet": "لا يوجد كاشير على هذا الجهاز بعد",
@@ -673,6 +816,8 @@ const Map<String, String> _ar = {
   "These never reached the server. Fix the cause, then retry.": "هذه لم تصل إلى الخادم. عالج السبب ثم أعد المحاولة.",
   "This ends the shift and syncs the day's sales. It cannot be undone.": "هذا ينهي الوردية ويزامن مبيعات اليوم. لا يمكن التراجع عنه.",
   "This till has no staff yet. Sign in as Setup with PIN": "لا يوجد طاقم على هذا الكاشير بعد. سجّل الدخول كـ Setup بالرمز",
+  "Then open Settings → Staff to add employees, set each role and PIN. Settings → Roles & permissions controls what each role may do.":
+      "بعدها افتح الإعدادات ← الموظفون لإضافة الموظفين وتحديد الدور والرمز السري لكل واحد. الإعدادات ← الأدوار والصلاحيات تتحكم بما يستطيع كل دور فعله.",
   "This till needs attention": "هذا الكاشير يحتاج إلى انتباه",
   "Too many attempts. Try again in": "محاولات كثيرة. أعد المحاولة بعد",
   "Total discount given": "إجمالي الخصم الممنوح",
@@ -798,6 +943,28 @@ const Map<String, String> _ar = {
   'Go back': 'رجوع',
   'Close anyway': 'الإغلاق رغم ذلك',
   'Cashier flash': 'تقرير سريع لكل كاشير',
+  'Flash reports': 'تقارير الفلاش',
+  'Which Flash do you need?': 'انهي فلاش تحتاج؟',
+  'Pick the report type': 'اختر نوع التقرير المطلوب',
+  'All orders — every till on the network':
+      'الفلاش المجمع — كل الطلبات من كل الأجهزة على الشبكة',
+  'Flash summary': 'ملخص الفلاش',
+  'Delivery flash only': 'فلاش التوصيل فقط',
+  "Today's Flash": 'فلاش اليوم',
+  'Shop flash for today — all tills, prints now':
+      'فلاش مجمع لليوم من كل الأجهزة — يطبع فوراً',
+  'Payment Method Flash': 'فلاش طريقة الدفع',
+  'Pick a payment method and see its sales today':
+      'اختر طريقة دفع واعرض مبيعاتها اليوم',
+  'Includes every till on the network':
+      'يشمل كل الأجهزة على الشبكة المحلية',
+  'Delivery only': 'توصيل فقط',
+  'All cashiers — every till': 'كل الكاشيرين — كل الأجهزة',
+  'By order type': 'حسب نوع الطلب',
+  'By till': 'حسب الجهاز',
+  'No sales in this period': 'لا مبيعات في هذه الفترة',
+  'Tax (VAT)': 'الضريبة',
+  'Payments': 'المدفوعات',
   'No sales in this shift yet': 'لا توجد مبيعات في هذه الوردية بعد',
   'Cashier flash sent to printer': 'أُرسل تقرير الكاشير إلى الطابعة',
   // selling flow: money-off discounts, customer on any order type, order number,
@@ -818,6 +985,14 @@ const Map<String, String> _ar = {
   'Copy for the pass': 'نسخة لقسم التحضير',
   'Hide prices on that copy': 'إخفاء الأسعار في تلك النسخة',
   'A packing list: names and quantities only': 'قائمة تجهيز: الأسماء والكميات فقط',
+  'Delivery receipt printer': 'طابعة إيصال الدليفري',
+  'Same as receipt': 'نفس طابعة الإيصال',
+  'Bag slip and paid receipt for store / company delivery':
+      'سليب الشنطة وإيصال الدفع لدليفري المحل / الشركات',
+  'No receipt printer configured':
+      'لا توجد طابعة إيصال. أضف طابعة باسم receipt أو delivery',
+  'Printer offline — job held':
+      'الطابعة غير متصلة — المهمة محتجزة وستُطبع لاحقًا',
   'Logo': 'الشعار',
   'LOGO': 'الشعار',
   'Print the shop logo': 'طباعة شعار المحل',
@@ -856,6 +1031,24 @@ const Map<String, String> _ar = {
   'Nothing is sent or booked. Queued sales still go out at shift close.':
       'لا يُرسَل ولا يُسجَّل شيء. المبيعات المنتظرة تُرسَل عند إغلاق الوردية.',
   'Backup': 'نسخة احتياطية',
+  'SQL console': 'وحدة SQL',
+  'Inspect and edit the local SQLite tables':
+      'عرض وتعديل جداول SQLite المحلية',
+  'Inspect and edit the live till database. Writes are confirmed first.':
+      'عرض وتعديل قاعدة الجهاز الحيّة. أي كتابة تُؤكَّد أولاً.',
+  'Open SQL console': 'فتح وحدة SQL',
+  'The encrypted till database. A write is live, not a copy.':
+      'قاعدة الجهاز المشفّرة. الكتابة هنا حيّة وليست نسخة.',
+  'Run this write?': 'تشغيل أمر الكتابة؟',
+  'This changes the live till database. The floor and the next sale will see it.':
+      'هذا يغيّر قاعدة الجهاز الحيّة. المخطط والبيع التالي سيريان التغيير.',
+  'Run a statement to see rows.': 'شغّل جملة لترى الصفوف.',
+  'Running...': 'جارٍ التشغيل...',
+  'Copy SQL': 'نسخ SQL',
+  'Done.': 'تم.',
+  'row(s) changed': 'صف/صفوف تغيّرت',
+  'row(s)': 'صف/صفوف',
+  'truncated': 'مقطوع',
   'Back up now': 'إنشاء نسخة الآن',
   'Copying...': 'جارٍ النسخ...',
   'Backup failed': 'فشل النسخ الاحتياطي',
@@ -873,6 +1066,16 @@ const Map<String, String> _ar = {
   'Deliveries waiting': 'طلبات توصيل منتظرة',
   'Pick one up, or start a new order.': 'اختر واحدًا منها، أو ابدأ طلبًا جديدًا.',
   'New delivery': 'طلب توصيل جديد',
+  'No deliveries waiting for this type.': 'لا توجد طلبات توصيل منتظرة لهذا النوع.',
+  'Driver account': 'حساب الطيار',
+  'Pick a driver': 'اختر طياراً',
+  'No deliveries for this driver': 'لا توجد توصيلات لهذا الطيار',
+  'Service fee': 'رسوم الخدمة',
+  'Received': 'مستلم',
+  'Assigned': 'مُسنَد',
+  'On the way': 'في الطريق',
+  'Delivered': 'تم التسليم',
+  'Status': 'الحالة',
   'Zones, channels, drivers': 'المناطق والقنوات والسائقون',
   'Zones': 'المناطق',
   'Channels': 'القنوات',
@@ -927,6 +1130,9 @@ const Map<String, String> _ar = {
   'Add your staff': 'أضف الموظفين',
   'Everyone who rings a sale needs their own PIN.':
       'كل من يسجّل بيعًا يحتاج رمزًا خاصًا به.',
+  'Settings → Staff: create each employee, pick their role, set their PIN.':
+      'الإعدادات ← الموظفون: أنشئ كل موظف، اختر دوره، وعيّن الرمز السري.',
+  'Add employees, set role and PIN': 'إضافة موظفين وتحديد الدور والرمز السري',
   'This till is ready to sell': 'هذا الجهاز جاهز للبيع',
   'Everything is stored on the device. You can ring a sale right now, with or without a connection.':
       'كل شيء محفوظ على الجهاز. يمكنك تسجيل بيع الآن، باتصال أو بدونه.',
@@ -971,13 +1177,23 @@ const Map<String, String> _ar = {
   'Off, a tab is settled on the till it was opened on. On, a manager on another device can take it, and this one gives it up as it agrees, so it is never open in two places.':
       'عند الإيقاف، تُسدَّد الطاولة على الجهاز الذي فُتحت عليه. عند التشغيل، يستطيع مدير على جهاز آخر أخذها، ويتنازل عنها هذا الجهاز لحظة موافقته، فلا تكون مفتوحة في مكانين.',
   'Take over this tab?': 'أخذ هذه الطاولة؟',
+  'It is open on another device. That device is asked first. If it '
+          'does not answer, this till takes the tab so you can settle it.':
+      'الطاولة مفتوحة على جهاز آخر. يُطلب منه أولاً. إذا لم يُجِب، '
+          'هذا الجهاز يأخذها لتتمكن من إقفالها.',
+  'It is open on another device. That device is asked first. If it does not answer, this primary till takes the tab.':
+      'مفتوحة على جهاز آخر. يُسأل ذلك الجهاز أولاً. إن لم يرد، يأخذها هذا الجهاز الأساسي.',
   'It is open on another device. That device is asked first and gives it up, so it cannot be settled in two places.':
       'الطاولة مفتوحة على جهاز آخر. يُسأل ذلك الجهاز أولًا ويتنازل عنها، فلا يمكن تسديدها في مكانين.',
-  'Take over': 'أخذ الطاولة',
   'That device did not answer, so the tab stays with it. Settle it there.':
       'لم يستجب ذلك الجهاز، فتبقى الطاولة لديه. سدّدها هناك.',
+  'That device did not answer and this till has no copy of the tab.':
+      'الجهاز لم يُجِب وليس لدى هذا الجهاز نسخة من الطلب.',
   'That device would not hand the tab over.':
       'رفض ذلك الجهاز تسليم الطاولة.',
+  'That device is not answering. As the primary till, take the tab here anyway?':
+      'الجهاز لا يرد. كجهاز أساسي، تأخذ الطاولة هنا على أي حال؟',
+  'Take over': 'أخذ الطاولة',
   'Ask before opening someone else\'s tab': 'اسأل قبل فتح طاولة كاشير آخر',
   'Transfer tables': 'نقل الطاولات',
   // sharing the room out between the waiters on shift
@@ -1211,6 +1427,8 @@ const Map<String, String> _ar = {
       'تعذّرت قراءة القوائم من أودو. ما هو محفوظ بالأسفل ما زال ساريًا وما زال '
           'يُرسل مع كل عملية بيع.',
   'Branch (company)': 'الفرع (الشركة)',
+  'Branch': 'الفرع',
+  'Choose branch': 'اختر الفرع',
   'Restaurant (point of sale)': 'المطعم (نقطة البيع)',
   'Warehouse': 'المخزن',
   'Let Odoo decide': 'دع أودو يقرر',
@@ -1326,4 +1544,41 @@ const Map<String, String> _ar = {
           'الفرع والمطعم والمخزن. ويجب تعديل أودو ليقبله. وقبل نشر هذا التعديل '
           'تُسجَّل الليلة في مستند واحد بلا بيان لكل فاتورة على حدة وبلا حماية من '
           'تكرار التسجيل عند إعادة المحاولة. راجع المسؤول عن أودو قبل تشغيله.',
+  // ZKTeco fingerprint reader (PIN fallback when the device is unplugged).
+  'Fingerprint or manager PIN': 'بصمة أو رقم سري للمدير',
+  'Place your finger on the reader…': 'ضع إصبعك على القارئ…',
+  'Ready for fingerprint': 'جاهز للبصمة',
+  'No match — try again or use PIN': 'لا تطابق — أعد المحاولة أو استخدم الرقم السري',
+  'No match — keep finger on reader or use PIN':
+      'لا تطابق — أعد وضع الإصبع أو استخدم الرقم السري',
+  'No fingerprints enrolled — use PIN': 'لا توجد بصمات مسجّلة — استخدم الرقم السري',
+  'Use PIN instead': 'استخدم الرقم السري',
+  'Use fingerprint': 'استخدم البصمة',
+  'Scan again': 'امسح مرة أخرى',
+  'Enrol fingerprint': 'تسجيل بصمة',
+  'Clear fingerprint': 'مسح البصمة',
+  'fingerprint enrolled': 'بصمة مسجّلة',
+  'Fingerprint reader not connected': 'قارئ البصمة غير متصل',
+  'Checking fingerprint setup…': 'جاري فحص إعداد البصمة…',
+  'Fingerprint setup': 'إعداد البصمة',
+  'Auto-install libraries / see errors on this PC':
+      'تثبيت المكتبات تلقائيًا / عرض الأخطاء على هذا الجهاز',
+  'Reader ready': 'القارئ جاهز',
+  'Fix the failed checks below': 'أصلح الفحوصات الفاشلة بالأسفل',
+  'Issues': 'المشاكل',
+  'Checks': 'الفحوصات',
+  'Log file': 'ملف السجل',
+  'Status file': 'ملف الحالة',
+  'Re-check / install': 'إعادة فحص / تثبيت',
+  'Checking…': 'جاري الفحص…',
+  'Capture failed — try again': 'فشل الالتقاط — حاول مرة أخرى',
+  'No finger detected — try again': 'لم يُكتشف إصبع — حاول مرة أخرى',
+  'Lift finger, then place again…': 'ارفع الإصبع ثم ضعه مرة أخرى…',
+  'Captured': 'تم الالتقاط',
+  'Saving fingerprint…': 'جاري حفظ البصمة…',
+  'Could not merge captures': 'تعذر دمج اللقطات',
+  'Need 3 captures of the same finger': 'يلزم 3 لقطات لنفس الإصبع',
+  'Capture': 'التقاط',
+  'Sign in': 'تسجيل الدخول',
+  'Pick who is signing in': 'اختر من يسجّل الدخول',
 };

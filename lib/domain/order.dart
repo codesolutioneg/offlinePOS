@@ -1,33 +1,130 @@
 import 'business_day.dart';
+import 'delivery.dart';
 import 'identity.dart';
 
 /// Where the sale is served. Drives the sell screen, the kitchen ticket header,
 /// and whether delivery details and a delivery charge are collected.
 ///
+/// Delivery mirrors Dishflow's three subtypes:
+/// - [deliveryFromCompany]: aggregator / shipping company (Talabat-like channel)
+/// - [storeDelivery]: own riders + zones
+/// - [carDelivery]: drive-through style; counts as delivery but skips address/fee gates
+///
 /// [toGo] is food eaten off the premises that is still rung in the room: the guests
 /// sit at a table while it is packed, so it occupies the floor like a dine-in but
-/// is bagged like a takeaway. It is its own type rather than a flag on takeaway
-/// because the shop prices it on its own line of the tax and service matrices.
-enum OrderType { dineIn, takeaway, toGo, delivery }
+/// is bagged like a takeaway.
+enum OrderType {
+  dineIn,
+  takeaway,
+  toGo,
+  deliveryFromCompany,
+  storeDelivery,
+  carDelivery,
+}
 
 extension OrderTypeLabel on OrderType {
   String get label => switch (this) {
         OrderType.dineIn => 'Dine-in',
         OrderType.takeaway => 'Takeaway',
         OrderType.toGo => 'To go',
-        OrderType.delivery => 'Delivery',
+        OrderType.deliveryFromCompany => 'Delivery from company',
+        OrderType.storeDelivery => 'Store delivery',
+        OrderType.carDelivery => 'Car delivery',
       };
 
-  /// Whether this kind of sale can sit at a table on the floor plan. Mandatory for
-  /// a dine-in, optional for a to-go, meaningless for the two that leave the room.
+  /// Short kitchen / receipt banner (Dishflow-style English).
+  String get printBanner => switch (this) {
+        OrderType.dineIn => 'DINE IN',
+        OrderType.takeaway => 'TAKEAWAY',
+        OrderType.toGo => 'TO GO',
+        OrderType.deliveryFromCompany => 'DELIVERY',
+        OrderType.storeDelivery => 'Store delivery',
+        OrderType.carDelivery => 'CAR THROW',
+      };
+
+  /// Whether this kind of sale can sit at a table on the floor plan.
   bool get seatsAtTable => this == OrderType.dineIn || this == OrderType.toGo;
 
-  /// What the server is told this sale was. The module books `order_type` from a
-  /// fixed vocabulary, and to-go is a distinction the shop makes on its own floor:
-  /// it goes over the wire as the takeaway it is, and the difference stays here,
-  /// on the till that prints it and reports on it.
-  String get wireName =>
-      this == OrderType.toGo ? OrderType.takeaway.name : name;
+  /// Any of the three Dishflow delivery subtypes.
+  bool get isDelivery =>
+      this == OrderType.deliveryFromCompany ||
+      this == OrderType.storeDelivery ||
+      this == OrderType.carDelivery;
+
+  /// Company + store need customer contact before kitchen/pay (soft gate).
+  bool get needsDeliveryCustomer =>
+      this == OrderType.deliveryFromCompany || this == OrderType.storeDelivery;
+
+  /// Aggregator reference is required when ringing company delivery.
+  bool get needsCompanyOrderNo => this == OrderType.deliveryFromCompany;
+
+  /// Zone fee presets apply to store delivery.
+  bool get usesDeliveryZones => this == OrderType.storeDelivery;
+
+  /// What Odoo is told. All delivery subtypes share `delivery`; to-go wires as takeaway.
+  String get wireName => switch (this) {
+        OrderType.toGo => OrderType.takeaway.name,
+        OrderType.deliveryFromCompany ||
+        OrderType.storeDelivery ||
+        OrderType.carDelivery =>
+          'delivery',
+        _ => name,
+      };
+
+  /// Dishflow `orderType` string on Firebase sales.
+  String get dishflowName => switch (this) {
+        OrderType.deliveryFromCompany => 'Delivery from company',
+        OrderType.storeDelivery => 'Store delivery',
+        OrderType.carDelivery => 'Car delivery',
+        _ => label,
+      };
+
+  /// Parse persisted or imported names, including legacy `delivery` → store.
+  static OrderType parse(String? raw) {
+    final v = (raw ?? '').trim();
+    switch (v) {
+      case 'dineIn':
+      case 'Dine-in':
+        return OrderType.dineIn;
+      case 'takeaway':
+      case 'Takeaway':
+        return OrderType.takeaway;
+      case 'toGo':
+      case 'To go':
+        return OrderType.toGo;
+      case 'deliveryFromCompany':
+      case 'Delivery from company':
+        return OrderType.deliveryFromCompany;
+      case 'carDelivery':
+      case 'Car delivery':
+        return OrderType.carDelivery;
+      case 'storeDelivery':
+      case 'Store delivery':
+      case 'delivery': // legacy single type
+        return OrderType.storeDelivery;
+      default:
+        return OrderType.dineIn;
+    }
+  }
+
+  /// Expand a saved name list into types. Legacy `delivery` unlocks all three
+  /// subtypes so a shop that offered delivery before the split keeps doing so.
+  static Set<OrderType> parseSet(Iterable<String> names) {
+    final out = <OrderType>{};
+    var hadLegacyDelivery = false;
+    for (final n in names) {
+      if (n == 'delivery') hadLegacyDelivery = true;
+      out.add(parse(n));
+    }
+    if (hadLegacyDelivery) {
+      out.addAll(const [
+        OrderType.deliveryFromCompany,
+        OrderType.storeDelivery,
+        OrderType.carDelivery,
+      ]);
+    }
+    return out;
+  }
 }
 
 /// draft: being rung. held: parked on a table/tab, not yet paid. paid: tendered,
@@ -330,21 +427,31 @@ class Order {
     this.deliveryCost = 0,
     this.deliveryChannel,
     this.companyOrderNo,
+    this.driverId,
     this.driverName,
+    this.driverPhone,
+    this.deliveryStatus = DeliveryStatus.received,
+    this.shippingZoneId,
+    this.shippingZoneName,
+    this.serviceFee = 0,
     this.serviceChargePercent = 0,
     this.tip = 0,
     this.kitchenStatus = KitchenStatus.pending,
     this.refundOfUuid,
+    this.ecommerceOrderId,
     int? businessDayCutoverHour,
     this.orderNo,
     List<OrderLine>? lines,
     List<OrderPayment>? payments,
+    List<String>? linkedOrderUuids,
+    this.billPrintedAt,
   })  : uuid = uuid ?? Uuid.v4(),
         createdAt = createdAt ?? DateTime.now().toUtc(),
         businessDayCutoverHour =
             businessDayCutoverHour ?? BusinessDay.shopCutoverHour,
         lines = lines ?? [],
-        payments = payments ?? [];
+        payments = payments ?? [],
+        linkedOrderUuids = List.of(linkedOrderUuids ?? const []);
 
   final String uuid;
   final String deviceId;
@@ -388,13 +495,26 @@ class Order {
   /// Which channel this delivery came through ("Talabat", "Phone"), the number that
   /// channel calls the order, and who is carrying it.
   ///
-  /// All three are local to the till and stripped from the server payload. The wire
-  /// contract is fixed: the sale is a delivery, and who it is for travels as the
-  /// partner. An aggregator's own reference and the name of the driver are how the
-  /// shop finds the order on its own floor, and the server has nowhere to put them.
+  /// Channel / company # stay local for Odoo. Driver id/name/phone and
+  /// delivery_status travel on the Dishflow mirror so the rider app and
+  /// settlement reports match Dishflow.
   String? deliveryChannel;
   String? companyOrderNo;
+  String? driverId;
   String? driverName;
+  String? driverPhone;
+  DeliveryStatus deliveryStatus;
+
+  /// Zone chosen for the fee preset (Dishflow shipping zone), when store delivery.
+  String? shippingZoneId;
+  String? shippingZoneName;
+
+  /// Flat service fee (Dishflow manual service charge), in addition to any %.
+  double serviceFee;
+
+  /// Firebase `ecommerce_orders` doc id when this bag was claimed from the store app.
+  /// Soft-completed on pay so the customer app advances.
+  String? ecommerceOrderId;
 
   /// The service percentage this bill carries, stamped when the order is created and
   /// re-stamped when its type changes, never read from settings at total time: a bill
@@ -423,11 +543,50 @@ class Order {
   /// sequence claiming to be the first.
   String? orderNo;
 
+  /// Other open bills that share this table. Empty on a table that holds one
+  /// check, which is still the common case. Local only: the server books each
+  /// uuid on its own and has nowhere to put a sibling list.
+  List<String> linkedOrderUuids;
+
+  /// When the pre-bill was last printed for this still-open tab. Null until
+  /// somebody asks for the check. Local only: it colours the floor, and the
+  /// server is not handed a piece of paper.
+  DateTime? billPrintedAt;
+
   /// What to print or show as this order's reference: its human number once it has
   /// one, and the tail of the uuid before that (a draft being rung has no number
   /// yet, and a slip still has to be identifiable).
-  String get displayNo =>
-      orderNo ?? uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
+  ///
+  /// Plain digits only. New numbers are a never-repeating sequence. Legacy
+  /// `DDMM-SEQ-TAG` values expose `DDMM`+`SEQ` without the till letters so two
+  /// days' `#6` never both print as `6` on the same flash.
+  String get displayNo {
+    final n = orderNo?.trim();
+    if (n == null || n.isEmpty) {
+      return uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
+    }
+    return shortOrderNumber(n);
+  }
+
+  /// Human-facing order number: plain digits, unique for legacy rows.
+  static String shortOrderNumber(String raw) {
+    final parts = raw.split('-');
+    // DDMM-SEQ-TAG → DDMMSEQ (e.g. 2009-006-D50 → 2009006), never just "6".
+    if (parts.length >= 2 &&
+        RegExp(r'^\d+$').hasMatch(parts[0]) &&
+        RegExp(r'^\d+$').hasMatch(parts[1])) {
+      final seq = parts[1].replaceFirst(RegExp(r'^0+(?=.)'), '');
+      return '${parts[0]}$seq';
+    }
+    if (RegExp(r'^\d+$').hasMatch(raw)) {
+      return raw.replaceFirst(RegExp(r'^0+(?=.)'), '');
+    }
+    final digits = raw.replaceAll(RegExp(r'\D'), '');
+    if (digits.isNotEmpty) {
+      return digits.replaceFirst(RegExp(r'^0+(?=.)'), '');
+    }
+    return raw;
+  }
 
   /// Cash the customer handed over, when it exceeds what was due. Kept only so the
   /// receipt can print the change; it is NOT the amount booked. The payment stores
@@ -468,7 +627,12 @@ class Order {
   /// been paying, and it is what the server books when it applies each product's
   /// tax to the price this sale is sent at.
   double get total =>
-      subtotal * discountFactor + serviceCharge + taxTotal + deliveryCost + tip;
+      subtotal * discountFactor +
+      serviceCharge +
+      serviceFee +
+      taxTotal +
+      deliveryCost +
+      tip;
 
   /// What part of this bill is charged: the given lines net of their own discounts,
   /// less the whole-order discount, plus the bill's service charge, plus the tax on
@@ -574,12 +738,21 @@ class Order {
         'delivery_cost': deliveryCost,
         'delivery_channel': deliveryChannel,
         'company_order_no': companyOrderNo,
+        'driver_id': driverId,
         'driver_name': driverName,
+        'driver_phone': driverPhone,
+        'delivery_status': deliveryStatus.wireName,
+        'shipping_zone_id': shippingZoneId,
+        'shipping_zone_name': shippingZoneName,
+        'service_fee': serviceFee,
+        'ecommerce_order_id': ecommerceOrderId,
         'service_charge_percent': serviceChargePercent,
         'tip': tip,
         'kitchen_status': kitchenStatus.name,
         'refund_of_uuid': refundOfUuid,
         'order_no': orderNo,
+        'linked_order_uuids': linkedOrderUuids,
+        'bill_printed_at': billPrintedAt?.toIso8601String(),
         'cash_received': cashReceived,
         'amended': amended,
         'lines': lines.map((l) => l.toMap()).toList(),
@@ -649,6 +822,10 @@ class Order {
     // The human number is the till's counter, for the people in the shop. The server
     // numbers its own documents, and the uuid is what identifies this sale there.
     m.remove('order_no');
+    // Sibling tabs and the printed-check clock are the till's floor bookkeeping.
+    // The module books one sale under one uuid and has no field for either.
+    m.remove('linked_order_uuids');
+    m.remove('bill_printed_at');
     // A to-go sale books as the takeaway it is. Sending a value the module has
     // never seen would reject a sale over a label nobody there reads.
     m['order_type'] = type.wireName;
@@ -657,7 +834,16 @@ class Order {
     // dispatch record, so none of this has a field to land in.
     m.remove('delivery_channel');
     m.remove('company_order_no');
+    m.remove('driver_id');
     m.remove('driver_name');
+    m.remove('driver_phone');
+    m.remove('delivery_status');
+    m.remove('shipping_zone_id');
+    m.remove('shipping_zone_name');
+    // service_fee stays on the wire: the module books it tax-inclusive
+    // (OFFLINE_SERVICE_FEE), same as delivery_cost — net + VAT still total the
+    // amount the guest paid. Stripping it used to leave the SO short.
+    m.remove('ecommerce_order_id');
     // A locally-created customer has a synthetic negative id, not an Odoo partner.
     // Never send it as partner_id (it would fail the foreign key); the name and
     // phone still travel so the server can match or create the partner itself.
@@ -730,8 +916,7 @@ class Order {
         cashierId: m['cashier_id'] as String,
         createdAt: DateTime.parse(m['created_at'] as String),
         state: OrderState.values.byName(m['state'] as String),
-        type: OrderType.values
-            .byName((m['order_type'] as String?) ?? OrderType.dineIn.name),
+        type: OrderTypeLabel.parse(m['order_type'] as String?),
         discountPercent: (m['discount_percent'] as num?)?.toDouble() ?? 0,
         discountReason: m['discount_reason'] as String?,
         partnerId: m['partner_id'] as int?,
@@ -744,19 +929,32 @@ class Order {
         deliveryCost: (m['delivery_cost'] as num?)?.toDouble() ?? 0,
         deliveryChannel: m['delivery_channel'] as String?,
         companyOrderNo: m['company_order_no'] as String?,
+        driverId: m['driver_id'] as String?,
         driverName: m['driver_name'] as String?,
+        driverPhone: m['driver_phone'] as String?,
+        deliveryStatus: DeliveryStatus.parse(m['delivery_status'] as String?),
+        shippingZoneId: m['shipping_zone_id'] as String?,
+        shippingZoneName: m['shipping_zone_name'] as String?,
+        serviceFee: (m['service_fee'] as num?)?.toDouble() ?? 0,
         serviceChargePercent:
             (m['service_charge_percent'] as num?)?.toDouble() ?? 0,
         tip: (m['tip'] as num?)?.toDouble() ?? 0,
         kitchenStatus: KitchenStatus.values
             .byName((m['kitchen_status'] as String?) ?? KitchenStatus.pending.name),
         refundOfUuid: m['refund_of_uuid'] as String?,
+        ecommerceOrderId: m['ecommerce_order_id'] as String?,
         // An order saved before the cutover was configurable was rung under the old
         // fixed rule, so it keeps that one rather than adopting today's setting and
         // moving itself to another day.
         businessDayCutoverHour: (m['business_day_cutover_hour'] as num?)?.toInt() ??
             BusinessDay.defaultCutoverHour,
         orderNo: m['order_no'] as String?,
+        linkedOrderUuids: [
+          for (final e in (m['linked_order_uuids'] as List?) ?? const []) '$e',
+        ],
+        billPrintedAt: m['bill_printed_at'] == null
+            ? null
+            : DateTime.parse(m['bill_printed_at'] as String),
         lines: ((m['lines'] as List?) ?? const [])
             .map((e) => OrderLine.fromMap(e as Map<String, dynamic>))
             .toList(),

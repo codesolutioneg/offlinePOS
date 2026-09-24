@@ -54,13 +54,13 @@ void main() {
   });
 
   test('delivery is charged only once the shop says so', () {
-    session.setOrderType(OrderType.delivery);
+    session.setOrderType(OrderType.storeDelivery);
     session.addProduct(pizza);
     expect(session.current.serviceChargePercent, 0);
-    settings.setServiceChargeOrderType(OrderType.delivery, true);
+    settings.setServiceChargeOrderType(OrderType.storeDelivery, true);
     // Still 0: the bill keeps its stamp. Only re-opening the type re-resolves it.
     expect(session.current.serviceChargePercent, 0);
-    session.setOrderType(OrderType.delivery);
+    session.setOrderType(OrderType.storeDelivery);
     expect(session.current.serviceChargePercent, 12);
   });
 

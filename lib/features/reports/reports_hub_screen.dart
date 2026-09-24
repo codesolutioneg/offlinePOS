@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../../core/audit/audit_log.dart';
 import '../../core/db/attendance_store.dart';
@@ -6,6 +6,7 @@ import '../../core/db/shift_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/catalogue.dart';
+import '../../domain/delivery.dart';
 import '../../domain/order.dart';
 import 'activity_report_screen.dart';
 import 'attendance_report_screen.dart';
@@ -15,7 +16,11 @@ import 'cost_sales_report_screen.dart';
 import 'daily_sales_report_screen.dart';
 import 'detailed_discounts_report_screen.dart';
 import 'discounts_report_screen.dart';
+import 'driver_delivery_report_screen.dart';
 import 'expenses_report_screen.dart';
+import 'flash/flash_preview_screen.dart';
+import 'flash/flash_report_data.dart';
+import 'flash/flash_type_dialog.dart';
 import 'group_sales_report_screen.dart';
 import 'item_sales_report_screen.dart';
 import 'menu_engineering_report_screen.dart';
@@ -26,6 +31,7 @@ import 'refunds_summary_report_screen.dart';
 import 'report_export.dart';
 import 'receivables_report_screen.dart';
 import 'refunds_voids_report_screen.dart';
+import 'report_period_dialog.dart';
 import 'revenue_center_report_screen.dart';
 import 'sales_by_time_report_screen.dart';
 import 'sales_report_screen.dart';
@@ -35,28 +41,15 @@ import 'tax_report_screen.dart';
 import 'today_glance_card.dart';
 import 'top_products_report_screen.dart';
 
-/// The reports hub, with a date-range filter applied to every report it opens.
-///
-/// Reports used to be locked to the last 500 orders with no way to say "yesterday"
-/// or "this month". The range is chosen here once and threaded into each report, so
-/// a manager sees the period they actually care about.
-enum ReportRange { openShift, today, yesterday, last7, all }
-
-extension _RangeLabel on ReportRange {
-  String label(BuildContext context) => switch (this) {
-        // Not 'Open shift', which is the button that starts one.
-        ReportRange.openShift => tr(context, 'Current shift'),
-        ReportRange.today => tr(context, 'Today'),
-        ReportRange.yesterday => tr(context, 'Yesterday'),
-        ReportRange.last7 => tr(context, 'Last 7 days'),
-        ReportRange.all => tr(context, 'All'),
-      };
-}
+/// The reports hub. Each report asks for its own period when opened (Dishflow),
+/// so the chips are not a global filter over every tile.
+export 'report_period_dialog.dart' show ReportRange;
 
 class ReportsHubScreen extends StatefulWidget {
   const ReportsHubScreen({
     super.key,
     required this.allOrders,
+    this.shopOrders,
     this.cashTenderIds = const {},
     required this.categories,
     required this.formatAmount,
@@ -67,8 +60,10 @@ class ReportsHubScreen extends StatefulWidget {
     this.staffNames = const {},
     this.openTables,
     this.onPrint,
+    this.onPrintFlash,
     this.shopName = '',
     this.ranBy = '',
+    this.drivers = const [],
   });
 
   /// The shop the exported reports are headed with, and the cashier who ran them.
@@ -80,8 +75,15 @@ class ReportsHubScreen extends StatefulWidget {
   final String shopName;
   final String ranBy;
 
+  /// Local delivery drivers for the Dishflow settlement report.
+  final List<Driver> drivers;
+
   /// The recent completed orders; this screen filters them by the chosen range.
   final List<Order> allOrders;
+
+  /// Paid/synced sales from every till on the LAN (for Flash). Falls back to
+  /// [allOrders] when null so a single-till shop still works.
+  final List<Order>? shopOrders;
   final List<Category> categories;
   final String Function(double) formatAmount;
 
@@ -110,191 +112,287 @@ class ReportsHubScreen extends StatefulWidget {
   /// Prints a report to the receipt printer. Null hides the print action.
   final Future<void> Function(String title, List<(String, String)> rows)? onPrint;
 
+  /// Dishflow-layout Flash thermal print. Null falls back to [onPrint] rows.
+  final Future<void> Function(FlashReportData data, FlashKind kind)? onPrintFlash;
+
   @override
   State<ReportsHubScreen> createState() => _ReportsHubScreenState();
 }
 
 class _ReportsHubScreenState extends State<ReportsHubScreen> {
-  /// The chip the manager picked.
-  ReportRange _chosen = ReportRange.today;
-
-  /// The range actually applied. The open-shift range only exists while a shift is
-  /// open, so a shift closed with that chip selected falls back to today rather than
-  /// leaving every report blank.
-  ReportRange get _range =>
-      _chosen == ReportRange.openShift && _shiftOpenedAt == null
-          ? ReportRange.today
-          : _chosen;
-
-  /// A manager-picked from/to range; when set it overrides the preset chips so a
-  /// report can cover any period, not just today/yesterday/7-day.
-  DateTimeRange? _custom;
-
-  /// Narrow the window to one cashier / one order type before a report opens.
-  /// Null means "all", so the reports keep working exactly as before until a
-  /// manager actually picks a value.
+  /// Narrow to one cashier / one order type before a report opens.
+  /// Null means "all".
   String? _cashier;
   OrderType? _type;
 
   /// When the drawer currently open was opened, in local time, or null when there is
-  /// no open shift (or no shift store at all). Read live rather than captured on
-  /// entry, so a shift opened or closed while this screen is up is reflected.
+  /// no open shift (or no shift store at all).
   DateTime? get _shiftOpenedAt =>
       widget.shifts?.currentOpenShift()?.openedAt.toLocal();
-
-  /// Orders whose local sale date falls inside the chosen range and match the
-  /// cashier/order-type filters.
-  List<Order> get _filtered {
-    final now = DateTime.now();
-    final startOfToday = DateTime(now.year, now.month, now.day);
-    bool inRange(Order o) {
-      final at = o.createdAt.toLocal();
-      if (_custom != null) {
-        final end = _custom!.end.add(const Duration(days: 1));
-        return !at.isBefore(_custom!.start) && at.isBefore(end);
-      }
-      return switch (_range) {
-        // Everything since the drawer was opened, so a manager can read the shift
-        // they are standing in rather than a calendar day that spans two of them.
-        ReportRange.openShift => _shiftOpenedAt != null && !at.isBefore(_shiftOpenedAt!),
-        ReportRange.today => !at.isBefore(startOfToday),
-        ReportRange.yesterday => !at.isBefore(startOfToday.subtract(const Duration(days: 1))) &&
-            at.isBefore(startOfToday),
-        ReportRange.last7 => !at.isBefore(startOfToday.subtract(const Duration(days: 6))),
-        ReportRange.all => true,
-      };
-    }
-
-    return widget.allOrders
-        .where(inRange)
-        .where((o) => _cashier == null || o.cashierId == _cashier)
-        .where((o) => _type == null || o.type == _type)
-        .toList();
-  }
 
   /// The cashiers who appear in the recent orders, for the cashier filter.
   List<String> get _cashiers =>
       (widget.allOrders.map((o) => o.cashierId).toSet().toList()..sort());
 
-  /// The chosen range as explicit bounds, for reports that also read the audit
-  /// trail (which is not a list of orders). Null means unbounded on that side.
-  DateTime? get _windowFrom {
-    if (_custom != null) return _custom!.start;
+  bool _inPeriod(Order o, ReportPeriodChoice period) {
+    final at = o.createdAt.toLocal();
+    final custom = period.custom;
+    if (custom != null) {
+      final end = custom.end.add(const Duration(days: 1));
+      return !at.isBefore(custom.start) && at.isBefore(end);
+    }
     final now = DateTime.now();
     final startOfToday = DateTime(now.year, now.month, now.day);
-    return switch (_range) {
-      ReportRange.openShift => _shiftOpenedAt,
-      ReportRange.today => startOfToday,
-      ReportRange.yesterday => startOfToday.subtract(const Duration(days: 1)),
-      ReportRange.last7 => startOfToday.subtract(const Duration(days: 6)),
-      ReportRange.all => null,
+    return switch (period.range ?? ReportRange.today) {
+      ReportRange.openShift =>
+        _shiftOpenedAt != null && !at.isBefore(_shiftOpenedAt!),
+      ReportRange.today => !at.isBefore(startOfToday),
+      ReportRange.yesterday =>
+        !at.isBefore(startOfToday.subtract(const Duration(days: 1))) &&
+            at.isBefore(startOfToday),
+      ReportRange.last7 =>
+        !at.isBefore(startOfToday.subtract(const Duration(days: 6))),
+      ReportRange.all => true,
     };
   }
 
-  DateTime? get _windowTo {
-    if (_custom != null) return _custom!.end.add(const Duration(days: 1));
+  List<Order> _applyStaffType(Iterable<Order> source) => source
+      .where((o) => _cashier == null || o.cashierId == _cashier)
+      .where((o) => _type == null || o.type == _type)
+      .toList();
+
+  /// Local till orders in [period].
+  List<Order> _filteredFor(ReportPeriodChoice period) =>
+      _applyStaffType(widget.allOrders.where((o) => _inPeriod(o, period)));
+
+  /// Every till on the LAN in [period] (Flash).
+  List<Order> _shopFilteredFor(ReportPeriodChoice period) {
+    final source = widget.shopOrders ?? widget.allOrders;
+    return _applyStaffType(source.where((o) => _inPeriod(o, period)));
+  }
+
+  (DateTime?, DateTime?) _windowOf(ReportPeriodChoice period) {
+    final custom = period.custom;
+    if (custom != null) {
+      return (custom.start, custom.end.add(const Duration(days: 1)));
+    }
     final now = DateTime.now();
     final startOfToday = DateTime(now.year, now.month, now.day);
-    return _range == ReportRange.yesterday ? startOfToday : null;
+    return switch (period.range ?? ReportRange.today) {
+      ReportRange.openShift => (_shiftOpenedAt, null),
+      ReportRange.today => (startOfToday, null),
+      ReportRange.yesterday => (
+          startOfToday.subtract(const Duration(days: 1)),
+          startOfToday
+        ),
+      ReportRange.last7 => (
+          startOfToday.subtract(const Duration(days: 6)),
+          null
+        ),
+      ReportRange.all => (null, null),
+    };
   }
 
-  /// The chosen window with both ends filled in: an open-ended range runs to the
-  /// end of today, so a period comparison measures whole days against whole days
-  /// rather than "today so far" against a full day.
-  ({DateTime from, DateTime to})? get _closedWindow {
-    final from = _windowFrom;
+  double? _rangeHoursOf(ReportPeriodChoice period) {
+    final (from, to) = _windowOf(period);
     if (from == null) return null;
-    final now = DateTime.now();
-    final endOfToday =
-        DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
-    return (from: from, to: _windowTo ?? endOfToday);
+    final end = to ?? DateTime.now();
+    final hours = end.difference(from).inMinutes / 60.0;
+    return hours <= 0 ? null : hours;
   }
 
-  /// The wall-clock hours the chosen window spans, for the session summary's
-  /// sales-per-hour line. Null on an unbounded range ('All'), where that line has
-  /// no meaning and is left off.
-  double? get _rangeHours {
-    final window = _closedWindow;
-    if (window == null) return null;
-    final h = window.to.difference(window.from).inMinutes / 60.0;
-    return h <= 0 ? null : h;
+  Future<ReportPeriodChoice?> _askPeriod([String? title]) =>
+      showReportPeriodDialog(
+        context,
+        title: title,
+        shiftOpenedAt: _shiftOpenedAt,
+      );
+
+  // Attendance rows that fall inside the picked window for session summary.
+  List<AttendanceEntry> _attendanceFor(ReportPeriodChoice period) {
+    final store = widget.attendance;
+    if (store == null) return const [];
+    final (from, to) = _windowOf(period);
+    return store.between(from: from, to: to, staffId: _cashier);
   }
 
-  /// The same-length period immediately before the chosen one, with the same
-  /// cashier and order-type filters. Empty for 'All', which has no before.
-  List<Order> get _previousPeriod {
-    final window = _closedWindow;
-    if (window == null) return const [];
-    final length = window.to.difference(window.from);
-    final from = window.from.subtract(length);
-    return widget.allOrders.where((o) {
-      final at = o.createdAt.toLocal();
-      return !at.isBefore(from) && at.isBefore(window.from);
-    }).where(_matchesFilters).toList();
+  Future<void> _openFlashMenu() async {
+    final kind = await showFlashTypeDialog(context);
+    if (!mounted || kind == null) return;
+    final period = await _askPeriod(tr(context, 'Select period'));
+    if (!mounted || period == null) return;
+    final shop = _shopFilteredFor(period);
+    switch (kind) {
+      case FlashKind.collector:
+      case FlashKind.summary:
+        _pushFlash(
+          kind: kind,
+          title: kind == FlashKind.collector
+              ? 'Flash Collector'
+              : 'Flash Summary',
+          orders: shop,
+          periodLabel: period.label,
+        );
+      case FlashKind.delivery:
+        _pushFlash(
+          kind: kind,
+          title: 'Delivery Flash',
+          orders: FlashReportBuilder.deliveryOnly(shop),
+          periodLabel: period.label,
+          filterLabel: tr(context, 'Delivery only'),
+        );
+      case FlashKind.today:
+        await _openTodayFlash(period, shop);
+      case FlashKind.paymentMethod:
+        await _openPaymentFlash(period, shop);
+    }
   }
 
-  bool _matchesFilters(Order o) =>
-      (_cashier == null || o.cashierId == _cashier) &&
-      (_type == null || o.type == _type);
-
-  /// The paid-outs and paid-ins inside the chosen window, for the expenses
-  /// report. Read straight from the shift store, which is local, so this works
-  /// with the network down like everything else here.
-  List<ShiftMovement> get _movements =>
-      widget.shifts?.movements(
-        from: _windowFrom,
-        to: _windowTo,
-        cashierId: _cashier,
-      ) ??
-      const [];
-
-  /// The clock-ins inside the chosen window, for the hours report. Local read,
-  /// filtered by the same cashier picker as everything else here.
-  List<AttendanceEntry> get _attendance =>
-      widget.attendance?.between(
-        from: _windowFrom,
-        to: _windowTo,
-        staffId: _cashier,
-      ) ??
-      const [];
-
-  /// What the chosen period is called, for a report that names it on screen.
-  String _rangeLabel(BuildContext context) => _custom == null
-      ? _range.label(context)
-      : '${_custom!.start.month}/${_custom!.start.day} - ${_custom!.end.month}/${_custom!.end.day}';
-
-  Future<void> _pickCustom() async {
-    final now = DateTime.now();
-    final picked = await showDateRangePicker(
+  Future<void> _openTodayFlash(
+      ReportPeriodChoice period, List<Order> pool) async {
+    final choice = await showDialog<String>(
       context: context,
-      firstDate: DateTime(now.year - 2),
-      lastDate: now,
-      initialDateRange: _custom,
+      builder: (ctx) => SimpleDialog(
+        title: Text(tr(ctx, "Today's Flash")),
+        children: [
+          SimpleDialogOption(
+            key: const Key('flash-today-all'),
+            onPressed: () => Navigator.pop(ctx, 'all'),
+            child: Text(tr(ctx, 'All cashiers â€” every till')),
+          ),
+          SimpleDialogOption(
+            key: const Key('flash-today-cashier'),
+            onPressed: () => Navigator.pop(ctx, 'cashier'),
+            child: Text(tr(ctx, 'By cashier')),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (pool.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr(context, 'No sales in this period'))));
+      return;
+    }
+    if (choice == 'all') {
+      _pushFlash(
+        kind: FlashKind.today,
+        title: tr(context, "Today's Flash"),
+        orders: pool,
+        periodLabel: period.label,
+      );
+      return;
+    }
+    final ids = FlashReportBuilder.cashierIds(pool);
+    if (ids.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr(context, 'No sales in this period'))));
+      return;
+    }
+    final who = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(tr(ctx, 'Cashier')),
+        children: [
+          for (final id in ids)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, id),
+              child: Text(widget.staffNames[id] ?? id),
+            ),
+        ],
+      ),
+    );
+    if (!mounted || who == null) return;
+    _pushFlash(
+      kind: FlashKind.today,
+      title: tr(context, "Today's Flash"),
+      orders: pool.where((o) => o.cashierId == who).toList(),
+      periodLabel: period.label,
+      filterLabel: widget.staffNames[who] ?? who,
+    );
+  }
+
+  Future<void> _openPaymentFlash(
+      ReportPeriodChoice period, List<Order> orders) async {
+    final labels = FlashReportBuilder.paymentLabels(orders);
+    if (labels.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr(context, 'No sales in this period'))));
+      return;
+    }
+    final method = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(tr(ctx, 'Payment Method Flash')),
+        children: [
+          for (final m in labels)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, m),
+              child: Text(m),
+            ),
+        ],
+      ),
+    );
+    if (!mounted || method == null) return;
+    _pushFlash(
+      kind: FlashKind.paymentMethod,
+      title: '$method Flash',
+      orders: FlashReportBuilder.withPayment(orders, method),
+      periodLabel: period.label,
+      filterLabel: method,
+    );
+  }
+
+  void _pushFlash({
+    required FlashKind kind,
+    required String title,
+    required List<Order> orders,
+    String? periodLabel,
+    String? filterLabel,
+  }) {
+    final data = FlashReportBuilder.build(
+      title: title,
+      periodLabel: periodLabel ?? '',
+      orders: orders,
+      filterLabel: filterLabel,
+      cashierName: (id) => widget.staffNames[id] ?? id,
+    );
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => FlashPreviewScreen(
+        data: data,
+        kind: kind,
+        shopName: widget.shopName,
+        formatAmount: widget.formatAmount,
+        categories: widget.categories,
+        cashTenderIds: widget.cashTenderIds,
+        onPrint: widget.onPrint,
+        onPrintFlash: widget.onPrintFlash,
+        staffNames: widget.staffNames,
+      ),
+    ));
+  }
+
+  Future<void> _open(
+    Widget Function(List<Order> orders, ReportPeriodChoice period) build,
+  ) async {
+    final period = await _askPeriod();
+    if (!mounted || period == null) return;
+    final orders = _filteredFor(period);
+    final scope = ReportScope(
+      shopName: widget.shopName,
+      periodLabel: period.label,
+      ranBy: widget.ranBy,
+      child: build(orders, period),
     );
     if (!mounted) return;
-    if (picked != null) setState(() => _custom = picked);
-  }
-
-  /// Pushes a report, wrapped in the scope its download reads the header off.
-  ///
-  /// Wrapped here rather than threaded through every report's constructor: the
-  /// shop, the period and who is looking are hub facts, and a report has no
-  /// business taking three more arguments to put them on a file.
-  void _open(Widget Function(List<Order>) build) {
-    final scope = _scope(build(_filtered));
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => scope));
   }
 
-  ReportScope _scope(Widget child) => ReportScope(
-        shopName: widget.shopName,
-        periodLabel: _rangeLabel(context),
-        ranBy: widget.ranBy,
-        child: child,
-      );
-
-  /// Print the sales summary for the current range to the receipt printer.
+  /// Print summary: pick period first, then print.
   Future<void> _printSummary() async {
-    final o = _filtered;
+    final period = await _askPeriod(tr(context, 'Print summary'));
+    if (!mounted || period == null) return;
+    final o = _filteredFor(period);
     final f = widget.formatAmount;
     final gross = o.fold(0.0, (s, x) => s + x.total);
     final discounts =
@@ -314,6 +412,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       }
     }
     final rows = <(String, String)>[
+      ('Period', period.label),
       ('Orders', '${o.length}'),
       ('Gross sales', f(gross)),
       ('Discounts', f(discounts)),
@@ -324,55 +423,16 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     ];
     await widget.onPrint?.call('Sales summary', rows);
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(tr(context, 'Summary sent to printer'))));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr(context, 'Summary sent to printer'))));
     }
-  }
-
-  /// The windowed, filtered orders as one row each, the shape both the CSV and
-  /// the PDF export share. Columns are the order-level facts a manager needs off
-  /// the till: reference, when, who, type, item count and total.
-  ReportTable _ordersTable() {
-    String ref(String uuid) =>
-        uuid.length <= 6 ? uuid : uuid.replaceAll('-', '').substring(0, 6).toUpperCase();
-    String at(DateTime d) {
-      final l = d.toLocal();
-      String two(int n) => n.toString().padLeft(2, '0');
-      return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
-    }
-
-    return ReportTable(
-      header: const ['Ref', 'Date', 'Cashier', 'Type', 'Items', 'Total'],
-      rows: [
-        for (final o in _filtered)
-          [
-            ref(o.uuid),
-            at(o.createdAt),
-            o.cashierId,
-            o.type.label,
-            '${o.lines.length}',
-            o.total.toStringAsFixed(2),
-          ],
-      ],
-    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final count = _filtered.length;
-    return _scope(Scaffold(
+    return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'Reports')),
-        // Built under the scope, so the hub's own download carries the same
-        // header as the reports it opens.
-        actions: [
-          Builder(
-            builder: (ctx) => reportExportAction(ctx,
-                name: 'report-orders',
-                title: tr(ctx, 'Orders'),
-                table: _ordersTable),
-          ),
-        ],
       ),
       floatingActionButton: widget.onPrint == null
           ? null
@@ -391,37 +451,18 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
             cashTenderIds: widget.cashTenderIds,
           ),
           Padding(
-            padding: const EdgeInsets.all(8),
-            child: Wrap(
-              spacing: 8,
-              children: [
-                for (final r in ReportRange.values)
-                  // The open-shift chip is only offered while there is one to
-                  // report on; the other ranges are always meaningful.
-                  if (r != ReportRange.openShift || _shiftOpenedAt != null)
-                    ChoiceChip(
-                      key: Key('range-${r.name}'),
-                      label: Text(r.label(context)),
-                      selected: _custom == null && _chosen == r,
-                      onSelected: (_) => setState(() {
-                        _chosen = r;
-                        _custom = null;
-                      }),
-                    ),
-                ChoiceChip(
-                  key: const Key('range-custom'),
-                  avatar: const Icon(Icons.date_range, size: 16),
-                  label: Text(_custom == null
-                      ? tr(context, 'Custom')
-                      : '${_custom!.start.month}/${_custom!.start.day} - ${_custom!.end.month}/${_custom!.end.day}'),
-                  selected: _custom != null,
-                  onSelected: (_) => _pickCustom(),
-                ),
-              ],
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Text(
+              tr(context, 'Pick a report, then choose its period'),
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: AppColors.textMutedLight,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            padding: const EdgeInsets.all(8),
             child: Row(
               children: [
                 Expanded(
@@ -438,8 +479,11 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                         value: null,
                         child: Text(tr(context, 'All cashiers')),
                       ),
-                      for (final c in _cashiers)
-                        DropdownMenuItem<String?>(value: c, child: Text(c)),
+                      for (final id in _cashiers)
+                        DropdownMenuItem<String?>(
+                          value: id,
+                          child: Text(widget.staffNames[id] ?? id),
+                        ),
                     ],
                     onChanged: (v) => setState(() => _cashier = v),
                   ),
@@ -471,151 +515,285 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 8),
-          Text('$count order(s) in range', key: const Key('range-count')),
           const Divider(),
           Expanded(
             child: ListView(
               children: [
+                Card(
+                  key: const Key('rep-flash'),
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(
+                        color: const Color(0xFFFBBF24).withValues(alpha: 0.35)),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: ListTile(
+                    leading: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFBBF24).withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.bolt,
+                          color: Color(0xFFFBBF24), size: 20),
+                    ),
+                    title: Text(tr(context, 'Flash reports')),
+                    subtitle: Text(
+                      tr(context, 'Includes every till on the network'),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _openFlashMenu,
+                  ),
+                ),
                 _tile(tr(context, 'Sales summary'), Icons.summarize, 'rep-summary',
                     AppColors.info,
-                    (o) => SalesReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Tax'), Icons.receipt, 'rep-tax', const Color(0xFF2563EB),
-                    (o) => TaxReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Group sales'), Icons.dashboard_customize,
-                    'rep-group-sales', const Color(0xFF6366F1),
-                    (o) => GroupSalesReportScreen(
+                    (o, _) => SalesReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Tax'), Icons.receipt, 'rep-tax',
+                    const Color(0xFF2563EB),
+                    (o, _) => TaxReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(
+                    tr(context, 'Group sales'),
+                    Icons.dashboard_customize,
+                    'rep-group-sales',
+                    const Color(0xFF6366F1),
+                    (o, _) => GroupSalesReportScreen(
                         orders: o,
                         categories: widget.categories,
                         costs: widget.costs,
                         formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Item sales'), Icons.list_alt, 'rep-item-sales',
+                _tile(
+                    tr(context, 'Item sales'),
+                    Icons.list_alt,
+                    'rep-item-sales',
                     const Color(0xFF0EA5E9),
-                    (o) => ItemSalesReportScreen(
+                    (o, _) => ItemSalesReportScreen(
                         orders: o,
                         categories: widget.categories,
                         costs: widget.costs,
                         formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Session detail'), Icons.receipt_long,
-                    'rep-session-detail', const Color(0xFF2563EB),
-                    (o) => SessionDetailReportScreen(
+                _tile(
+                    tr(context, 'Session detail'),
+                    Icons.receipt_long,
+                    'rep-session-detail',
+                    const Color(0xFF2563EB),
+                    (o, _) => SessionDetailReportScreen(
                         orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Sales by revenue center'), Icons.storefront,
-                    'rep-revenue-center', const Color(0xFF06B6D4),
-                    (o) => RevenueCenterReportScreen(
+                _tile(
+                    tr(context, 'Sales by revenue center'),
+                    Icons.storefront,
+                    'rep-revenue-center',
+                    const Color(0xFF06B6D4),
+                    (o, _) => RevenueCenterReportScreen(
                         orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Daily sales'), Icons.calendar_month,
-                    'rep-daily-sales', const Color(0xFF14B8A6),
-                    (o) => DailySalesReportScreen(
+                _tile(
+                    tr(context, 'Daily sales'),
+                    Icons.calendar_month,
+                    'rep-daily-sales',
+                    const Color(0xFF14B8A6),
+                    (o, _) => DailySalesReportScreen(
                         orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Detailed discounts'), Icons.discount,
-                    'rep-detailed-discounts', AppColors.warning,
-                    (o) => DetailedDiscountsReportScreen(
+                _tile(
+                    tr(context, 'Detailed discounts'),
+                    Icons.discount,
+                    'rep-detailed-discounts',
+                    AppColors.warning,
+                    (o, _) => DetailedDiscountsReportScreen(
                         orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Refunds summary'), Icons.assignment_return,
-                    'rep-refunds-summary', AppColors.error,
-                    (o) => RefundsSummaryReportScreen(
+                _tile(
+                    tr(context, 'Refunds summary'),
+                    Icons.assignment_return,
+                    'rep-refunds-summary',
+                    AppColors.error,
+                    (o, _) => RefundsSummaryReportScreen(
                         orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Session summary'), Icons.summarize_outlined,
-                    'rep-session-summary', const Color(0xFF9333EA),
-                    (o) => SessionSummaryReportScreen(
+                _tile(
+                    tr(context, 'Session summary'),
+                    Icons.summarize_outlined,
+                    'rep-session-summary',
+                    const Color(0xFF9333EA),
+                    (o, p) => SessionSummaryReportScreen(
                         orders: o,
                         categories: widget.categories,
                         costs: widget.costs,
                         formatAmount: widget.formatAmount,
-                        attendance: _attendance,
-                        rangeHours: _rangeHours)),
-                _tile(tr(context, 'Top products'), Icons.star, 'rep-top', const Color(0xFF0EA5E9),
-                    (o) => TopProductsReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Category performance'), Icons.category, 'rep-category',
-                    const Color(0xFF6366F1),
-                    (o) => CategoryReportScreen(
-                        orders: o, categories: widget.categories, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Payment analysis'), Icons.payments, 'rep-payment',
-                    const Color(0xFF06B6D4),
-                    (o) => PaymentAnalysisReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Discounts'), Icons.percent, 'rep-discounts', AppColors.warning,
-                    (o) => DiscountsReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Cashier performance'), Icons.badge_outlined, 'rep-cashier',
-                    const Color(0xFFEA580C),
-                    (o) => CashierReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Cancelled, voided & refunded'), Icons.gpp_bad,
-                    'rep-activity', AppColors.error,
-                    (o) => ActivityReportScreen(
-                          orders: o,
-                          audit: widget.audit,
-                          formatAmount: widget.formatAmount,
-                          from: _windowFrom,
-                          to: _windowTo,
-                          // Narrow voids/cancels to the same cashier as the refunds.
-                          actor: _cashier,
-                        )),
-                _tile(tr(context, 'Sales by hour'), Icons.schedule, 'rep-time',
-                    const Color(0xFF14B8A6),
-                    (o) => SalesByTimeReportScreen(orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Period comparison'), Icons.compare_arrows,
-                    'rep-comparison', const Color(0xFF14B8A6),
-                    (o) => PeriodComparisonReportScreen(
-                          current: o,
-                          previous: _previousPeriod,
-                          currentLabel: _rangeLabel(context),
-                          previousLabel: tr(context, 'Previous period'),
-                          formatAmount: widget.formatAmount,
-                        )),
-                _tile(tr(context, 'Modifiers'), Icons.tune, 'rep-modifiers',
+                        attendance: _attendanceFor(p),
+                        rangeHours: _rangeHoursOf(p))),
+                _tile(tr(context, 'Top products'), Icons.star, 'rep-top',
                     const Color(0xFF0EA5E9),
-                    (o) => ModifierReportScreen(
+                    (o, _) => TopProductsReportScreen(
                         orders: o, formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Refunds & voids'), Icons.undo, 'rep-refunds',
+                _tile(
+                    tr(context, 'Category performance'),
+                    Icons.category,
+                    'rep-category',
+                    const Color(0xFF6366F1),
+                    (o, _) => CategoryReportScreen(
+                        orders: o,
+                        categories: widget.categories,
+                        formatAmount: widget.formatAmount)),
+                _tile(
+                    tr(context, 'Payment analysis'),
+                    Icons.payments,
+                    'rep-payment',
+                    const Color(0xFF06B6D4),
+                    (o, _) => PaymentAnalysisReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(tr(context, 'Discounts'), Icons.percent, 'rep-discounts',
+                    AppColors.warning,
+                    (o, _) => DiscountsReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(
+                    tr(context, 'Cashier performance'),
+                    Icons.badge_outlined,
+                    'rep-cashier',
+                    const Color(0xFF8B5CF6),
+                    (o, _) => CashierReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(
+                    tr(context, 'Driver account'),
+                    Icons.delivery_dining,
+                    'rep-driver',
+                    const Color(0xFF10B981),
+                    (o, _) => DriverDeliveryReportScreen(
+                        orders: o,
+                        drivers: widget.drivers,
+                        formatAmount: widget.formatAmount)),
+                _tile(
+                    tr(context, 'Cancelled, voided & refunded'),
+                    Icons.gpp_bad,
+                    'rep-activity',
                     AppColors.error,
-                    (o) => RefundsVoidsReportScreen(
-                          orders: o,
-                          audit: widget.audit,
-                          formatAmount: widget.formatAmount,
-                          from: _windowFrom,
-                          to: _windowTo,
-                          actor: _cashier,
-                        )),
-                _tile(tr(context, 'Cost vs sales'), Icons.savings_outlined,
-                    'rep-cost', const Color(0xFF16A34A),
-                    (o) => CostSalesReportScreen(
+                    (o, p) {
+                      final (from, to) = _windowOf(p);
+                      return ActivityReportScreen(
+                        orders: o,
+                        audit: widget.audit,
+                        from: from,
+                        to: to,
+                        formatAmount: widget.formatAmount,
+                      );
+                    }),
+                _tile(tr(context, 'Sales by hour'), Icons.schedule, 'rep-time',
+                    const Color(0xFF64748B),
+                    (o, _) => SalesByTimeReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(
+                    tr(context, 'Period comparison'),
+                    Icons.compare_arrows,
+                    'rep-period-compare',
+                    const Color(0xFF475569),
+                    (o, p) {
+                      List<Order> previous = const [];
+                      final (from, to) = _windowOf(p);
+                      if (from != null) {
+                        final end = to ??
+                            DateTime.now()
+                                .add(const Duration(days: 1));
+                        final length = end.difference(from);
+                        final prevFrom = from.subtract(length);
+                        previous = _applyStaffType(widget.allOrders.where((x) {
+                          final at = x.createdAt.toLocal();
+                          return !at.isBefore(prevFrom) && at.isBefore(from);
+                        }));
+                      }
+                      return PeriodComparisonReportScreen(
+                        current: o,
+                        previous: previous,
+                        currentLabel: p.label,
+                        previousLabel: tr(context, 'Previous period'),
+                        formatAmount: widget.formatAmount,
+                      );
+                    }),
+                _tile(tr(context, 'Modifiers'), Icons.tune, 'rep-modifiers',
+                    const Color(0xFFA855F7),
+                    (o, _) => ModifierReportScreen(
+                        orders: o, formatAmount: widget.formatAmount)),
+                _tile(
+                    tr(context, 'Refunds & voids'),
+                    Icons.undo,
+                    'rep-refunds',
+                    AppColors.error,
+                    (o, p) {
+                      final (from, to) = _windowOf(p);
+                      return RefundsVoidsReportScreen(
+                        orders: o,
+                        audit: widget.audit,
+                        from: from,
+                        to: to,
+                        actor: _cashier,
+                        formatAmount: widget.formatAmount,
+                      );
+                    }),
+                _tile(
+                    tr(context, 'Cost vs sales'),
+                    Icons.savings_outlined,
+                    'rep-cost-sales',
+                    const Color(0xFF059669),
+                    (o, _) => CostSalesReportScreen(
                         orders: o,
                         costs: widget.costs,
                         formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'Menu engineering'), Icons.restaurant_menu,
-                    'rep-menu', const Color(0xFF9333EA),
-                    (o) => MenuEngineeringReportScreen(
+                _tile(
+                    tr(context, 'Menu engineering'),
+                    Icons.restaurant_menu,
+                    'rep-menu-eng',
+                    const Color(0xFFD97706),
+                    (o, _) => MenuEngineeringReportScreen(
                         orders: o,
                         costs: widget.costs,
                         formatAmount: widget.formatAmount)),
                 if (widget.shifts != null)
                   _tile(tr(context, 'Expenses'), Icons.money_off, 'rep-expenses',
-                      AppColors.warning,
-                      (_) => ExpensesReportScreen(
-                          movements: _movements,
-                          formatAmount: widget.formatAmount)),
-                _tile(tr(context, 'On account'), Icons.account_balance_wallet_outlined,
-                    'rep-receivables', const Color(0xFFEA580C),
-                    (o) => ReceivablesReportScreen(
+                      const Color(0xFFDC2626), (o, p) {
+                    final (from, to) = _windowOf(p);
+                    final movements = widget.shifts?.movements(
+                          from: from,
+                          to: to,
+                          cashierId: _cashier,
+                        ) ??
+                        const [];
+                    return ExpensesReportScreen(
+                      movements: movements,
+                      formatAmount: widget.formatAmount,
+                    );
+                  }),
+                _tile(
+                    tr(context, 'On account'),
+                    Icons.account_balance_wallet_outlined,
+                    'rep-receivables',
+                    const Color(0xFF0D9488),
+                    (o, _) => ReceivablesReportScreen(
                         orders: o, formatAmount: widget.formatAmount)),
                 if (widget.attendance != null)
                   _tile(tr(context, 'Hours worked'), Icons.schedule,
-                      'rep-attendance', const Color(0xFF6366F1),
-                      (_) => AttendanceReportScreen(
-                          entries: _attendance, staffNames: widget.staffNames)),
+                      'rep-hours', const Color(0xFF4F46E5), (o, p) {
+                    return AttendanceReportScreen(
+                      entries: _attendanceFor(p),
+                      staffNames: widget.staffNames,
+                    );
+                  }),
               ],
             ),
           ),
         ],
       ),
-    ));
+    );
   }
 
-  /// A rounded, bordered card with a coloured icon badge, tinted per report
-  /// family so financial reports and audit/oversight reports read apart in the
-  /// list rather than as one flat wall of grey tiles.
-  Widget _tile(String title, IconData icon, String key, Color color,
-          Widget Function(List<Order>) build) =>
+  /// A rounded, bordered card with a coloured icon badge.
+  Widget _tile(
+    String title,
+    IconData icon,
+    String key,
+    Color color,
+    Widget Function(List<Order> orders, ReportPeriodChoice period) build,
+  ) =>
       Card(
         key: Key(key),
         margin: const EdgeInsets.symmetric(vertical: 4),

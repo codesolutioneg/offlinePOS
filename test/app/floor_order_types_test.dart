@@ -24,6 +24,7 @@ import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/order.dart';
+import 'package:offline_pos/core/widgets/select_pill.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
@@ -57,6 +58,8 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     // Seating here is about the order type / the receipt, not the covers, so the
     // guest prompt is off: on by default it would sit in front of every seating.
     settings.askGuestCount = false;
@@ -172,10 +175,10 @@ void main() {
       await tapTable(t);
 
       expect(find.byType(SellScreen), findsOneWidget);
-      final chip = t.widget<ChoiceChip>(find.byKey(const Key('order-type-togo')));
+      final chip = t.widget<SelectPill>(find.byKey(const Key('order-type-togo')));
       expect(chip.selected, isTrue);
       // It holds the floor like a dine-in, and says which table on the bill.
-      expect(find.widgetWithText(ActionChip, 'Table 5'), findsOneWidget);
+      expect(find.textContaining('Table 5'), findsWidgets);
 
       await t.tap(find.byKey(const Key('product-10')));
       await t.pumpAndSettle();
@@ -200,16 +203,18 @@ void main() {
       await t.tap(find.byKey(const Key('floor-to-go')));
       await t.pumpAndSettle();
 
-      final chip = t.widget<ChoiceChip>(find.byKey(const Key('order-type-togo')));
+      final chip = t.widget<SelectPill>(find.byKey(const Key('order-type-togo')));
       expect(chip.selected, isTrue);
       // Offered a table rather than nagged for one: it is optional here.
-      expect(find.widgetWithText(ActionChip, 'Table'), findsOneWidget);
+      expect(find.text('Table'), findsWidgets);
     });
   });
 
   group('what the shop offers', () {
     testWidgets('a shop that does not deliver offers it to nobody', (t) async {
-      settings.setShopOrderType(OrderType.delivery, false);
+      settings.setShopOrderType(OrderType.deliveryFromCompany, false);
+      settings.setShopOrderType(OrderType.storeDelivery, false);
+      settings.setShopOrderType(OrderType.carDelivery, false);
       await t.pumpWidget(app());
       await signIn(t);
 
@@ -217,7 +222,9 @@ void main() {
       expect(find.byKey(const Key('floor-takeaway')), findsOneWidget);
 
       await tapTable(t);
-      expect(find.byKey(const Key('order-type-delivery')), findsNothing);
+      expect(find.byKey(const Key('order-type-storedelivery')), findsNothing);
+      expect(find.byKey(const Key('order-type-deliveryfromcompany')), findsNothing);
+      expect(find.byKey(const Key('order-type-cardelivery')), findsNothing);
       expect(find.byKey(const Key('order-type-takeaway')), findsOneWidget);
     });
 
@@ -236,7 +243,9 @@ void main() {
     });
 
     testWidgets('a role narrowed inside what the shop offers still is', (t) async {
-      settings.setRoleOrderType('cashier', OrderType.delivery, false);
+      settings.setRoleOrderType('cashier', OrderType.deliveryFromCompany, false);
+      settings.setRoleOrderType('cashier', OrderType.storeDelivery, false);
+      settings.setRoleOrderType('cashier', OrderType.carDelivery, false);
       await t.pumpWidget(app());
       await signIn(t);
 
@@ -287,7 +296,7 @@ void main() {
 
       expect(find.byKey(Key('line-${parked.lines.single.uuid}')), findsOneWidget);
       // Recalled as what it was rung as, not as the seating the selector shows.
-      final chip = t.widget<ChoiceChip>(find.byKey(const Key('order-type-togo')));
+      final chip = t.widget<SelectPill>(find.byKey(const Key('order-type-togo')));
       expect(chip.selected, isTrue);
     });
 
@@ -298,11 +307,7 @@ void main() {
       await signIn(t);
 
       await tapTable(t);
-      // The covers are picked from a list, so the menu opens before the number.
-      await t.tap(find.byKey(const Key('guest-count-dropdown')));
-      await t.pumpAndSettle();
-      await t.tap(find.descendant(
-          of: find.byKey(const Key('guests-2')), matching: find.text('2')));
+      await t.tap(find.byKey(const Key('guests-2')));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('product-10')));
       await t.pumpAndSettle();
