@@ -252,6 +252,10 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('transfer-ana')));
     await t.pumpAndSettle();
+    // Every tab Ana holds starts ticked; Next carries them all.
+    expect(find.byKey(Key('transfer-tab-${tab.uuid}')), findsOneWidget);
+    await t.tap(find.byKey(const Key('transfer-tabs-next')));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('transfer-mo')));
     await t.pumpAndSettle();
 
@@ -271,7 +275,7 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t, 'sara', '1234');
     // Off the floor and onto the counter, then into the list of parked tabs.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('open-orders')));
     await t.pumpAndSettle();

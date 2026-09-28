@@ -491,6 +491,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     attendance: attendance,
     fingerprints: fingerprintService,
     fingerprintStore: fingerprintStore,
+    lockedFloorHome: true,
     reservations: reservations,
     assignments: assignments,
     lan: lan,

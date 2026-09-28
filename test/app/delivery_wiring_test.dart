@@ -188,11 +188,11 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  /// Floor Delivery → subtype popup → waiting screen (resume / new).
+  /// Floor Delivery → delivery station → waiting screen (resume / new).
   Future<void> pickStoreDeliveryFromFloor(WidgetTester t) async {
-    await t.tap(find.byKey(const Key('floor-delivery')));
+    await t.tap(find.byKey(const Key('floor-action-delivery')));
     await t.pumpAndSettle();
-    final subtype = find.byKey(const Key('pick-delivery-storeDelivery'));
+    final subtype = find.byKey(const Key('delivery-home-storeDelivery'));
     if (subtype.evaluate().isNotEmpty) {
       await t.tap(subtype);
       await t.pumpAndSettle();
@@ -582,9 +582,12 @@ void main() {
       await t.tap(find.byKey(const Key('delivery-waiting-back')));
       await t.pumpAndSettle();
 
-      expect(find.byType(TableFloorScreen), findsOneWidget,
-          reason: 'backing out must leave the cashier on the floor');
+      expect(find.byKey(const Key('delivery-home')), findsOneWidget,
+          reason: 'backing out must leave the cashier on the delivery station');
       expect(orders.held(), hasLength(1));
+      await t.tap(find.byKey(const Key('delivery-home-back')));
+      await t.pumpAndSettle();
+      expect(find.byType(TableFloorScreen), findsOneWidget);
     });
 
     testWidgets('an Arabic till reads the prompt in Arabic', (t) async {

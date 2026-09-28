@@ -32,7 +32,13 @@ class ShiftScreen extends StatefulWidget {
     this.sessionPartnerName,
     this.onPrepareCloseSync,
     this.startCloseOnOpen = false,
+    this.startMovement,
   });
+
+  /// Open straight into recording a cash movement, for the floor's Misc pad:
+  /// 'in' (paid in), 'out' (paid out), 'drop' (money drop to the safe) or
+  /// 'employee' (paid out to a member of staff). Ignored with no shift open.
+  final String? startMovement;
 
   /// When true and a shift is already open, jump straight into the End-of-Day
   /// close ceremony (Dishflow "End shift" from the floor).
@@ -125,6 +131,22 @@ class _ShiftScreenState extends State<ShiftScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_runCloseCeremony());
       });
+    } else if (widget.startMovement != null && _shift != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        switch (widget.startMovement) {
+          case 'in':
+            unawaited(_cashIn());
+          case 'out':
+            unawaited(_cashOut());
+          case 'drop':
+            unawaited(_cashOut(title: tr(context, 'Money Drop'),
+                reason: tr(context, 'Money Drop')));
+          case 'employee':
+            unawaited(_cashOut(title: tr(context, 'Employee Paid Out'),
+                reason: tr(context, 'Employee Paid Out')));
+        }
+      });
     }
   }
 
@@ -150,9 +172,10 @@ class _ShiftScreenState extends State<ShiftScreen> {
   Future<({double amount, String reason, String? category})?> _promptMovement(
     String title, {
     List<String> categories = const [],
+    String? reason,
   }) {
     final amountC = TextEditingController();
-    final reasonC = TextEditingController();
+    final reasonC = TextEditingController(text: reason);
     String? category = categories.isEmpty ? null : categories.first;
     return showDialog<({double amount, String reason, String? category})>(
       context: context,
@@ -206,6 +229,26 @@ class _ShiftScreenState extends State<ShiftScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _cashIn() async {
+    final m = await _promptMovement(tr(context, 'Cash in'));
+    if (!mounted) return;
+    if (m != null) {
+      widget.store.addMovement('in', m.amount, reason: m.reason);
+      _refresh();
+    }
+  }
+
+  Future<void> _cashOut({String? title, String? reason}) async {
+    final m = await _promptMovement(title ?? tr(context, 'Cash out'),
+        categories: widget.expenseCategories, reason: reason);
+    if (!mounted) return;
+    if (m != null) {
+      widget.store.addMovement('out', m.amount,
+          reason: m.reason, category: m.category);
+      _refresh();
+    }
   }
 
   Widget _row(String k, String v, {bool bold = false, Color? valueColor}) => Padding(
@@ -341,14 +384,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
             key: const Key('cash-in'),
             icon: const Icon(Icons.add),
             label: Text(tr(context, 'Cash in')),
-            onPressed: () async {
-              final m = await _promptMovement(tr(context, 'Cash in'));
-              if (!mounted) return;
-              if (m != null) {
-                widget.store.addMovement('in', m.amount, reason: m.reason);
-                _refresh();
-              }
-            },
+            onPressed: _cashIn,
           ),
         ),
         SizedBox(
@@ -357,16 +393,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
             key: const Key('cash-out'),
             icon: const Icon(Icons.remove),
             label: Text(tr(context, 'Cash out')),
-            onPressed: () async {
-              final m = await _promptMovement(tr(context, 'Cash out'),
-                  categories: widget.expenseCategories);
-              if (!mounted) return;
-              if (m != null) {
-                widget.store.addMovement('out', m.amount,
-                    reason: m.reason, category: m.category);
-                _refresh();
-              }
-            },
+            onPressed: _cashOut,
           ),
         ),
       ]),

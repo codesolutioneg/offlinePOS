@@ -540,6 +540,23 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
             value: _enabled,
             onChanged: _setEnabled,
           ),
+          if (widget.settings.deviceRole == DeviceRole.secondary)
+            SwitchListTile(
+              key: const Key('lan-require-primary-online'),
+              contentPadding: EdgeInsets.zero,
+              title: Text(tr(context, 'Require primary device online')),
+              subtitle: Text(tr(
+                context,
+                'When off, this till works alone if the master is shut down. '
+                    'When on, sign-in waits until the primary is on the network.',
+              )),
+              value: widget.settings.lanRequirePrimaryOnline,
+              onChanged: (v) {
+                widget.settings.lanRequirePrimaryOnline = v;
+                widget.onChanged();
+                setState(() {});
+              },
+            ),
           SwitchListTile(
             key: const Key('lan-allow-takeover'),
             contentPadding: EdgeInsets.zero,

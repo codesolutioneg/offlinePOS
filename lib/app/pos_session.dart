@@ -887,6 +887,64 @@ class PosSession {
     orders.save(current);
   }
 
+  /// Ring [extra] more of a line the kitchen already has. The sent line keeps what
+  /// the kitchen was told; the extra goes on an unsent copy (same item, choices,
+  /// price, note, discount, seat) right under it, so the next Send fires only the
+  /// difference. A copy already waiting to be sent takes the units instead of a
+  /// second row. Returns the uuid of the line that took them, null if none.
+  String? addMoreOf(String lineUuid, double extra) {
+    if (extra <= 0) return null;
+    final idx = current.lines.indexWhere((l) => l.uuid == lineUuid);
+    if (idx < 0) return null;
+    final src = current.lines[idx];
+    for (final l in current.lines) {
+      if (l.uuid == src.uuid ||
+          l.printedToKitchen ||
+          l.firedStations.isNotEmpty ||
+          l.fireAt != null ||
+          l.productId != src.productId ||
+          l.unitPrice != src.unitPrice ||
+          l.taxRate != src.taxRate ||
+          l.baseTaxRate != src.baseTaxRate ||
+          l.categoryId != src.categoryId ||
+          l.name != src.name ||
+          l.note != src.note ||
+          l.discountPercent != src.discountPercent ||
+          l.seat != src.seat ||
+          !_sameModifiers(l.modifiers, src.modifiers)) {
+        continue;
+      }
+      l.quantity += extra;
+      orders.save(current);
+      return l.uuid;
+    }
+    final more = OrderLine(
+      productId: src.productId,
+      odooProductId: src.odooProductId,
+      name: src.name,
+      quantity: extra,
+      unitPrice: src.unitPrice,
+      categoryId: src.categoryId,
+      taxRate: src.taxRate,
+      baseTaxRate: src.baseTaxRate,
+      note: src.note,
+      discountPercent: src.discountPercent,
+      seat: src.seat,
+      modifiers: [
+        for (final m in src.modifiers)
+          OrderModifier(
+              modifierId: m.modifierId,
+              productId: m.productId,
+              name: m.name,
+              quantity: m.quantity,
+              unitPrice: m.unitPrice),
+      ],
+    );
+    current.lines.insert(idx + 1, more);
+    orders.save(current);
+    return more.uuid;
+  }
+
   /// Peel [qty] units off a line into a new line and return its uuid, so a subset
   /// of a multi-unit line can be paid or moved on its own (split by item with a
   /// quantity). Returns the original uuid when [qty] covers the whole line, and

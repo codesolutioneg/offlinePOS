@@ -162,7 +162,7 @@ void main() {
 
     // The floor refuses the order with the strip up, and goes on refusing it once
     // the reminder is gone: dismissing it is not a way past the gate.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsNothing);
     expect(find.byKey(const Key('shift-nudge')).hitTestable(), findsOneWidget);
@@ -175,7 +175,7 @@ void main() {
     // Let the refusal toast clear the button it is sitting over, then try again.
     await t.pump(const Duration(seconds: 4));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsNothing);
   });

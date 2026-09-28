@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show exit;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -38,6 +39,7 @@ import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
 import '../core/widgets/feedback.dart';
+import '../core/widgets/icon_pad.dart';
 import '../core/widgets/numeric_keypad.dart';
 import '../core/printing/kitchen_ticket.dart';
 import '../core/printing/printer_logo.dart';
@@ -61,6 +63,7 @@ import '../core/theme/app_theme.dart';
 import '../core/updates/update_service.dart';
 import '../domain/business_day.dart';
 import '../domain/catalogue.dart';
+import '../domain/floor_bulletin.dart';
 import '../domain/order.dart';
 import '../domain/table_floor_info.dart';
 import '../domain/table_section_config.dart';
@@ -76,17 +79,20 @@ import '../features/kitchen/kitchen_display_screen.dart';
 import '../features/menu/menu_editor_screen.dart';
 import '../features/onboarding/setup_checklist_card.dart';
 import '../features/onboarding/wizard_overlay.dart';
+import '../features/orders/delivery_home_screen.dart';
 import '../features/orders/delivery_waiting_screen.dart';
 import '../features/orders/ecommerce_orders_screen.dart';
 import '../features/orders/open_orders_screen.dart';
 import '../features/orders/order_history_screen.dart';
 import '../features/orders/refund_screen.dart';
 import '../features/reports/reports_hub_screen.dart';
-import '../features/reports/flash/flash_report_data.dart';
-import '../features/reports/flash/flash_thermal_escpos.dart';
+import '../features/reports/revenue_center_report_screen.dart';
+import '../features/reports/flash/flash_flow.dart';
+import '../features/reports/flash/flash_report_data.dart';import '../features/reports/flash/flash_thermal_escpos.dart';
 import '../features/reports/flash/flash_type_dialog.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
+import '../features/settings/bulletin_settings_screen.dart';
 import '../features/settings/delivery_settings_screen.dart';
 import '../features/settings/dishflow_mirror_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
@@ -106,6 +112,7 @@ import '../features/settings/table_preorder_screen.dart';
 import '../features/shift/shift_screen.dart';
 import '../features/support/diagnostics_screen.dart';
 import '../features/support/sql_console_screen.dart';
+import '../features/tables/floor_action_bar.dart';
 import '../features/tables/table_floor_screen.dart';
 import 'pos_session.dart';
 import 'till_activity.dart';
@@ -152,8 +159,13 @@ class PosApp extends StatefulWidget {
     this.assignments,
     this.dishflow,
     this.loginManagersOnly = true,
+    this.lockedFloorHome = false,
     this.nowFn = DateTime.now,
   });
+
+  /// Nobody signed in shows the floor, locked, instead of the sign-in screen:
+  /// Begin opens sign-in, and a known finger on the reader unlocks it outright.
+  final bool lockedFloorHome;
 
   /// The clock the idle lock reads. Injectable for the tests, exactly as the
   /// floor's booking badges inject theirs; production reads the real one.
@@ -303,6 +315,9 @@ class _PosAppState extends State<PosApp> {
   /// the floor is home, and an order has to be started or recalled to leave it.
   bool _onCounter = false;
 
+  /// Handed to the next counter that opens, then forgotten.
+  SellStartAction? _pendingSellAction;
+
   /// The room the waiter has open on the floor, and what the next table tap seats.
   ///
   /// Held up here because home swaps the floor out for the counter on every order
@@ -315,6 +330,10 @@ class _PosAppState extends State<PosApp> {
   /// happened to be, and it is cleared at sign-out for the same reason.
   String? _floorSection;
   OrderType? _floorSeatAs;
+
+  /// The delivery station is up in place of the floor (the floor's Delivery tile).
+  /// A role that rings deliveries only has it as home whatever this says.
+  bool _deliveryHome = false;
 
   bool _firstSaleHelp = false;
 
@@ -329,6 +348,7 @@ class _PosAppState extends State<PosApp> {
   String? _printError;
   Timer? _background;
   Timer? _storeOrderPoll;
+  Timer? _primaryWatch;
 
   /// Seen Firebase store-order ids — first poll is silent, then new ones alert.
   final StoreOrderWatchState _storeWatch = StoreOrderWatchState();
@@ -417,6 +437,12 @@ class _PosAppState extends State<PosApp> {
     // human to open the support screen and press Reprint, which meant a printer
     // that came back mid-shift printed nothing until somebody noticed.
     _background = Timer.periodic(const Duration(seconds: 30), (_) => _catchUp());
+    // While a secondary is waiting for the primary, refresh often so the floor
+    // unlocks within a few seconds of the master coming online.
+    _primaryWatch = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted || !_needsPrimaryOnline) return;
+      setState(() {});
+    });
     unawaited(_startLan());
   }
 
@@ -426,9 +452,26 @@ class _PosAppState extends State<PosApp> {
     setState(() => _provisioningPin = pin);
   }
 
+  /// Secondary + option on + LAN sharing: floor waits until the primary beacons.
+  bool get _needsPrimaryOnline {
+    final s = widget.settings;
+    if (s.deviceRole != DeviceRole.secondary) return false;
+    if (!s.lanRequirePrimaryOnline) return false;
+    if (!s.lanEnabled(fallback: widget.config.lanDefault)) return false;
+    return true;
+  }
+
+  bool get _primaryBlocked {
+    if (!_needsPrimaryOnline) return false;
+    final lan = widget.lan;
+    if (lan == null || !lan.isRunning) return true;
+    return !lan.primaryIsReachable(widget.settings);
+  }
+
   @override
   void dispose() {
     _background?.cancel();
+    _primaryWatch?.cancel();
     _stopStoreOrderWatch();
     _justParkedClear?.cancel();
     unawaited(widget.lan?.dispose());
@@ -513,6 +556,7 @@ class _PosAppState extends State<PosApp> {
 
   void _signedIn(Cashier cashier) {
     _lastTouch = widget.nowFn();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncLockFingerprint());
     setState(() {
       final session = _session = PosSession(
         catalogue: widget.catalogue,
@@ -585,7 +629,7 @@ class _PosAppState extends State<PosApp> {
     await Future<void>.delayed(Duration.zero);
     if (!mounted) return;
     final navCtx = _navigator.currentContext;
-    if (navCtx == null) return;
+    if (navCtx == null || !navCtx.mounted) return;
     final choice = await showDialog<String>(
       context: navCtx,
       barrierDismissible: false,
@@ -618,7 +662,6 @@ class _PosAppState extends State<PosApp> {
     if (!mounted || choice == null) return;
     widget.settings.lanRolePromptDismissed = true;
     if (choice == 'skip') return;
-    final messengerCtx = _navigator.currentContext ?? context;
     if (choice == 'primary') {
       widget.settings.deviceRole = DeviceRole.primary;
       if (!(widget.settings.lanEnabled(fallback: widget.config.lanDefault))) {
@@ -628,11 +671,14 @@ class _PosAppState extends State<PosApp> {
       unawaited(_reconcileLan());
       if (mounted) setState(() {});
       if (widget.lan == null && mounted) {
-        ScaffoldMessenger.of(messengerCtx).showSnackBar(SnackBar(
-          content: Text(tr(
-              messengerCtx,
-              'Primary saved. Restart the app once so Share can start on the network.')),
-        ));
+        final snackCtx = _navigator.currentContext;
+        if (snackCtx != null && snackCtx.mounted) {
+          ScaffoldMessenger.of(snackCtx).showSnackBar(SnackBar(
+            content: Text(tr(
+                snackCtx,
+                'Primary saved. Restart the app once so Share can start on the network.')),
+          ));
+        }
       }
       return;
     }
@@ -645,12 +691,15 @@ class _PosAppState extends State<PosApp> {
     if (!mounted) return;
     setState(() {});
     if (widget.lan == null) {
-      ScaffoldMessenger.of(messengerCtx).showSnackBar(SnackBar(
-        content: Text(tr(
-            messengerCtx,
-            'Restart the app, then open Shop network and Join with the PIN '
-                'from the primary.')),
-      ));
+      final snackCtx = _navigator.currentContext;
+      if (snackCtx != null && snackCtx.mounted) {
+        ScaffoldMessenger.of(snackCtx).showSnackBar(SnackBar(
+          content: Text(tr(
+              snackCtx,
+              'Restart the app, then open Shop network and Join with the PIN '
+                  'from the primary.')),
+        ));
+      }
       return;
     }
     _openLanSettings();
@@ -920,6 +969,7 @@ class _PosAppState extends State<PosApp> {
       // whoever picks it up next.
       _floorSection = null;
       _floorSeatAs = null;
+      _deliveryHome = false;
       // The nudge belongs to the cashier who was told it, not to the sign-in screen
       // the next one is looking at.
       _nudge = null;
@@ -1109,7 +1159,7 @@ class _PosAppState extends State<PosApp> {
       if (go == true) {
         final session = _session;
         final below = _navigator.currentContext;
-        if (session != null && below != null) {
+        if (session != null && below != null && below.mounted) {
           _ackStoreOrderAlert();
           _openStoreOrders(below, session);
         }
@@ -1580,16 +1630,245 @@ class _PosAppState extends State<PosApp> {
             : widget.config.kdsMode
                 ? _kitchenOnly()
                 : session == null
-                    ? LoginScreen(
-                        auth: widget.auth,
-                        users: widget.users,
-                        onSignedIn: _signedIn,
-                        provisioningPin: _provisioningPin,
-                        managersOnly: widget.loginManagersOnly,
-                        fingerprints: widget.fingerprints,
-                        fingerprintStore: widget.fingerprintStore,
-                      )
-                    : _home(session),
+                    ? (_showLockedFloor
+                        ? _lockedFloor()
+                        : _loginScreen(onSignedIn: _signedIn))
+                    : _primaryBlocked
+                        ? _waitingForPrimary(session)
+                        : _home(session),
+      ),
+    );
+  }
+
+  Widget _loginScreen({
+    required void Function(Cashier) onSignedIn,
+    bool asPopup = false,
+    VoidCallback? onClose,
+  }) =>
+      LoginScreen(
+        auth: widget.auth,
+        users: widget.users,
+        onSignedIn: onSignedIn,
+        provisioningPin: _provisioningPin,
+        managersOnly: widget.loginManagersOnly,
+        fingerprints: widget.fingerprints,
+        fingerprintStore: widget.fingerprintStore,
+        asPopup: asPopup,
+        onClose: onClose,
+      );
+
+  /// The locked floor stands in for the sign-in screen once the till is set up. A
+  /// fresh install still lands on sign-in, where the setup PIN is shown.
+  bool get _showLockedFloor =>
+      widget.lockedFloorHome &&
+      _provisioningPin == null &&
+      !BootstrapCashier.stillNeeded(widget.users.active());
+
+  /// Whether the sign-in page is open over the locked floor, so the background
+  /// fingerprint listener stands aside for the one on that page.
+  bool _loginOpen = false;
+
+  /// Bumped to stop the running listener; a loop exits once its number is stale.
+  int _lockFpGen = 0;
+  bool _lockFpListening = false;
+
+  Widget _lockedFloor() => Builder(builder: (floorContext) {
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _syncLockFingerprint());
+        final occ = _floorOccupancy(null);
+        return TableFloorScreen(
+          key: const Key('locked-floor'),
+          locked: true,
+          onUnlock: () => unawaited(_openLogin(floorContext)),
+          store: widget.tables,
+          occupiedLabels: occ.occupied,
+          occupiedInfo: occ.info,
+          formatAmount: PosApp.money,
+          bulletin: widget.settings.floorBulletinEnabled
+              ? _floorBulletin(null)
+              : null,
+          bulletinHidden: widget.settings.floorBulletinHidden,
+          sectionsAtSide: widget.settings.floorSectionsSide,
+          section: _floorSection,
+          onSectionChanged: (s) => _floorSection = s,
+          assignments: widget.assignments?.byTable() ?? const {},
+          staff: [
+            for (final u in widget.users.all())
+              (id: u.id, name: u.name, active: u.active),
+          ],
+          onOpenTable: (_, _) => unawaited(_openLogin(floorContext)),
+          actions: _lockedActions(floorContext),
+        );
+      });
+
+  /// The same bar as the signed-in floor, greyed out except Begin (and Quit, so a
+  /// locked till can still be shut down).
+  List<FloorAction> _lockedActions(BuildContext context) => _barFrom(context, {
+        'begin': () => unawaited(_openLogin(context)),
+        'quit': () => unawaited(_quitApp(context)),
+      });
+
+  /// Sign-in as a popup over the locked floor. Signing in closes it and the floor
+  /// underneath unlocks; closing it leaves the floor locked.
+  Future<void> _openLogin(BuildContext context) async {
+    if (_loginOpen || _session != null) return;
+    _loginOpen = true;
+    _syncLockFingerprint();
+    await showDialog<void>(
+      context: context,
+      builder: (loginContext) => Dialog(
+        key: const Key('login-over-floor'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: const EdgeInsets.all(16),
+        child: _loginScreen(
+          asPopup: true,
+          onClose: () => Navigator.of(loginContext).pop(),
+          onSignedIn: (cashier) {
+            Navigator.of(loginContext).pop();
+            _signedIn(cashier);
+          },
+        ),
+      ),
+    );
+    _loginOpen = false;
+    if (mounted) _syncLockFingerprint();
+  }
+
+  /// Start or stop listening for a finger while the locked floor is up.
+  void _syncLockFingerprint() {
+    final fp = widget.fingerprints;
+    final want = fp != null &&
+        mounted &&
+        _session == null &&
+        _showLockedFloor &&
+        !_loginOpen &&
+        !widget.config.displayMode &&
+        !widget.config.kdsMode;
+    if (want && !_lockFpListening) {
+      unawaited(_lockFingerprintLoop(fp));
+    } else if (!want && _lockFpListening) {
+      _lockFpGen++;
+      _lockFpListening = false;
+      if (fp != null) unawaited(fp.clearPending());
+    }
+  }
+
+  /// Wait for a finger over and over; a known one signs its owner straight in.
+  Future<void> _lockFingerprintLoop(FingerprintService fp) async {
+    final gen = ++_lockFpGen;
+    _lockFpListening = true;
+    bool live() => mounted && gen == _lockFpGen && _session == null;
+    var bankPushed = false;
+    try {
+      await FingerprintAgentLauncher().ensureRunning();
+      while (live()) {
+        if (!await fp.warmUp()) {
+          await Future<void>.delayed(const Duration(seconds: 10));
+          continue;
+        }
+        if (!bankPushed) {
+          await widget.fingerprintStore?.pushToAgent();
+          bankPushed = true;
+        }
+        if (!live()) break;
+        final outcome = await fp.identifyOnce(timeout: const Duration(seconds: 10));
+        if (!live()) break;
+        switch (outcome) {
+          case FingerprintIdentifyMatch(:final userId):
+            final user = widget.users.byId(userId);
+            final managers = widget.users.active().where((u) => u.isManager);
+            if (user != null &&
+                widget.loginManagersOnly &&
+                managers.isNotEmpty &&
+                !user.isManager) {
+              _lockToast('Manager fingerprint required', ToastKind.error);
+              await Future<void>.delayed(const Duration(seconds: 2));
+              continue;
+            }
+            final result = await widget.auth.unlockByFingerprint(userId);
+            if (!live()) break;
+            if (result is AuthOk) {
+              _signedIn(result.cashier);
+              return;
+            }
+            _lockToast('Fingerprint not recognised', ToastKind.error);
+          case FingerprintIdentifyNoMatch():
+            _lockToast('Fingerprint not recognised', ToastKind.error);
+            await Future<void>.delayed(const Duration(seconds: 1));
+          case FingerprintIdentifyEmptyBank():
+            await Future<void>.delayed(const Duration(seconds: 30));
+            bankPushed = false;
+          case FingerprintIdentifyUnavailable():
+            await Future<void>.delayed(const Duration(seconds: 5));
+          case FingerprintIdentifyTimeout():
+            break;
+        }
+      }
+    } finally {
+      if (gen == _lockFpGen) _lockFpListening = false;
+    }
+  }
+
+  void _lockToast(String message, ToastKind kind) {
+    final ctx = _navigator.currentContext;
+    if (ctx != null) showToast(ctx, tr(ctx, message), kind: kind);
+  }
+
+  /// Secondary till: primary is offline — do not open the floor yet.
+  Widget _waitingForPrimary(PosSession session) {
+    return Builder(
+      builder: (context) => Scaffold(
+        key: const Key('waiting-for-primary'),
+        appBar: AppBar(
+          title: Text(tr(context, 'Shop network')),
+          actions: [
+            TextButton(
+              key: const Key('waiting-primary-sign-out'),
+              onPressed: _signOut,
+              child: Text(tr(context, 'Sign out')),
+            ),
+          ],
+        ),
+        body: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.dns_outlined,
+                      size: 64,
+                      color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(height: 16),
+                  Text(
+                    tr(context, 'Start the primary device first'),
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    tr(
+                      context,
+                      'This till is linked to the shop master. Turn on the '
+                          'primary device (and Share on both) before using this '
+                          'one. Tap Retry when it is online.',
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    key: const Key('waiting-primary-retry'),
+                    onPressed: () => setState(() {}),
+                    icon: const Icon(Icons.refresh),
+                    label: Text(tr(context, 'Retry')),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1601,7 +1880,11 @@ class _PosAppState extends State<PosApp> {
   /// help pinned to the sell screen would go unread on a till that has not opened
   /// an order yet.
   Widget _home(PosSession session) {
-    final screen = _onCounter ? _selling(session) : _floorHome(session);
+    final screen = _onCounter
+        ? _selling(session)
+        : (_deliveryHome || _deliveryOnly)
+            ? _deliveryStation(session)
+            : _floorHome(session);
     // One coach at a time, and setting the till up comes before the first sale: two
     // scrims over each other is a cashier with no way out.
     if (!_firstSignInHelp && !_firstSaleHelp) return screen;
@@ -1789,12 +2072,19 @@ class _PosAppState extends State<PosApp> {
     return widget.settings.sectionConfig(section).allowedPaymentMethodIds;
   }
 
+  SellStartAction? _takePendingSellAction() {
+    final a = _pendingSellAction;
+    _pendingSellAction = null;
+    return a;
+  }
+
   /// The counter, opened onto one order. Reached from the floor home by seating a
   /// table, by the table-less buttons, by recalling a parked tab, or by reopening a
   /// paid sale to correct it. Never the resting screen.
   Widget _selling(PosSession session) => Builder(
         // Builder, so navigation targets the Navigator inside this MaterialApp.
         builder: (context) => SellScreen(
+          startAction: _takePendingSellAction(),
           session: session,
           formatAmount: PosApp.money,
           staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
@@ -1895,6 +2185,8 @@ class _PosAppState extends State<PosApp> {
           onSignOut: _signOut,
           drawer: _buildDrawer(context, session),
           onOpenOrders: () => _openOrders(context, session),
+          onEmployeeTransfer: () => _transferOpenOrder(context, session),
+          onOpenRefunds: () => _openHistory(context),
           // The table asked for the bill. Paper only: nothing is settled, nothing
           // is pushed, and the order stays exactly as it is.
           onPrintBill: (order) => unawaited(_printBill(order)),
@@ -2503,6 +2795,31 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
+  /// The Flash pickers and slip as popups over the floor, without the reports hub.
+  Future<void> _openFlashPopup(BuildContext context) {
+    final shiftOpenedAt =
+        widget.shifts.currentOpenShift()?.openedAt.toLocal();
+    final shop = widget.orders.recentAnywhere(limit: 2000);
+    return runFlashFlow(
+      context,
+      asPopup: true,
+      ordersFor: (period) => shop
+          .where((o) => period.contains(o.createdAt, shiftOpenedAt: shiftOpenedAt))
+          .toList(),
+      formatAmount: PosApp.money,
+      shiftOpenedAt: shiftOpenedAt,
+      staffNames: {for (final u in widget.users.all()) u.id: u.name},
+      shopName: widget.settings.shopName ?? widget.config.shopName,
+      categories: widget.catalogue.categories(),
+      cashTenderIds: {
+        for (final m in widget.catalogue.paymentMethods())
+          if (m.isCash) m.id,
+      },
+      onPrint: _printShiftReport,
+      onPrintFlash: _printFlashReport,
+    );
+  }
+
   void _openKitchen(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => KitchenDisplayScreen(
@@ -2538,7 +2855,7 @@ class _PosAppState extends State<PosApp> {
   /// the held orders plus the one on screen. Shared by the floor plan and the table
   /// picker so both colour tables identically.
   ({Set<String> occupied, Map<String, TableFloorInfo> info})
-      _floorOccupancy(PosSession session) {
+      _floorOccupancy(PosSession? session) {
     // Every parked order in the shop, not just this till's. A table busy on the bar
     // till has to read as busy here, or two cashiers seat the same table and the
     // second guest's food goes to a bill nobody is holding.
@@ -2556,7 +2873,7 @@ class _PosAppState extends State<PosApp> {
     }
     // The order on screen also occupies its table, or opening the floor and
     // tapping it would start a second order on the same table.
-    add(session.current);
+    if (session != null) add(session.current);
     return (
       occupied: byTable.keys.toSet(),
       info: {
@@ -2600,45 +2917,6 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
-  /// Resume one of the parked deliveries, start a new one, or back out.
-  ///
-  /// Which Dishflow delivery subtype to start when the floor has more than one.
-  Future<OrderType?> _pickDeliverySubtype(
-          BuildContext context, List<OrderType> types) =>
-      showDialog<OrderType>(
-        context: context,
-        barrierColor: const Color(0x99000000),
-        builder: (ctx) => Dialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                  child: Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: Text(tr(ctx, 'Delivery'),
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w800, fontSize: 16)),
-                  ),
-                ),
-                for (final t in types)
-                  ListTile(
-                    key: Key('pick-delivery-${t.name}'),
-                    leading: const Icon(Icons.delivery_dining),
-                    title: Text(tr(ctx, t.label)),
-                    onTap: () => Navigator.pop(ctx, t),
-                  ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
-        ),
-      );
-
   /// Full screen of parked bags for [type]: resume one, start new, or back out.
   ///
   /// Dishflow shows suspended deliveries as a panel after the subtype pick; we
@@ -2668,6 +2946,93 @@ class _PosAppState extends State<PosApp> {
         .then((v) => v ?? 'cancel');
   }
 
+  /// The delivery kinds the signed-in role may ring, in Dishflow order.
+  List<OrderType> get _deliveryTypes => [
+        OrderType.deliveryFromCompany,
+        OrderType.storeDelivery,
+        OrderType.carDelivery,
+      ].where(_allowedOrderTypes.contains).toList();
+
+  /// A role that may ring nothing but deliveries works from the delivery station.
+  bool get _deliveryOnly {
+    final allowed = _allowedOrderTypes;
+    return allowed.isNotEmpty && allowed.every((t) => t.isDelivery);
+  }
+
+  /// The subtype's waiting screen (Dishflow panel): resume a parked bag, start
+  /// new, or back out.
+  Future<void> _openDeliveryType(
+      BuildContext context, PosSession session, OrderType type) async {
+    final parked = widget.orders.held().where((o) => o.type == type).toList();
+    final resume = await _pickParkedDelivery(context, type, parked);
+    if (resume == 'cancel' || !mounted) return;
+    setState(() {
+      if (resume is Order) {
+        session.recall(resume.uuid);
+      } else {
+        session.startFresh(type);
+      }
+      _onCounter = true;
+    });
+  }
+
+  /// The delivery station: home for a delivery-only role, a screen of its own for
+  /// everyone else. Rebuilt with the shell, so a bag parked a moment ago is on it.
+  Widget _deliveryStation(PosSession session) => Builder(builder: (context) {
+        final only = _deliveryOnly;
+        bool mayStart() {
+          if (widget.shifts.currentOpenShift() == null) {
+            showToast(context,
+                tr(context, 'No shift is open. Open one before you start an order.'),
+                kind: ToastKind.error);
+            return false;
+          }
+          final day = _dayCloseNotice(context);
+          if (day != null && day.blocking) {
+            showToast(context, day.text, kind: ToastKind.error);
+            return false;
+          }
+          return true;
+        }
+
+        final taps = <String, VoidCallback?>{
+          'session': () => _openShift(context, session),
+          'tabs': () => _openOrders(context, session),
+          'misc': () => unawaited(_floorMisc(context, session)),
+          'flash': () async {
+            if (await _authorize(Permission.viewReports, context) &&
+                context.mounted) {
+              await _openFlashPopup(context);
+            }
+          },
+          'end': _signOut,
+          'quit': () => unawaited(_quitApp(context)),
+        };
+        return DeliveryHomeScreen(
+          types: _deliveryTypes,
+          parked: widget.orders.held().where((o) => o.type.isDelivery).toList(),
+          formatAmount: PosApp.money,
+          guard: mayStart,
+          cashierName: widget.auth.signedIn?.name,
+          onBack: only ? null : () => setState(() => _deliveryHome = false),
+          onOpenType: (t) => unawaited(_openDeliveryType(context, session, t)),
+          onResume: (o) => setState(() {
+            session.recall(o.uuid);
+            _onCounter = true;
+          }),
+          actions: [
+            for (final a in FloorActionBar.catalog)
+              if (taps.containsKey(a.id))
+                FloorAction(
+                  id: a.id,
+                  label: tr(context, a.label),
+                  icon: a.icon,
+                  color: a.color,
+                  onTap: taps[a.id],
+                ),
+          ],
+        );
+      });
   /// After a delivery bag is parked (Hold or kitchen auto-suspend), land back on
   /// that subtype's waiting list — Dishflow's post-suspend panel.
   Future<void> _reopenDeliveryWaiting(BuildContext context, OrderType type) async {
@@ -2717,6 +3082,28 @@ class _PosAppState extends State<PosApp> {
         builder: (floorContext) {
           final occ = _floorOccupancy(session);
           final allowed = _allowedOrderTypes;
+          final VoidCallback? onToGo = !allowed.contains(OrderType.toGo)
+              ? null
+              : () => _startOrder(session, OrderType.toGo);
+          final VoidCallback? onTakeaway = !allowed.contains(OrderType.takeaway)
+              ? null
+              : () => _startOrder(session, OrderType.takeaway);
+          final orderType = [
+            OrderType.takeaway,
+            OrderType.toGo,
+            ...OrderType.values,
+          ].where(allowed.contains).firstOrNull;
+          final VoidCallback? onOrder = orderType == null
+              ? null
+              : () => _startOrder(session, orderType);
+          final deliveryTypes = [
+            OrderType.deliveryFromCompany,
+            OrderType.storeDelivery,
+            OrderType.carDelivery,
+          ].where(allowed.contains).toList();
+          final VoidCallback? onDelivery = deliveryTypes.isEmpty
+              ? null
+              : () => setState(() => _deliveryHome = true);
           return TableFloorScreen(
             // The same drawer the counter carries. The floor is home now, so support,
             // reprints, reports and the shift screen have to be reachable from it.
@@ -2795,50 +3182,17 @@ class _PosAppState extends State<PosApp> {
               for (final t in OrderType.values)
                 if (t.seatsAtTable && allowed.contains(t)) t,
             ],
-            // The table-less ways to start an order, straight from the floor home.
-            // Each starts a fresh order of that type and opens the counter on it. A
-            // type this role may not ring has no button rather than a button that
-            // refuses.
-            onToGo: !allowed.contains(OrderType.toGo)
-                ? null
-                : () => _startOrder(session, OrderType.toGo),
-            onTakeaway: !allowed.contains(OrderType.takeaway)
-                ? null
-                : () => _startOrder(session, OrderType.takeaway),
-            onDelivery: ![
-                      OrderType.deliveryFromCompany,
-                      OrderType.storeDelivery,
-                      OrderType.carDelivery,
-                    ].any(allowed.contains)
-                ? null
-                : () async {
-                    final deliveryTypes = [
-                      OrderType.deliveryFromCompany,
-                      OrderType.storeDelivery,
-                      OrderType.carDelivery,
-                    ].where(allowed.contains).toList();
-                    final chosen = deliveryTypes.length == 1
-                        ? deliveryTypes.first
-                        : await _pickDeliverySubtype(floorContext, deliveryTypes);
-                    if (chosen == null || !mounted) return;
-                    // Always open the waiting screen for this subtype (Dishflow
-                    // panel): resume a parked bag, start new, or back out.
-                    final parked = widget.orders
-                        .held()
-                        .where((o) => o.type == chosen)
-                        .toList();
-                    final resume = await _pickParkedDelivery(
-                        floorContext, chosen, parked);
-                    if (resume == 'cancel' || !mounted) return;
-                    setState(() {
-                      if (resume is Order) {
-                        session.recall(resume.uuid);
-                      } else {
-                        session.startFresh(chosen);
-                      }
-                      _onCounter = true;
-                    });
-                  },
+            // No To go / Takeaway row under the plan: the bar's Table and Delivery
+            // tiles start those orders, and the order screen switches the type.
+            bulletin: widget.settings.floorBulletinEnabled
+                ? _floorBulletin(session)
+                : null,
+            bulletinHidden: widget.settings.floorBulletinHidden,
+            actions: _floorActions(floorContext, session,
+                toGo: onToGo,
+                takeaway: onTakeaway,
+                delivery: onDelivery,
+                order: onOrder),
             onOpenTable: (t, seatAs) async {
               // Tapping the table the current order is already seated at just returns
               // to it rather than parking it and starting a duplicate, unless more
@@ -3034,6 +3388,483 @@ class _PosAppState extends State<PosApp> {
         ),
       ),
     );
+  }
+
+  /// The Bulletin board's numbers, across every till on the LAN.
+  FloorBulletin _floorBulletin(PosSession? session) {
+    final now = DateTime.now();
+    final paid = widget.orders
+        .paidAnywhereSince(DateTime(now.year, now.month, now.day));
+    return FloorBulletin.from(
+      tableNames: {for (final t in widget.tables.all()) t.name},
+      open: [
+        ...widget.orders.occupyingAnywhere(),
+        if (session != null) session.current,
+      ],
+      held: widget.orders.heldAnywhere(),
+      paidToday: paid.count,
+      salesToday: paid.total,
+    );
+  }
+
+  /// The Dishflow bottom bar on the floor. Every tile is a door to something the
+  /// till already does, through the same permission gate the drawer uses.
+  List<FloorAction> _floorActions(
+    BuildContext context,
+    PosSession session, {
+    VoidCallback? toGo,
+    VoidCallback? takeaway,
+    VoidCallback? delivery,
+    VoidCallback? order,
+  }) {
+    final quick = [
+      if (delivery != null)
+        (label: tr(context, 'Delivery'), icon: Icons.delivery_dining, go: delivery),
+      if (takeaway != null)
+        (label: tr(context, 'Takeaway'), icon: Icons.takeout_dining, go: takeaway),
+      if (toGo != null)
+        (label: tr(context, 'To go'), icon: Icons.shopping_bag_outlined, go: toGo),
+    ];
+    return _barFrom(context, {
+      'begin': () => _openAttendance(context),
+      'end': _signOut,
+      'table': order,
+      'delivery': delivery,
+      'quick': quick.isEmpty
+          ? null
+          : () async {
+              if (quick.length == 1) {
+                quick.first.go();
+                return;
+              }
+              final go = await showModalBottomSheet<VoidCallback>(
+                context: context,
+                builder: (ctx) => SafeArea(
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    for (final q in quick)
+                      ListTile(
+                        leading: Icon(q.icon),
+                        title: Text(q.label),
+                        onTap: () => Navigator.pop(ctx, q.go),
+                      ),
+                  ]),
+                ),
+              );
+              go?.call();
+            },
+      'info': () => _openDiagnostics(context),
+      'session': () => _openShift(context, session),
+      'misc': () => unawaited(_floorMisc(context, session)),
+      'empl': () async {
+        if (await _authorize(Permission.manageStaff, context) &&
+            context.mounted) {
+          _openRoster(context);
+        }
+      },
+      'tabs': () => _openOrders(context, session),
+      'employee-transfer': widget.orders.held().isEmpty
+          ? null
+          : () => unawaited(_transferTables(context)),
+      'transfer-items': () =>
+          unawaited(_transferItemsFromFloor(context, session)),
+      'flash': () async {
+        if (await _authorize(Permission.viewReports, context) &&
+            context.mounted) {
+          await _openFlashPopup(context);
+        }
+      },
+      'quit': () => unawaited(_quitApp(context)),
+    });
+  }
+
+  /// The bottom bar in catalogue order, minus what settings switched off. A button
+  /// with no action here draws greyed out.
+  List<FloorAction> _barFrom(
+      BuildContext context, Map<String, VoidCallback?> taps) {
+    if (!widget.settings.floorActionBarEnabled) return const [];
+    final hidden = widget.settings.floorActionsHidden;
+    return [
+      for (final a in FloorActionBar.catalog)
+        if (!hidden.contains(a.id))
+          FloorAction(
+            id: a.id,
+            label: tr(context, a.label),
+            icon: a.icon,
+            color: a.color,
+            newWork: const {'quick', 'table', 'delivery'}.contains(a.id),
+            onTap: taps[a.id],
+          ),
+    ];
+  }
+  /// The floor's Misc pad (Dinerware's manager Misc screen): every tool that has
+  /// no tile on the bottom bar, as pages of big icon buttons. What does not apply
+  /// right now is greyed.
+  Future<void> _floorMisc(BuildContext context, PosSession session) async {
+    final isManager = widget.auth.signedIn?.isManager ?? false;
+    final shiftOpen = widget.shifts.currentOpenShift() != null;
+    final tabs = _openTableTabs();
+    final linked = tabs.where((o) => o.linkedOrderUuids.isNotEmpty).toList();
+    final items = [
+      const IconPadItem('reprint', 'misc-reprint', Icons.print, 'Re-print',
+          Color(0xFF1E6B52)),
+      const IconPadItem('revise', 'misc-revise', Icons.edit_note,
+          'Revise Settlement', Color(0xFF5D6D7E)),
+      IconPadItem('merge', 'misc-merge', Icons.merge_type, 'Merge Tables',
+          const Color(0xFFB9561B), tabs.length >= 2),
+      IconPadItem('unmerge', 'misc-unmerge', Icons.call_split,
+          'Unmerge Tables', const Color(0xFFE91E63), linked.isNotEmpty),
+      const IconPadItem('print-all', 'misc-print-all', Icons.print_outlined,
+          'Print All', Color(0xFF424242)),
+      IconPadItem('end-of-day', 'misc-end-of-day', Icons.nightlight_round,
+          'End Of Day', const Color(0xFF4A4A4A), shiftOpen),
+      IconPadItem('paid-in', 'misc-paid-in', Icons.move_to_inbox, 'Paid In',
+          const Color(0xFF17A589), shiftOpen),
+      IconPadItem('paid-out', 'misc-paid-out', Icons.outbox, 'Paid Out',
+          const Color(0xFFD35400), shiftOpen),
+      IconPadItem('employee-paid-out', 'misc-employee-paid-out',
+          Icons.badge_outlined, 'Employee Paid Out', const Color(0xFF2E86C1),
+          shiftOpen),
+      IconPadItem('money-drop', 'misc-money-drop', Icons.savings_outlined,
+          'Money Drop', const Color(0xFF6D4C41), shiftOpen),
+      const IconPadItem('view-checks', 'misc-view-checks', Icons.fact_check,
+          'View Checks', Color(0xFF16A085)),
+      IconPadItem('assign-badge', 'misc-assign-badge', Icons.fingerprint,
+          'Assign Badge', const Color(0xFF7F8C8D), isManager),
+      const IconPadItem('revenue-report', 'misc-revenue-report',
+          Icons.storefront, 'Revenues Report', Color(0xFF06B6D4)),
+      const IconPadItem('reports', 'misc-reports', Icons.bar_chart, 'Reports',
+          Color(0xFF2563EB)),
+      IconPadItem('button-log', 'misc-button-log', Icons.touch_app,
+          'View Button Log', const Color(0xFF8E44AD), isManager),
+      const IconPadItem('history', 'misc-history', Icons.receipt_long,
+          'Order history', Color(0xFF34495E)),
+      const IconPadItem('store-orders', 'misc-store-orders',
+          Icons.storefront_outlined, 'Store orders', Color(0xFF8E44AD)),
+      const IconPadItem('kitchen', 'misc-kitchen', Icons.soup_kitchen,
+          'Kitchen display', Color(0xFFC0392B)),
+      const IconPadItem('nosale', 'misc-nosale', Icons.money_off,
+          'No sale (open drawer)', Color(0xFF7D3C98)),
+      const IconPadItem('attendance', 'misc-attendance',
+          Icons.how_to_reg_outlined, 'Attendance', Color(0xFF27AE60)),
+      const IconPadItem('settings', 'misc-settings', Icons.settings,
+          'Settings', Color(0xFF455A64)),
+      const IconPadItem('support', 'misc-support', Icons.support_agent,
+          'Support & printers', Color(0xFF2980B9)),
+    ];
+    final pick = await showDialog<String>(
+      context: context,
+      builder: (_) => IconPad(items: items),
+    );
+    if (pick == null || !context.mounted) return;
+    switch (pick) {
+      case 'reprint':
+        await _reprintLast(context);
+      case 'revise' || 'history':
+        _openHistory(context);
+      case 'merge':
+        await _pickTabThen(context, session, tabs,
+            tr(context, 'Merge into which table?'), SellStartAction.mergeTable);
+      case 'unmerge':
+        await _pickTabThen(context, session, linked,
+            tr(context, 'Unmerge which table?'), SellStartAction.unmergeTable);
+      case 'print-all':
+        await _printAllChecks(context);
+      case 'end-of-day':
+        await _openShift(context, session, startClose: true);
+      case 'paid-in':
+        await _openShift(context, session, startMovement: 'in');
+      case 'paid-out':
+        await _openShift(context, session, startMovement: 'out');
+      case 'employee-paid-out':
+        await _openShift(context, session, startMovement: 'employee');
+      case 'money-drop':
+        await _openShift(context, session, startMovement: 'drop');
+      case 'view-checks':
+        _openOrders(context, session);
+      case 'assign-badge':
+        _openRoster(context);
+      case 'revenue-report':
+        if (await _authorize(Permission.viewReports, context) &&
+            context.mounted) {
+          final now = DateTime.now();
+          final today = DateTime(now.year, now.month, now.day);
+          await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => RevenueCenterReportScreen(
+              orders: widget.orders
+                  .recentAnywhere(limit: 2000)
+                  .where((o) =>
+                      (o.state == OrderState.paid ||
+                          o.state == OrderState.synced) &&
+                      !o.createdAt.toLocal().isBefore(today))
+                  .toList(),
+              formatAmount: PosApp.money,
+            ),
+          ));
+        }
+      case 'reports':
+        if (await _authorize(Permission.viewReports, context) &&
+            context.mounted) {
+          _openReports(context);
+        }
+      case 'button-log':
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => AuditLogScreen(audit: widget.audit),
+        ));
+      case 'store-orders':
+        _openStoreOrders(context, session);
+      case 'kitchen':
+        _openKitchen(context);
+      case 'nosale':
+        await _openDrawerNoSale(context);
+      case 'attendance':
+        _openAttendance(context);
+      case 'settings':
+        _openSettingsHub(context);
+      case 'support':
+        _openDiagnostics(context);
+    }
+  }
+
+  /// Parked tabs sitting on a table with something on them, by table name.
+  List<Order> _openTableTabs() => widget.orders
+      .held()
+      .where((o) => (o.tableLabel ?? '').isNotEmpty && o.lines.isNotEmpty)
+      .toList()
+    ..sort((a, b) => a.tableLabel!.compareTo(b.tableLabel!));
+
+  /// Pick one of [tabs], open it on the counter, and start [action] there.
+  Future<void> _pickTabThen(BuildContext context, PosSession session,
+      List<Order> tabs, String title, SellStartAction action) async {
+    if (tabs.isEmpty) {
+      showToast(context, tr(context, 'No open tables'), kind: ToastKind.error);
+      return;
+    }
+    final picked = await showModalBottomSheet<Order>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(shrinkWrap: true, children: [
+          ListTile(
+            title: Text(title,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          for (final o in tabs)
+            ListTile(
+              key: Key('transfer-from-${o.uuid}'),
+              leading: const Icon(Icons.table_bar),
+              title: Text(o.tableLabel!),
+              trailing: Text(PosApp.money(o.total)),
+              onTap: () => Navigator.pop(ctx, o),
+            ),
+        ]),
+      ),
+    );
+    if (picked == null || !mounted || !context.mounted) return;
+    _pendingSellAction = action;
+    await _resumeTab(context, session, picked);
+    if (!_onCounter) _pendingSellAction = null;
+  }
+
+  /// Re-print: pick the table. An open table prints its check again; a check
+  /// closed today reprints its receipt (with the reprint grant).
+  Future<void> _reprintLast(BuildContext context) async {
+    final open = _openTableTabs();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final closed = widget.orders
+        .recent(limit: 300)
+        .where((o) =>
+            (o.state == OrderState.paid || o.state == OrderState.synced) &&
+            !o.createdAt.toLocal().isBefore(today))
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    if (open.isEmpty && closed.isEmpty) {
+      showToast(context, tr(context, 'No checks to reprint'));
+      return;
+    }
+    String time(DateTime d) {
+      final l = d.toLocal();
+      return '${l.hour.toString().padLeft(2, '0')}:'
+          '${l.minute.toString().padLeft(2, '0')}';
+    }
+
+    Widget heading(BuildContext ctx, String text) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(text,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w800, color: Color(0xFF1E6B52))),
+        );
+
+    final picked = await showDialog<Order>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('reprint-picker'),
+        title: Text(tr(ctx, 'Re-print')),
+        contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
+        content: SizedBox(
+          width: 460,
+          height: 440,
+          child: ListView(children: [
+            if (open.isNotEmpty) heading(ctx, tr(ctx, 'Open tables')),
+            for (final o in open)
+              ListTile(
+                key: Key('reprint-${o.uuid}'),
+                leading: const Icon(Icons.table_bar, color: Color(0xFFE67E22)),
+                title: Text(o.tableLabel!),
+                subtitle: Text('#${o.displayNo}'),
+                trailing: Text(PosApp.money(o.total),
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                onTap: () => Navigator.pop(ctx, o),
+              ),
+            if (closed.isNotEmpty) heading(ctx, tr(ctx, 'Closed checks today')),
+            for (final o in closed)
+              ListTile(
+                key: Key('reprint-${o.uuid}'),
+                leading: const Icon(Icons.receipt_long, color: Color(0xFF27AE60)),
+                title: Text(o.tableLabel ?? tr(ctx, o.type.label)),
+                subtitle: Text('#${o.displayNo}  ·  ${time(o.createdAt)}'),
+                trailing: Text(PosApp.money(o.total),
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                onTap: () => Navigator.pop(ctx, o),
+              ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr(ctx, 'Cancel'))),
+        ],
+      ),
+    );
+    if (picked == null || !context.mounted) return;
+    if (picked.state == OrderState.held) {
+      await _printBill(picked);
+      if (context.mounted) {
+        showToast(context, tr(context, 'Bill sent to the printer'),
+            kind: ToastKind.success);
+      }
+      return;
+    }
+    if (!await _authorize(Permission.reprint, context)) return;
+    await _printReceipt(picked, reprint: true);
+    if (context.mounted) {
+      showToast(context, tr(context, 'Receipt sent to the printer'),
+          kind: ToastKind.success);
+    }
+  }
+  /// Print All: pick one of the staff who rang orders this session (since the
+  /// shift opened, or today with no shift) and print all of theirs. Open tabs
+  /// print their check; closed ones reprint the receipt, under the reprint grant.
+  Future<void> _printAllChecks(BuildContext context) async {
+    final now = DateTime.now();
+    final since = widget.shifts.currentOpenShift()?.openedAt.toLocal() ??
+        DateTime(now.year, now.month, now.day);
+    final orders = [
+      ...widget.orders.held().where((o) => o.lines.isNotEmpty),
+      ...widget.orders
+          .recent(limit: 2000)
+          .where((o) => !o.createdAt.toLocal().isBefore(since)),
+    ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    if (orders.isEmpty) {
+      showToast(context, tr(context, 'No orders this session'));
+      return;
+    }
+    final byUser = <String, List<Order>>{};
+    for (final o in orders) {
+      byUser.putIfAbsent(o.cashierId, () => []).add(o);
+    }
+    String nameOf(String id) => widget.users.byId(id)?.name ?? id;
+    final ids = byUser.keys.toList()
+      ..sort((a, b) => nameOf(a).compareTo(nameOf(b)));
+
+    Widget tile(BuildContext ctx, String key, IconData icon, String title,
+            List<Order> list, String result) {
+      final open = list.where((o) => o.state == OrderState.held).length;
+      final total = list.fold<double>(0, (s, o) => s + o.total);
+      return ListTile(
+        key: Key(key),
+        leading: Icon(icon, color: const Color(0xFF1E6B52)),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text('${tr(ctx, 'Orders')}: ${list.length}'
+            '  ·  ${tr(ctx, 'Open')}: $open'
+            '  ·  ${tr(ctx, 'Closed')}: ${list.length - open}'),
+        trailing: Text(PosApp.money(total),
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+        onTap: () => Navigator.pop(ctx, result),
+      );
+    }
+
+    final who = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('print-all-picker'),
+        title: Text(tr(ctx, 'Print whose orders?')),
+        contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
+        content: SizedBox(
+          width: 460,
+          height: 420,
+          child: ListView(children: [
+            for (final id in ids)
+              tile(ctx, 'print-all-user-$id', Icons.person, nameOf(id),
+                  byUser[id]!, id),
+            if (ids.length > 1) ...[
+              const Divider(),
+              tile(ctx, 'print-all-everyone', Icons.groups,
+                  tr(ctx, 'All staff'), orders, '*'),
+            ],
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr(ctx, 'Cancel'))),
+        ],
+      ),
+    );
+    if (who == null || !context.mounted) return;
+    final chosen = who == '*' ? orders : byUser[who]!;
+    final closed = chosen.where((o) => o.state != OrderState.held);
+    if (closed.isNotEmpty &&
+        !await _authorize(Permission.reprint, context)) {
+      return;
+    }
+    for (final o in chosen) {
+      if (o.state == OrderState.held) {
+        await _printBill(o);
+      } else {
+        await _printReceipt(o, reprint: true);
+      }
+    }
+    if (context.mounted) {
+      showToast(context, '${tr(context, 'Checks printed')}: ${chosen.length}',
+          kind: ToastKind.success);
+    }
+  }
+  /// Pick an open table, open its tab, and go straight into moving items off it.
+  Future<void> _transferItemsFromFloor(
+          BuildContext context, PosSession session) =>
+      _pickTabThen(context, session, _openTableTabs(),
+          tr(context, 'Move items from which table?'), SellStartAction.moveItems);
+  Future<void> _quitApp(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Quit Offline POS?')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+          FilledButton(
+            key: const Key('quit-confirm'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Quit')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    widget.audit.record(_session?.cashierId ?? '', 'app.quit');
+    exit(0);
   }
 
   /// Bring a parked tab back to the counter, asking whose it is first when the shop
@@ -3293,13 +4124,16 @@ class _PosAppState extends State<PosApp> {
     final from = await _pickCashier(
         context, tr(context, 'Move tabs from'), holders);
     if (from == null || !context.mounted) return;
+    final chosen = await _pickTabsToMove(
+        context, held.where((o) => o.cashierId == from).toList());
+    if (chosen == null || chosen.isEmpty || !context.mounted) return;
     final to = await _pickCashier(
       context,
       tr(context, 'Move tabs to'),
       widget.users.active().map((u) => u.id).where((id) => id != from).toList(),
     );
     if (to == null) return;
-    final moved = held.where((o) => o.cashierId == from).toList();
+    final moved = held.where((o) => chosen.contains(o.uuid)).toList();
     for (final tab in moved) {
       widget.orders.reassignCashier(tab.uuid, to);
       // Floor ownership follows the tabs, or the next waiter still sees the old
@@ -3315,6 +4149,33 @@ class _PosAppState extends State<PosApp> {
     if (!context.mounted) return;
     setState(() {});
     showToast(context, '${tr(context, 'Tabs moved')}: ${moved.length}',
+        kind: ToastKind.success);
+  }
+
+  /// Employee Transfer from the order screen: the order on the counter (and its
+  /// table) goes to another waiter, with a manager's approval.
+  Future<void> _transferOpenOrder(
+      BuildContext context, PosSession session) async {
+    if (await _authorizeManager(context) == null) return;
+    if (!context.mounted) return;
+    final from = session.current.cashierId;
+    final to = await _pickCashier(
+      context,
+      tr(context, 'Move tabs to'),
+      widget.users.active().map((u) => u.id).where((id) => id != from).toList(),
+    );
+    if (to == null || !context.mounted) return;
+    session.rebindCashier(to);
+    final label = session.current.tableLabel;
+    if (label != null && widget.assignments != null) {
+      final table = widget.tables.byName(label);
+      if (table != null) _assignTable(table, to);
+    }
+    widget.audit.record(_session?.cashierId ?? 'system', 'tables.transferred',
+        detail: '$from->$to|1 tab(s)');
+    setState(() {});
+    showToast(context,
+        '${tr(context, 'Order moved to')} ${widget.users.byId(to)?.name ?? to}',
         kind: ToastKind.success);
   }
 
@@ -3425,7 +4286,7 @@ class _PosAppState extends State<PosApp> {
             key: const Key('opener-list'),
             shrinkWrap: true,
             itemCount: ids.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
+            separatorBuilder: (_, _) => const Divider(height: 1),
             itemBuilder: (ctx, i) {
               final id = ids[i];
               return ListTile(
@@ -3444,6 +4305,70 @@ class _PosAppState extends State<PosApp> {
           ),
         ],
       ),
+    );
+  }
+
+  /// The tabs one waiter is holding, all ticked to start with, so moving everything
+  /// stays one tap and moving a few means unticking the rest.
+  Future<Set<String>?> _pickTabsToMove(BuildContext context, List<Order> tabs) {
+    tabs.sort((a, b) => (a.tableLabel ?? '~').compareTo(b.tableLabel ?? '~'));
+    final picked = {for (final o in tabs) o.uuid};
+    return showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setDialog) {
+        final all = picked.length == tabs.length;
+        return AlertDialog(
+          title: Text(tr(ctx, 'Which tables to move?')),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              key: const Key('transfer-tabs'),
+              shrinkWrap: true,
+              children: [
+                CheckboxListTile(
+                  key: const Key('transfer-tabs-all'),
+                  value: all,
+                  title: Text(tr(ctx, 'Select all'),
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  onChanged: (_) => setDialog(() {
+                    picked.clear();
+                    if (!all) picked.addAll(tabs.map((o) => o.uuid));
+                  }),
+                ),
+                const Divider(height: 1),
+                for (final o in tabs)
+                  CheckboxListTile(
+                    key: Key('transfer-tab-${o.uuid}'),
+                    value: picked.contains(o.uuid),
+                    secondary: const Icon(Icons.table_bar),
+                    title: Text(o.tableLabel ?? tr(ctx, 'Tab')),
+                    subtitle: Text(PosApp.money(o.total)),
+                    onChanged: (v) => setDialog(() {
+                      if (v == true) {
+                        picked.add(o.uuid);
+                      } else {
+                        picked.remove(o.uuid);
+                      }
+                    }),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr(ctx, 'Cancel')),
+            ),
+            FilledButton(
+              key: const Key('transfer-tabs-next'),
+              onPressed: picked.isEmpty
+                  ? null
+                  : () => Navigator.pop(ctx, Set.of(picked)),
+              child: Text('${tr(ctx, 'Next')} (${picked.length})'),
+            ),
+          ],
+        );
+      }),
     );
   }
 
@@ -3711,6 +4636,15 @@ class _PosAppState extends State<PosApp> {
         group: 'Shop',
         onTap: () => pushGated(Permission.openSettings,
             ShopSettingsScreen(settings: widget.settings, onChanged: refresh)),
+      ),
+      SettingsEntry(
+        title: 'Floor screen',
+        subtitle: 'Bulletin and bottom buttons: what shows',
+        icon: Icons.dashboard_outlined,
+        keyValue: 'set-bulletin',
+        group: 'Shop',
+        onTap: () => pushGated(Permission.openSettings,
+            BulletinSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'Payment methods',
@@ -4323,6 +5257,7 @@ class _PosAppState extends State<PosApp> {
                   report('Saving shop link...', 0.97);
                   widget.settings.lanShopKey = pendingKey;
                   widget.settings.deviceRole = DeviceRole.secondary;
+                  widget.settings.lanPrimaryDeviceId = peer.deviceId;
                   widget.settings.lanRolePromptDismissed = true;
 
                   report('Done', 1.0);
@@ -4747,7 +5682,7 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _openShift(BuildContext context, PosSession session,
-      {bool startClose = false}) {
+      {bool startClose = false, String? startMovement}) {
     // Which tenders count as drawer cash, read from the synced catalogue so the
     // X/Z drawer total reconciles cash and leaves card sales out.
     final cashMethodIds = widget.catalogue
@@ -4760,6 +5695,7 @@ class _PosAppState extends State<PosApp> {
         store: widget.shifts,
         cashierId: session.cashierId,
         startCloseOnOpen: startClose,
+        startMovement: startMovement,
         // Right after the shift opens, ask who is working this session so sales and
         // tables can be attributed to whoever is actually on the floor. Opt-in.
         onShiftOpened: () {
@@ -4799,13 +5735,14 @@ class _PosAppState extends State<PosApp> {
           // Tickets in THIS open shift only — not the whole outbox backlog.
           if (widget.orders.awaitingSyncInShift(shift).isEmpty) return null;
           widget.settings.mergeBatchIntoOneSaleOrder = true;
+          final needsPartnerMsg = tr(context,
+              'Consolidated close needs a branch with a session invoice customer. '
+              'Pick the branch under Server settings, and set the customer on '
+              'Offline POS ▸ Branches ▸ Session close in Odoo.');
           await _ensureSessionPartnerFromBranch();
           if (widget.settings.odooSessionPartnerId == null &&
               widget.settings.odooBranchId == null) {
-            return tr(context,
-                'Consolidated close needs a branch with a session invoice customer. '
-                'Pick the branch under Server settings, and set the customer on '
-                'Offline POS ▸ Branches ▸ Session close in Odoo.');
+            return needsPartnerMsg;
           }
           return null;
         },

@@ -56,7 +56,6 @@ class SettingsStore {
   static const _discountPercents = 'discount_percents';
   static const _maxDiscountPercent = 'max_discount_percent';
   static const _allowAmountDiscount = 'allow_amount_discount';
-  static const _orderNoDay = 'order_no_day';
   static const _orderNoSeq = 'order_no_seq';
   static const _categoryColors = 'category_colors';
   static const _categoryStations = 'category_stations';
@@ -558,6 +557,42 @@ class SettingsStore {
       getBool('table_open_require_auth', fallback: true);
   set tableOpenRequireAuth(bool v) => setBool('table_open_require_auth', v);
 
+  /// Whether the floor draws the Bulletin board on its right.
+  bool get floorBulletinEnabled => getBool('floor_bulletin', fallback: true);
+  set floorBulletinEnabled(bool v) => setBool('floor_bulletin', v);
+
+  /// Bulletin rows the shop switched off, by row id. Empty shows every row.
+  Set<String> get floorBulletinHidden => {
+        for (final id in (getString('floor_bulletin_hidden') ?? '').split(','))
+          if (id.trim().isNotEmpty) id.trim(),
+      };
+  set floorBulletinHidden(Set<String> ids) =>
+      setString('floor_bulletin_hidden', (ids.toList()..sort()).join(','));
+
+  /// Whether the floor draws the coloured button bar along the bottom.
+  bool get floorActionBarEnabled => getBool('floor_action_bar', fallback: true);
+  set floorActionBarEnabled(bool v) => setBool('floor_action_bar', v);
+
+  /// Bottom-bar buttons the shop switched off, by id. Empty shows every button.
+  Set<String> get floorActionsHidden => {
+        for (final id in (getString('floor_actions_hidden') ?? '').split(','))
+          if (id.trim().isNotEmpty) id.trim(),
+      };
+  set floorActionsHidden(Set<String> ids) =>
+      setString('floor_actions_hidden', (ids.toList()..sort()).join(','));
+
+  /// Whether the order screen draws the coloured button bar along the bottom.
+  bool get orderActionBarEnabled => getBool('order_action_bar', fallback: true);
+  set orderActionBarEnabled(bool v) => setBool('order_action_bar', v);
+
+  /// Order-screen buttons the shop switched off, by id.
+  Set<String> get orderActionsHidden => {
+        for (final id in (getString('order_actions_hidden') ?? '').split(','))
+          if (id.trim().isNotEmpty) id.trim(),
+      };
+  set orderActionsHidden(Set<String> ids) =>
+      setString('order_actions_hidden', (ids.toList()..sort()).join(','));
+
   /// Whether moving a dine-in bill to another table waits until a line has been
   /// sent to the kitchen. Off by default: the till can reseat before the pass has
   /// the ticket, which is what a shop does when guests change tables as they sit.
@@ -658,6 +693,17 @@ class SettingsStore {
 
   bool get isLanPrimary => deviceRole == DeviceRole.primary;
 
+  /// Secondary only: refuse the floor until the primary till is seen on the LAN.
+  bool get lanRequirePrimaryOnline =>
+      getBool('lan_require_primary_online', fallback: true);
+  set lanRequirePrimaryOnline(bool v) =>
+      setBool('lan_require_primary_online', v);
+
+  /// Device id of the primary this secondary joined (beacon presence check).
+  String? get lanPrimaryDeviceId => getString('lan_primary_device_id');
+  set lanPrimaryDeviceId(String? v) =>
+      setString('lan_primary_device_id', v?.trim().isEmpty == true ? null : v?.trim());
+
   /// Shown once on a fresh till until the cashier picks Primary, joins, or skips.
   bool get lanRolePromptDismissed => getBool('lan_role_prompt_dismissed');
   set lanRolePromptDismissed(bool v) => setBool('lan_role_prompt_dismissed', v);
@@ -668,11 +714,13 @@ class SettingsStore {
   void clearLanPairing() {
     deviceRole = DeviceRole.unset;
     lanShopKey = null;
+    lanPrimaryDeviceId = null;
     _writeJoinPins(const []);
     setString('lan_shift_notices', null);
     lanRolePromptDismissed = false;
     // Belt-and-braces: delete even if a setter no-op'd on an already-empty value.
     setString('lan_shop_key', null);
+    setString('lan_primary_device_id', null);
     setString(_deviceRole, null);
   }
 

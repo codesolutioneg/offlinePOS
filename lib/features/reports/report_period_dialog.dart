@@ -33,6 +33,30 @@ class ReportPeriodChoice {
   final String label;
   final ReportRange? range;
   final DateTimeRange? custom;
+
+  /// Whether [when] falls inside this window, read in local time. A custom range
+  /// includes its whole last day.
+  bool contains(DateTime when, {DateTime? shiftOpenedAt}) {
+    final at = when.toLocal();
+    final c = custom;
+    if (c != null) {
+      final end = c.end.add(const Duration(days: 1));
+      return !at.isBefore(c.start) && at.isBefore(end);
+    }
+    final now = DateTime.now();
+    final startOfToday = DateTime(now.year, now.month, now.day);
+    return switch (range ?? ReportRange.today) {
+      ReportRange.openShift =>
+        shiftOpenedAt != null && !at.isBefore(shiftOpenedAt),
+      ReportRange.today => !at.isBefore(startOfToday),
+      ReportRange.yesterday =>
+        !at.isBefore(startOfToday.subtract(const Duration(days: 1))) &&
+            at.isBefore(startOfToday),
+      ReportRange.last7 =>
+        !at.isBefore(startOfToday.subtract(const Duration(days: 6))),
+      ReportRange.all => true,
+    };
+  }
 }
 
 /// Ask for the report window after the report was chosen — not a hub-wide filter.

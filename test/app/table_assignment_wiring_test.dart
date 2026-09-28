@@ -373,7 +373,7 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t, 'mo', '9999');
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byTooltip('Open navigation menu'));
     await t.pumpAndSettle();

@@ -17,6 +17,7 @@ import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
 import '../printing/printer_registry.dart';
 import '../sync/odoo_endpoint.dart';
+import '../../domain/table_section_config.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
 import 'lan_claim.dart';
@@ -223,6 +224,7 @@ class LanNode {
         httpPort: port,
         port: beaconPort,
         onPeer: peers.seen,
+        role: () => settings.deviceRole,
         log: log,
         bind: beaconBind,
         localAddresses: localAddresses,
@@ -252,6 +254,15 @@ class LanNode {
   /// bind the same port: the app shell starts the node, and the LAN switch can ask
   /// for it again in the same second.
   Future<void>? _starting;
+
+  /// Whether the shop primary is currently visible on the LAN.
+  ///
+  /// Prefers the device id recorded at join; falls back to any peer advertising
+  /// [DeviceRole.primary] (newer builds). Empty peer list = primary not online.
+  bool primaryIsReachable(SettingsStore settings) => primaryReached(
+        activePeers: peers.active,
+        primaryDeviceId: settings.lanPrimaryDeviceId,
+      );
 
   /// Handed to the stores so a committed change is announced from inside their own
   /// write transaction.

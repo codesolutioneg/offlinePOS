@@ -251,7 +251,7 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
 
     expect(currentLines(), isEmpty);

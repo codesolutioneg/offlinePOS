@@ -149,7 +149,7 @@ void main() {
   }
 
   Future<void> openShiftScreen(WidgetTester t) async {
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byTooltip('Open navigation menu'));
     await t.pumpAndSettle();
@@ -281,7 +281,7 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byTooltip('Open navigation menu'));
     await t.pumpAndSettle();

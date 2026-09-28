@@ -28,7 +28,15 @@ class LoginScreen extends StatefulWidget {
     this.managersOnly = true,
     this.fingerprints,
     this.fingerprintStore,
+    this.asPopup = false,
+    this.onClose,
   });
+
+  /// Just the card, for a dialog over the locked floor, with no page behind it.
+  final bool asPopup;
+
+  /// Draws a close button on the card. Null draws none.
+  final VoidCallback? onClose;
 
   final AuthService auth;
   final UserStore users;
@@ -157,6 +165,69 @@ class _LoginScreenState extends State<LoginScreen> {
     // Managers unlock the till. Until a manager exists, everyone can (setup).
     final staff = widget.managersOnly && managers.isNotEmpty ? managers : active;
     final pin = widget.provisioningPin;
+    final form = Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (pin != null) ...[
+          _provisioningCard(context, pin),
+          const SizedBox(height: 16),
+        ],
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.onClose != null)
+                  Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: IconButton(
+                      key: const Key('login-close'),
+                      icon: const Icon(Icons.close),
+                      tooltip: tr(context, 'Close'),
+                      onPressed: widget.onClose,
+                    ),
+                  ),
+                _brand(context),
+                const SizedBox(height: 16),
+                if (staff.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(tr(context, 'No cashiers on this device yet'),
+                        key: const Key('no-users')),
+                  )
+                else ...[
+                  _accountSelector(staff),
+                  const SizedBox(height: 12),
+                  _pinDots(context),
+                  if (_message != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(_message!,
+                          key: const Key('login-message'),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: scheme.error,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  const SizedBox(height: 10),
+                  _keypad(),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    if (widget.asPopup) {
+      return SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: form,
+        ),
+      );
+    }
     return Scaffold(
       // A quiet wash of the brand colour behind the card, so the lock screen is
       // recognisably the till from across the counter without shouting.
@@ -183,52 +254,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 460),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (pin != null) ...[
-                        _provisioningCard(context, pin),
-                        const SizedBox(height: 16),
-                      ],
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _brand(context),
-                              const SizedBox(height: 16),
-                              if (staff.isEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.all(16),
-                                  child: Text(
-                                      tr(context, 'No cashiers on this device yet'),
-                                      key: const Key('no-users')),
-                                )
-                              else ...[
-                                _accountSelector(staff),
-                                const SizedBox(height: 12),
-                                _pinDots(context),
-                                if (_message != null)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 6),
-                                    child: Text(_message!,
-                                        key: const Key('login-message'),
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                            color: scheme.error,
-                                            fontWeight: FontWeight.w600)),
-                                  ),
-                                const SizedBox(height: 10),
-                                _keypad(),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: form,
                 ),
               ),
             ),

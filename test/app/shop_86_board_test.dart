@@ -127,7 +127,7 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
     // Back to the counter: sign-in lands on the floor plan.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
 
     await t.longPress(find.byKey(const Key('product-10')));
@@ -146,7 +146,7 @@ void main() {
   testWidgets('an item another till marked off cannot be rung here', (t) async {
     await t.pumpWidget(app());
     await signIn(t);
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
 
     // What the applier does with a peer's event, arriving while the counter is open.

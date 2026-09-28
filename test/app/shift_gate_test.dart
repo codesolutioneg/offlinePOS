@@ -156,7 +156,7 @@ void main() {
     expect(find.textContaining('No shift is open'), findsWidgets);
 
     // The takeaway button is there and says no rather than opening a bill.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsNothing,
         reason: 'a till with no drawer open must not reach the counter');
@@ -217,7 +217,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('floor-no-shift')), findsNothing);
 
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.text('Margherita'));
     await t.pumpAndSettle();
@@ -243,7 +243,7 @@ void main() {
     await onTheFloor(t);
 
     expect(find.byKey(const Key('floor-no-shift')), findsNothing);
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('no-shift-gate')), findsNothing);
     expect(find.text('Margherita'), findsOneWidget);

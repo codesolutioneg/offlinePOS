@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../db/schema.dart';
+import '../../domain/table_section_config.dart';
 import 'lan_peer.dart';
 import 'lan_transport.dart';
 
@@ -25,6 +26,7 @@ class LanBeacon {
     required this.onPeer,
     this.port = 45334,
     this.interval = const Duration(seconds: 10),
+    this.role,
     LanLog? log,
     Future<RawDatagramSocket> Function(InternetAddress address, int port)? bind,
     Future<List<String>> Function()? localAddresses,
@@ -50,6 +52,9 @@ class LanBeacon {
   /// mid-service is picked up within a few seconds, rarely enough to be invisible
   /// on the network.
   final Duration interval;
+
+  /// Optional primary/secondary role so secondaries can see the master is up.
+  final DeviceRole? Function()? role;
 
   /// Called for every peer heard from. Wired to the peer directory, which is what
   /// decides whether the peer is compatible.
@@ -100,11 +105,13 @@ class LanBeacon {
   void announce() {
     final socket = _socket;
     if (socket == null) return;
+    final r = role?.call();
     final datagram = utf8.encode(jsonEncode({
       'device_id': deviceId,
       'name': name,
       'port': httpPort,
       'schema': Schema.version,
+      if (r != null && r != DeviceRole.unset) 'role': r.wire,
     }));
     for (final target in _targets) {
       try {

@@ -208,7 +208,7 @@ void main() {
     expect(find.byKey(const Key('floor-day-notice')), findsOneWidget);
     expect(find.textContaining('Bar'), findsOneWidget);
     // A warning is a warning: the till carries on trading.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
     await lan.dispose();
@@ -235,7 +235,7 @@ void main() {
     expect(find.byKey(const Key('floor-day-notice')), findsOneWidget);
 
     // A new takeaway is held.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsNothing);
     expect(find.textContaining('New orders are held'), findsWidgets);
@@ -276,7 +276,7 @@ void main() {
     await signIn(t);
 
     expect(find.byKey(const Key('floor-day-notice')), findsNothing);
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
   });
@@ -299,7 +299,7 @@ void main() {
 
     // The cash-up, as a cashier does it: off the floor, into the shift screen, count
     // the drawer, confirm.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byTooltip('Open navigation menu'));
     await t.pumpAndSettle();

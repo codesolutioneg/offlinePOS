@@ -225,7 +225,7 @@ void main() {
     // Signing in lands on the floor home. These tests ring a sale up, so walk to
     // the counter the way a cashier does; a takeaway needs no table on the plan.
     if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
-      await t.tap(find.byKey(const Key('floor-takeaway')));
+      await t.tap(find.byKey(const Key('floor-action-table')));
       await t.pumpAndSettle();
     }
   }

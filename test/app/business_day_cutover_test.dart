@@ -141,7 +141,7 @@ void main() {
     await signIn(t);
     // Nothing on the till, so the shell lands on the floor. Start a takeaway there
     // the way a cashier does, ring one item, and park it.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();

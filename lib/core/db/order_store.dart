@@ -262,6 +262,17 @@ class OrderStore {
           Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
       .toList();
 
+  /// How many sales every till in the shop has closed since [since], and what
+  /// they came to. One aggregate over indexed columns, so the floor can read it on
+  /// every build without decoding a single payload.
+  ({int count, double total}) paidAnywhereSince(DateTime since) {
+    final row = _db.raw.select(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS t FROM orders "
+        "WHERE state IN ('paid','synced') AND created_at >= ?",
+        [since.toUtc().toIso8601String()]).first;
+    return (count: row['n'] as int, total: (row['t'] as num).toDouble());
+  }
+
   /// [_query] restricted to orders this till rang.
   List<Order> _mine(String where, [List<Object?> args = const []]) =>
       ownDeviceId == null

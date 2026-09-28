@@ -13,7 +13,10 @@ import '../../core/theme/dishflow_brand.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/select_pill.dart';
 import '../../domain/order.dart' show OrderType, OrderTypeLabel;
+import '../../domain/floor_bulletin.dart';
 import '../../domain/table_floor_info.dart';
+import 'floor_action_bar.dart';
+import 'floor_bulletin_panel.dart';
 import 'reservations_screen.dart';
 import 'section_settings_sheet.dart';
 import '../../core/theme/table_palette.dart';
@@ -70,7 +73,30 @@ class TableFloorScreen extends StatefulWidget {
     this.assignHint = false,
     this.onDuty = const [],
     this.onOpenAttendance,
+    this.actions = const [],
+    this.bulletin,
+    this.bulletinHidden = const {},
+    this.locked = false,
+    this.onUnlock,
   });
+
+  /// Bulletin rows switched off in settings.
+  final Set<String> bulletinHidden;
+
+  /// Opens sign-in from the locked strip. Only read while [locked].
+  final VoidCallback? onUnlock;
+
+  /// Nobody is signed in: the room is shown for reading only, with no tools and no
+  /// way to start an order. Table taps still reach [onOpenTable], which the shell
+  /// turns into "sign in first".
+  final bool locked;
+
+  /// The numbers for the Bulletin board on the right. Null draws no board.
+  final FloorBulletin? bulletin;
+
+  /// The coloured tiles along the bottom (Begin, End, Tabs, Flash report...). Empty
+  /// draws no bar, which is what the picker and the plan-only suites want.
+  final List<FloorAction> actions;
 
   /// Who each table belongs to for this service, by table id.
   ///
@@ -855,7 +881,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               label: Text(tr(context, 'No table')),
             ),
           ]
-          else ...[
+          else if (!widget.locked) ...[
             if (widget.onAssign != null)
               IconButton(
                 key: const Key('toggle-assign'),
@@ -911,11 +937,13 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         children: [
           // Above the day notice: with no drawer open nothing can be rung at all,
           // which outranks anything another till has to say about the day.
+          if (widget.locked) _lockedStrip(),
           if (_noShift) _noShiftStrip(),
           if (widget.dayNotice case final notice?) _dayNoticeStrip(notice),
           if (widget.parkedNotice case final parked?) _parkedStrip(parked),
           if (_assigning) _assigningStrip(),
-          if (!widget.pickMode && !_editing && !_noShift) _attendanceStrip(),
+          if (!widget.pickMode && !_editing && !_noShift && !widget.locked)
+            _attendanceStrip(),
           // Only with a drawer open and a room to share out: before that the strip
           // above it is the one that matters, and an empty floor has its own prompt.
           if (!_assigning &&
@@ -928,7 +956,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             _assignHintStrip(),
           // The sections moved to the side, so the room above the plan is where the
           // waiter now says what they are seating.
-          if (widget.seatTypes.length > 1) _seatTypeStrip(),
+          if (widget.seatTypes.length > 1 && !widget.locked) _seatTypeStrip(),
           if (!widget.sectionsAtSide) _sectionStrip(),
           if (widget.pickMode) _legend(),
           const Divider(height: 1),
@@ -950,10 +978,24 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                           child: _canvas(tables),
                         ),
                 ),
+                if (widget.bulletin case final b?
+                    when !widget.pickMode &&
+                        !_editing &&
+                        MediaQuery.of(context).size.width >= 900)
+                  FloorBulletinPanel(
+                    bulletin: b,
+                    hidden: widget.bulletinHidden,
+                    formatAmount: widget.formatAmount ?? (v) => v.toStringAsFixed(2),
+                  ),
               ],
             ),
           ),
-          if (!widget.pickMode && !_editing) _tablelessRow(),
+          if (!widget.pickMode && !_editing && !widget.locked) _tablelessRow(),
+          if (!widget.pickMode && !_editing && widget.actions.isNotEmpty)
+            FloorActionBar(
+              actions: widget.actions,
+              guard: (_) => !_orderingHeld(newWork: true),
+            ),
           if (!widget.pickMode && _editing) _editBar(),
         ],
       ),
@@ -1205,6 +1247,37 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                       foregroundColor: AppColors.error),
                   onPressed: widget.onOpenShift,
                   child: Text(tr(context, 'Open shift')),
+                ),
+            ]),
+          ),
+        ),
+      );
+
+  Widget _lockedStrip() => Material(
+        key: const Key('floor-locked'),
+        color: const Color(0xFF263238),
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(children: [
+              const Icon(Icons.lock, size: 18, color: Colors.white),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                    tr(context,
+                        'Locked. Press Begin to sign in, or place your finger on the reader.'),
+                    style: const TextStyle(color: Colors.white)),
+              ),
+              if (widget.onUnlock != null)
+                FilledButton.icon(
+                  key: const Key('floor-unlock'),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFE67E22),
+                      foregroundColor: Colors.white),
+                  onPressed: widget.onUnlock,
+                  icon: const Icon(Icons.lock_open, size: 18),
+                  label: Text(tr(context, 'Begin')),
                 ),
             ]),
           ),
@@ -1771,7 +1844,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       // the top does not change how the floor is driven.
       key: Key('section-${s.toLowerCase()}'),
       borderRadius: BorderRadius.circular(12),
-      onTap: () => _setSection(s),
+      onTap: () => widget.locked ? widget.onUnlock?.call() : _setSection(s),
       // In edit mode a long-press renames or deletes the whole section, exactly as
       // it does on the top strip.
       onLongPress: () => _sectionMenu(s),
@@ -1817,7 +1890,8 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                   key: Key('section-${s.toLowerCase()}'),
                   label: Text(s),
                   selected: _activeSection == s,
-                  onSelected: (_) => _setSection(s),
+                  onSelected: (_) =>
+                      widget.locked ? widget.onUnlock?.call() : _setSection(s),
                 ),
               ),
               const SizedBox(width: 6),

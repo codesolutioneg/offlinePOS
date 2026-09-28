@@ -166,7 +166,7 @@ void main() {
   testWidgets('the takeaway button opens the counter with no table', (t) async {
     await boot(t);
 
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
 
     expect(find.byType(SellScreen), findsOneWidget);

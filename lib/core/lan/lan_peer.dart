@@ -1,4 +1,5 @@
 import '../db/schema.dart';
+import '../../domain/table_section_config.dart';
 
 /// Where a fabric error or refusal is recorded. Wired to the audit log on a real
 /// till, so a peer that never joined is answerable to support instead of being a
@@ -14,6 +15,7 @@ class LanPeer {
     required this.port,
     required this.schemaVersion,
     required this.lastSeenAt,
+    this.role,
   });
 
   /// The peer's own device id, which is its identity here. The address is not: a
@@ -34,6 +36,9 @@ class LanPeer {
 
   final DateTime lastSeenAt;
 
+  /// Primary / secondary when the peer's build announces it; null on older beacons.
+  final DeviceRole? role;
+
   bool get isCompatible => schemaVersion == Schema.version;
 
   Uri get baseUrl => Uri.parse('http://$host:$port');
@@ -45,6 +50,7 @@ class LanPeer {
         port: port,
         schemaVersion: schemaVersion,
         lastSeenAt: at,
+        role: role,
       );
 
   /// The beacon datagram. Deliberately tiny and free of anything private: it is
@@ -55,6 +61,7 @@ class LanPeer {
         'name': name,
         'port': port,
         'schema': schemaVersion,
+        if (role != null && role != DeviceRole.unset) 'role': role!.wire,
       };
 
   /// Throws [FormatException] on a datagram this build cannot read. Anything at all
@@ -70,6 +77,12 @@ class LanPeer {
     if (deviceId is! String || deviceId.isEmpty || port is! int || schema is! int) {
       throw const FormatException('beacon is missing device_id, port or schema');
     }
+    DeviceRole? role;
+    final rawRole = m['role'];
+    if (rawRole is String && rawRole.isNotEmpty) {
+      final parsed = DeviceRole.fromWire(rawRole);
+      if (parsed != DeviceRole.unset) role = parsed;
+    }
     return LanPeer(
       deviceId: deviceId,
       name: m['name'] is String ? m['name'] as String : deviceId,
@@ -77,8 +90,24 @@ class LanPeer {
       port: port,
       schemaVersion: schema,
       lastSeenAt: at,
+      role: role,
     );
   }
+}
+
+/// Whether the shop primary is among [activePeers].
+///
+/// Prefers [primaryDeviceId] from a prior join; otherwise any peer advertising
+/// [DeviceRole.primary].
+bool primaryReached({
+  required Iterable<LanPeer> activePeers,
+  required String? primaryDeviceId,
+}) {
+  final id = primaryDeviceId?.trim();
+  if (id != null && id.isNotEmpty) {
+    return activePeers.any((p) => p.deviceId == id);
+  }
+  return activePeers.any((p) => p.role == DeviceRole.primary);
 }
 
 /// Who is on the LAN right now, and who was refused.

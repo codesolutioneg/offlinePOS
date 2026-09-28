@@ -215,7 +215,7 @@ void main() {
     }
     await t.tap(find.byKey(const Key('pin-ok')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();

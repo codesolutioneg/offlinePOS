@@ -18,7 +18,7 @@ import 'detailed_discounts_report_screen.dart';
 import 'discounts_report_screen.dart';
 import 'driver_delivery_report_screen.dart';
 import 'expenses_report_screen.dart';
-import 'flash/flash_preview_screen.dart';
+import 'flash/flash_flow.dart';
 import 'flash/flash_report_data.dart';
 import 'flash/flash_type_dialog.dart';
 import 'group_sales_report_screen.dart';
@@ -134,27 +134,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   List<String> get _cashiers =>
       (widget.allOrders.map((o) => o.cashierId).toSet().toList()..sort());
 
-  bool _inPeriod(Order o, ReportPeriodChoice period) {
-    final at = o.createdAt.toLocal();
-    final custom = period.custom;
-    if (custom != null) {
-      final end = custom.end.add(const Duration(days: 1));
-      return !at.isBefore(custom.start) && at.isBefore(end);
-    }
-    final now = DateTime.now();
-    final startOfToday = DateTime(now.year, now.month, now.day);
-    return switch (period.range ?? ReportRange.today) {
-      ReportRange.openShift =>
-        _shiftOpenedAt != null && !at.isBefore(_shiftOpenedAt!),
-      ReportRange.today => !at.isBefore(startOfToday),
-      ReportRange.yesterday =>
-        !at.isBefore(startOfToday.subtract(const Duration(days: 1))) &&
-            at.isBefore(startOfToday),
-      ReportRange.last7 =>
-        !at.isBefore(startOfToday.subtract(const Duration(days: 6))),
-      ReportRange.all => true,
-    };
-  }
+  bool _inPeriod(Order o, ReportPeriodChoice period) =>
+      period.contains(o.createdAt, shiftOpenedAt: _shiftOpenedAt);
 
   List<Order> _applyStaffType(Iterable<Order> source) => source
       .where((o) => _cashier == null || o.cashierId == _cashier)
@@ -216,161 +197,18 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     return store.between(from: from, to: to, staffId: _cashier);
   }
 
-  Future<void> _openFlashMenu() async {
-    final kind = await showFlashTypeDialog(context);
-    if (!mounted || kind == null) return;
-    final period = await _askPeriod(tr(context, 'Select period'));
-    if (!mounted || period == null) return;
-    final shop = _shopFilteredFor(period);
-    switch (kind) {
-      case FlashKind.collector:
-      case FlashKind.summary:
-        _pushFlash(
-          kind: kind,
-          title: kind == FlashKind.collector
-              ? 'Flash Collector'
-              : 'Flash Summary',
-          orders: shop,
-          periodLabel: period.label,
-        );
-      case FlashKind.delivery:
-        _pushFlash(
-          kind: kind,
-          title: 'Delivery Flash',
-          orders: FlashReportBuilder.deliveryOnly(shop),
-          periodLabel: period.label,
-          filterLabel: tr(context, 'Delivery only'),
-        );
-      case FlashKind.today:
-        await _openTodayFlash(period, shop);
-      case FlashKind.paymentMethod:
-        await _openPaymentFlash(period, shop);
-    }
-  }
-
-  Future<void> _openTodayFlash(
-      ReportPeriodChoice period, List<Order> pool) async {
-    final choice = await showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text(tr(ctx, "Today's Flash")),
-        children: [
-          SimpleDialogOption(
-            key: const Key('flash-today-all'),
-            onPressed: () => Navigator.pop(ctx, 'all'),
-            child: Text(tr(ctx, 'All cashiers â€” every till')),
-          ),
-          SimpleDialogOption(
-            key: const Key('flash-today-cashier'),
-            onPressed: () => Navigator.pop(ctx, 'cashier'),
-            child: Text(tr(ctx, 'By cashier')),
-          ),
-        ],
-      ),
-    );
-    if (!mounted || choice == null) return;
-    if (pool.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(tr(context, 'No sales in this period'))));
-      return;
-    }
-    if (choice == 'all') {
-      _pushFlash(
-        kind: FlashKind.today,
-        title: tr(context, "Today's Flash"),
-        orders: pool,
-        periodLabel: period.label,
-      );
-      return;
-    }
-    final ids = FlashReportBuilder.cashierIds(pool);
-    if (ids.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(tr(context, 'No sales in this period'))));
-      return;
-    }
-    final who = await showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text(tr(ctx, 'Cashier')),
-        children: [
-          for (final id in ids)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, id),
-              child: Text(widget.staffNames[id] ?? id),
-            ),
-        ],
-      ),
-    );
-    if (!mounted || who == null) return;
-    _pushFlash(
-      kind: FlashKind.today,
-      title: tr(context, "Today's Flash"),
-      orders: pool.where((o) => o.cashierId == who).toList(),
-      periodLabel: period.label,
-      filterLabel: widget.staffNames[who] ?? who,
-    );
-  }
-
-  Future<void> _openPaymentFlash(
-      ReportPeriodChoice period, List<Order> orders) async {
-    final labels = FlashReportBuilder.paymentLabels(orders);
-    if (labels.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(tr(context, 'No sales in this period'))));
-      return;
-    }
-    final method = await showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text(tr(ctx, 'Payment Method Flash')),
-        children: [
-          for (final m in labels)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, m),
-              child: Text(m),
-            ),
-        ],
-      ),
-    );
-    if (!mounted || method == null) return;
-    _pushFlash(
-      kind: FlashKind.paymentMethod,
-      title: '$method Flash',
-      orders: FlashReportBuilder.withPayment(orders, method),
-      periodLabel: period.label,
-      filterLabel: method,
-    );
-  }
-
-  void _pushFlash({
-    required FlashKind kind,
-    required String title,
-    required List<Order> orders,
-    String? periodLabel,
-    String? filterLabel,
-  }) {
-    final data = FlashReportBuilder.build(
-      title: title,
-      periodLabel: periodLabel ?? '',
-      orders: orders,
-      filterLabel: filterLabel,
-      cashierName: (id) => widget.staffNames[id] ?? id,
-    );
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => FlashPreviewScreen(
-        data: data,
-        kind: kind,
-        shopName: widget.shopName,
+  Future<void> _openFlashMenu() => runFlashFlow(
+        context,
+        ordersFor: _shopFilteredFor,
         formatAmount: widget.formatAmount,
+        shiftOpenedAt: _shiftOpenedAt,
+        staffNames: widget.staffNames,
+        shopName: widget.shopName,
         categories: widget.categories,
         cashTenderIds: widget.cashTenderIds,
         onPrint: widget.onPrint,
         onPrintFlash: widget.onPrintFlash,
-        staffNames: widget.staffNames,
-      ),
-    ));
-  }
+      );
 
   Future<void> _open(
     Widget Function(List<Order> orders, ReportPeriodChoice period) build,

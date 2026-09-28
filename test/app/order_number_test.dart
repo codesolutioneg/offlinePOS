@@ -153,7 +153,7 @@ void main() {
     // Parking put the till back on the floor home, so the second order of the
     // service starts there, the way the next one always does. Nothing to wait out:
     // the parked confirmation is a strip above the plan, clear of this button.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('product-11')));
     await t.pumpAndSettle();

@@ -140,7 +140,7 @@ void main() {
     // Signing in lands on the floor home. Most of these are about the grid, so
     // walk to the counter the way a cashier does; a takeaway needs no table drawn.
     if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
-      await t.tap(find.byKey(const Key('floor-takeaway')));
+      await t.tap(find.byKey(const Key('floor-action-table')));
       await t.pumpAndSettle();
     }
   }
