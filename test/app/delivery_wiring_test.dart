@@ -585,7 +585,7 @@ void main() {
       expect(find.byKey(const Key('delivery-home')), findsOneWidget,
           reason: 'backing out must leave the cashier on the delivery station');
       expect(orders.held(), hasLength(1));
-      await t.tap(find.byKey(const Key('delivery-home-back')));
+      await t.tap(find.byKey(const Key('delivery-action-table')));
       await t.pumpAndSettle();
       expect(find.byType(TableFloorScreen), findsOneWidget);
     });

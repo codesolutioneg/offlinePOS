@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -9,6 +10,7 @@ import '../../domain/order.dart'
     show DiscountBooking, LocalProductBooking, OrderType, OrderTypeLabel;
 import '../../domain/table_preorder.dart';
 import '../../domain/table_section_config.dart';
+import '../auth/access.dart';
 import '../auth/permissions.dart';
 import '../email/smtp_config.dart';
 import '../lan/lan_event.dart';
@@ -45,7 +47,14 @@ class SettingsStore {
   /// switch that decides whether there is a fabric at all is read from this very
   /// store: the node cannot exist before it.
   LanPublish? _publish;
-  set publish(LanPublish? v) => _publish = v;
+  set publish(LanPublish? v) {
+    _publish = v;
+    // The baseline a later change is measured against: what this till holds as it
+    // joins the fabric is not news, only what changes after it is.
+    if (v != null && getString(_sharedBundleHash) == null) {
+      setString(_sharedBundleHash, _bundleHash(exportShopBundle()));
+    }
+  }
 
   // ── keys ─────────────────────────────────────────────────────────
   static const _shopName = 'shop_name';
@@ -70,6 +79,7 @@ class SettingsStore {
   static const _gridColumns = 'grid_columns';
   static const _rolePermissions = 'role_permissions';
   static const _customRoles = 'custom_roles';
+  static const _roleAccess = 'role_access';
   static const _smtpHost = 'smtp_host';
   static const _smtpPort = 'smtp_port';
   static const _smtpSecurity = 'smtp_security';
@@ -101,13 +111,65 @@ class SettingsStore {
   void setString(String key, String? value) {
     if (value == null || value.isEmpty) {
       _db.raw.execute('DELETE FROM app_settings WHERE key = ?', [key]);
-      return;
+    } else {
+      _db.raw.execute(
+        'INSERT INTO app_settings (key, value) VALUES (?, ?) '
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        [key, value],
+      );
     }
-    _db.raw.execute(
-      'INSERT INTO app_settings (key, value) VALUES (?, ?) '
-      'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-      [key, value],
-    );
+    if (key != _sharedBundleHash) _shopSettingsTouched();
+  }
+
+  // ── shop settings kept the same on every till ────────────────────
+  // Whatever a manager changes on any till that belongs in the shop bundle (roles,
+  // levels, button bars, the Bulletin, discounts, receipt, …) is announced once
+  // the change is done. Only a real change goes out: the bundle is compared with
+  // the last one this till sent or received, so a till that boots, syncs Odoo or
+  // counts a drawer announces nothing and cannot overwrite newer settings.
+
+  static const _sharedBundleHash = 'shared_bundle_hash';
+
+  /// Screen and button prefs that are the shop's rather than one till's.
+  static const _sharedUiKeys = [
+    'floor_action_bar',
+    'floor_actions_hidden',
+    'order_action_bar',
+    'order_actions_hidden',
+    'floor_bulletin',
+    'floor_bulletin_hidden',
+    'lan_require_primary_online',
+  ];
+
+  bool _applyingBundle = false;
+
+  /// Bumped whenever shop settings or staff arrive from another till, so the shell
+  /// can redraw with them.
+  int sharedRevision = 0;
+  void bumpSharedRevision() => sharedRevision++;
+  bool _bundleCheckQueued = false;
+
+  void _shopSettingsTouched() {
+    if (_applyingBundle || _bundleCheckQueued || _publish == null) return;
+    _bundleCheckQueued = true;
+    scheduleMicrotask(() {
+      _bundleCheckQueued = false;
+      _announceShopSettingsIfChanged();
+    });
+  }
+
+  String _bundleHash(Map<String, dynamic> bundle) =>
+      sha256.convert(utf8.encode(jsonEncode(bundle))).toString();
+
+  void _announceShopSettingsIfChanged() {
+    final publish = _publish;
+    if (publish == null) return;
+    final bundle = exportShopBundle();
+    final hash = _bundleHash(bundle);
+    final last = getString(_sharedBundleHash);
+    if (last == hash) return;
+    setString(_sharedBundleHash, hash);
+    publish(LanEventKind.shopBundle, shopBundleRecord, bundle);
   }
 
   bool getBool(String key, {bool fallback = false}) {
@@ -1077,6 +1139,46 @@ class SettingsStore {
   /// Whether [role] may do [p] without a manager PIN.
   bool roleCan(String role, Permission p) => permissionsFor(role).contains(p);
 
+  // ── what each level sees ─────────────────────────────────────────
+  // Per role (level), per screen or button id: allowed, behind a manager PIN, or
+  // hidden. Only the exceptions are stored; everything unnamed is allowed, so a
+  // shop that never opens the screen trades exactly as before.
+
+  Map<String, Map<String, String>> get _roleAccessMap {
+    final v = getString(_roleAccess);
+    if (v == null) return {};
+    try {
+      return (jsonDecode(v) as Map<String, dynamic>).map((role, rules) =>
+          MapEntry(role, (rules as Map<String, dynamic>).map(
+              (id, rule) => MapEntry(id, rule.toString()))));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  void _writeRoleAccessMap(Map<String, Map<String, String>> map) =>
+      setString(_roleAccess, jsonEncode(map));
+
+  /// What [role] may do with the screen or button [id]. A manager is never
+  /// restricted.
+  AccessRule accessFor(String role, String id) {
+    if (role == 'manager') return AccessRule.allow;
+    return AccessRule.parse(_roleAccessMap[role]?[id]);
+  }
+
+  void setAccess(String role, String id, AccessRule rule) {
+    if (role == 'manager') return;
+    final map = _roleAccessMap;
+    final rules = map[role] ?? <String, String>{};
+    if (rule == AccessRule.allow) {
+      rules.remove(id);
+    } else {
+      rules[id] = rule.name;
+    }
+    map[role] = rules;
+    _writeRoleAccessMap(map);
+  }
+
   // ── what a table opens with ──────────────────────────────────────
   // The cover charge, the bottle of water, the bread: things that go on the bill the
   // moment guests sit down, and that a waiter would otherwise ring by hand on every
@@ -1416,10 +1518,39 @@ class SettingsStore {
         'dishflow_odoo_connection_id': dishflowOdooConnectionId,
         'dishflow_branch_id': dishflowBranchId,
         'dishflow_branch_name': dishflowBranchName,
+        'role_access': _roleAccessMap,
+        'ui_prefs': {for (final k in _sharedUiKeys) k: getString(k)},
       };
 
   /// Apply a primary's [exportShopBundle] on this till (no LAN echo).
   void applyShopBundle(Map<String, dynamic> bundle) {
+    _applyingBundle = true;
+    try {
+      _applyShopBundle(bundle);
+    } finally {
+      _applyingBundle = false;
+    }
+    bumpSharedRevision();
+    // What just landed is what the others hold, so it is not news to announce.
+    setString(_sharedBundleHash, _bundleHash(exportShopBundle()));
+  }
+
+  void _applyShopBundle(Map<String, dynamic> bundle) {
+    if (bundle['role_access'] is Map) {
+      _writeRoleAccessMap({
+        for (final e in (bundle['role_access'] as Map).entries)
+          if (e.value is Map)
+            '${e.key}': {
+              for (final r in (e.value as Map).entries) '${r.key}': '${r.value}',
+            },
+      });
+    }
+    if (bundle['ui_prefs'] is Map) {
+      final prefs = bundle['ui_prefs'] as Map;
+      for (final k in _sharedUiKeys) {
+        if (prefs.containsKey(k)) setString(k, prefs[k]?.toString());
+      }
+    }
     if (bundle['shop_name'] != null) shopName = '${bundle['shop_name']}';
     if (bundle['tax_id'] != null) taxId = '${bundle['tax_id']}';
     if (bundle['receipt_footer'] != null) {
@@ -1575,7 +1706,9 @@ class SettingsStore {
   void publishShopBundle() {
     final publish = _publish;
     if (publish == null || !isLanPrimary) return;
-    publish(LanEventKind.shopBundle, shopBundleRecord, exportShopBundle());
+    final bundle = exportShopBundle();
+    setString(_sharedBundleHash, _bundleHash(bundle));
+    publish(LanEventKind.shopBundle, shopBundleRecord, bundle);
   }
 
   // ── LAN join PIN bank (primary only) ─────────────────────────────
@@ -1687,6 +1820,12 @@ class SettingsStore {
     final held = map.remove(from);
     if (held != null) map[target] = held;
     _writeRolePermissionMap(map);
+    final access = _roleAccessMap;
+    final rules = access.remove(from);
+    if (rules != null) {
+      access[target] = rules;
+      _writeRoleAccessMap(access);
+    }
     return true;
   }
 
@@ -1697,6 +1836,8 @@ class SettingsStore {
     setStringList(_customRoles, roles);
     final map = _rolePermissionMap;
     if (map.remove(name) != null) _writeRolePermissionMap(map);
+    final access = _roleAccessMap;
+    if (access.remove(name) != null) _writeRoleAccessMap(access);
   }
 
   bool _nameIsFree(String role) {

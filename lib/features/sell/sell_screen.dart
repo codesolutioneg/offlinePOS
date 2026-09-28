@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/pos_session.dart';
+import '../../core/auth/access.dart';
 import '../../core/auth/permissions.dart';
 import '../../core/db/catalogue_store.dart' show ModifierMark;
 import '../../core/db/settings_store.dart';
@@ -23,8 +24,9 @@ import '../customers/customer_management_screen.dart' show CustomerFormDialog, C
 import '../tables/floor_action_bar.dart';
 import 'modifier_sheet.dart';
 import 'order_actions.dart';
+import 'split_check_screen.dart';
 
-enum SellStartAction { moveItems, mergeTable, unmergeTable }
+enum SellStartAction { moveItems, mergeTable, unmergeTable, splitCheck }
 
 /// The selling screen: catalogue on the right, the order on the left.
 ///
@@ -64,6 +66,7 @@ class SellScreen extends StatefulWidget {
     this.onToggleAvailable,
     this.favourites = const {},
     this.onToggleFavourite,
+    this.staffName,
     this.gridColumns = 0,
     this.extraCustomers,
     this.onAddCustomer,
@@ -95,6 +98,7 @@ class SellScreen extends StatefulWidget {
     this.startAction,
     this.onEmployeeTransfer,
     this.onOpenRefunds,
+    this.access = AccessPolicy.open,
   });
 
   /// Hands the open order to another waiter (manager-gated by the shell). Null
@@ -103,6 +107,10 @@ class SellScreen extends StatefulWidget {
 
   /// Opens past sales to refund one. Null leaves the Misc pad without the button.
   final VoidCallback? onOpenRefunds;
+
+  /// The signed-in level's rules for the bottom bar (order.*) and the Misc pad
+  /// (omisc.*): hidden buttons are not drawn, gated ones ask for a manager.
+  final AccessPolicy access;
 
   /// Something to open straight away, for a floor tile that means "this tab, then
   /// that tool" (Transfer items). Read once, when the counter opens.
@@ -235,6 +243,9 @@ class SellScreen extends StatefulWidget {
   /// Products pinned as favourites, shown under a Favourites filter chip.
   final Set<int> favourites;
 
+  /// The name a staff id goes by, for the status strip's EMPL field.
+  final String? Function(String staffId)? staffName;
+
   /// Toggle a product favourite. Manager-gated by the caller.
   final void Function(int productId, bool favourite)? onToggleFavourite;
 
@@ -324,6 +335,14 @@ class _SellScreenState extends State<SellScreen> {
 
   PosSession get s => widget.session;
 
+  /// The cart lines the Dinerware controls act on. A line just rung is picked on
+  /// its own, the way the till's cursor follows the last item.
+  final Set<String> _picked = {};
+  final Set<String> _linesSeen = {};
+  String? _seenOrder;
+  final ScrollController _cartScroll = ScrollController();
+  final Map<String, GlobalKey> _lineKeys = {};
+
   /// No open shift, so no order may be started. Read fresh every time rather than
   /// cached: the cashier opens the shift on another screen and comes straight back.
   bool get _noShift => widget.shiftOpen != null && !widget.shiftOpen!();
@@ -355,6 +374,10 @@ class _SellScreenState extends State<SellScreen> {
         unawaited(_mergeTable());
         return;
       }
+      if (widget.startAction == SellStartAction.splitCheck && s.hasLines) {
+        unawaited(_splitCheck());
+        return;
+      }
       if (widget.startAction == SellStartAction.unmergeTable &&
           s.current.linkedOrderUuids.isNotEmpty) {
         unawaited(_splitTabToTable());
@@ -380,6 +403,7 @@ class _SellScreenState extends State<SellScreen> {
     _fireTick?.cancel();
     _scanFocus.dispose();
     _searchFocus.dispose();
+    _cartScroll.dispose();
     super.dispose();
   }
 
@@ -2021,7 +2045,7 @@ class _SellScreenState extends State<SellScreen> {
     // If shares were already taken (even split), the main Pay settles what is left,
     // not the whole total again.
     final partPaid = s.current.amountPaid > 0.001;
-    showModalBottomSheet<void>(
+    await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
@@ -2035,7 +2059,7 @@ class _SellScreenState extends State<SellScreen> {
         // because everything about taking money belongs in one place. The split
         // flows themselves are dine-in only, so a counter sale sees a plain tender
         // step with no first step to answer.
-        modes: _splitModes(),
+        modes: _splitPaying ? const [] : _splitModes(),
         onMode: (mode) {
           Navigator.pop(ctx);
           _startPayMode(mode);
@@ -2061,7 +2085,7 @@ class _SellScreenState extends State<SellScreen> {
   /// Only a seated table can be split: a counter sale has no guests to divide it
   /// between and no table to leave open on a balance.
   List<_PayMode> _splitModes() => s.current.type == OrderType.dineIn
-      ? const [_PayMode.all, _PayMode.evenly, _PayMode.guest, _PayMode.item]
+      ? const [_PayMode.all, _PayMode.evenly, _PayMode.guest]
       : const [];
 
   /// Leave the tender step and start the chosen way of splitting. Each route ends
@@ -2076,7 +2100,7 @@ class _SellScreenState extends State<SellScreen> {
       case _PayMode.evenly:
         await _splitEvenly();
       case _PayMode.guest:
-        await _splitByGuest();
+        await _splitCheck(thenPay: true);
       case _PayMode.item:
         await _pickLines(
             title: tr(context, 'Pay selected items'),
@@ -2093,6 +2117,11 @@ class _SellScreenState extends State<SellScreen> {
     final settling = s.current; // finalized in place if this share settles it
     final balance = s.payShare(payments: payments, cashReceived: cashReceived, tip: tip);
     final paidNow = payments.fold(0.0, (a, p) => a + p.amount);
+    if (balance <= 0.001 && _splitPaying && settling.tableLabel != null) {
+      final next =
+          s.orders.held().where((o) => o.tableLabel == settling.tableLabel);
+      if (next.isNotEmpty) s.recall(next.first.uuid);
+    }
     setState(() {});
     if (balance <= 0.001) {
       widget.onPaid?.call(settling);
@@ -2125,7 +2154,12 @@ class _SellScreenState extends State<SellScreen> {
   void _complete(
       List<OrderPayment> payments, String label, double tip, double? cashReceived) {
     if (tip > 0) s.setTip(tip);
+    final table = s.current.tableLabel;
     final order = s.pay(payments: payments, cashReceived: cashReceived);
+    if (_splitPaying && table != null) {
+      final next = s.orders.held().where((o) => o.tableLabel == table);
+      if (next.isNotEmpty) s.recall(next.first.uuid);
+    }
     setState(() {});
     widget.onPaid?.call(order);
     if (!mounted) return;
@@ -2311,11 +2345,15 @@ class _SellScreenState extends State<SellScreen> {
         IconPadItem('refund', 'misc-refund', Icons.currency_exchange, 'Refund',
             const Color(0xFF6C3483), true),
     ];
+    items.removeWhere((i) => widget.access.hidden('omisc.${i.id}'));
     final action = await showDialog<String>(
       context: context,
       builder: (ctx) => IconPad(items: items),
     );
     if (!mounted || action == null) return;
+    if (!await widget.access.allows(context, 'omisc.$action') || !mounted) {
+      return;
+    }
     switch (action) {
       case 'print':
         _printBill();
@@ -2376,32 +2414,60 @@ class _SellScreenState extends State<SellScreen> {
     }
   }
 
-  /// Split Check from the Misc pad: the same three splits the payment sheet
-  /// offers, straight into the chosen one.
-  Future<void> _splitCheck() async {
-    final pick = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(tr(ctx, 'Split Check')),
-        content: SizedBox(
-          width: 440,
-          child: _menuGrid(ctx, [
-            ('evenly', 'split-check-evenly', Icons.safety_divider,
-                'Split evenly', const Color(0xFF1E8449)),
-            ('guest', 'split-check-guest', Icons.groups_2_outlined, 'By guest',
-                const Color(0xFF2980B9)),
-            ('item', 'split-check-item', Icons.checklist, 'By item',
-                const Color(0xFF8E44AD)),
-          ]),
+  /// Split Check from the Misc pad: a column per guest, items moved between them,
+  /// and each guest's column becomes its own check on this table.
+  Future<void> _splitCheck({bool thenPay = false}) async {
+    if (s.current.lines.isEmpty) return;
+    final checks = await Navigator.of(context).push<List<List<SplitShare>>>(
+      MaterialPageRoute(
+        builder: (_) => SplitCheckScreen(
+          checks: s.tableChecks(),
+          formatAmount: widget.formatAmount,
+          guests: s.current.guestCount,
+          onAction: _splitAction,
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-        ],
       ),
     );
-    if (pick == null || !mounted) return;
-    await _startPayMode(_PayMode.values.byName(pick));
+    if (!mounted) return;
+    if (checks == null) {
+      setState(() {});
+      return;
+    }
+    var made = 1;
+    _changed(
+        () => made = s.splitIntoChecks(checks, among: s.tableChecks()).length);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(made < 2
+          ? tr(context, 'Check unsplit')
+          : '${tr(context, 'Checks split')}: $made'),
+    ));
+    if (thenPay) await _pay();
+  }
+
+  /// Set while a guest's check is paid from the split screen: the sale that settles
+  /// it brings the table's next check up, so the till stays on the table.
+  bool _splitPaying = false;
+
+  Future<List<Order>> _splitAction(
+      List<List<SplitShare>> layout, int check, SplitAction action) async {
+    final made = s.splitIntoChecks(layout, among: s.tableChecks());
+    if (mounted) setState(() {});
+    if (check >= made.length) return s.tableChecks();
+    final target = made[check];
+    switch (action) {
+      case SplitAction.print:
+        widget.onPrintBill?.call(target);
+      case SplitAction.pay:
+        if (target.uuid != s.current.uuid) s.recall(target.uuid);
+        if (mounted) setState(() {});
+        _splitPaying = true;
+        try {
+          await _pay();
+        } finally {
+          _splitPaying = false;
+        }
+    }
+    return s.hasLines ? s.tableChecks() : const [];
   }
 
   /// In Stock Quantity: switch items sold out (86) or back on, with a search, for
@@ -2959,6 +3025,7 @@ class _SellScreenState extends State<SellScreen> {
           .where((p) => p.categoryId != null && allowCats.contains(p.categoryId))
           .toList();
     }
+    _syncPicked();
     final o = s.current;
     final title = o.tableLabel != null
         ? '${tr(context, o.type.label)} - ${o.tableLabel}'
@@ -3008,7 +3075,15 @@ class _SellScreenState extends State<SellScreen> {
       ),
       // A bottom bar rather than the last row of the body, so a toast rises above
       // it instead of covering the buttons.
-      bottomNavigationBar: _noShift ? null : _orderActionBar(),
+      bottomNavigationBar: _noShift
+          ? null
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _orderActionBar(),
+                if (_actionBarShown) _statusStrip(),
+              ],
+            ),
       body: KeyboardListener(
         focusNode: _scanFocus,
         autofocus: true,
@@ -3016,6 +3091,11 @@ class _SellScreenState extends State<SellScreen> {
         child: SafeArea(
         child: Column(
           children: [
+            if (_actionBarShown)
+              _EntryClockBar(
+                title: '${tr(context, 'Order entry').toUpperCase()} '
+                    '(${tr(context, o.type.label)})',
+              ),
             if (widget.staleness != null && widget.staleness!.inHours >= 24)
               _StaleBanner(age: widget.staleness!),
             Expanded(
@@ -3056,7 +3136,8 @@ class _SellScreenState extends State<SellScreen> {
     if (settings == null) return true;
     if (!settings.orderActionBarEnabled) return false;
     final hidden = settings.orderActionsHidden;
-    return orderActionCatalog.any((a) => !hidden.contains(a.id));
+    return orderActionCatalog.any((a) =>
+        !hidden.contains(a.id) && !widget.access.hidden('order.${a.id}'));
   }
 
   Widget _orderActionBar() {
@@ -3085,7 +3166,7 @@ class _SellScreenState extends State<SellScreen> {
     };
     final actions = [
       for (final a in orderActionCatalog)
-        if (!hidden.contains(a.id))
+        if (!hidden.contains(a.id) && !widget.access.hidden('order.${a.id}'))
           FloorAction(
             id: a.id,
             label: a.id == 'send' && unsent > 0
@@ -3093,7 +3174,7 @@ class _SellScreenState extends State<SellScreen> {
                 : tr(context, a.label),
             icon: a.icon,
             color: a.color,
-            onTap: taps[a.id],
+            onTap: _gated('order.${a.id}', taps[a.id]),
           ),
     ];
     if (actions.isEmpty) return const SizedBox.shrink();
@@ -3103,6 +3184,15 @@ class _SellScreenState extends State<SellScreen> {
       keyPrefix: 'order-action',
       barKey: const Key('order-action-bar'),
     );
+  }
+
+  /// [tap] behind the level's rule for [id]: as is when allowed, after a manager
+  /// PIN when gated.
+  VoidCallback? _gated(String id, VoidCallback? tap) {
+    if (tap == null || widget.access.rule(id) == AccessRule.allow) return tap;
+    return () async {
+      if (await widget.access.allows(context, id) && mounted) tap();
+    };
   }
 
   bool _isFired(OrderLine l) => l.printedToKitchen || l.firedStations.isNotEmpty;
@@ -3612,6 +3702,7 @@ class _SellScreenState extends State<SellScreen> {
                       ),
                     ),
                   const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                  if (_actionBarShown) _cartControls(),
                   Expanded(
                     child: !s.hasLines
                         ? EmptyState(
@@ -3620,34 +3711,29 @@ class _SellScreenState extends State<SellScreen> {
                             message: tr(context,
                                 'Tap a product to add it to the order'),
                           )
-                        : ListView(
-                            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-                            children: [
-                              for (final line in s.current.lines)
-                                _LineTile(
-                                  key: Key('line-${line.uuid}'),
-                                  line: line,
-                                  amount: widget.formatAmount(line.total),
-                                  format: widget.formatAmount,
-                                  onRemove: () =>
-                                      _changed(() => s.removeLine(line.uuid)),
-                                  onQty: (q) => _changed(
-                                      () => s.setQuantity(line.uuid, q)),
-                                  onTapLine: () => _lineActions(line),
-                                  onMore: () => _addMore(line, 1),
-                                  onVoid: () => _voidLine(
-                                    line,
-                                    // Red minus on a multi-qty sent line = peel
-                                    // one unit; the line menu still asks how many.
-                                    units: line.quantity > 1 &&
-                                            line.quantity ==
-                                                line.quantity.roundToDouble()
-                                        ? 1
-                                        : null,
+                        : !_actionBarShown
+                            ? ListView(
+                                padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                                children: [
+                                  for (final line in s.current.lines)
+                                    _lineTile(line),
+                                ],
+                              )
+                            : Row(children: [
+                                Expanded(
+                                  child: ListView(
+                                    key: const Key('cart-list'),
+                                    controller: _cartScroll,
+                                    padding:
+                                        const EdgeInsets.fromLTRB(6, 6, 2, 6),
+                                    children: [
+                                      for (final line in s.current.lines)
+                                        _pickableLine(line),
+                                    ],
                                   ),
                                 ),
-                            ],
-                          ),
+                                _cartRail(),
+                              ]),
                   ),
                   const Divider(height: 1, color: Color(0xFFE2E8F0)),
                   ConstrainedBox(
@@ -3666,6 +3752,309 @@ class _SellScreenState extends State<SellScreen> {
           ),
         ),
       );
+
+  Widget _lineTile(OrderLine line, {VoidCallback? onTap}) => _LineTile(
+        key: Key('line-${line.uuid}'),
+        line: line,
+        compact: onTap != null,
+        amount: widget.formatAmount(line.total),
+        format: widget.formatAmount,
+        onRemove: () => _changed(() => s.removeLine(line.uuid)),
+        onQty: (q) => _changed(() => s.setQuantity(line.uuid, q)),
+        onTapLine: onTap ?? () => _lineActions(line),
+        onMore: () => _addMore(line, 1),
+        onVoid: () => _voidLine(
+          line,
+          // Red minus on a multi-qty sent line = peel one unit; the line menu
+          // still asks how many.
+          units: line.quantity > 1 &&
+                  line.quantity == line.quantity.roundToDouble()
+              ? 1
+              : null,
+        ),
+      );
+
+  // ── Dinerware cart controls: pick lines, then step qty / seat ─────────────
+
+  /// Keep the picked set on lines that still exist, and move it onto a line the
+  /// moment one is rung.
+  void _syncPicked() {
+    final lines = s.current.lines;
+    final ids = {for (final l in lines) l.uuid};
+    _picked.removeWhere((id) => !ids.contains(id));
+    _lineKeys.removeWhere((id, _) => !ids.contains(id));
+    final fresh = [
+      for (final l in lines)
+        if (!_linesSeen.contains(l.uuid)) l.uuid,
+    ];
+    // Another bill coming up (a tab recalled) picks nothing; a line rung on this
+    // bill picks that line.
+    if (s.current.uuid != _seenOrder) {
+      _seenOrder = s.current.uuid;
+      _picked.clear();
+    } else if (fresh.isNotEmpty) {
+      _picked
+        ..clear()
+        ..add(fresh.last);
+    }
+    _linesSeen
+      ..clear()
+      ..addAll(ids);
+  }
+
+  Widget _pickableLine(OrderLine line) {
+    final picked = _picked.contains(line.uuid);
+    return KeyedSubtree(
+      key: _lineKeys.putIfAbsent(line.uuid, GlobalKey.new),
+      child: Container(
+        key: Key('cart-pick-${line.uuid}'),
+        decoration: BoxDecoration(
+          color: picked ? const Color(0xFFBBD3F2) : null,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: _lineTile(line, onTap: () {
+          if (_picked.length == 1 && picked) {
+            _lineActions(line);
+          } else {
+            setState(() => _picked
+              ..clear()
+              ..add(line.uuid));
+          }
+        }),
+      ),
+    );
+  }
+
+  List<OrderLine> get _pickedLines =>
+      [for (final l in s.current.lines) if (_picked.contains(l.uuid)) l];
+
+  int get _cursorIndex {
+    final lines = s.current.lines;
+    for (var i = lines.length - 1; i >= 0; i--) {
+      if (_picked.contains(lines[i].uuid)) return i;
+    }
+    return -1;
+  }
+
+  void _pickAt(int i) {
+    final lines = s.current.lines;
+    if (lines.isEmpty) return;
+    final at = i.clamp(0, lines.length - 1);
+    setState(() => _picked
+      ..clear()
+      ..add(lines[at].uuid));
+    final ctx = _lineKeys[lines[at].uuid]?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx,
+          duration: const Duration(milliseconds: 150), alignment: 0.5);
+    }
+  }
+
+  void _cartPage(int pages) {
+    if (!_cartScroll.hasClients) return;
+    final p = _cartScroll.position;
+    final to = pages.abs() > 100
+        ? (pages > 0 ? p.maxScrollExtent : 0.0)
+        : (p.pixels + pages * p.viewportDimension)
+            .clamp(0.0, p.maxScrollExtent);
+    _cartScroll.animateTo(to.toDouble(),
+        duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+  }
+
+  Future<void> _stepQty(int by) async {
+    final picked = _pickedLines;
+    if (picked.isEmpty) return;
+    for (final l in picked) {
+      final fired = l.printedToKitchen || l.firedStations.isNotEmpty;
+      if (!fired) {
+        _changed(() => s.setQuantity(l.uuid, l.quantity + by));
+      } else if (by > 0) {
+        _addMore(l, 1);
+      } else if (picked.length == 1) {
+        await _voidLine(l,
+            units: l.quantity > 1 && l.quantity == l.quantity.roundToDouble()
+                ? 1
+                : null);
+      }
+    }
+    if (mounted) setState(() {});
+  }
+
+  void _stepSeat(int by) {
+    final picked = _pickedLines;
+    if (picked.isEmpty) return;
+    _changed(() {
+      for (final l in picked) {
+        s.moveLineToSeat(l.uuid, (l.seat ?? 0) + by);
+      }
+    });
+  }
+
+  Widget _cartControls() {
+    final has = _picked.isNotEmpty && s.hasLines;
+    Widget key(String id, String label, VoidCallback? onTap) => Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(2),
+            child: Material(
+              color: onTap == null
+                  ? const Color(0xFFE5E7EB)
+                  : const Color(0xFFD1D5DB),
+              elevation: onTap == null ? 0 : 1,
+              borderRadius: BorderRadius.circular(4),
+              child: InkWell(
+                key: Key(id),
+                onTap: onTap,
+                child: Center(
+                  child: Text(tr(context, label),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: onTap == null
+                              ? Colors.black38
+                              : Colors.black87)),
+                ),
+              ),
+            ),
+          ),
+        );
+    return SizedBox(
+      height: 42,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 4, 4, 2),
+        child: Row(children: [
+          key('cart-qty-minus', 'Qty (-)', has ? () => _stepQty(-1) : null),
+          key('cart-seat-minus', 'Seat (-)', has ? () => _stepSeat(-1) : null),
+          Expanded(
+            child: ListenableBuilder(
+              listenable: _cartScroll,
+              builder: (context, _) {
+                var page = 1, pages = 1;
+                if (_cartScroll.hasClients &&
+                    _cartScroll.position.hasContentDimensions &&
+                    _cartScroll.position.viewportDimension > 0) {
+                  final p = _cartScroll.position;
+                  final view = p.viewportDimension;
+                  pages = ((p.maxScrollExtent + view) / view).ceil();
+                  page = (p.pixels / view).round() + 1;
+                  if (p.pixels >= p.maxScrollExtent - 1) page = pages;
+                }
+                return Center(
+                  child: Text('$page / $pages',
+                      key: const Key('cart-page'),
+                      style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.brandNavy)),
+                );
+              },
+            ),
+          ),
+          key('cart-seat-plus', 'Seat (+)', has ? () => _stepSeat(1) : null),
+          key('cart-qty-plus', 'Qty (+)', has ? () => _stepQty(1) : null),
+        ]),
+      ),
+    );
+  }
+
+  /// The green strip under the order-entry buttons: which table, whose check,
+  /// how many guests, whether tax is charged and the bill's discount.
+  Widget _statusStrip() {
+    final o = s.current;
+    final who = widget.staffName?.call(o.cashierId) ?? o.cashierId;
+    final taxed = o.lines.any((l) => l.taxRate > 0);
+    String label(String k) => tr(context, k).toUpperCase();
+    final fields = [
+      ('status-table', '${label('Table')}: ${o.tableLabel ?? '-'}'),
+      ('status-empl', '${label('Employee')}: $who (${o.cashierId})'),
+      ('status-cust', '${label('Guests')}: ${o.guestCount ?? 1}'),
+      ('status-tax', '${label('Tax')}: ${label(taxed ? 'Yes' : 'No')}'),
+      (
+        'status-discount',
+        '${label('Discount')}: ${o.discountPercent.toStringAsFixed(2)}%'
+      ),
+    ];
+    return Container(
+      key: const Key('order-status-strip'),
+      height: 24,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+            colors: [Color(0xFF2E7D32), Color(0xFF43A047), Color(0xFF2E7D32)]),
+      ),
+      child: Row(children: [
+        for (final (id, text) in fields)
+          Expanded(
+            child: Text(text,
+                key: Key(id),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600)),
+          ),
+      ]),
+    );
+  }
+
+  Widget _cartRail() {
+    final lines = s.current.lines;
+    final at = _cursorIndex;
+    Widget key(String id, IconData icon, String label, VoidCallback onTap) =>
+        Expanded(
+          child: InkWell(
+            key: Key(id),
+            onTap: lines.isEmpty ? null : onTap,
+            child: Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, color: const Color(0xFF2563EB), size: 24),
+                    Text(tr(context, label),
+                        style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF1F2937))),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+    return Container(
+      width: 54,
+      color: const Color(0xFFEFF4FB),
+      child: Column(children: [
+        key('cart-top', Icons.vertical_align_top, 'Top', () {
+          _pickAt(0);
+          _cartPage(-1000);
+        }),
+        key('cart-pgup', Icons.keyboard_double_arrow_up, 'Pgup',
+            () => _cartPage(-1)),
+        key('cart-up', Icons.keyboard_arrow_up, 'Up',
+            () => _pickAt(at < 0 ? lines.length - 1 : at - 1)),
+        key('cart-all', Icons.add_box_outlined, 'All', () {
+          setState(() => _picked
+            ..clear()
+            ..addAll(lines.map((l) => l.uuid)));
+        }),
+        key('cart-clear', Icons.indeterminate_check_box_outlined, 'Clr',
+            () => setState(_picked.clear)),
+        key('cart-down', Icons.keyboard_arrow_down, 'Down',
+            () => _pickAt(at < 0 ? 0 : at + 1)),
+        key('cart-pgdn', Icons.keyboard_double_arrow_down, 'Pgdn',
+            () => _cartPage(1)),
+        key('cart-btm', Icons.vertical_align_bottom, 'Btm', () {
+          _pickAt(lines.length - 1);
+          _cartPage(1000);
+        }),
+      ]),
+    );
+  }
 
   void _switchOrderType(OrderType t) {
     _changed(() => s.setOrderType(t));
@@ -4446,10 +4835,14 @@ class _LineTile extends StatelessWidget {
     required this.onTapLine,
     required this.onVoid,
     required this.onMore,
+    this.compact = false,
   });
 
   final OrderLine line;
   final String amount;
+
+  /// The cart's Qty (+)/(-) keys stand in for the row's own +/- buttons.
+  final bool compact;
 
   /// One more of a kitchen-fired line, rung as a new unsent row.
   final VoidCallback onMore;
@@ -4494,7 +4887,22 @@ class _LineTile extends StatelessWidget {
             ),
           ),
           child: Row(children: [
-            if (!kitchenHasIt) ...[
+            if (compact) ...[
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(_qtyText,
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.primaryDark)),
+              ),
+              const SizedBox(width: 8),
+            ] else if (!kitchenHasIt) ...[
               _qtyBtn(Icons.remove, AppColors.error,
                   () => onQty(line.quantity - 1)),
               Padding(
@@ -4919,7 +5327,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     final (icon, label) = switch (mode) {
       _PayMode.all => (Icons.payments, tr(context, 'All of it')),
       _PayMode.evenly => (Icons.safety_divider, tr(context, 'Split evenly')),
-      _PayMode.guest => (Icons.groups_2_outlined, tr(context, 'By guest')),
+      _PayMode.guest => (Icons.call_split, tr(context, 'Split Check')),
       _PayMode.item => (Icons.checklist, tr(context, 'By item')),
     };
     final scheme = Theme.of(context).colorScheme;
@@ -5264,6 +5672,84 @@ class _PaymentSheetState extends State<_PaymentSheet> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The green strip across the top of order entry: the date and a running clock,
+/// what screen this is (and the kind of sale), and the day of the week.
+class _EntryClockBar extends StatefulWidget {
+  const _EntryClockBar({required this.title});
+
+  final String title;
+
+  @override
+  State<_EntryClockBar> createState() => _EntryClockBarState();
+}
+
+class _EntryClockBarState extends State<_EntryClockBar> {
+  static const _days = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+
+  late final Timer _tick;
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _now = DateTime.now());
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick.cancel();
+    super.dispose();
+  }
+
+  String _two(int v) => v.toString().padLeft(2, '0');
+
+  @override
+  Widget build(BuildContext context) {
+    final n = _now;
+    final h = n.hour % 12 == 0 ? 12 : n.hour % 12;
+    final stamp = '${_two(n.day)}/${_two(n.month)}/${_two(n.year % 100)} '
+        '${_two(h)}:${_two(n.minute)}:${_two(n.second)} '
+        '${n.hour < 12 ? 'AM' : 'PM'}';
+    const style = TextStyle(
+        color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600);
+    return Container(
+      key: const Key('order-entry-clock'),
+      height: 22,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+            colors: [Color(0xFF2E7D32), Color(0xFF43A047), Color(0xFF2E7D32)]),
+      ),
+      child: Row(children: [
+        Expanded(child: Text(stamp, style: style)),
+        Expanded(
+          flex: 2,
+          child: Text(widget.title,
+              key: const Key('order-entry-title'),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: style),
+        ),
+        Expanded(
+          child: Text(tr(context, _days[n.weekday - 1]).toUpperCase(),
+              textAlign: TextAlign.end, style: style),
+        ),
+      ]),
     );
   }
 }

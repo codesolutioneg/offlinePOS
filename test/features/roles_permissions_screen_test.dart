@@ -25,6 +25,8 @@ void main() {
     ));
 
     expect(settings.roleCan('cashier', Permission.applyDiscount), isFalse);
+    await t.tap(find.byKey(const Key('level-cashier')));
+    await t.pumpAndSettle();
     // The list is longer than a short screen, so scroll to the switch the way a
     // manager would rather than tapping at a coordinate off the bottom.
     final discount = find.byKey(Key('perm-${Permission.applyDiscount.key}'));
@@ -37,6 +39,37 @@ void main() {
 
     expect(settings.roleCan('cashier', Permission.applyDiscount), isTrue);
     expect(changed, greaterThan(0));
+  });
+
+  testWidgets('a level just added opens on its own page, ready to set up',
+      (t) async {
+    t.view.physicalSize = const Size(1366, 900);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
+    await t.pumpWidget(MaterialApp(
+      home: RolesPermissionsScreen(settings: settings, onChanged: () {}),
+    ));
+    await t.tap(find.byKey(const Key('add-role')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('role-name-field')), 'Level 1');
+    await t.tap(find.byKey(const Key('role-name-save')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('level-page-Level 1')), findsOneWidget);
+    final refund = find.byKey(Key('perm-Level 1-${Permission.refund.key}'));
+    await t.scrollUntilVisible(refund, 200);
+    await t.pumpAndSettle();
+    await t.tap(refund);
+    await t.pump();
+    expect(settings.roleCan('Level 1', Permission.refund), isTrue);
+
+    await t.pageBack();
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('level-Level 1')), findsOneWidget,
+        reason: 'the new level sits on the list, a tap away');
+    await t.tap(find.byKey(const Key('level-Level 1')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('access-open-Level 1')), findsOneWidget);
   });
 
   testWidgets('the manager role is shown as read-only full access', (t) async {
@@ -52,6 +85,8 @@ void main() {
       home: RolesPermissionsScreen(settings: settings, onChanged: () => changed++),
     ));
 
+    await t.tap(find.byKey(const Key('level-cashier')));
+    await t.pumpAndSettle();
     final dineIn = find.byKey(const Key('order-type-allowed-dineIn'));
     await t.ensureVisible(dineIn);
     await t.pumpAndSettle();

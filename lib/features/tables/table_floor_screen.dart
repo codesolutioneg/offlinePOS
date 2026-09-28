@@ -11,8 +11,7 @@ import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/dishflow_brand.dart';
 import '../../core/widgets/feedback.dart';
-import '../../core/widgets/select_pill.dart';
-import '../../domain/order.dart' show OrderType, OrderTypeLabel;
+import '../../domain/order.dart' show OrderType;
 import '../../domain/floor_bulletin.dart';
 import '../../domain/table_floor_info.dart';
 import 'floor_action_bar.dart';
@@ -299,16 +298,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   String? _section;
   Timer? _tick;
 
-  /// The kind of order the next free-table tap opens. Held here rather than in the
-  /// shell because the selector redraws with the plan, and the shell cannot repaint
-  /// a pushed route.
-  OrderType? _seatAs;
-
+  /// The kind of order a free-table tap opens: the first kind the shop seats (a
+  /// section's own default still wins in the shell). The order screen switches it.
   /// A shop that seats nobody still reports dine-in on a tap; the shell refuses the
   /// seating either way, and an occupied table is recalled without reading this.
-  OrderType get _seatType => widget.seatTypes.contains(_seatAs)
-      ? _seatAs!
-      : (widget.seatTypes.firstOrNull ?? OrderType.dineIn);
+  OrderType get _seatType => widget.seatTypes.firstOrNull ?? OrderType.dineIn;
 
   /// No shift, no orders. Read per build, exactly as the counter reads it.
   bool get _noShift => widget.shiftOpen != null && !widget.shiftOpen!();
@@ -333,7 +327,6 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     // room out, and resuming it silently after a sale would put drag handles under
     // a waiter's fingers.
     _section = widget.section;
-    _seatAs = widget.seatAs;
     // Re-render every 30s so the "sitting for N minutes" ages on occupied tables
     // keep counting up while the floor is open instead of freezing.
     if (widget.occupiedInfo.isNotEmpty) {
@@ -379,11 +372,6 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   }
 
   /// Set what the next table tap seats, and tell the shell for the same reason.
-  void _setSeatAs(OrderType type) {
-    setState(() => _seatAs = type);
-    widget.onSeatAsChanged?.call(type);
-  }
-
   Future<void> _addTable() async {
     final result = await _tableDialog(title: tr(context, 'Add table'));
     if (result == null) return;
@@ -956,7 +944,6 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             _assignHintStrip(),
           // The sections moved to the side, so the room above the plan is where the
           // waiter now says what they are seating.
-          if (widget.seatTypes.length > 1 && !widget.locked) _seatTypeStrip(),
           if (!widget.sectionsAtSide) _sectionStrip(),
           if (widget.pickMode) _legend(),
           const Divider(height: 1),
@@ -1503,35 +1490,6 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         // Three buttons on a narrow till is a tight row, so the label shrinks
         // rather than wrapping into an ellipsis nobody can read.
         label: FittedBox(fit: BoxFit.scaleDown, child: Text(label)),
-      );
-
-  /// What the next free table opens. Only drawn when the shop seats more than one
-  /// kind of order: a to-go that sits down while it is packed occupies the floor
-  /// exactly like a dine-in, and the only thing that says which it is is this.
-  Widget _seatTypeStrip() => Material(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withValues(alpha: 0.4),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-          child: Row(children: [
-            Text(tr(context, 'Seat as'),
-                style: Theme.of(context).textTheme.labelMedium),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Wrap(spacing: 8, children: [
-                for (final t in widget.seatTypes)
-                  SelectPill(
-                    key: Key('seat-as-${t.name.toLowerCase()}'),
-                    label: tr(context, t.label),
-                    selected: _seatType == t,
-                    onTap: () => _setSeatAs(t),
-                  ),
-              ]),
-            ),
-          ]),
-        ),
       );
 
   /// Whether starting something new is held right now, telling the cashier why when

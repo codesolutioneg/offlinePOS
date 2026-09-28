@@ -1,5 +1,6 @@
 import '../../domain/order.dart';
 import '../auth/fingerprint_store.dart';
+import '../auth/user_store.dart';
 import '../db/attendance_store.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
@@ -42,6 +43,7 @@ class LanApplier {
     AttendanceStore? attendance,
     FingerprintStore? fingerprints,
     ShiftStore? shifts,
+    UserStore? users,
     void Function()? onShopBundleApplied,
     LanLog? onRefused,
   })  : _orders = orders,
@@ -52,6 +54,7 @@ class LanApplier {
         _attendance = attendance,
         _fingerprints = fingerprints,
         _shifts = shifts,
+        _users = users,
         _onShopBundleApplied = onShopBundleApplied,
         _log = log,
         _onRefused = onRefused;
@@ -67,6 +70,7 @@ class LanApplier {
   final AttendanceStore? _attendance;
   final FingerprintStore? _fingerprints;
   final ShiftStore? _shifts;
+  final UserStore? _users;
   final void Function()? _onShopBundleApplied;
   final LanEventLog _log;
   final LanLog? _onRefused;
@@ -182,6 +186,7 @@ class LanApplier {
         LanEventKind.shiftLifecycle => _applyShiftNotice(event),
         LanEventKind.attendanceUpsert => _applyAttendance(event),
         LanEventKind.fingerprintUpsert => _applyFingerprint(event),
+        LanEventKind.userUpsert => _applyUser(event),
         LanEventKind.cartDisplay => _applyCart(event),
       };
       if (!written) return _Landing.refused;
@@ -287,6 +292,14 @@ class LanApplier {
     final store = _attendance;
     if (store == null) return false;
     store.applyRemote(event.payload);
+    return true;
+  }
+
+  bool _applyUser(LanEvent event) {
+    final store = _users;
+    if (store == null) return false;
+    store.applyRemote(event.payload);
+    _settings.bumpSharedRevision();
     return true;
   }
 

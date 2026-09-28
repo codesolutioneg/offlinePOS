@@ -78,6 +78,11 @@ enum LanEventKind {
   /// till with a ZK reader can identify the same people; PIN stays the fallback.
   fingerprintUpsert('fingerprint.upsert'),
 
+  /// A staff account added or changed: name, PIN hash, level, active. Shared so a
+  /// person set up (or moved to another level) on one till signs in the same way
+  /// on every till. The provisioning account never travels.
+  userUpsert('user.upsert'),
+
   /// What one till has on its counter right now, for a customer-facing display.
   ///
   /// The one snapshot kind, and the only thing here that is written while an order

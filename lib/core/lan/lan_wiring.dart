@@ -132,6 +132,7 @@ class LanNode {
       attendance: attendance,
       fingerprints: fingerprints,
       shifts: shifts,
+      users: users,
       log: eventLog,
       onShopBundleApplied: onShopBundleApplied,
       onRefused: log,

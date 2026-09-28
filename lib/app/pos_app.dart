@@ -79,6 +79,8 @@ import '../features/kitchen/kitchen_display_screen.dart';
 import '../features/menu/menu_editor_screen.dart';
 import '../features/onboarding/setup_checklist_card.dart';
 import '../features/onboarding/wizard_overlay.dart';
+import '../core/auth/access.dart';
+import '../domain/delivery_bulletin.dart';
 import '../features/orders/delivery_home_screen.dart';
 import '../features/orders/delivery_waiting_screen.dart';
 import '../features/orders/ecommerce_orders_screen.dart';
@@ -335,6 +337,9 @@ class _PosAppState extends State<PosApp> {
   /// A role that rings deliveries only has it as home whatever this says.
   bool _deliveryHome = false;
 
+  /// The shop-settings revision last drawn; another till's change bumps it.
+  int _sharedSeen = 0;
+
   bool _firstSaleHelp = false;
 
   /// Whether the walkthrough for the provisioning account is up. Only that account
@@ -440,7 +445,10 @@ class _PosAppState extends State<PosApp> {
     // While a secondary is waiting for the primary, refresh often so the floor
     // unlocks within a few seconds of the master coming online.
     _primaryWatch = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!mounted || !_needsPrimaryOnline) return;
+      if (!mounted) return;
+      final shared = widget.settings.sharedRevision;
+      if (!_needsPrimaryOnline && shared == _sharedSeen) return;
+      _sharedSeen = shared;
       setState(() {});
     });
     unawaited(_startLan());
@@ -1299,7 +1307,7 @@ class _PosAppState extends State<PosApp> {
   Future<void> _printBill(Order order) async {
     widget.audit.record(_session?.cashierId ?? order.cashierId, 'bill.printed',
         detail: order.uuid);
-    _session?.markBillPrinted();
+    _session?.markBillPrinted(order);
     try {
       final bytes = _receiptBuilder().buildBill(order);
       // A bill is reprintable on demand, so the timestamp keeps each copy out of the
@@ -2085,6 +2093,7 @@ class _PosAppState extends State<PosApp> {
         // Builder, so navigation targets the Navigator inside this MaterialApp.
         builder: (context) => SellScreen(
           startAction: _takePendingSellAction(),
+          staffName: (id) => widget.users.byId(id)?.name,
           session: session,
           formatAmount: PosApp.money,
           staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
@@ -2187,6 +2196,7 @@ class _PosAppState extends State<PosApp> {
           onOpenOrders: () => _openOrders(context, session),
           onEmployeeTransfer: () => _transferOpenOrder(context, session),
           onOpenRefunds: () => _openHistory(context),
+          access: _access,
           // The table asked for the bill. Paper only: nothing is settled, nothing
           // is pushed, and the order stays exactly as it is.
           onPrintBill: (order) => unawaited(_printBill(order)),
@@ -2479,9 +2489,11 @@ class _PosAppState extends State<PosApp> {
               label: tr(rootContext, 'Audit log'),
               onTap: () {
                 Navigator.pop(rootContext);
-                Navigator.of(rootContext).push(MaterialPageRoute<void>(
-                  builder: (_) => AuditLogScreen(audit: widget.audit),
-                ));
+                _ifScreen(rootContext, 'screen.audit', () {
+                  Navigator.of(rootContext).push(MaterialPageRoute<void>(
+                    builder: (_) => AuditLogScreen(audit: widget.audit),
+                  ));
+                });
               },
             ),
           section(tr(rootContext, 'This till')),
@@ -2548,7 +2560,10 @@ class _PosAppState extends State<PosApp> {
     );
   }
 
-  void _openAttendance(BuildContext context) {
+  void _openAttendance(BuildContext context) =>
+      _ifScreen(context, 'screen.attendance', () => _openAttendanceNow(context));
+
+  void _openAttendanceNow(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => AttendanceScreen(
             users: widget.users,
@@ -2558,7 +2573,10 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
-  void _openOrders(BuildContext context, PosSession session) {
+  void _openOrders(BuildContext context, PosSession session) =>
+      _ifScreen(context, 'screen.tabs', () => _openOrdersNow(context, session));
+
+  void _openOrdersNow(BuildContext context, PosSession session) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (sheetContext) => OpenOrdersScreen(
         orders: widget.orders.held(),
@@ -2622,7 +2640,10 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
-  void _openStoreOrders(BuildContext context, PosSession session) {
+  void _openStoreOrders(BuildContext context, PosSession session) =>
+      _ifScreen(context, 'screen.store-orders', () => _openStoreOrdersNow(context, session));
+
+  void _openStoreOrdersNow(BuildContext context, PosSession session) {
     _ackStoreOrderAlert();
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => EcommerceOrdersScreen(
@@ -2638,7 +2659,10 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
-  void _openHistory(BuildContext context) {
+  void _openHistory(BuildContext context) =>
+      _ifScreen(context, 'screen.history', () => _openHistoryNow(context));
+
+  void _openHistoryNow(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (historyContext) => OrderHistoryScreen(
         orders: widget.orders.recentAnywhere(limit: 1000),
@@ -2757,7 +2781,10 @@ class _PosAppState extends State<PosApp> {
   }
 
   /// The reports hub, with a date-range filter over the recent completed sales.
-  void _openReports(BuildContext context) {
+  void _openReports(BuildContext context) =>
+      _ifScreen(context, 'screen.reports', () => _openReportsNow(context));
+
+  void _openReportsNow(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => ReportsHubScreen(
         // Which tenders are cash, from Odoo rather than from their names: a
@@ -2796,7 +2823,12 @@ class _PosAppState extends State<PosApp> {
   }
 
   /// The Flash pickers and slip as popups over the floor, without the reports hub.
-  Future<void> _openFlashPopup(BuildContext context) {
+  Future<void> _openFlashPopup(BuildContext context) async {
+    if (!await _screenOk(context, 'screen.flash') || !context.mounted) return;
+    return _openFlashPopupNow(context);
+  }
+
+  Future<void> _openFlashPopupNow(BuildContext context) {
     final shiftOpenedAt =
         widget.shifts.currentOpenShift()?.openedAt.toLocal();
     final shop = widget.orders.recentAnywhere(limit: 2000);
@@ -2820,7 +2852,10 @@ class _PosAppState extends State<PosApp> {
     );
   }
 
-  void _openKitchen(BuildContext context) {
+  void _openKitchen(BuildContext context) =>
+      _ifScreen(context, 'screen.kitchen', () => _openKitchenNow(context));
+
+  void _openKitchenNow(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => KitchenDisplayScreen(
         load: () => widget.orders.kitchenTickets(),
@@ -2829,7 +2864,10 @@ class _PosAppState extends State<PosApp> {
     ));
   }
 
-  void _openRoster(BuildContext context) {
+  void _openRoster(BuildContext context) =>
+      _ifScreen(context, 'screen.roster', () => _openRosterNow(context));
+
+  void _openRosterNow(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => RosterScreen(
         users: widget.users,
@@ -2996,6 +3034,7 @@ class _PosAppState extends State<PosApp> {
         }
 
         final taps = <String, VoidCallback?>{
+          if (!only) 'table': () => setState(() => _deliveryHome = false),
           'session': () => _openShift(context, session),
           'tabs': () => _openOrders(context, session),
           'misc': () => unawaited(_floorMisc(context, session)),
@@ -3014,6 +3053,9 @@ class _PosAppState extends State<PosApp> {
           formatAmount: PosApp.money,
           guard: mayStart,
           cashierName: widget.auth.signedIn?.name,
+          bulletin: widget.settings.floorBulletinEnabled
+              ? _deliveryBulletin()
+              : null,
           onBack: only ? null : () => setState(() => _deliveryHome = false),
           onOpenType: (t) => unawaited(_openDeliveryType(context, session, t)),
           onResume: (o) => setState(() {
@@ -3022,13 +3064,13 @@ class _PosAppState extends State<PosApp> {
           }),
           actions: [
             for (final a in FloorActionBar.catalog)
-              if (taps.containsKey(a.id))
+              if (taps.containsKey(a.id) && !_access.hidden('floor.${a.id}'))
                 FloorAction(
                   id: a.id,
                   label: tr(context, a.label),
                   icon: a.icon,
                   color: a.color,
-                  onTap: taps[a.id],
+                  onTap: _gated(context, 'floor.${a.id}', taps[a.id]),
                 ),
           ],
         );
@@ -3103,7 +3145,8 @@ class _PosAppState extends State<PosApp> {
           ].where(allowed.contains).toList();
           final VoidCallback? onDelivery = deliveryTypes.isEmpty
               ? null
-              : () => setState(() => _deliveryHome = true);
+              : () => _ifScreen(floorContext, 'screen.delivery',
+                  () => setState(() => _deliveryHome = true));
           return TableFloorScreen(
             // The same drawer the counter carries. The floor is home now, so support,
             // reprints, reports and the shift screen have to be reachable from it.
@@ -3243,30 +3286,18 @@ class _PosAppState extends State<PosApp> {
                 return;
               }
               if (local.isNotEmpty) {
-                Order? chosen;
                 if (local.length == 1) {
-                  chosen = local.first;
-                } else {
-                  final pick = await _pickTableTab(floorContext, local);
-                  if (!floorContext.mounted) return;
-                  if (pick == null) return;
-                  if (pick == 'new') {
-                    if (!allowed.contains(seatAs)) {
-                      ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
-                        content: Text(tr(floorContext,
-                            'This role does not open dine-in orders.')),
-                      ));
-                      return;
-                    }
-                    setState(() {
-                      session.openLinkedTab(t.name);
-                      _onCounter = true;
-                    });
-                    return;
-                  }
-                  chosen = pick as Order;
+                  unawaited(_resumeTab(floorContext, session, local.first));
+                  return;
                 }
-                unawaited(_resumeTab(floorContext, session, chosen));
+                // A split table opens on its split screen, so the waiter sees at
+                // once how many guests it was split for and each one's check.
+                final chosen = local.firstWhere(
+                    (o) => o.uuid == session.current.uuid,
+                    orElse: () => local.first);
+                _pendingSellAction = SellStartAction.splitCheck;
+                await _resumeTab(floorContext, session, chosen);
+                if (!_onCounter) _pendingSellAction = null;
                 return;
               }
               if (!allowed.contains(seatAs)) {
@@ -3357,36 +3388,15 @@ class _PosAppState extends State<PosApp> {
     );
   }
 
-  /// Which bill to resume when more than one sits on the same table, or a new
-  /// check on that table. Null is backing out.
-  Future<Object?> _pickTableTab(BuildContext context, List<Order> tabs) {
-    return showModalBottomSheet<Object>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            for (final o in tabs)
-              ListTile(
-                key: Key('table-tab-${o.uuid}'),
-                title: Text(
-                  o.orderNo ??
-                      '${tr(ctx, 'Tab')} ${o.uuid.substring(0, 6).toUpperCase()}',
-                ),
-                subtitle: Text(
-                  '${PosApp.money(o.total)} · ${o.lines.length} ${tr(ctx, 'item(s)')}',
-                ),
-                onTap: () => Navigator.pop(ctx, o),
-              ),
-            ListTile(
-              key: const Key('table-tab-new'),
-              leading: const Icon(Icons.add),
-              title: Text(tr(ctx, 'New bill on this table')),
-              onTap: () => Navigator.pop(ctx, 'new'),
-            ),
-          ],
-        ),
-      ),
+  /// The delivery station's Bulletin numbers, across every till on the LAN.
+  DeliveryBulletin _deliveryBulletin() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return DeliveryBulletin.from(
+      held: widget.orders.heldAnywhere(),
+      closedToday: widget.orders
+          .recentAnywhere(limit: 2000)
+          .where((o) => !o.createdAt.toLocal().isBefore(today)),
     );
   }
 
@@ -3485,16 +3495,57 @@ class _PosAppState extends State<PosApp> {
     final hidden = widget.settings.floorActionsHidden;
     return [
       for (final a in FloorActionBar.catalog)
-        if (!hidden.contains(a.id))
+        if (!hidden.contains(a.id) && !_access.hidden('floor.${a.id}'))
           FloorAction(
             id: a.id,
             label: tr(context, a.label),
             icon: a.icon,
             color: a.color,
             newWork: const {'quick', 'table', 'delivery'}.contains(a.id),
-            onTap: taps[a.id],
+            onTap: _gated(context, 'floor.${a.id}', taps[a.id]),
           ),
     ];
+  }
+
+  // ── what the signed-in level sees ────────────────────────────────
+
+  /// The signed-in level's rules for every screen and button (Levels screen).
+  AccessPolicy get _access => AccessPolicy(
+        ruleOf: (id) => widget.settings
+            .accessFor(widget.auth.signedIn?.role ?? 'cashier', id),
+        approve: (context) async => await _authorizeManager(context) != null,
+      );
+
+  /// [tap] behind the level's rule for [id]: as is when allowed, after a manager
+  /// PIN when gated.
+  VoidCallback? _gated(BuildContext context, String id, VoidCallback? tap) {
+    if (tap == null || _access.rule(id) == AccessRule.allow) return tap;
+    return () async {
+      if (await _access.allows(context, id) && context.mounted) tap();
+    };
+  }
+
+  /// Whether the level may open the screen [id], saying so when it may not.
+  Future<bool> _screenOk(BuildContext context, String id) async {
+    final access = _access;
+    if (access.hidden(id)) {
+      showToast(context, tr(context, 'Your level cannot open this screen.'),
+          kind: ToastKind.error);
+      return false;
+    }
+    return access.allows(context, id);
+  }
+
+  /// Opens a screen through the level's rule. Straight away when allowed, so
+  /// nothing about an unrestricted till changes.
+  void _ifScreen(BuildContext context, String id, VoidCallback open) {
+    if (_access.rule(id) == AccessRule.allow) {
+      open();
+      return;
+    }
+    unawaited(() async {
+      if (await _screenOk(context, id) && context.mounted) open();
+    }());
   }
   /// The floor's Misc pad (Dinerware's manager Misc screen): every tool that has
   /// no tile on the bottom bar, as pages of big icon buttons. What does not apply
@@ -3551,11 +3602,15 @@ class _PosAppState extends State<PosApp> {
       const IconPadItem('support', 'misc-support', Icons.support_agent,
           'Support & printers', Color(0xFF2980B9)),
     ];
+    items.removeWhere((i) => _access.hidden('fmisc.${i.id}'));
     final pick = await showDialog<String>(
       context: context,
       builder: (_) => IconPad(items: items),
     );
     if (pick == null || !context.mounted) return;
+    if (!await _access.allows(context, 'fmisc.$pick') || !context.mounted) {
+      return;
+    }
     switch (pick) {
       case 'reprint':
         await _reprintLast(context);
@@ -3607,9 +3662,11 @@ class _PosAppState extends State<PosApp> {
           _openReports(context);
         }
       case 'button-log':
-        await Navigator.of(context).push(MaterialPageRoute<void>(
-          builder: (_) => AuditLogScreen(audit: widget.audit),
-        ));
+        _ifScreen(context, 'screen.audit', () {
+          Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => AuditLogScreen(audit: widget.audit),
+          ));
+        });
       case 'store-orders':
         _openStoreOrders(context, session);
       case 'kitchen':
@@ -3848,7 +3905,7 @@ class _PosAppState extends State<PosApp> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(tr(ctx, 'Quit Offline POS?')),
+        title: Text(tr(ctx, 'Quit Dishflow?')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -4600,7 +4657,10 @@ class _PosAppState extends State<PosApp> {
   }
 
   /// The settings hub: one door onto everything a manager configures on the device.
-  void _openSettingsHub(BuildContext context) {
+  void _openSettingsHub(BuildContext context) =>
+      _ifScreen(context, 'screen.settings', () => _openSettingsHubNow(context));
+
+  void _openSettingsHubNow(BuildContext context) {
     void refresh() {
       setState(() {});
       _syncStoreOrderWatchForStation();
@@ -5682,6 +5742,13 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _openShift(BuildContext context, PosSession session,
+      {bool startClose = false, String? startMovement}) async {
+    if (!await _screenOk(context, 'screen.shift') || !context.mounted) return;
+    return _openShiftNow(context, session,
+        startClose: startClose, startMovement: startMovement);
+  }
+
+  Future<void> _openShiftNow(BuildContext context, PosSession session,
       {bool startClose = false, String? startMovement}) {
     // Which tenders count as drawer cash, read from the synced catalogue so the
     // X/Z drawer total reconciles cash and leaves card sales out.
@@ -6143,7 +6210,10 @@ class _PosAppState extends State<PosApp> {
         ],
       )..payments = [const OrderPayment(methodId: 0, amount: 20, label: 'Cash')];
 
-  void _openDiagnostics(BuildContext context) {
+  void _openDiagnostics(BuildContext context) =>
+      _ifScreen(context, 'screen.support', () => _openDiagnosticsNow(context));
+
+  void _openDiagnosticsNow(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => DiagnosticsScreen(
         sync: widget.sync,

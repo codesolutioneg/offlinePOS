@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:offline_pos/domain/delivery_bulletin.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/orders/delivery_home_screen.dart';
 import 'package:offline_pos/features/tables/floor_action_bar.dart';
@@ -86,6 +87,30 @@ void main() {
     await pump(t, onBack: () => back++);
     await t.tap(find.byKey(const Key('delivery-home-back')));
     expect(back, 1);
+  });
+
+  testWidgets('the Bulletin board carries the delivery numbers', (t) async {
+    t.view.physicalSize = const Size(1366, 768);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
+    final a = bag(OrderType.storeDelivery, 'Nadia');
+    await t.pumpWidget(MaterialApp(
+      home: DeliveryHomeScreen(
+        types: const [OrderType.storeDelivery],
+        parked: [a],
+        formatAmount: (v) => v.toStringAsFixed(2),
+        onOpenType: (_) {},
+        onResume: (_) {},
+        bulletin: DeliveryBulletin.from(held: [a], closedToday: const []),
+      ),
+    ));
+    expect(find.byKey(const Key('delivery-bulletin')), findsOneWidget);
+    expect(
+        t.widget<Text>(find.byKey(const Key('bulletin-waiting-value'))).data,
+        '1');
+    expect(
+        t.widget<Text>(find.byKey(const Key('bulletin-no-driver-value'))).data,
+        '1');
   });
 
   testWidgets('carries the station bar', (t) async {

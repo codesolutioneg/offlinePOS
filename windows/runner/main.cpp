@@ -22,7 +22,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // shop is left with a message box and no way to sell.
   HANDLE instance_lock = ::CreateMutexW(nullptr, TRUE, L"offline_pos_single_instance");
   if (instance_lock != nullptr && ::GetLastError() == ERROR_ALREADY_EXISTS) {
-    HWND running = ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", L"offline_pos");
+    HWND running = ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", L"Dishflow");
+    if (!running) {
+      running = ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", L"offline_pos");
+    }
     if (running) {
       // Already selling, just behind something. Bring it forward.
       ::ShowWindow(running, SW_RESTORE);
@@ -36,7 +39,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
           L"The till is already running on this computer, but it is not "
           L"responding.\r\n\r\nRestart the computer, then open the till again.\r\n"
           L"If it still does not open, call support.",
-          L"offline_pos", MB_OK | MB_ICONWARNING);
+          L"Dishflow", MB_OK | MB_ICONWARNING);
     }
     return EXIT_SUCCESS;
   }
@@ -49,13 +52,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
+  // A till runs full screen with no title bar, so nothing but the app's own Quit
+  // closes it. `--windowed` brings the normal frame back for support work.
+  bool windowed = false;
+  for (const auto& arg : command_line_arguments) {
+    if (arg == "--windowed") windowed = true;
+  }
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
   FlutterWindow window(project);
+  window.SetKiosk(!windowed && !::IsDebuggerPresent());
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"offline_pos", origin, size)) {
+  if (!window.Create(L"Dishflow", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

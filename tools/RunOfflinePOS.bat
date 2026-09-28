@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Offline POS
+title Dishflow
 cd /d "%~dp0"
 
 :: First-run: Visual C++ runtime (fixes VCRUNTIME140_1.dll missing)

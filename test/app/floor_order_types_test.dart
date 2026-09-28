@@ -169,10 +169,10 @@ void main() {
       await t.pumpWidget(app());
       await signIn(t);
 
-      // Say what is being seated, then seat it.
-      await t.tap(find.byKey(const Key('seat-as-togo')));
-      await t.pumpAndSettle();
+      // Seat the table, then say on the order what is being seated.
       await tapTable(t);
+      await t.tap(find.byKey(const Key('order-type-togo')));
+      await t.pumpAndSettle();
 
       expect(find.byType(SellScreen), findsOneWidget);
       final chip = t.widget<SelectPill>(find.byKey(const Key('order-type-togo')));
@@ -282,9 +282,9 @@ void main() {
       await t.pumpWidget(app());
       await signIn(t);
 
-      await t.tap(find.byKey(const Key('seat-as-togo')));
-      await t.pumpAndSettle();
       await tapTable(t);
+      await t.tap(find.byKey(const Key('order-type-togo')));
+      await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('product-10')));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('hold')));

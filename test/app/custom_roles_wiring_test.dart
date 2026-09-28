@@ -156,7 +156,8 @@ void main() {
     await t.pumpAndSettle();
     await typeRoleName(t, 'Supervisor');
 
-    // The new role gets its own block of switches, separate from the cashier's.
+    // The new role opens on its own page of switches, separate from the cashier's.
+    expect(find.byKey(const Key('level-page-Supervisor')), findsOneWidget);
     await t.tap(find.byKey(const Key('perm-Supervisor-void_line')));
     await t.pumpAndSettle();
 

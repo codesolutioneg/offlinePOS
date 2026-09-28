@@ -203,6 +203,7 @@ void main() {
     expect(find.byType(TableFloorScreen), findsNothing);
     expect(find.byKey(const Key('delivery-home-back')), findsNothing,
         reason: 'the role has no floor to go back to');
+    expect(find.byKey(const Key('delivery-action-table')), findsNothing);
     expect(find.byKey(const Key('delivery-home-storeDelivery')), findsOneWidget);
     expect(orders.held(), isEmpty);
   });

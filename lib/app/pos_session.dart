@@ -445,6 +445,8 @@ class PosSession {
     for (final line in current.lines) {
       _applyTax(line);
     }
+    // Covers belong to a bill eaten at the table.
+    if (type != OrderType.dineIn) current.guestCount = null;
     if (!type.isDelivery) {
       // The customer survives the switch: every order type can name one, and the
       // till shows and clears it on all of them. Only what is delivery's alone goes,
@@ -511,9 +513,24 @@ class PosSession {
 
   /// Stamp that the check went to the printer, so the floor can colour the table
   /// as billed while it is still open.
-  void markBillPrinted() {
-    current.billPrintedAt = DateTime.now().toUtc();
-    orders.save(current);
+  void markBillPrinted([Order? order]) {
+    final o = (order == null || order.uuid == current.uuid)
+        ? current
+        : (orders.byUuid(order.uuid) ?? order);
+    o.billPrintedAt = DateTime.now().toUtc();
+    orders.save(o);
+  }
+
+  /// Every open check on the current order's table, the current one first: the
+  /// checks a split made, plus any other bill parked there on this till.
+  List<Order> tableChecks() {
+    final label = current.tableLabel;
+    if (label == null) return [current];
+    return [
+      current,
+      for (final o in orders.held())
+        if (o.tableLabel == label && o.uuid != current.uuid) o,
+    ];
   }
 
   /// Open another check on a table that already has one, without folding the
@@ -887,6 +904,15 @@ class PosSession {
     orders.save(current);
   }
 
+  /// Put the whole line on guest [seat] (0 or less clears it), every unit with it:
+  /// the cart's Seat (+)/(-) steps a line from guest to guest.
+  void moveLineToSeat(String lineUuid, int seat) {
+    final i = current.lines.indexWhere((l) => l.uuid == lineUuid);
+    if (i < 0) return;
+    current.lines[i].seat = seat > 0 ? seat : null;
+    orders.save(current);
+  }
+
   /// Ring [extra] more of a line the kitchen already has. The sent line keeps what
   /// the kitchen was told; the extra goes on an unsent copy (same item, choices,
   /// price, note, discount, seat) right under it, so the next Send fires only the
@@ -1033,6 +1059,169 @@ class PosSession {
     }
     orders.save(current);
   }
+
+  /// Lay the table's bills out as [checks] (each a list of line slices), one check
+  /// per non-empty entry. [among] names the checks already open on the table (the
+  /// current order is always one of them); they take the entries in order, the
+  /// current order first, and each further entry becomes a new held order linked
+  /// to the table's tabs, so the floor offers it like any second tab. An existing
+  /// check left with nothing is closed. A line cut across checks becomes one line
+  /// per slice (a shared item carries a fractional quantity); lines no entry names
+  /// stay where they were. Returns the checks in entry order.
+  List<Order> splitIntoChecks(
+      List<List<({String line, double quantity})>> checks,
+      {List<Order> among = const []}) {
+    final order = current;
+    final existing = [
+      order,
+      for (final o in among)
+        if (o.uuid != order.uuid) orders.byUuid(o.uuid) ?? o,
+    ];
+    final byUuid = {
+      for (final o in existing)
+        for (final l in o.lines) l.uuid: l,
+    };
+    final slices = <String, int>{};
+    for (final c in checks) {
+      for (final s in c) {
+        slices[s.line] = (slices[s.line] ?? 0) + 1;
+      }
+    }
+    final groups = <List<OrderLine>>[];
+    for (final c in checks) {
+      final g = <OrderLine>[];
+      for (final s in c) {
+        final src = byUuid[s.line];
+        if (src == null || s.quantity <= 0) continue;
+        g.add(slices[s.line] == 1 && (s.quantity - src.quantity).abs() < 1e-9
+            ? src
+            : _copyLine(src, s.quantity));
+      }
+      if (g.isNotEmpty) groups.add(g);
+    }
+    if (groups.isEmpty || (existing.length == 1 && groups.length < 2)) {
+      return existing;
+    }
+    // Lines are about to cross between bills, so a whole-order discount that is
+    // not the same on every bill moves down onto its own lines first.
+    if (existing.map((o) => o.discountPercent).toSet().length > 1) {
+      for (final o in existing) {
+        _flattenOrderDiscount(o);
+      }
+    }
+    final siblings = <Order>[
+      for (final o in existing)
+        for (final id in o.linkedOrderUuids)
+          if (!existing.any((e) => e.uuid == id)) ?orders.byUuid(id),
+    ];
+    final untouched = {
+      for (final o in existing)
+        o.uuid: o.lines.where((l) => !slices.containsKey(l.uuid)).toList(),
+    };
+    final made = <Order>[];
+    for (var i = 0; i < existing.length; i++) {
+      final o = existing[i];
+      final keep = untouched[o.uuid]!;
+      if (i >= groups.length && keep.isEmpty) {
+        _detachFromSiblings(o);
+        orders.delete(o.uuid);
+        for (final e in [...existing, ...siblings]) {
+          e.linkedOrderUuids.remove(o.uuid);
+        }
+        continue;
+      }
+      o.lines
+        ..clear()
+        ..addAll(i < groups.length ? groups[i] : const [])
+        ..addAll(keep);
+      _foldShares(o);
+      orders.save(o);
+      made.add(o);
+    }
+    for (final g in groups.skip(existing.length)) {
+      final check = Order(
+        deviceId: deviceId,
+        cashierId: cashierId,
+        type: order.type,
+        tableLabel: order.tableLabel,
+        partnerId: order.partnerId,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        discountPercent: order.discountPercent,
+        discountReason: order.discountReason,
+        serviceChargePercent: order.serviceChargePercent,
+        lines: g,
+      )..state = OrderState.held;
+      _stampOrderNo(check);
+      orders.save(check);
+      made.add(check);
+    }
+    for (final a in made) {
+      for (final b in [...made, ...siblings]) {
+        _linkPair(a, b);
+      }
+    }
+    audit.record(cashierId, 'order.split_check',
+        detail: '${order.uuid}|${made.length} checks');
+    return made;
+  }
+
+  /// Join the shares of one item that ended up on the same check back into one
+  /// line (half a pasta and its other half make the pasta again). Only a share
+  /// (a fractional quantity) is joined; whole lines keep their own rows.
+  void _foldShares(Order o) {
+    for (var i = 0; i < o.lines.length; i++) {
+      final a = o.lines[i];
+      for (var j = o.lines.length - 1; j > i; j--) {
+        final b = o.lines[j];
+        final share = a.quantity != a.quantity.roundToDouble() ||
+            b.quantity != b.quantity.roundToDouble();
+        if (!share ||
+            b.productId != a.productId ||
+            b.name != a.name ||
+            b.unitPrice != a.unitPrice ||
+            b.taxRate != a.taxRate ||
+            b.note != a.note ||
+            b.discountPercent != a.discountPercent ||
+            b.seat != a.seat ||
+            b.printedToKitchen != a.printedToKitchen ||
+            !_sameModifiers(a.modifiers, b.modifiers)) {
+          continue;
+        }
+        a.quantity += b.quantity;
+        if ((a.quantity - a.quantity.roundToDouble()).abs() < 1e-9) {
+          a.quantity = a.quantity.roundToDouble();
+        }
+        o.lines.removeAt(j);
+      }
+    }
+  }
+
+  OrderLine _copyLine(OrderLine src, double quantity) => OrderLine(
+        productId: src.productId,
+        odooProductId: src.odooProductId,
+        name: src.name,
+        quantity: quantity,
+        unitPrice: src.unitPrice,
+        categoryId: src.categoryId,
+        taxRate: src.taxRate,
+        baseTaxRate: src.baseTaxRate,
+        note: src.note,
+        discountPercent: src.discountPercent,
+        printedToKitchen: src.printedToKitchen,
+        firedStations: List.of(src.firedStations),
+        fireAt: src.fireAt,
+        seat: src.seat,
+        modifiers: [
+          for (final m in src.modifiers)
+            OrderModifier(
+                modifierId: m.modifierId,
+                productId: m.productId,
+                name: m.name,
+                quantity: m.quantity,
+                unitPrice: m.unitPrice),
+        ],
+      );
 
   /// What a check made of [lines] is charged. [payCheck] books exactly this, so a
   /// tender sheet asks for this figure rather than re-deriving part of it and coming

@@ -216,6 +216,9 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   // about the shop, so the 86 board is shared the same way a parked tab is.
   settings.publish =
       lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null;
+  // Staff and their levels, so an account set up on one till signs in on all.
+  users.publish =
+      lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null;
 
   // Senders are registered once the device is enrolled and authenticated. Until
   // then the outbox simply accumulates, which is the correct offline behaviour:

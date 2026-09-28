@@ -12,13 +12,30 @@ typedef BulletinRow = ({String id, String label, IconData icon, Color color});
 class FloorBulletinPanel extends StatelessWidget {
   const FloorBulletinPanel({
     super.key,
-    required this.bulletin,
+    required FloorBulletin this.bulletin,
     required this.formatAmount,
     this.hidden = const {},
-  });
+  })  : customRows = null,
+        customValues = const {};
 
-  final FloorBulletin bulletin;
+  /// The same board carrying other rows (the delivery station's), with each
+  /// row's value already formatted.
+  const FloorBulletinPanel.custom({
+    super.key,
+    required List<BulletinRow> rows,
+    required Map<String, String> values,
+    this.hidden = const {},
+  })  : bulletin = null,
+        formatAmount = _noFormat,
+        customRows = rows,
+        customValues = values;
+
+  static String _noFormat(double v) => '$v';
+
+  final FloorBulletin? bulletin;
   final String Function(double) formatAmount;
+  final List<BulletinRow>? customRows;
+  final Map<String, String> customValues;
 
   /// Row ids the shop switched off in settings.
   final Set<String> hidden;
@@ -91,6 +108,7 @@ class FloorBulletinPanel extends StatelessWidget {
 
   String _value(String id) {
     final b = bulletin;
+    if (b == null) return customValues[id] ?? '';
     return switch (id) {
       'open' => '${b.openTables}',
       'free' => '${b.freeTables} / ${b.tables}',
@@ -108,7 +126,8 @@ class FloorBulletinPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shown = rows.where((r) => !hidden.contains(r.id)).toList();
+    final shown =
+        (customRows ?? rows).where((r) => !hidden.contains(r.id)).toList();
 
     // The board takes only the height its rows need, with the Dishflow mark right
     // under it; a long board stops short of the mark and scrolls instead.

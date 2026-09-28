@@ -138,8 +138,10 @@ void main() {
     expect(t.widget<InkWell>(tile('send')).onTap, isNull,
         reason: 'no kitchen sender wired in this test');
 
-    // The inline + on the sent row adds to the same waiting copy.
-    await t.tap(find.byKey(Key('line-more-${sent.uuid}')));
+    // Qty (+) on the sent row adds to the same waiting copy.
+    await t.tap(find.byKey(Key('line-${sent.uuid}')));
+    await t.pump();
+    await t.tap(find.byKey(const Key('cart-qty-plus')));
     await t.pumpAndSettle();
     expect(session.current.lines, hasLength(2));
     expect(extra.single.quantity, 3);
