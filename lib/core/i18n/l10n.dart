@@ -414,6 +414,9 @@ const Map<String, String> _ar = {
           'الآن.',
   'This table is open on another device. Settle it there.':
       'هذه الطاولة مفتوحة على جهاز آخر. أكمل الحساب هناك.',
+  'This delivery is open on another device. Settle it there.':
+      'طلب التوصيل مفتوح على جهاز آخر. أكمل الحساب هناك.',
+  'Open on another device': 'مفتوح على جهاز آخر',
   'A shop key is needed before this device can share.':
       'يلزم وجود مفتاح للمتجر قبل أن يتمكن هذا الجهاز من المشاركة.',
   'Saved. This device is paired on it now.':
@@ -647,6 +650,10 @@ const Map<String, String> _ar = {
   'Off the clock': 'خارج الدوام',
   'Clock in': 'تسجيل حضور',
   'Clock out': 'تسجيل انصراف',
+  'Staff clock in / out': 'حضور وانصراف الموظفين',
+  'Clocked in': 'تم تسجيل الحضور',
+  'Clocked out': 'تم تسجيل الانصراف',
+  'Close': 'إغلاق',
   'Enter PIN to clock in': 'أدخل الرمز السري لتسجيل الحضور',
   'Enter PIN to clock out': 'أدخل الرمز السري لتسجيل الانصراف',
   // status colours / dine-in visuals
@@ -764,6 +771,7 @@ const Map<String, String> _ar = {
   'Shift': 'الوردية',
   'Receipt sent to printer': 'أُرسل الإيصال للطابعة',
   'X report sent to printer': 'أُرسل تقرير X للطابعة',
+  'Z report sent to printer': 'أُرسل تقرير Z للطابعة',
   'Search ref, table or customer': 'ابحث بالرقم أو الطاولة أو العميل',
   'Synced only': 'المتزامنة فقط',
   // settings hub groups

@@ -121,6 +121,12 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     _restaurantId = s?.odooRestaurantId;
     _warehouseId = s?.odooWarehouseId;
     _choices = s?.odooSiteChoices ?? const OdooSiteChoices();
+    // Without the branch addon the picker holds companies, and a company is saved
+    // as the company alone.
+    _branchId ??= _choices.branches
+        .where((o) => o.isCompany && o.id == s?.odooCompanyId)
+        .firstOrNull
+        ?.id;
     _discountProduct =
         TextEditingController(text: s?.odooDiscountProductId?.toString() ?? '');
     _localProduct =
@@ -207,7 +213,6 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
     // Odoo decide" is how a shop says it has only one of that thing.
     final s = widget.settings;
     if (s != null) {
-      s.odooBranchId = _branchId;
       OdooSiteOption? branch;
       if (_branchId != null) {
         for (final o in _choices.branches) {
@@ -217,6 +222,7 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
           }
         }
       }
+      s.odooBranchId = (branch?.isCompany ?? false) ? null : _branchId;
       if (branch?.companyId != null) s.odooCompanyId = branch!.companyId;
       if (_warehouseId == null && branch?.warehouseId != null) {
         _warehouseId = branch!.warehouseId;

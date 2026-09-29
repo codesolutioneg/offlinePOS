@@ -313,11 +313,15 @@ class _ShiftScreenState extends State<ShiftScreen> {
                   if (!mounted) return;
                   if (f != null) {
                     widget.store.openShift(openingFloat: f, cashierId: widget.cashierId);
-                    widget.onShiftOpened?.call();
                     // Land on the floor right after open — that is where service starts.
+                    // Left before announcing: whatever the open asks next (who is
+                    // working) is a dialog over the floor, and leaving after it
+                    // would close that dialog instead of this screen.
                     if (widget.onNavigateToFloor != null) {
                       widget.onNavigateToFloor!();
+                      widget.onShiftOpened?.call();
                     } else {
+                      widget.onShiftOpened?.call();
                       _refresh();
                     }
                   }
@@ -359,8 +363,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
                 key: Key('reprint-z-${s.id}'),
                 tooltip: tr(context, 'Print Z'),
                 icon: const Icon(Icons.print),
-                onPressed: () => widget.onPrintReport!(
-                    'Z Report', _rows(sum, withVariance: true)),
+                onPressed: () => _sendReport('Z Report',
+                    _rows(sum, withVariance: true), 'Z report sent to printer'),
               ),
       ),
     );
@@ -760,8 +764,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
               key: const Key('print-z'),
               icon: const Icon(Icons.print),
               label: Text(tr(context, 'Print')),
-              onPressed: () =>
-                  widget.onPrintReport!('Z Report', _rows(sum, withVariance: true)),
+              onPressed: () => _sendReport('Z Report',
+                  _rows(sum, withVariance: true), 'Z report sent to printer'),
             ),
           FilledButton(
             key: const Key('session-done-ok'),
@@ -1020,11 +1024,28 @@ class _ShiftScreenState extends State<ShiftScreen> {
     final s = _shift;
     if (s == null || widget.onPrintReport == null) return;
     final sum = widget.store.summary(s, cashMethodIds: widget.cashMethodIds);
-    await widget.onPrintReport!('X Report', _rows(sum));
-    if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(tr(context, 'X report sent to printer'))));
+    await _sendReport('X Report', _rows(sum), 'X report sent to printer');
+  }
+
+  /// Prints a report and says what became of it: a till with no receipt printer,
+  /// or one that is switched off, must not look as if the paper came out.
+  Future<void> _sendReport(
+      String title, List<(String, String)> rows, String sent) async {
+    String said;
+    try {
+      await widget.onPrintReport!(title, rows);
+      said = sent;
+    } catch (e) {
+      final raw = '$e';
+      said = raw.contains('No receipt printer')
+          ? 'No receipt printer configured'
+          : raw.contains('Printer offline')
+              ? 'Printer offline — job held'
+              : raw;
     }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(tr(context, said))));
   }
 
   List<(String, String)> _cashierRows(ShiftSummary sum) => [
@@ -1059,11 +1080,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
       ),
     );
     if (who == null || !mounted) return;
-    await widget.onPrintReport!(
-        'Cashier flash - $who', _cashierRows(byCashier[who]!));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(tr(context, 'Cashier flash sent to printer'))));
-    }
+    await _sendReport('Cashier flash - $who', _cashierRows(byCashier[who]!),
+        'Cashier flash sent to printer');
   }
 }

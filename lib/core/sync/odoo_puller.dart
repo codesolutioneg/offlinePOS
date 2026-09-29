@@ -923,7 +923,10 @@ class OdooPuller {
     } catch (_) {
       // Fall through to companies when the addon is not installed.
     }
-    return _siteOptions('res.company');
+    return [
+      for (final c in await _siteOptions('res.company'))
+        OdooSiteOption(id: c.id, name: c.name, companyId: c.id, isCompany: true),
+    ];
   }
 
   String _branchLabel(Map<String, dynamic> r) {

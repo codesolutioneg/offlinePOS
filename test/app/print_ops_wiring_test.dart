@@ -30,6 +30,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 /// Nothing answers a sweep, so every slip lands in the spool instead of on paper,
 /// which is how a test reads what the printer would have produced.
@@ -61,6 +62,13 @@ class _Paper implements PrinterTransport {
 
   @override
   Future<void> send(Uint8List bytes) async => jobs.add(bytes);
+}
+
+/// A printer that is switched off: the connection is refused.
+class _SwitchedOff implements PrinterTransport {
+  @override
+  Future<void> send(Uint8List bytes) async =>
+      throw PrinterUnavailable('connection refused');
 }
 
 /// Printers do not answer a reverse lookup here, and a real one would put a DNS
@@ -119,6 +127,7 @@ void main() {
     outboxStore = SqliteOutboxStore(db);
     audit = AuditLog(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     spool = MemorySpoolStore();
     printers = PrinterRegistry(discovery: _NoPrinters());
     CatalogueStore(db).replaceAll(
@@ -238,7 +247,7 @@ void main() {
     await signIn(t);
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(Key('method-$method')));
     await t.pumpAndSettle();
@@ -369,7 +378,11 @@ void main() {
       printers = PrinterRegistry(
         discovery: _Subnet({'10.0.0.9'}),
         identify: _anonymous,
-        open: (host, port) => papers.putIfAbsent(host, () => _Paper()),
+        // The till still tries the address it was given when the probe fails, so
+        // the dead one has to refuse the send too.
+        open: (host, port) => host == '10.0.0.5'
+            ? _SwitchedOff()
+            : papers.putIfAbsent(host, () => _Paper()),
       );
       printers.remember('receipt', host: '10.0.0.5', backup: 'spare');
       printers.remember('spare', host: '10.0.0.9');
@@ -393,7 +406,9 @@ void main() {
       printers = PrinterRegistry(
         discovery: _Subnet({'10.0.0.9'}),
         identify: _anonymous,
-        open: (host, port) => papers.putIfAbsent(host, () => _Paper()),
+        open: (host, port) => host == '10.0.0.5'
+            ? _SwitchedOff()
+            : papers.putIfAbsent(host, () => _Paper()),
       );
       printers.remember('receipt', host: '10.0.0.5');
       printers.remember('spare', host: '10.0.0.9');

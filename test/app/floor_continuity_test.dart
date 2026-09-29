@@ -131,10 +131,10 @@ void main() {
   }
 
   /// Open a counter and come straight back, which is what every order does. The
-  /// to-go button is used because it needs no table and so cannot itself change
-  /// which room is showing.
+  /// bar's Table button is used because it needs no table and so cannot itself
+  /// change which room is showing.
   Future<void> counterRoundTrip(WidgetTester t) async {
-    await t.tap(find.byKey(const Key('floor-to-go')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
     await t.tap(find.byKey(const Key('new-order')));
@@ -165,26 +165,13 @@ void main() {
 
       await t.tap(find.byKey(const Key('section-terrace')));
       await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('sign-out')));
+      await t.tap(find.byKey(const Key('floor-action-end')));
       await t.pumpAndSettle();
       await signIn(t);
 
       // The room belongs to the waiter who chose it, not to the next one.
       expect(find.byKey(Key('table-tile-${mainTable.id}')), findsOneWidget);
       expect(find.byKey(Key('table-tile-${terraceTable.id}')), findsNothing);
-    });
-
-    testWidgets('and so does the seating the waiter chose', (t) async {
-      await t.pumpWidget(app());
-      await signIn(t);
-
-      await t.tap(find.byKey(const Key('seat-as-togo')));
-      await t.pumpAndSettle();
-
-      await counterRoundTrip(t);
-
-      final chip = t.widget<SelectPill>(find.byKey(const Key('seat-as-togo')));
-      expect(chip.selected, isTrue);
     });
   });
 
@@ -220,7 +207,7 @@ void main() {
       await parkATab(t);
 
       // No waiting anything out: the button row is live the moment the floor is up.
-      await t.tap(find.byKey(const Key('floor-to-go')));
+      await t.tap(find.byKey(const Key('floor-action-table')));
       await t.pumpAndSettle();
       expect(find.byType(SellScreen), findsOneWidget);
     });

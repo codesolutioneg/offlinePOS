@@ -147,6 +147,11 @@ void main() {
     draftOnTheTill(type: OrderType.storeDelivery);
     await t.pumpWidget(app());
     await signIn(t);
+    // A delivery with nobody on it opens its details first; not what this is about.
+    if (find.byKey(const Key('delivery-cost')).evaluate().isNotEmpty) {
+      await t.tap(find.text('Cancel'));
+      await t.pumpAndSettle();
+    }
 
     for (final name in [
       'order-type-storedelivery',

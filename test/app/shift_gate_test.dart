@@ -31,6 +31,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -100,7 +101,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       config: const TillConfig(),
@@ -212,16 +213,15 @@ void main() {
     await t.pumpAndSettle();
     expect(shifts.currentOpenShift(), isNotNull);
 
-    // Back to the floor, which is open for business without a restart.
-    await t.pageBack();
-    await t.pumpAndSettle();
+    // Straight back on the floor, which is open for business without a restart.
+    expect(find.byType(ShiftScreen), findsNothing);
     expect(find.byKey(const Key('floor-no-shift')), findsNothing);
 
     await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.text('Margherita'));
     await t.pumpAndSettle();
-    expect(find.byKey(const Key('pay')), findsOneWidget);
+    expect(findPay(), findsOneWidget);
   });
 
   testWidgets('a closed drawer does not lock the cashier out of a reprint',
@@ -263,7 +263,7 @@ void main() {
     expect(find.text('No shift is open'), findsOneWidget);
     // Nothing to ring up with: no grid, no cart, no Pay.
     expect(find.text('Margherita'), findsNothing);
-    expect(find.byKey(const Key('pay')), findsNothing);
+    expect(findPay(), findsNothing);
     expect(find.byKey(const Key('search')), findsNothing);
 
     // And the way out of it is the same one the floor offers.

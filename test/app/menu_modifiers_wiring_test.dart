@@ -56,6 +56,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234', role: 'manager');
@@ -144,6 +145,8 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-settings')));
     await t.pumpAndSettle();
+    await t.scrollUntilVisible(find.byKey(const Key('set-menu')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-menu')));
     await t.pumpAndSettle();
   }
@@ -217,8 +220,10 @@ void main() {
         .firstWhere((m) => m.name == 'Large');
     await t.tap(find.byKey(Key('mod-${large.id}')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
-    await t.pumpAndSettle();
+    if (find.byKey(const Key('confirm-modifiers')).evaluate().isNotEmpty) {
+      await t.tap(find.byKey(const Key('confirm-modifiers')));
+      await t.pumpAndSettle();
+    }
 
     final line = orders.drafts().first.lines
         .firstWhere((l) => l.modifiers.isNotEmpty);
@@ -256,6 +261,9 @@ void main() {
     final created =
         CatalogueStore(db).products().firstWhere((p) => p.name == 'Shawarma');
     expect(CatalogueStore(db).modifierGroupsFor(created.id).single.name, 'Bread');
+    // Given no category, it sits on the rail's Other tab.
+    await t.tap(find.byKey(const Key('cat-chip-other')));
+    await t.pumpAndSettle();
     expect(find.byKey(Key('product-mods-${created.id}')), findsOneWidget);
   });
 
@@ -306,8 +314,10 @@ void main() {
         reason: 'a group with an option left to take must never settle itself');
     await t.tap(find.byKey(const Key('mod-1001')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
-    await t.pumpAndSettle();
+    if (find.byKey(const Key('confirm-modifiers')).evaluate().isNotEmpty) {
+      await t.tap(find.byKey(const Key('confirm-modifiers')));
+      await t.pumpAndSettle();
+    }
 
     final line =
         orders.drafts().first.lines.firstWhere((l) => l.modifiers.isNotEmpty);

@@ -56,6 +56,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     users = UserStore(db);
     audit = AuditLog(db);
     await AuthService(users: users, hasher: FakePinHasher(), audit: audit)
@@ -135,6 +136,8 @@ void main() {
 
   Future<void> openRoles(WidgetTester t) async {
     await openSettingsHub(t);
+    await t.scrollUntilVisible(find.byKey(const Key('set-roles')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-roles')));
     await t.pumpAndSettle();
   }
@@ -175,6 +178,8 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
     await openSettingsHub(t);
+    await t.scrollUntilVisible(find.byKey(const Key('set-staff')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-staff')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('add-staff')));

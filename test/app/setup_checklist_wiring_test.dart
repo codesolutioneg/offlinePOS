@@ -59,6 +59,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     users = UserStore(db);
     audit = AuditLog(db);
     printers = PrinterRegistry(discovery: _NoPrinters());
@@ -80,9 +81,11 @@ void main() {
     wizards.dismiss(WizardId.firstSale, 'sara');
   }
 
-  Widget app() {
+  Widget app({String? setupPin}) {
     final outbox = Outbox(store: SqliteOutboxStore(db), senders: {});
     return PosApp(
+      // Handed over the way boot hands it; without it the app mints a fresh one.
+      provisioningPin: setupPin,
       auth: authService(),
       users: users,
       catalogue: CatalogueStore(db),
@@ -169,7 +172,9 @@ void main() {
     await onlyTheSetupAccount();
     draftOnTheTill(BootstrapCashier.id);
 
-    await t.pumpWidget(app());
+    // The setup notice above the keypad pushes it past a short window.
+    tallWindow(t);
+    await t.pumpWidget(app(setupPin: '1234'));
     await signIn(t, BootstrapCashier.id);
 
     expect(find.byKey(const Key('wizard-progress')), findsOneWidget,

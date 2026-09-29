@@ -30,6 +30,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -179,7 +180,7 @@ void main() {
     await boot(t);
     await seatAndRing(t);
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-1')));
     await t.pumpAndSettle();

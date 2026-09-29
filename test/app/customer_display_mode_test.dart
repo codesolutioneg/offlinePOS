@@ -62,6 +62,7 @@ void main() {
     // sells opens the drawer first.
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     CatalogueStore(db).replaceAll(
       categories: const [Category(id: 1, name: 'Food')],

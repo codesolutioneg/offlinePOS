@@ -34,6 +34,7 @@ import 'package:offline_pos/features/settings/server_settings_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -66,6 +67,7 @@ void main() {
     shifts.openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     outboxStore = SqliteOutboxStore(db);
     audit = AuditLog(db);
     calls = [];
@@ -98,6 +100,8 @@ void main() {
     // The three ids are picked off Odoo's own lists now, so the lists have to be
     // there to pick from.
     final site = switch ((request['params'] as Map?)?['model']) {
+      // No branch addon, so the picker lists companies.
+      'branch.simple' => <Map<String, Object>>[],
       'res.company' => [
           {'id': 3, 'name': 'Downtown'}
         ],
@@ -122,14 +126,8 @@ void main() {
       post: fakeOdoo,
       onOrderBooked: (uuid, [id, name]) => orders.markSynced(uuid, id),
     );
-    return PosApp(
-      auth: AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit),
-      users: UserStore(db),
-      catalogue: CatalogueStore(db),
-      orders: orders,
-      outbox: outbox,
-      audit: audit,
-      sync: SyncService(
+    late final SyncService sync;
+    sync = SyncService(
         outbox: outbox,
         catalogue: CatalogueStore(db),
         outboxStore: outboxStore,
@@ -150,7 +148,28 @@ void main() {
           batchUuid: () => shifts.latestShift()?.uuid,
           onOrderBooked: (uuid, [id, name]) => orders.markSynced(uuid, id),
         ).run,
-      ),
+        // Sync now finishes the shift the way Close session does: sales leave
+        // only as the shift's one order.
+        closedShiftRetry: () async {
+          final shiftOrders = orders.awaitingSync();
+          return sync.flushClosedShift(
+            orderUuids: {for (final o in shiftOrders) o.uuid},
+            enqueueOrders: () async {
+              for (final o in shiftOrders) {
+                await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
+              }
+            },
+          );
+        },
+      );
+    return PosApp(
+      auth: AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit),
+      users: UserStore(db),
+      catalogue: CatalogueStore(db),
+      orders: orders,
+      outbox: outbox,
+      audit: audit,
+      sync: sync,
       outboxStore: outboxStore,
       printers: PrinterRegistry(discovery: _NoPrinters()),
       wizards: WizardStore(db),
@@ -190,6 +209,8 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-settings')));
     await t.pumpAndSettle();
+    await t.scrollUntilVisible(find.byKey(const Key('set-server')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-server')));
     await t.pumpAndSettle();
     expect(find.byType(ServerSettingsScreen), findsOneWidget);
@@ -249,7 +270,7 @@ void main() {
       ];
 
   Future<void> payTheOrder(WidgetTester t, {String? tip}) async {
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     if (tip != null) {
       await t.enterText(find.byKey(const Key('tip')), tip);
@@ -269,13 +290,18 @@ void main() {
         announce: false,
       );
       await signIn(t);
-      await setTheShopUp(t);
-      // The charge for the drive, typed where a cashier types it.
-      await t.tap(find.byKey(const Key('customer')));
-      await t.pumpAndSettle();
+      // The charge for the drive, typed where a cashier types it: a delivery with
+      // nobody on it opens its details as soon as it is back on the counter.
+      expect(find.byKey(const Key('delivery-cost')), findsOneWidget);
+      // A store delivery goes to someone, so it will not save without who and where.
+      await t.enterText(find.byKey(const Key('delivery-name')), 'Nadia');
+      await t.enterText(find.byKey(const Key('delivery-phone')), '0100000000');
+      await t.enterText(find.byKey(const Key('delivery-address')), 'Nasr City');
       await t.enterText(find.byKey(const Key('delivery-cost')), '25');
       await t.tap(find.text('Save'));
       await t.pumpAndSettle();
+      expect(find.byKey(const Key('delivery-cost')), findsNothing);
+      await setTheShopUp(t);
       await payTheOrder(t, tip: '10');
 
       expect(await outbox.drain(), greaterThan(0));
@@ -340,7 +366,7 @@ void main() {
       await t.pumpAndSettle();
     }
 
-    testWidgets('off by default: each sale goes out as its own order', (t) async {
+    testWidgets('off by default: no sale goes out one by one', (t) async {
       twoSalesQueued();
       await signIn(t);
       await setTheShopUp(t);
@@ -348,8 +374,9 @@ void main() {
           reason: 'it must not be on until Odoo can take a batch');
       await syncNow(t);
 
-      expect(booked(), hasLength(2));
-      expect(booked().every((p) => p['batch'] == null), isTrue);
+      expect(booked(), isEmpty,
+          reason: 'sales only reach Odoo as the shift, never ticket by ticket');
+      expect(orders.awaitingSync(), hasLength(2));
     });
 
     testWidgets('turned on, the whole shift reaches Odoo as one payload', (t) async {

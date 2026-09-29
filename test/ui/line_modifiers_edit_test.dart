@@ -78,8 +78,12 @@ void main() {
       await t.tap(find.byKey(Key('mod-$option')));
       await t.pumpAndSettle();
     }
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
-    await t.pumpAndSettle();
+    // A single choice adds the line by itself when ringing; confirm only if the
+    // sheet is still up.
+    if (find.byKey(const Key('confirm-modifiers')).evaluate().isNotEmpty) {
+      await t.tap(find.byKey(const Key('confirm-modifiers')));
+      await t.pumpAndSettle();
+    }
   }
 
   /// Open the per-line action sheet for [uuid] by tapping its row in the cart.

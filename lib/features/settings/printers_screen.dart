@@ -196,11 +196,18 @@ class _PrintersScreenState extends State<PrintersScreen> {
     // Only printers that actually exist, unlike the routing chips below: a category
     // can be pointed at a station before its printer is bought, but a copy sent to a
     // name nothing answers to just prints a second slip at the till.
+    final existing = {for (final printer in widget.printers.printers) printer.name};
+    // Whatever is already chosen stays pickable, even if that printer was removed
+    // since, so the setting never disappears out from under a manager. Each list
+    // keeps only its own choice: the delivery printer's default name is not a
+    // printer to send the pass copy to.
     final configured = <String>{
-      for (final printer in widget.printers.printers) printer.name,
-      // Whatever is already chosen stays pickable, even if that printer was removed
-      // since, so the setting never disappears out from under a manager.
+      ...existing,
       if (subStation.isNotEmpty) subStation,
+    }.toList()
+      ..sort();
+    final deliveryChoices = <String>{
+      ...existing,
       if (deliveryPrinter.isNotEmpty) deliveryPrinter,
     }.toList()
       ..sort();
@@ -305,14 +312,14 @@ class _PrintersScreenState extends State<PrintersScreen> {
             DropdownButton<String>(
               key: const Key('delivery-receipt-printer'),
               value: deliveryPrinter.isNotEmpty &&
-                      configured.contains(deliveryPrinter)
+                      deliveryChoices.contains(deliveryPrinter)
                   ? deliveryPrinter
                   : '',
               items: [
                 DropdownMenuItem(
                     value: '',
                     child: Text(tr(context, 'Same as receipt'))),
-                for (final station in configured)
+                for (final station in deliveryChoices)
                   DropdownMenuItem(value: station, child: Text(station)),
               ],
               onChanged: (v) {

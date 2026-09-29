@@ -70,6 +70,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234', role: 'manager');
@@ -143,6 +144,11 @@ void main() {
       await t.tap(find.byKey(const Key('floor-action-table')));
       await t.pumpAndSettle();
     }
+    // The grid shows one category at a time; the pizza is what these ring.
+    if (find.byKey(const Key('cat-chip-1')).evaluate().isNotEmpty) {
+      await t.tap(find.byKey(const Key('cat-chip-1')));
+      await t.pumpAndSettle();
+    }
   }
 
   Future<void> openAppearance(WidgetTester t) async {
@@ -150,6 +156,8 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-settings')));
     await t.pumpAndSettle();
+    await t.scrollUntilVisible(find.byKey(const Key('set-appearance')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-appearance')));
     await t.pumpAndSettle();
     expect(find.byType(AppearanceSettingsScreen), findsOneWidget);
@@ -191,6 +199,7 @@ void main() {
 
     testWidgets('switching it in settings darkens the till without a restart',
         (t) async {
+      settings.themeMode = 'light';
       seedMenu();
       await boot(t);
       expect(brightnessOnScreen(t), Brightness.light);
@@ -227,6 +236,8 @@ void main() {
       expect(find.byKey(const Key('product-image-10')), findsOneWidget,
           reason: 'the shell must read the pictures, or the toggle is dead');
       // A product with no picture keeps the coloured tile it has today.
+      await t.tap(find.byKey(const Key('cat-chip-2')));
+      await t.pumpAndSettle();
       expect(find.byKey(const Key('product-image-11')), findsNothing);
       expect(find.byKey(const Key('product-11')), findsOneWidget);
     });

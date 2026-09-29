@@ -41,7 +41,7 @@ void main() {
 
   test('emptying the bill takes the channel and the driver with it', () {
     session.setDeliveryChannel(talabat, companyOrderNo: 'TLB-1');
-    session.setDriver('Hany');
+    session.setDriver(const Driver(id: 'd1', name: 'Hany'));
 
     session.clear();
 
@@ -74,7 +74,7 @@ void main() {
   });
 
   test('a driver is trimmed and clearable', () {
-    session.setDriver('  Hany  ');
+    session.setDriver(const Driver(id: 'd1', name: '  Hany  '));
     expect(session.current.driverName, 'Hany');
     session.setDriver(null);
     expect(session.current.driverName, isNull);
@@ -83,7 +83,7 @@ void main() {
   test('switching delivery subtypes drops what only the previous kind used', () {
     session.setDeliveryChannel(talabat, companyOrderNo: 'TLB-9');
     session.setDeliveryCost(25);
-    session.setDriver('Hany');
+    session.setDriver(const Driver(id: 'd1', name: 'Hany'));
     session.setDeliveryCustomer(name: 'Ali', phone: '010', address: 'Nasr City');
 
     session.setOrderType(OrderType.carDelivery);

@@ -9,6 +9,41 @@ import '../../core/i18n/l10n.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/numeric_keypad.dart';
 
+/// Clock [cashier] in when they are off the clock and out when they are on it,
+/// after their own PIN. Returns whether they are now on the clock, or null when
+/// nothing changed (backed out, or a wrong PIN).
+Future<bool?> toggleClockWithPin(
+  BuildContext context, {
+  required Cashier cashier,
+  required AttendanceStore attendance,
+  required AuthService auth,
+}) async {
+  final clockIn = !attendance.isClockedIn(cashier.id);
+  final pin = await promptTouchPin(
+    context,
+    title: cashier.name,
+    message: clockIn
+        ? tr(context, 'Enter PIN to clock in')
+        : tr(context, 'Enter PIN to clock out'),
+    confirmLabel: clockIn ? tr(context, 'Clock in') : tr(context, 'Clock out'),
+    displayKey: const Key('attend-pin'),
+    confirmKey: const Key('attend-pin-ok'),
+  );
+  if (pin == null || pin.isEmpty || !context.mounted) return null;
+  if (!await auth.authorizeCashier(cashier.id, pin)) {
+    if (context.mounted) {
+      showToast(context, tr(context, 'Incorrect PIN'), kind: ToastKind.error);
+    }
+    return null;
+  }
+  if (clockIn) {
+    attendance.clockIn(cashier.id);
+  } else {
+    attendance.clockOut(cashier.id);
+  }
+  return clockIn;
+}
+
 /// Staff clock in / clock out for the till. Several cashiers can be on the clock at
 /// once, which is why this is separate from the single cash-drawer shift.
 ///
@@ -61,31 +96,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   }
 
   Future<void> _confirmAndToggle(Cashier c, {required bool clockIn}) async {
-    final pin = await promptTouchPin(
-      context,
-      title: tr(context, 'Confirm with PIN'),
-      message: clockIn
-          ? tr(context, 'Enter PIN to clock in')
-          : tr(context, 'Enter PIN to clock out'),
-      confirmLabel: clockIn ? tr(context, 'Clock in') : tr(context, 'Clock out'),
-      displayKey: const Key('attend-pin'),
-      confirmKey: const Key('attend-pin-ok'),
-    );
-    if (pin == null || pin.isEmpty || !mounted) return;
-    final ok = await widget.auth.authorizeCashier(c.id, pin);
-    if (!ok) {
-      if (mounted) {
-        showToast(context, tr(context, 'Incorrect PIN'), kind: ToastKind.error);
-      }
-      return;
-    }
-    setState(() {
-      if (clockIn) {
-        widget.attendance.clockIn(c.id);
-      } else {
-        widget.attendance.clockOut(c.id);
-      }
-    });
+    await toggleClockWithPin(context,
+        cashier: c, attendance: widget.attendance, auth: widget.auth);
+    if (mounted) setState(() {});
   }
 
   @override

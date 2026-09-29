@@ -31,6 +31,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 import '../db/sqlite_loader.dart';
 import '../printing/strip_escpos.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -160,7 +161,7 @@ void main() {
   Future<void> ringAndPay(WidgetTester t) async {
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-1')));
     await t.pumpAndSettle();
@@ -272,7 +273,7 @@ void main() {
     await t.enterText(find.byKey(const Key('discount-value')), '50');
     await t.tap(find.byKey(const Key('apply-discount')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-1')));
     await t.pumpAndSettle();
@@ -297,7 +298,7 @@ void main() {
     await t.enterText(find.byKey(const Key('discount-value')), '10');
     await t.tap(find.byKey(const Key('apply-discount')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-1')));
     await t.pumpAndSettle();

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/app/pos_app.dart';
@@ -18,6 +20,7 @@ import 'package:offline_pos/core/onboarding/wizard_id.dart';
 import 'package:offline_pos/core/onboarding/wizard_store.dart';
 import 'package:offline_pos/core/printing/printer_discovery.dart';
 import 'package:offline_pos/core/printing/printer_registry.dart';
+import 'package:offline_pos/core/printing/printer_transport.dart';
 import 'package:offline_pos/core/printing/spool_store.dart';
 import 'package:offline_pos/core/sync/odoo_endpoint.dart';
 import 'package:offline_pos/core/sync/odoo_wiring.dart';
@@ -38,10 +41,17 @@ class _NoPrinters extends PrinterDiscovery {
   Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async => const [];
 }
 
+/// The receipt printer is configured but switched off: the connection is refused.
+class _SwitchedOff implements PrinterTransport {
+  @override
+  Future<void> send(Uint8List bytes) async =>
+      throw PrinterUnavailable('connection refused');
+}
+
 /// Settling one cashier out of a shift two people worked.
 ///
 /// It goes on paper through the same report path the X read uses, so nothing here
-/// is a second print pipeline: nothing prints on this till, so the flash lands in
+/// is a second print pipeline: the receipt printer is off, so the flash lands in
 /// the spool, which is how a test reads what the printer would have produced.
 void main() {
   late Db db;
@@ -82,14 +92,17 @@ void main() {
         appVersion: 'test',
       ),
       outboxStore: SqliteOutboxStore(db),
-      printers: PrinterRegistry(discovery: _NoPrinters()),
+      printers: PrinterRegistry(
+        discovery: _NoPrinters(),
+        open: (host, port) => _SwitchedOff(),
+      )..remember(PosApp.receiptPrinter, host: '10.0.0.5'),
       wizards: WizardStore(db),
       shifts: shifts,
       deviceId: 'till-1',
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       receiptSpool: spool,
@@ -133,6 +146,12 @@ void main() {
     await t.tap(find.byKey(const Key('nav-shift')));
     await t.pumpAndSettle();
     expect(find.byType(ShiftScreen), findsOneWidget);
+    // The print actions sit under the session card, below the fold.
+    await t.scrollUntilVisible(find.byKey(const Key('cashier-flash')), 200,
+        scrollable: find
+            .descendant(
+                of: find.byType(ShiftScreen), matching: find.byType(Scrollable))
+            .first);
   }
 
   testWidgets('one cashier is flashed out of a shift two people worked',
@@ -155,7 +174,7 @@ void main() {
 
     final jobs = await spool.oldestFirst(limit: 10);
     final flash = jobs
-        .where((j) => (j.reference ?? '').startsWith('shift-Cashier flash - omar'))
+        .where((j) => (j.reference ?? '').startsWith('report-Cashier flash - omar'))
         .toList();
     expect(flash, hasLength(1),
         reason: 'the flash must go out through the report path the X read uses');
@@ -164,7 +183,8 @@ void main() {
     expect(paper, contains('60.00'));
     // Only that cashier's takings, not the whole till's.
     expect(paper.contains('100.00'), isFalse);
-    expect(find.text('Cashier flash sent to printer'), findsOneWidget);
+    // Held, not printed: the cashier is told so rather than promised paper.
+    expect(find.text('Printer offline — job held'), findsOneWidget);
   });
 
   testWidgets('a shift nobody has rung on says so instead of printing', (t) async {

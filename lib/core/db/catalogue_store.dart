@@ -332,6 +332,12 @@ class CatalogueStore {
         .toList();
   }
 
+  /// Whether any active product was left with no category, which the grid has to
+  /// give a tab of its own or nobody could ring it.
+  bool hasUncategorisedProducts() => _db.raw
+      .select('SELECT 1 FROM products WHERE active = 1 AND category_id IS NULL LIMIT 1')
+      .isNotEmpty;
+
   Product? byBarcode(String barcode) {
     final rows = _db.raw.select(
         'SELECT $_productColumns FROM products WHERE barcode = ? AND active = 1 LIMIT 1',

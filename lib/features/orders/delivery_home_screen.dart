@@ -26,12 +26,16 @@ class DeliveryHomeScreen extends StatelessWidget {
     this.cashierName,
     this.onBack,
     this.bulletin,
+    this.ownDeviceId,
   });
 
   final List<OrderType> types;
 
-  /// Parked delivery bags on this till, any kind.
+  /// Parked delivery bags in the shop, any kind, this till's and other tills'.
   final List<Order> parked;
+
+  /// This till; a bag rung anywhere else is marked as on another device.
+  final String? ownDeviceId;
   final String Function(double) formatAmount;
   final void Function(OrderType type) onOpenType;
   final void Function(Order order) onResume;
@@ -337,6 +341,16 @@ class DeliveryHomeScreen extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
                   ),
+                  if (ownDeviceId != null && o.deviceId != ownDeviceId)
+                    Tooltip(
+                      message: tr(context, 'Open on another device'),
+                      child: Icon(
+                        Icons.devices_other,
+                        key: Key('delivery-home-elsewhere-${o.uuid}'),
+                        size: 16,
+                        color: AppColors.textMutedLight,
+                      ),
+                    ),
                   const SizedBox(width: 6),
                   Text(
                     formatAmount(o.total),

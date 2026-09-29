@@ -96,10 +96,15 @@ class OdooSiteOption {
     this.consolidateSessionInvoice = false,
     this.sessionPartnerId,
     this.sessionPartnerName,
+    this.isCompany = false,
   });
 
   final int id;
   final String name;
+
+  /// A `res.company` row offered in the branch picker because Odoo has no branch
+  /// addon: picking it names the company, and there is no branch id to send.
+  final bool isCompany;
 
   /// The company this record belongs to, where Odoo holds one. Null means the
   /// record does not say, and a record that does not say is never hidden from a
@@ -126,6 +131,7 @@ class OdooSiteOption {
         'consolidate_session_invoice': consolidateSessionInvoice,
         'session_partner_id': sessionPartnerId,
         'session_partner_name': sessionPartnerName,
+        if (isCompany) 'is_company': true,
       };
 
   factory OdooSiteOption.fromMap(Map<String, dynamic> m) => OdooSiteOption(
@@ -139,6 +145,7 @@ class OdooSiteOption {
             ? m['session_partner_id'] as int
             : null,
         sessionPartnerName: m['session_partner_name'] as String?,
+        isCompany: m['is_company'] == true,
       );
 }
 

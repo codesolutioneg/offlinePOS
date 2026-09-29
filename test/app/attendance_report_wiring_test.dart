@@ -27,6 +27,7 @@ import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/report_period.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -85,7 +86,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: attendance,
       config: const TillConfig(),
@@ -125,9 +126,6 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-report')));
     await t.pumpAndSettle();
-    // Over the whole history, so the fixture's dates are not a clock race.
-    await t.tap(find.byKey(const Key('range-all')));
-    await t.pumpAndSettle();
   }
 
   void tallWindow(WidgetTester t) {
@@ -155,11 +153,10 @@ void main() {
     await signIn(t);
     await openReports(t);
 
-    expect(find.byKey(const Key('rep-attendance')), findsOneWidget,
+    expect(find.byKey(const Key('rep-hours')), findsOneWidget,
         reason: 'the shell must hand the hub the attendance store, or the tile is '
             'a dead screen nobody can feed');
-    await t.tap(find.byKey(const Key('rep-attendance')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-hours');
 
     // Names, not ids: the shell has to pass the roster too.
     expect(find.text('Sara'), findsOneWidget);
@@ -190,10 +187,10 @@ void main() {
 
     await t.tap(find.byKey(const Key('report-cashier-filter')));
     await t.pumpAndSettle();
-    await t.tap(find.text('sara').last);
+    // Listed by name, the way the roster knows her.
+    await t.tap(find.text('Sara').last);
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('rep-attendance')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-hours');
 
     expect(find.text('Sara'), findsOneWidget);
     expect(find.text('Omar'), findsNothing);

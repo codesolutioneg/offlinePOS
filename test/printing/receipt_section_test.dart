@@ -78,22 +78,20 @@ void main() {
     test('names the section above the table', () {
       final text = strippedText(
           KitchenTicketBuilder(sectionOf: (_) => 'Terrace').build(dineIn(table: '5')));
-      expect(text, contains('Section: Terrace'));
-      expect(text.indexOf('Section: Terrace'), lessThan(text.indexOf('Table: 5')));
+      expect(text, contains('Terrace - Table 5'));
     });
 
     test('a shop with no floor plan prints what it always printed', () {
       final text = strippedText(KitchenTicketBuilder().build(dineIn(table: '5')));
-      expect(text, contains('Table: 5'));
-      expect(text, isNot(contains('Section:')));
+      expect(text, contains('* Table 5 *'));
+      expect(text, isNot(contains('Terrace')));
     });
 
     test('a cancel slip goes to the same part of the floor', () {
       final order = dineIn(table: '5');
       final text = strippedText(KitchenTicketBuilder(sectionOf: (_) => 'Terrace')
           .buildVoid(order, order.lines.single, 'wrong table'));
-      expect(text, contains('Section: Terrace'));
-      expect(text, contains('Table: 5'));
+      expect(text, contains('Terrace - Table 5'));
     });
   });
 

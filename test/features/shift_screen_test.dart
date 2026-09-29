@@ -76,6 +76,9 @@ void main() {
       rows = reportRows;
     }));
 
+    // Under the session card, below the fold.
+    await t.scrollUntilVisible(find.byKey(const Key('print-x')), 200,
+        scrollable: find.byType(Scrollable).first);
     await t.tap(find.byKey(const Key('print-x')));
     await t.pumpAndSettle();
 

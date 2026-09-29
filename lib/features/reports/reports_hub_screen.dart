@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import '../../core/audit/audit_log.dart';
 import '../../core/db/attendance_store.dart';
@@ -306,6 +306,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                 Expanded(
                   child: DropdownButtonFormField<String?>(
                     key: const Key('report-cashier-filter'),
+                    isExpanded: true,
                     initialValue: _cashier,
                     decoration: InputDecoration(
                       labelText: tr(context, 'Cashier'),
@@ -320,7 +321,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                       for (final id in _cashiers)
                         DropdownMenuItem<String?>(
                           value: id,
-                          child: Text(widget.staffNames[id] ?? id),
+                          child: Text(widget.staffNames[id] ?? id,
+                              overflow: TextOverflow.ellipsis),
                         ),
                     ],
                     onChanged: (v) => setState(() => _cashier = v),
@@ -330,6 +332,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                 Expanded(
                   child: DropdownButtonFormField<OrderType?>(
                     key: const Key('report-type-filter'),
+                    isExpanded: true,
                     initialValue: _type,
                     decoration: InputDecoration(
                       labelText: tr(context, 'Order type'),
@@ -344,7 +347,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                       for (final t in OrderType.values)
                         DropdownMenuItem<OrderType?>(
                           value: t,
-                          child: Text(tr(context, t.label)),
+                          child: Text(tr(context, t.label),
+                              overflow: TextOverflow.ellipsis),
                         ),
                     ],
                     onChanged: (v) => setState(() => _type = v),

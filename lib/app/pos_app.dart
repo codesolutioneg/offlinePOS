@@ -69,6 +69,7 @@ import '../domain/table_floor_info.dart';
 import '../domain/table_section_config.dart';
 import '../domain/shift.dart';
 import '../features/admin/attendance_screen.dart';
+import '../features/admin/clock_dialog.dart';
 import '../features/admin/roles_permissions_screen.dart';
 import '../features/admin/roster_screen.dart';
 import '../features/support/audit_log_screen.dart';
@@ -3049,7 +3050,11 @@ class _PosAppState extends State<PosApp> {
         };
         return DeliveryHomeScreen(
           types: _deliveryTypes,
-          parked: widget.orders.held().where((o) => o.type.isDelivery).toList(),
+          parked: {
+            for (final o in widget.orders.heldAnywhere())
+              if (o.type.isDelivery) o.uuid: o,
+          }.values.toList(),
+          ownDeviceId: widget.deviceId,
           formatAmount: PosApp.money,
           guard: mayStart,
           cashierName: widget.auth.signedIn?.name,
@@ -3058,10 +3063,17 @@ class _PosAppState extends State<PosApp> {
               : null,
           onBack: only ? null : () => setState(() => _deliveryHome = false),
           onOpenType: (t) => unawaited(_openDeliveryType(context, session, t)),
-          onResume: (o) => setState(() {
-            session.recall(o.uuid);
-            _onCounter = true;
-          }),
+          onResume: (o) {
+            if (o.deviceId != widget.deviceId) {
+              _openElsewhere(context, session, o,
+                  refusal: 'This delivery is open on another device. Settle it there.');
+              return;
+            }
+            setState(() {
+              session.recall(o.uuid);
+              _onCounter = true;
+            });
+          },
           actions: [
             for (final a in FloorActionBar.catalog)
               if (taps.containsKey(a.id) && !_access.hidden('floor.${a.id}'))
@@ -3264,25 +3276,8 @@ class _PosAppState extends State<PosApp> {
                   if (o.deviceId == widget.deviceId) o,
               ];
               if (local.isEmpty && tabs.isNotEmpty) {
-                final tab = tabs.first;
-                final signed = widget.auth.signedIn;
-                final me = session.cashierId;
-                final isOpener =
-                    tab.cashierId == me || tab.cashierId == signed?.id;
-                final isManager = signed?.isManager ?? false;
-                final canTake = widget.lan != null &&
-                    (widget.settings.lanAllowTakeover ||
-                        isOpener ||
-                        isManager);
-                if (canTake) {
-                  unawaited(_takeOverTab(floorContext, session, tab,
-                      asOpener: isOpener, asManager: isManager));
-                  return;
-                }
-                ScaffoldMessenger.of(floorContext).showSnackBar(SnackBar(
-                  content: Text(tr(floorContext,
-                      'This table is open on another device. Settle it there.')),
-                ));
+                _openElsewhere(floorContext, session, tabs.first,
+                    refusal: 'This table is open on another device. Settle it there.');
                 return;
               }
               if (local.isNotEmpty) {
@@ -3465,12 +3460,12 @@ class _PosAppState extends State<PosApp> {
       'info': () => _openDiagnostics(context),
       'session': () => _openShift(context, session),
       'misc': () => unawaited(_floorMisc(context, session)),
-      'empl': () async {
-        if (await _authorize(Permission.manageStaff, context) &&
-            context.mounted) {
-          _openRoster(context);
-        }
-      },
+      // Clocking in is for everyone on the staff, so no manager gate: each
+      // person's own PIN is the check.
+      'empl': () => showClockDialog(context,
+          users: widget.users,
+          attendance: widget.attendance,
+          auth: widget.auth),
       'tabs': () => _openOrders(context, session),
       'employee-transfer': widget.orders.held().isEmpty
           ? null
@@ -4447,6 +4442,29 @@ class _PosAppState extends State<PosApp> {
         ],
       ),
     );
+  }
+
+  /// A tab parked on another till: take it over when this cashier may, otherwise
+  /// say where to settle it.
+  void _openElsewhere(
+    BuildContext context,
+    PosSession session,
+    Order tab, {
+    required String refusal,
+  }) {
+    final signed = widget.auth.signedIn;
+    final isOpener =
+        tab.cashierId == session.cashierId || tab.cashierId == signed?.id;
+    final isManager = signed?.isManager ?? false;
+    final canTake = widget.lan != null &&
+        (widget.settings.lanAllowTakeover || isOpener || isManager);
+    if (canTake) {
+      unawaited(_takeOverTab(context, session, tab,
+          asOpener: isOpener, asManager: isManager));
+      return;
+    }
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(tr(context, refusal))));
   }
 
   /// Take a tab parked on another till, so the counter can settle what a handheld

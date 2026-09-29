@@ -29,6 +29,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/report_period.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -60,6 +61,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     customers = CustomerStore(db);
     outboxStore = SqliteOutboxStore(db);
     audit = AuditLog(db);
@@ -137,7 +139,7 @@ void main() {
   }
 
   Future<void> openPayment(WidgetTester t) async {
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(find.byKey(const Key('order-action-settle')));
     await t.pumpAndSettle();
   }
 
@@ -221,8 +223,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-report')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('rep-receivables')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-receivables');
 
     expect(find.text('Nadia'), findsWidgets);
     expect(find.text('500.00'), findsWidgets);
@@ -251,8 +252,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-report')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('rep-receivables')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-receivables');
 
     expect(find.byKey(const Key('receivables-empty')), findsOneWidget);
   });

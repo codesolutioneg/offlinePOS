@@ -26,7 +26,10 @@ void main() {
     expect(sent.containsKey('driver_name'), isFalse);
     expect(sent.containsKey('driver_id'), isFalse);
     expect(sent.containsKey('delivery_status'), isFalse);
-    expect(sent.containsKey('service_fee'), isFalse);
+  });
+
+  test('the service fee travels, booked tax-inclusive like the delivery cost', () {
+    expect(delivery().toServerPayload().containsKey('service_fee'), isTrue);
   });
 
   test('the wire still calls the sale a delivery', () {

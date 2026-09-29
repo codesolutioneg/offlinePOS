@@ -31,6 +31,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -506,7 +507,7 @@ void main() {
       await t.pumpAndSettle();
       await t.tap(find.byKey(Key('driver-${driver.id}')));
       await t.pumpAndSettle();
-      await t.tap(find.byKey(const Key('pay')));
+      await t.tap(findPay());
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('confirm-payment')));
       await t.pumpAndSettle();

@@ -320,9 +320,10 @@ void main() {
     await lan.dispose();
   });
 
-  testWidgets('a till that does not answer keeps its tab', (t) async {
+  testWidgets('a secondary seizes a tab too when the owner does not answer',
+      (t) async {
     final tab = tabOnTheOtherTill();
-    // Secondary / unset: unreachable owner must keep the tab.
+    // A handheld that went offline must not strand its bills on a secondary.
     settings.deviceRole = DeviceRole.secondary;
     final lan = node(peerReachable: false);
 
@@ -332,10 +333,9 @@ void main() {
     await t.tap(find.byKey(const Key('confirm-takeover')));
     await t.pumpAndSettle();
 
-    expect(orders.byUuid(tab.uuid)!.deviceId, 'till-2',
-        reason: 'a till that cannot be asked cannot let go');
-    expect(peerOrders.held().map((o) => o.uuid), [tab.uuid]);
-    expect(find.textContaining('did not answer'), findsOneWidget);
+    expect(orders.byUuid(tab.uuid)!.deviceId, 'till-1');
+    expect(find.byType(SellScreen), findsOneWidget);
+    expect(find.textContaining('did not answer'), findsNothing);
     await lan.dispose();
   });
 

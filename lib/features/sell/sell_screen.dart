@@ -321,6 +321,9 @@ class SellScreen extends StatefulWidget {
 class _SellScreenState extends State<SellScreen> {
   int? _categoryId;
   bool _favesOnly = false;
+
+  /// The Other tab: products given no category, which no category tab shows.
+  bool _otherOnly = false;
   String _search = '';
 
   // A hardware barcode scanner behaves as a keyboard that types the code fast and
@@ -846,7 +849,7 @@ class _SellScreenState extends State<SellScreen> {
     }
   }
 
-  // â”€â”€ per-line actions: note, discount, void with reason â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── per-line actions: note, discount, void with reason ───────────
 
   Future<void> _lineActions(OrderLine line) async {
     // Only an item that actually carries choices offers the entry; on anything else
@@ -2174,7 +2177,7 @@ class _SellScreenState extends State<SellScreen> {
         duration: const Duration(seconds: 3));
   }
 
-  // â”€â”€ dine-in bill: split by guest, pay selected, move, merge â”€â”€â”€â”€â”€â”€
+  // ── dine-in bill: split by guest, pay selected, move, merge ──────
 
   /// The charge for a subset of the current order's lines: the session's own figure,
   /// which is exactly what payCheck books. Deriving it here instead once quoted the
@@ -2998,7 +3001,12 @@ class _SellScreenState extends State<SellScreen> {
 
   @override
   Widget build(BuildContext context) {
-    var products = s.catalogue.products(categoryId: _categoryId, search: _search);
+    var products = _otherOnly && !_favesOnly
+        ? s.catalogue
+            .products(search: _search)
+            .where((p) => p.categoryId == null)
+            .toList()
+        : s.catalogue.products(categoryId: _categoryId, search: _search);
     if (_favesOnly) {
       products = products.where((p) => widget.favourites.contains(p.id)).toList();
     }
@@ -3553,10 +3561,28 @@ class _SellScreenState extends State<SellScreen> {
         .toList();
   }
 
+  /// Whether the rail carries the Other tab. Never under a category allow-list:
+  /// a role limited to some categories is not handed the items outside them.
+  bool get _otherShown =>
+      widget.allowedCategoryIds.isEmpty && s.catalogue.hasUncategorisedProducts();
+
   /// No "All" tab — land on the first real category when nothing is selected.
   void _ensureCategorySelection(List<({int id, String name})> cats) {
-    if (_favesOnly) return;
-    if (cats.isEmpty) return;
+    if (_otherOnly && !_otherShown) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _otherOnly = false);
+      });
+      return;
+    }
+    if (_favesOnly || _otherOnly) return;
+    if (cats.isEmpty) {
+      if (_otherShown) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_favesOnly) setState(() => _otherOnly = true);
+        });
+      }
+      return;
+    }
     final stillValid =
         _categoryId != null && cats.any((c) => c.id == _categoryId);
     if (stillValid) return;
@@ -3594,10 +3620,24 @@ class _SellScreenState extends State<SellScreen> {
             _categorySquare(
               key: Key('cat-chip-${cats[i].id}'),
               label: cats[i].name,
-              selected: _categoryId == cats[i].id && !_favesOnly,
+              selected: _categoryId == cats[i].id && !_favesOnly && !_otherOnly,
               color: _colorFor(cats[i].id) ?? AppColors.primary,
               onTap: () => setState(() {
                 _categoryId = cats[i].id;
+                _favesOnly = false;
+                _otherOnly = false;
+              }),
+            ),
+          ],
+          if (_otherShown) ...[
+            if (cats.isNotEmpty) const SizedBox(height: 8),
+            _categorySquare(
+              key: const Key('cat-chip-other'),
+              label: tr(context, 'Other'),
+              selected: _otherOnly && !_favesOnly,
+              color: AppColors.textMutedLight,
+              onTap: () => setState(() {
+                _otherOnly = true;
                 _favesOnly = false;
               }),
             ),
@@ -4098,7 +4138,7 @@ class _SellScreenState extends State<SellScreen> {
         ),
       );
 
-  /// Order # / Table / Guests â€” mock header under the type pills.
+  /// Order # / Table / Guests — mock header under the type pills.
   Widget _orderMetaHeader() {
     final o = s.current;
     final muted = AppColors.textMutedLight;
@@ -4221,7 +4261,7 @@ class _SellScreenState extends State<SellScreen> {
         o.customerAddress,
         o.deliveryChannel,
         if (o.companyOrderNo != null) '#${o.companyOrderNo}',
-      ].whereType<String>().where((e) => e.isNotEmpty).join('  Â·  ');
+      ].whereType<String>().where((e) => e.isNotEmpty).join('  ·  ');
 
   Widget _addNoteField() {
     final note = s.current.note;
@@ -5285,7 +5325,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
           if (partPaid) ...[
             const SizedBox(height: 4),
             Text(
-              '${tr(context, 'Bill')} ${widget.format(bill)}  Â·  '
+              '${tr(context, 'Bill')} ${widget.format(bill)}  ·  '
               '${tr(context, 'Paid')} ${widget.format(widget.alreadyPaid)}',
               key: const Key('running-balance'),
               style: TextStyle(
@@ -5416,7 +5456,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   IconData _methodIcon(PaymentMethod m) {
     if (m.isCash) return Icons.payments_outlined;
     final name = m.name.toLowerCase();
-    if (name.contains('wallet') || name.contains('Ù…Ø­ÙØ¸Ø©')) {
+    if (name.contains('wallet') || name.contains('محفظة')) {
       return Icons.account_balance_wallet_outlined;
     }
     if (name.contains('transfer') || name.contains('bank')) {

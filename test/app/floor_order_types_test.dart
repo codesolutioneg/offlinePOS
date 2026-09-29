@@ -200,7 +200,9 @@ void main() {
       await t.pumpWidget(app());
       await signIn(t);
 
-      await t.tap(find.byKey(const Key('floor-to-go')));
+      await t.tap(find.byKey(const Key('floor-action-table')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('order-type-togo')));
       await t.pumpAndSettle();
 
       final chip = t.widget<SelectPill>(find.byKey(const Key('order-type-togo')));
@@ -218,8 +220,11 @@ void main() {
       await t.pumpWidget(app());
       await signIn(t);
 
-      expect(find.byKey(const Key('floor-delivery')), findsNothing);
-      expect(find.byKey(const Key('floor-takeaway')), findsOneWidget);
+      // The bar keeps its fixed places, so the tile is there but inert.
+      expect(
+          t.widget<InkWell>(find.byKey(const Key('floor-action-delivery'))).onTap,
+          isNull);
+      expect(find.byKey(const Key('floor-action-table')), findsOneWidget);
 
       await tapTable(t);
       expect(find.byKey(const Key('order-type-storedelivery')), findsNothing);
@@ -249,8 +254,11 @@ void main() {
       await t.pumpWidget(app());
       await signIn(t);
 
-      expect(find.byKey(const Key('floor-delivery')), findsNothing);
-      expect(find.byKey(const Key('floor-to-go')), findsOneWidget);
+      // The bar keeps its fixed places, so the tile is there but inert.
+      expect(
+          t.widget<InkWell>(find.byKey(const Key('floor-action-delivery'))).onTap,
+          isNull);
+      expect(find.byKey(const Key('floor-action-table')), findsOneWidget);
     });
   });
 

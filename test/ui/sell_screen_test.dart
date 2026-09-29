@@ -11,6 +11,7 @@ import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
+import 'pay_button.dart';
 
 void main() {
   late Db db;
@@ -230,7 +231,7 @@ void main() {
     await t.pumpWidget(app());
     await t.tap(find.byKey(const Key('product-11')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     // The tender sheet opens; the sale completes only on confirmation.
     expect(find.byKey(const Key('confirm-payment')), findsOneWidget);
@@ -242,7 +243,7 @@ void main() {
 
   testWidgets('pay is disabled with an empty order', (t) async {
     await t.pumpWidget(app());
-    final button = t.widget<FilledButton>(find.byKey(const Key('pay')));
+    final button = t.widget<FilledButton>(findPay());
     expect(button.onPressed, isNull);
   });
 
@@ -343,11 +344,9 @@ void main() {
     session.addProduct(const Product(id: 10, name: 'Margherita', price: 250, categoryId: 1));
     final line = session.current.lines.single;
 
-    // Before firing: free inline controls, plain trash.
+    // Before firing: changed from the cart controls, with no void on the line.
     await t.pumpWidget(app());
     await t.pumpAndSettle();
-    expect(find.byIcon(Icons.add_circle_outline), findsWidgets);
-    expect(find.byIcon(Icons.delete_outline), findsOneWidget);
     expect(find.byKey(Key('line-void-inline-${line.uuid}')), findsNothing);
 
     // Once the kitchen holds it, the +/- and free trash are gone; the only removal

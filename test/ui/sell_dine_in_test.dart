@@ -12,6 +12,7 @@ import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
+import 'pay_button.dart';
 
 void main() {
   late Db db;
@@ -74,7 +75,7 @@ void main() {
     await t.tap(find.byKey(const Key('product-10'))); // Pizza
     await t.pumpAndSettle();
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     expect(find.byKey(const Key('pay-mode-item')), findsNothing);
     await t.tap(find.byKey(const Key('pay-mode-guest')));
@@ -87,7 +88,7 @@ void main() {
     await t.tap(find.byKey(const Key('product-10'))); // Pizza 100
     await t.pumpAndSettle();
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pay-mode-evenly')));
     await t.pumpAndSettle();
@@ -108,7 +109,7 @@ void main() {
     await t.tap(find.byKey(const Key('product-10'))); // qty 2 on one line
     await t.pumpAndSettle();
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pay-mode-guest')));
     await t.pumpAndSettle();

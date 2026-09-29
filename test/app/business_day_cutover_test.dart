@@ -58,6 +58,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     CatalogueStore(db).replaceAll(
       categories: const [Category(id: 1, name: 'Food')],

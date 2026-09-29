@@ -29,6 +29,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 /// Nothing answers a sweep. A test till has no hardware, and a discovery that
 /// reached for the network is the one thing here that could hang.
@@ -112,7 +113,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       receiptSpool: spool,
@@ -242,7 +243,7 @@ void main() {
     // The customer adds a drink, and the sale is tendered again.
     await t.tap(find.byKey(const Key('product-11')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     // Card, so the sheet is covered without a cash-received amount.
     await t.tap(find.byKey(const Key('method-2')));
@@ -272,7 +273,7 @@ void main() {
 
     await t.tap(find.byKey(const Key('product-11')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     // Card, so the sheet is covered without a cash-received amount.
     await t.tap(find.byKey(const Key('method-2')));
@@ -298,7 +299,7 @@ void main() {
         of: find.byKey(Key('line-${cola.uuid}')),
         matching: find.byIcon(Icons.delete_outline)));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-2')));
     await t.pumpAndSettle();
@@ -322,13 +323,13 @@ void main() {
     // units the customer paid for are no longer on the bill.
     await t.tap(find.descendant(
         of: find.byKey(Key('line-${cola.uuid}')),
-        matching: find.byIcon(Icons.remove_circle_outline)));
+        matching: find.byIcon(Icons.remove)));
     await t.pumpAndSettle();
     await t.tap(find.descendant(
         of: find.byKey(Key('line-${cola.uuid}')),
-        matching: find.byIcon(Icons.remove_circle_outline)));
+        matching: find.byIcon(Icons.remove)));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-2')));
     await t.pumpAndSettle();
@@ -339,7 +340,7 @@ void main() {
     expect(slips, hasLength(1));
     expect(slips.single, contains('REMOVED ON EDIT'));
     // The two units that came off, at what they were sold for.
-    expect(slips.single, contains('2 Cola'));
+    expect(slips.single, contains('2 x Cola'));
     expect(slips.single, contains('60.00'));
     expect(orders.byUuid(sale.uuid)!.total, 280);
   });
@@ -350,7 +351,7 @@ void main() {
 
     await t.tap(find.byKey(const Key('product-11')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-2')));
     await t.pumpAndSettle();

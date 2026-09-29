@@ -31,6 +31,7 @@ import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -142,7 +143,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: odoo,
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       config: const TillConfig(),
@@ -287,7 +288,7 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('confirm-payment')));
     await t.pumpAndSettle();
