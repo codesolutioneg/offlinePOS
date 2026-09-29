@@ -126,8 +126,7 @@ class OrderStore {
     }
     _db.raw.execute('BEGIN');
     try {
-      _insert(order);
-      announce();
+      if (_insert(order)) announce();
       _db.raw.execute('COMMIT');
     } catch (e) {
       _db.raw.execute('ROLLBACK');
@@ -141,7 +140,14 @@ class OrderStore {
   /// one. Leaving them behind would file the order under whoever used to have it
   /// while the bill on it says otherwise, and the reads that decide money are
   /// scoped by exactly those columns.
-  void _insert(Order order) {
+  ///
+  /// Money only moves forward: a copy of an order read before it was paid (a
+  /// course-fire loop waiting on a slow printer, a sheet left open) must not turn
+  /// the paid sale back into a tab, and a paid copy must not un-sync a sale Odoo
+  /// already has. Such a write is dropped here, where every caller passes, rather
+  /// than trusted to each caller re-reading first. [reopen] is the one deliberate
+  /// way back and says so with [allowReopen]. Returns whether the row was written.
+  bool _insert(Order order, {bool allowReopen = false}) {
     _db.raw.execute(
       '''
       INSERT INTO orders (uuid, device_id, cashier_id, created_at, state, server_id, total, payload)
@@ -150,6 +156,9 @@ class OrderStore {
         device_id = excluded.device_id, cashier_id = excluded.cashier_id,
         state = excluded.state, server_id = excluded.server_id,
         total = excluded.total, payload = excluded.payload
+      WHERE ? = 1 OR orders.state NOT IN ('paid', 'synced')
+        OR (CASE excluded.state WHEN 'synced' THEN 3 WHEN 'paid' THEN 2 ELSE 0 END)
+          >= (CASE orders.state WHEN 'synced' THEN 3 ELSE 2 END)
       ''',
       [
         order.uuid,
@@ -160,8 +169,10 @@ class OrderStore {
         order.serverId,
         order.total,
         jsonEncode(order.toMap()),
+        if (allowReopen) 1 else 0,
       ],
     );
+    return _db.raw.updatedRows > 0;
   }
 
   Order? byUuid(String uuid) {
@@ -262,6 +273,26 @@ class OrderStore {
           Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
       .toList();
 
+  /// The highest order number among the newest [limit] rows from every till, so
+  /// the next number climbs past it. Open tabs count: a table parked on another
+  /// till already has its number on a kitchen ticket.
+  ///
+  /// SQLite reads the one field out of the payload, so no bill is decoded:
+  /// decoding 2000 of them was most of what a Pay cost on a till with a few
+  /// thousand sales.
+  int orderNumberFloor({int limit = 2000}) {
+    var floor = 0;
+    final rows = _db.raw.select(
+        "SELECT json_extract(payload, '\$.order_no') AS n FROM orders "
+        'ORDER BY created_at DESC LIMIT ?',
+        [limit]);
+    for (final raw in rows.map((r) => r['n']).whereType<String>()) {
+      final n = int.tryParse(Order.shortOrderNumber(raw.trim()));
+      if (n != null && n > floor) floor = n;
+    }
+    return floor;
+  }
+
   /// How many sales every till in the shop has closed since [since], and what
   /// they came to. One aggregate over indexed columns, so the floor can read it on
   /// every build without decoding a single payload.
@@ -355,7 +386,7 @@ class OrderStore {
       // Rides on the order so the corrected receipt is marked whenever it prints,
       // including a reprint days later and after a restart mid-correction.
       order.amended = true;
-      _insert(order);
+      _insert(order, allowReopen: true);
       _db.raw.execute('COMMIT');
       return true;
     } catch (_) {

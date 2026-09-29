@@ -75,6 +75,11 @@ import '../features/admin/roster_screen.dart';
 import '../features/support/audit_log_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/customers/customer_management_screen.dart';
+import '../features/dev/stress_lab_runner.dart';
+import '../features/dev/stress_lab_screen.dart';
+import '../features/dev/stress_lab_store.dart';
+import '../features/dev/stress_printer.dart';
+import '../features/dev/stress_report_log.dart';
 import '../features/display/customer_display_screen.dart';
 import '../features/kitchen/kitchen_display_screen.dart';
 import '../features/menu/menu_editor_screen.dart';
@@ -563,6 +568,12 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
+  /// The number staff and customers actually say out loud, handed out when an
+  /// order is parked or paid. Climbs past any number already on this shop (other
+  /// tills / older sales) so Flash never lists two different checks as the same #.
+  String _nextOrderNo() => widget.settings
+      .nextOrderNumber(widget.deviceId, atLeast: widget.orders.orderNumberFloor());
+
   void _signedIn(Cashier cashier) {
     _lastTouch = widget.nowFn();
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncLockFingerprint());
@@ -581,19 +592,7 @@ class _PosAppState extends State<PosApp> {
         // so a manager changing it mid-service applies to the next bill and not to
         // the ones already on the floor.
         serviceChargeFor: widget.settings.serviceChargePercentFor,
-        // The number staff and customers actually say out loud. Per till and per
-        // trading day, handed out when an order is parked or paid.
-        nextOrderNo: () {
-          // Climb past any number already on this shop (other tills / older
-          // sales) so Flash never lists two different checks as the same #.
-          var floor = 0;
-          for (final o in widget.orders.recentAnywhere(limit: 2000)) {
-            final n = int.tryParse(o.displayNo);
-            if (n != null && n > floor) floor = n;
-          }
-          return widget.settings
-              .nextOrderNumber(widget.deviceId, atLeast: floor);
-        },
+        nextOrderNo: _nextOrderNo,
         settings: widget.settings,
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
@@ -5006,6 +5005,15 @@ class _PosAppState extends State<PosApp> {
               cashierId: _session?.cashierId,
             )),
       ),
+      if (kStressLabEnabled)
+        SettingsEntry(
+          title: 'Stress Lab',
+          subtitle: 'Order flood, fill every table, pay on a full till',
+          icon: Icons.bolt,
+          keyValue: 'set-stress-lab',
+          group: 'Shop',
+          onTap: () => _openStressLab(context, pushGated, refresh),
+        ),
       SettingsEntry(
         title: 'Staff',
         subtitle: 'Add employees, set role and PIN',
@@ -5518,15 +5526,7 @@ class _PosAppState extends State<PosApp> {
       session.ensureOrderNo(order);
       widget.orders.save(order, announce: false);
     } else if (order.orderNo == null) {
-      order.orderNo = widget.settings.nextOrderNumber(widget.deviceId,
-          atLeast: () {
-            var floor = 0;
-            for (final o in widget.orders.recentAnywhere(limit: 2000)) {
-              final n = int.tryParse(o.displayNo);
-              if (n != null && n > floor) floor = n;
-            }
-            return floor;
-          }());
+      order.orderNo = _nextOrderNo();
       widget.orders.save(order, announce: false);
     }
     // The ticket says which part of the floor the plate is going to, resolved from
@@ -6230,6 +6230,39 @@ class _PosAppState extends State<PosApp> {
 
   void _openDiagnostics(BuildContext context) =>
       _ifScreen(context, 'screen.support', () => _openDiagnosticsNow(context));
+
+  /// The lab rings on its own session, which would pick up the cashier's unsent
+  /// cart as its first order, so it only opens on an empty counter.
+  void _openStressLab(BuildContext context,
+      Future<void> Function(Permission, Widget) pushGated, VoidCallback refresh) {
+    final live = _session;
+    if (live == null) return;
+    if (live.hasLines) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr(context,
+              'Park or pay the order on the counter before the Stress Lab.'))));
+      return;
+    }
+    final store = StressLabStore(
+        db: widget.outboxStore.db, orders: widget.orders, tables: widget.tables);
+    final runner = StressLabRunner(
+      session: PosSession(
+        catalogue: widget.catalogue,
+        orders: widget.orders,
+        outbox: widget.outbox,
+        audit: widget.audit,
+        deviceId: widget.deviceId,
+        cashierId: live.cashierId,
+        nextOrderNo: _nextOrderNo,
+      ),
+      catalogue: widget.catalogue,
+      tables: widget.tables,
+      store: store,
+      printer: StressPrinter(fireKitchen: _fireKitchen, printReceipt: _printReceipt),
+    );
+    unawaited(pushGated(Permission.openSettings,
+        StressLabScreen(runner: runner, onChanged: refresh, log: StressReportLog())));
+  }
 
   void _openDiagnosticsNow(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(

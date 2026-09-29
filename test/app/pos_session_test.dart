@@ -302,7 +302,7 @@ void main() {
   test('payment queues the order and hands back a fresh one', () {
     session.addProduct(pizza);
     final uuid = session.current.uuid;
-    final paid = session.pay();
+    final paid = session.pay()!;
     expect(paid.state, OrderState.paid);
     expect(outboxStore.pendingCount, 1);
     expect(session.current.uuid, isNot(uuid));

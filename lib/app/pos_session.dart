@@ -733,9 +733,16 @@ class PosSession {
 
   /// Bring a parked order back to the counter to edit or pay. The order currently
   /// on screen is parked first if it has lines, so switching tables never loses it.
-  void recall(String uuid) {
+  ///
+  /// Refuses (false) a sale that is already paid or synced: a list read before the
+  /// payment and tapped after it would otherwise put the sale back on the counter
+  /// to be charged a second time. Correcting a paid sale goes through reopen.
+  bool recall(String uuid) {
     final target = orders.byUuid(uuid);
-    if (target == null) return;
+    if (target == null) return false;
+    if (target.state == OrderState.paid || target.state == OrderState.synced) {
+      return false;
+    }
     final active = current;
     if (active.uuid != uuid && active.lines.isNotEmpty) {
       active.state = OrderState.held;
@@ -744,6 +751,7 @@ class PosSession {
     target.state = OrderState.draft;
     orders.save(target);
     _current = target;
+    return true;
   }
 
   /// Start a brand-new order, parking the current one if it has lines.
@@ -790,9 +798,12 @@ class PosSession {
   }
 
   /// Take payment. Writes locally, queues for the server, and starts a fresh order.
-  /// Returns the completed order so the caller can print it.
-  Order pay({List<OrderPayment> payments = const [], double? cashReceived}) {
+  /// Returns the completed order so the caller can print it, or null when there is
+  /// nothing on the counter: a second tap on Charge would otherwise book an empty
+  /// sale carrying real money.
+  Order? pay({List<OrderPayment> payments = const [], double? cashReceived}) {
     final order = current;
+    if (order.lines.isEmpty) return null;
     _detachFromSiblings(order);
     order.state = OrderState.paid;
     _stampOrderNo(order);
@@ -811,9 +822,11 @@ class PosSession {
   /// covered. The share's tenders accrue on the order; once they settle the total
   /// the order is finalized like a normal sale and a fresh order starts. Returns the
   /// remaining balance (0 when fully paid). While a balance remains the order is
-  /// held, so it survives a restart and shows on the floor/open tabs.
-  double payShare({List<OrderPayment> payments = const [], double? cashReceived, double tip = 0}) {
+  /// held, so it survives a restart and shows on the floor/open tabs. Null when
+  /// there is nothing on the counter to pay toward.
+  double? payShare({List<OrderPayment> payments = const [], double? cashReceived, double tip = 0}) {
     final order = current;
+    if (order.lines.isEmpty) return null;
     // A tip on a share raises what is owed too, so the tendered amount (which
     // includes the tip) nets correctly against the balance rather than paying down
     // the food. Additive, since several shares can each carry a tip.
@@ -1237,8 +1250,9 @@ class PosSession {
   /// check discounts only its own lines); tip is whatever was tendered on the check.
   /// The service percentage rides along the same way, taken from the table's stamp
   /// rather than read again, so the checks add up to exactly what the table was
-  /// charged.
-  Order payCheck(
+  /// charged. Null when none of [lineUuids] are still on the table, which is what a
+  /// second tap on the same check looks like.
+  Order? payCheck(
     List<String> lineUuids, {
     List<OrderPayment> payments = const [],
     double? cashReceived,
@@ -1247,6 +1261,7 @@ class PosSession {
     final order = current;
     final ids = lineUuids.toSet();
     final taken = order.lines.where((l) => ids.contains(l.uuid)).toList();
+    if (taken.isEmpty) return null;
     final check = Order(
       deviceId: deviceId,
       cashierId: cashierId,
@@ -1330,24 +1345,12 @@ class PosSession {
       return order;
     }
     final taken = order.lines.where((l) => lineUuids.contains(l.uuid)).toList();
-    if (taken.isEmpty) return order;
+    if (taken.isEmpty || !canMoveLines(lineUuids)) return order;
+    final whole = taken.length == order.lines.length;
+    final joined = _tabToJoin(order, targetTableLabel, targetOrderUuid);
+    if (whole && joined == null) return _relabel(order, targetTableLabel);
     _carryOrderDiscount(order.discountPercent, taken);
-    Order? named;
-    if (targetOrderUuid != null) {
-      named = orders.byUuid(targetOrderUuid);
-      if (named != null && named.tableLabel != targetTableLabel) named = null;
-    }
-    Order? existing;
-    if (named == null) {
-      for (final o in orders.held()) {
-        if (o.tableLabel == targetTableLabel && o.uuid != order.uuid) {
-          existing = o;
-          break;
-        }
-      }
-    }
-    final target = named ??
-        existing ??
+    final target = joined ??
         (Order(
           deviceId: deviceId,
           cashierId: cashierId,
@@ -1359,6 +1362,7 @@ class PosSession {
     // (already priced) are not discounted a second time by it.
     _flattenOrderDiscount(target);
     target.lines.addAll(taken);
+    if (whole) _carryMoney(order, target);
     orders.save(target);
     order.lines.removeWhere((l) => lineUuids.contains(l.uuid));
     audit.record(cashierId, 'order.moved',
@@ -1373,6 +1377,55 @@ class PosSession {
     return target;
   }
 
+  /// Whether [lineUuids] may leave the current order. Money taken on a table was
+  /// paid toward the whole bill, so part of a part-paid table cannot move without
+  /// deciding which items that money bought: settle it, or move the whole table.
+  bool canMoveLines(Set<String> lineUuids) =>
+      current.payments.isEmpty ||
+      current.lines.every((l) => lineUuids.contains(l.uuid));
+
+  /// The open tab on [table] that moved lines join: the bill the waiter named if it
+  /// is still there, else the first one sitting there, else null for an empty table.
+  Order? _tabToJoin(Order from, String table, String? namedUuid) {
+    if (namedUuid != null) {
+      final named = orders.byUuid(namedUuid);
+      if (named != null && named.tableLabel == table) return named;
+    }
+    for (final o in orders.held()) {
+      if (o.tableLabel == table && o.uuid != from.uuid) return o;
+    }
+    return null;
+  }
+
+  /// A whole table moving to an empty one is the same bill at a new table, not a
+  /// new bill: its number is already on the kitchen tickets, and the shares taken
+  /// on it are already on the till. Only the table changes.
+  Order _relabel(Order order, String table) {
+    _detachFromSiblings(order);
+    order
+      ..tableLabel = table
+      ..type = OrderType.dineIn
+      ..state = OrderState.held;
+    orders.save(order);
+    audit.record(cashierId, 'order.moved', detail: '${order.uuid}->$table|whole table');
+    _current = _blankOrder();
+    return order;
+  }
+
+  /// Hand the money on a bill that is being folded away to the bill that absorbs
+  /// it, so a share already paid is not charged again or lost from the drawer.
+  static void _carryMoney(Order from, Order to) {
+    to.payments = [...to.payments, ...from.payments];
+    to.tip += from.tip;
+    final cash = from.cashReceived;
+    if (cash != null) to.cashReceived = (to.cashReceived ?? 0) + cash;
+    to.partnerId ??= from.partnerId;
+    if ((to.customerName ?? '').isEmpty) {
+      to.customerName = from.customerName;
+      to.customerPhone = from.customerPhone;
+    }
+  }
+
   /// Fold another table's open order into the current one, then discard the source.
   /// Used for "merge tables". A no-op if the source is missing or is this order. One
   /// merged bill carries one service percentage, so the surviving order keeps its own.
@@ -1385,6 +1438,7 @@ class PosSession {
     _carryOrderDiscount(source.discountPercent, source.lines);
     _flattenOrderDiscount(current);
     current.lines.addAll(source.lines);
+    _carryMoney(source, current);
     orders.save(current);
     _detachFromSiblings(source);
     orders.delete(source.uuid);

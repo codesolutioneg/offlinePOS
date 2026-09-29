@@ -122,7 +122,7 @@ void main() {
   test('a paid order carries the charge into the outbox payload', () {
     session.addProduct(pizza, qty: 2);
     final paid = session.pay(
-        payments: [const OrderPayment(methodId: 1, amount: 224, label: 'Cash')]);
+        payments: [const OrderPayment(methodId: 1, amount: 224, label: 'Cash')])!;
     expect(paid.total, 224);
     final sent = paid.toServerPayload();
     final line = (sent['lines'] as List).single as Map;
@@ -147,10 +147,10 @@ void main() {
     final first = session.current.lines.first.uuid;
     final second = session.current.lines.last.uuid;
 
-    final checkA = session.payCheck([first]);
+    final checkA = session.payCheck([first])!;
     // The setting moving mid-service must not shift the second check's share.
     settings.serviceChargePercent = 50;
-    final checkB = session.payCheck([second]);
+    final checkB = session.payCheck([second])!;
 
     expect(checkA.serviceChargePercent, 12);
     expect(checkB.serviceChargePercent, 12);
@@ -168,7 +168,7 @@ void main() {
     final quoted = session.checkTotal(picked);
     expect(quoted, closeTo(100 * 0.9 * 1.12, 0.0001));
 
-    final check = session.payCheck([picked.single.uuid]);
+    final check = session.payCheck([picked.single.uuid])!;
     expect(check.total, closeTo(quoted, 0.0001));
   });
 

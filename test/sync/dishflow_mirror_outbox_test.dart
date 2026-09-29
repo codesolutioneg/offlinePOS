@@ -61,7 +61,7 @@ void main() {
     session.addProduct(burger);
     final paid = session.pay(payments: const [
       OrderPayment(methodId: -1, amount: 50, label: 'Cash'),
-    ]);
+    ])!;
     await Future<void>.delayed(Duration.zero);
     expect(store.pendingSalesCount, 1);
     expect(store.pendingDishflowCount, 1);
@@ -115,7 +115,7 @@ void main() {
     session.addProduct(burger);
     final paid = session.pay(payments: const [
       OrderPayment(methodId: -1, amount: 50, label: 'Cash'),
-    ]);
+    ])!;
     await Future<void>.delayed(Duration.zero);
     expect(store.pendingDishflowCount, 1);
 

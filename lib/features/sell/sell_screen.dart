@@ -2119,6 +2119,7 @@ class _SellScreenState extends State<SellScreen> {
       {String? slipTitle}) {
     final settling = s.current; // finalized in place if this share settles it
     final balance = s.payShare(payments: payments, cashReceived: cashReceived, tip: tip);
+    if (balance == null) return;
     final paidNow = payments.fold(0.0, (a, p) => a + p.amount);
     if (balance <= 0.001 && _splitPaying && settling.tableLabel != null) {
       final next =
@@ -2159,6 +2160,7 @@ class _SellScreenState extends State<SellScreen> {
     if (tip > 0) s.setTip(tip);
     final table = s.current.tableLabel;
     final order = s.pay(payments: payments, cashReceived: cashReceived);
+    if (order == null) return;
     if (_splitPaying && table != null) {
       final next = s.orders.held().where((o) => o.tableLabel == table);
       if (next.isNotEmpty) s.recall(next.first.uuid);
@@ -2221,6 +2223,7 @@ class _SellScreenState extends State<SellScreen> {
       double tip, double? cashReceived, String? label) {
     final check =
         s.payCheck(ids, payments: payments, cashReceived: cashReceived, tip: tip);
+    if (check == null) return;
     // Read before the rebuild, and only while the table is still open: once the last
     // check is paid the session has moved on to a fresh blank order.
     final owed = s.hasLines ? s.current.balance : 0.0;
@@ -2889,6 +2892,15 @@ class _SellScreenState extends State<SellScreen> {
         final lines = _peelPicks(picks);
         if (lines.isEmpty) return;
         final ids = lines.map((l) => l.uuid).toSet();
+        if (!s.canMoveLines(ids)) {
+          showToast(
+              context,
+              tr(context,
+                  'Part of this bill is already paid. Move the whole table or settle it first.'),
+              kind: ToastKind.error,
+              key: const Key('move-refused-part-paid'));
+          return;
+        }
         _changed(() => s.moveLinesToTable(ids, label,
             targetOrderUuid: dest is String ? dest : null));
         if (!mounted) return;
@@ -5252,7 +5264,13 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     });
   }
 
+  // A sheet books once. A double tap on Charge lands both taps before the pop
+  // closes it, and the second would book a phantom sale and pop the sell screen.
+  bool _submitted = false;
+
   void _confirm() {
+    if (_submitted) return;
+    _submitted = true;
     final label = _split
         ? 'Split'
         : (_method?.name ?? 'Cash');
@@ -5286,6 +5304,8 @@ class _PaymentSheetState extends State<_PaymentSheet> {
           kind: ToastKind.error, key: const Key('on-account-refused'));
       return;
     }
+    if (_submitted) return;
+    _submitted = true;
     widget.onConfirm(
       [OrderPayment(methodId: method.id, amount: _grand, label: kOnAccountLabel)],
       kOnAccountLabel,

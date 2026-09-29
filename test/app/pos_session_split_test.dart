@@ -63,7 +63,7 @@ void main() {
       final pizzaLine = lineFor(10);
 
       final check = session.payCheck([pizzaLine],
-          payments: const [OrderPayment(methodId: 1, amount: 100, label: 'Cash')]);
+          payments: const [OrderPayment(methodId: 1, amount: 100, label: 'Cash')])!;
 
       expect(check.state, OrderState.paid);
       expect(check.total, 100);
@@ -156,8 +156,9 @@ void main() {
     test('moving a line off a discounted table keeps its discounted price', () {
       session.setTable('1');
       session.addProduct(pizza); // 100
+      session.addProduct(cola); // stays behind, so this is a partial move
       session.setDiscount(10); // whole-order 10%
-      expect(session.current.lines.single.total, 100); // line total is pre-order-discount
+      expect(session.current.lines.first.total, 100); // line total is pre-order-discount
       final move = {lineFor(10)};
 
       final target = session.moveLinesToTable(move, '2');
@@ -165,6 +166,19 @@ void main() {
       // The moved line now owns the 10% as a line discount, so it is worth 90 on a
       // fresh (undiscounted) table rather than snapping back to 100.
       expect(target.lines.single.total, closeTo(90, 0.001));
+    });
+
+    test('moving a whole discounted table keeps the bill and its discount', () {
+      session.setTable('1');
+      session.addProduct(pizza); // 100
+      session.setDiscount(10);
+      final uuid = session.current.uuid;
+
+      final target = session.moveLinesToTable({lineFor(10)}, '2');
+
+      expect(target.uuid, uuid);
+      expect(target.discountPercent, 10);
+      expect(target.total, closeTo(90, 0.001));
     });
 
     test('moving into an already-discounted table does not double-discount', () {

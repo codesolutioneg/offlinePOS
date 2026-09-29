@@ -1208,6 +1208,43 @@ const Map<String, String> _ar = {
   'Run this write?': 'تشغيل أمر الكتابة؟',
   'This changes the live till database. The floor and the next sale will see it.':
       'هذا يغيّر قاعدة الجهاز الحيّة. المخطط والبيع التالي سيريان التغيير.',
+  'Stress Lab': 'مختبر الضغط',
+  'Part of this bill is already paid. Move the whole table or settle it first.':
+      'جزء من الفاتورة دي اتدفع خلاص. انقل الترابيزة كلها أو اقفل الحساب الأول.',
+  'Order flood, fill every table, pay on a full till':
+      'سيل طلبات، ملء كل الطربيزات، الدفع على جهاز مليان',
+  'Park or pay the order on the counter before the Stress Lab.':
+      'علّق أو ادفع الطلب اللي على الشاشة الأول قبل مختبر الضغط.',
+  'Test bench only. Lab orders are real rows on this till and are queued for Odoo. '
+          'Press "Clean up" before closing the shift.':
+      'للتجربة فقط. طلبات المختبر طلبات حقيقية على الجهاز ومتحطّة في طابور أودو. '
+          'اضغط «تنظيف» قبل قفل الوردية.',
+  'Seconds': 'ثواني',
+  'Old sales': 'مبيعات قديمة',
+  'Order flood': 'سيل طلبات',
+  'Fill every table': 'املأ كل الطربيزات',
+  'Settle the tables': 'ادفع الطربيزات',
+  'Pay on a full till': 'الدفع على جهاز مليان',
+  'Clean up': 'تنظيف',
+  '{done} done · {failed} failed': '{done} تم · {failed} فشل',
+  'Time per operation: avg {avg} ms · p95 {p95} ms · max {max} ms':
+      'زمن العملية: المتوسط {avg} ms · ‏95% تحت {p95} ms · الأبطأ {max} ms',
+  '{n} orders in {s} s': '{n} طلب في {s} ثانية',
+  'Order {n} failed: {error}': 'الطلب {n} فشل: {error}',
+  'Numbers: {distinct} distinct · repeated {repeated} {which}· without a number {none}':
+      'الأرقام: {distinct} مختلف · متكرر {repeated} {which}· من غير رقم {none}',
+  'Paid and waiting for the shift close: {paid} · not in the queue: {missing}':
+      'مدفوع ومستني قفل الوردية: {paid} · مش في الطابور: {missing}',
+  'No free table on the floor: added 30 in section "{section}"':
+      'مفيش طربيزة فاضية: اتضاف 30 طربيزة في قسم «{section}»',
+  '{n} sales on the till while timing': '{n} بيعة على الجهاز وقت القياس',
+  'Print to the kitchen and receipt printers': 'اطبع على طابعات المطبخ والإيصالات',
+  'Kitchen: {asked} orders · sent {sent} · spooled {spooled} · lost {lost} · '
+          'no answer {none} · receipts {receipts} · printers done after {s} s':
+      'المطبخ: {asked} طلب · اتطبع {sent} · في طابور الطباعة {spooled} · ضاع {lost} · '
+          'من غير رد {none} · إيصالات {receipts} · الطابعات خلصت بعد {s} ثانية',
+  'Removed {n} lab orders, their queued deliveries and the "{section}" tables':
+      'اتمسح {n} طلب من المختبر ومن طابور الإرسال، واتمسحت طربيزات قسم «{section}»',
   'Run a statement to see rows.': 'شغّل جملة لترى الصفوف.',
   'Running...': 'جارٍ التشغيل...',
   'Copy SQL': 'نسخ SQL',
