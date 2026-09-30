@@ -10,6 +10,7 @@ import 'package:offline_pos/core/printing/kitchen_ticket.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/theme/app_colors.dart';
 import 'package:offline_pos/domain/catalogue.dart';
+import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -81,6 +82,33 @@ void main() {
     expect(toastColour(t), AppColors.error);
   });
 
+  testWidgets('a delivery bag parks itself, not the order rung while it printed',
+      (t) async {
+    session.startFresh(OrderType.carDelivery);
+    session.addProduct(const Product(id: 11, name: 'Water', price: 10, categoryId: 1));
+    final bag = session.current.uuid;
+    final held = <String>[];
+    await t.pumpWidget(MaterialApp(
+      home: SellScreen(
+        session: session,
+        formatAmount: (v) => v.toStringAsFixed(2),
+        onSendToKitchen: () async {
+          // The cashier takes the next call while the printer is tried.
+          session.newOrder();
+          session.addProduct(
+              const Product(id: 11, name: 'Water', price: 10, categoryId: 1));
+          return KitchenFireResult.sent;
+        },
+        onHold: () => held.add(session.current.uuid),
+      ),
+    ));
+    await t.tap(find.byKey(const Key('send-kitchen')));
+    await t.pumpAndSettle();
+
+    expect(held, isEmpty, reason: 'the order on screen is not the bag that was fired');
+    expect(session.orders.byUuid(bag)?.state, OrderState.held);
+  });
+
   testWidgets('held print jobs are visible beside the online badge', (t) async {
     await t.pumpWidget(MaterialApp(
       home: SellScreen(
@@ -91,6 +119,19 @@ void main() {
     ));
     expect(find.byKey(const Key('spool-count')), findsOneWidget);
     expect(find.text('2 to print'), findsOneWidget);
+  });
+
+  testWidgets('sales the server refused are shown apart, in red', (t) async {
+    await t.pumpWidget(MaterialApp(
+      home: SellScreen(
+        session: session,
+        formatAmount: (v) => v.toStringAsFixed(2),
+        online: ValueNotifier(true),
+        refusedToSync: () => 3,
+      ),
+    ));
+    expect(find.byKey(const Key('refused-count')), findsOneWidget);
+    expect(find.text('3 refused'), findsOneWidget);
   });
 
   testWidgets('nothing held, nothing shown', (t) async {

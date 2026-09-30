@@ -17,11 +17,17 @@ class SqliteOutboxStore implements OutboxStore {
   Future<void> append(String kind, String payloadUuid, Map<String, dynamic> payload) async {
     // Re-queuing the same record replaces the payload rather than adding a second
     // entry, so a redraw or an edit cannot turn one sale into two deliveries.
+    //
+    // The replacement also takes a fresh id, which is what makes the id a version.
+    // A send already on the wire holds the old id, so its [markSent] finds no row
+    // and the newer payload stays owed; without this the send of the old payload
+    // would mark the new one delivered and it would never go out.
     _db.raw.execute(
       '''
       INSERT INTO outbox (kind, payload_uuid, payload, created_at)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(kind, payload_uuid) DO UPDATE SET
+        id         = (SELECT MAX(id) FROM outbox) + 1,
         payload    = excluded.payload,
         sent_at    = NULL,
         last_error = NULL
@@ -62,6 +68,15 @@ class SqliteOutboxStore implements OutboxStore {
   Future<void> markSent(int id) async {
     _db.raw.execute('UPDATE outbox SET sent_at = ? WHERE id = ?',
         [DateTime.now().toUtc().toIso8601String(), id]);
+  }
+
+  /// Mark several rows sent in one synchronous step, so a caller can put it inside
+  /// its own transaction with the writes it has to agree with.
+  void markAllSent(Iterable<int> ids) {
+    final at = DateTime.now().toUtc().toIso8601String();
+    for (final id in ids) {
+      _db.raw.execute('UPDATE outbox SET sent_at = ? WHERE id = ?', [at, id]);
+    }
   }
 
   @override
@@ -178,14 +193,24 @@ class SqliteOutboxStore implements OutboxStore {
           "AND dead_at IS NULL AND kind = '$_order'")
       .first['c'] as int;
 
-  /// Paid sales still waiting to reach Dishflow's owner view.
+  /// Paid sales still waiting to reach Dishflow's owner view, and the bags still
+  /// waiting to reach their driver's app.
   int get pendingDishflowCount => _db.raw
       .select('SELECT COUNT(*) c FROM outbox WHERE sent_at IS NULL '
-          "AND dead_at IS NULL AND kind = '$_dishflow'")
+          "AND dead_at IS NULL AND kind IN ('$_dishflow', '$_driver')")
+      .first['c'] as int;
+
+  /// Sales, mirror copies and driver bags the server refused, heartbeat and audit
+  /// aside. They leave the pending count when refused, so without their own count
+  /// a refusal would read as delivered.
+  int get refusedCount => _db.raw
+      .select('SELECT COUNT(*) c FROM outbox WHERE dead_at IS NOT NULL '
+          "AND kind IN ('$_order', '$_dishflow', '$_driver')")
       .first['c'] as int;
 
   /// Kinds are part of the on-disk contract; see docs/ODOO_SYNC.md.
   static const String _heartbeat = 'device.status';
   static const String _order = 'order.push';
   static const String _dishflow = 'dishflow.sale.push';
+  static const String _driver = 'dishflow.driver.order.push';
 }

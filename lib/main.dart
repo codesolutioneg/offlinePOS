@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -47,6 +48,7 @@ import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
 import 'core/printing/printer_registry.dart';
 import 'core/sync/batch_push.dart';
+import 'core/sync/closed_shift_backlog.dart';
 import 'core/sync/dishflow_wiring.dart';
 import 'core/sync/http_post.dart';
 import 'core/sync/outbox.dart';
@@ -100,6 +102,29 @@ Future<void> main() async {
   }
 }
 
+/// Errors nothing caught go to the audit log, which support reads, rather than
+/// only to the console of a till nobody is watching. The default handling runs too.
+void _auditUncaught(AuditLog audit) {
+  final previous = FlutterError.onError;
+  FlutterError.onError = (details) {
+    _recordUncaught(audit, details.exception);
+    previous?.call(details);
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    _recordUncaught(audit, error);
+    return false;
+  };
+}
+
+void _recordUncaught(AuditLog audit, Object error) {
+  try {
+    audit.record('system', 'app.error', detail: '$error');
+  } catch (e) {
+    // The database itself may be what failed; the console is all that is left.
+    debugPrint('app.error not audited: $e (original: $error)');
+  }
+}
+
 /// Everything the till needs before it can show its first screen.
 ///
 /// Anything started here that outlives a throw is registered on [unwind], so a
@@ -139,6 +164,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   final catalogue = CatalogueStore(db);
   final users = UserStore(db);
   final audit = AuditLog(db);
+  _auditUncaught(audit);
   final outboxStore = SqliteOutboxStore(db);
   final devices = DeviceStore(db);
 
@@ -325,8 +351,8 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     // The shop's option to have its night arrive as one sales order. Answers
     // false and costs nothing while the switch is off. Close always passes the
     // shift's ticket uuids so a backlog from another shift cannot ride along.
-    mergeBatch: ({Set<String>? onlyUuids}) async {
-      final ok = await batchPush.run(onlyUuids: onlyUuids);
+    mergeBatch: ({Set<String>? onlyUuids, String? batchKey}) async {
+      final ok = await batchPush.run(onlyUuids: onlyUuids, batchKey: batchKey);
       sync.lastMergeSkipReason = batchPush.lastSkipReason;
       if (ok) {
         final ack = batchPush.lastAck;
@@ -339,24 +365,26 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     },
     // Same path Close session uses, so a failed close finishes as one SO rather
     // than a pile of per-sale bookings without delivery lines.
+    // Each closed shift still owed is booked under its own key, oldest first, and
+    // the open shift's sales are left for its own close.
     closedShiftRetry: () async {
-      final shift = ShiftStore(db).latestShift();
-      if (shift == null) return null;
-      var shiftOrders = orders.awaitingSyncInShift(shift);
-      // Recovery: tickets outside the latest window (older failed closes) still
-      // need a path; Sync now / armed retry folds them under this shift's key.
-      if (shiftOrders.isEmpty) shiftOrders = orders.awaitingSync();
-      if (shiftOrders.isEmpty) {
-        return const ShiftFlushResult(merged: true, orderCount: 0);
+      ShiftFlushResult result = const ShiftFlushResult(merged: true, orderCount: 0);
+      final tried = <String>{};
+      for (var i = 0; i < kBacklogShiftLookback; i++) {
+        final backlog = nextClosedShiftBacklog(ShiftStore(db), orders);
+        if (backlog == null || !tried.add(backlog.batchKey)) return result;
+        result = await sync.flushClosedShift(
+          orderUuids: {for (final o in backlog.orders) o.uuid},
+          batchKey: backlog.batchKey,
+          enqueueOrders: () async {
+            for (final o in backlog.orders) {
+              await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
+            }
+          },
+        );
+        if (!result.merged) return result;
       }
-      return sync.flushClosedShift(
-        orderUuids: {for (final o in shiftOrders) o.uuid},
-        enqueueOrders: () async {
-          for (final o in shiftOrders) {
-            await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
-          }
-        },
-      );
+      return result;
     },
     // So a close that failed at midnight is still owed in the morning. start()
     // reads it back before the first tick.

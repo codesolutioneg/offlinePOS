@@ -16,7 +16,7 @@ const kStressCash = PaymentMethod(id: 1, name: 'Cash', isCash: true);
 /// session, so a stress run exercises the same code a real sale does.
 class StressTill {
   StressTill({this.deviceId = 'till-1'}) : db = Db.open(':memory:') {
-    ShiftStore(db).openShift(openingFloat: 0, cashierId: 'sara');
+    shifts = ShiftStore(db)..openShift(openingFloat: 0, cashierId: 'sara');
     orders = OrderStore(db, ownDeviceId: deviceId);
     settings = SettingsStore(db);
     outboxStore = SqliteOutboxStore(db);
@@ -34,6 +34,7 @@ class StressTill {
 
   final String deviceId;
   final Db db;
+  late final ShiftStore shifts;
   late final OrderStore orders;
   late final SettingsStore settings;
   late final SqliteOutboxStore outboxStore;
@@ -46,8 +47,10 @@ class StressTill {
   ];
 
   /// A cashier session with the same order-number rule `PosApp` installs: climb
-  /// past the highest number already on the shop.
-  PosSession session({String cashierId = 'sara'}) => PosSession(
+  /// past the highest number already on the shop, and never stamp a sale before
+  /// the open shift started. [clock] stands in for the device clock.
+  PosSession session({String cashierId = 'sara', DateTime Function()? clock}) =>
+      PosSession(
         catalogue: CatalogueStore(db),
         orders: orders,
         outbox: outbox,
@@ -56,6 +59,8 @@ class StressTill {
         cashierId: cashierId,
         nextOrderNo: () =>
             settings.nextOrderNumber(deviceId, atLeast: orders.orderNumberFloor()),
+        shiftOpenedAt: () => shifts.currentOpenShift()?.openedAt,
+        clock: clock,
       );
 
   /// Ring [lines] different products onto the current order.

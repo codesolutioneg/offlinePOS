@@ -50,6 +50,8 @@ class ReportsHubScreen extends StatefulWidget {
     super.key,
     required this.allOrders,
     this.shopOrders,
+    this.ordersIn,
+    this.shopOrdersIn,
     this.cashTenderIds = const {},
     required this.categories,
     required this.formatAmount,
@@ -84,6 +86,14 @@ class ReportsHubScreen extends StatefulWidget {
   /// Paid/synced sales from every till on the LAN (for Flash). Falls back to
   /// [allOrders] when null so a single-till shop still works.
   final List<Order>? shopOrders;
+
+  /// This till's sales between two local moments (`to` exclusive, null open),
+  /// read without a cap. When set, reports read their period through it rather
+  /// than from [allOrders], which is only the most recent slice.
+  final List<Order> Function(DateTime? from, DateTime? to)? ordersIn;
+
+  /// The same across every till on the LAN, for Flash; ahead of [shopOrders].
+  final List<Order> Function(DateTime? from, DateTime? to)? shopOrdersIn;
   final List<Category> categories;
   final String Function(double) formatAmount;
 
@@ -142,37 +152,28 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       .where((o) => _type == null || o.type == _type)
       .toList();
 
+  /// This till's sales in a window, read from the store when it can be asked
+  /// and from the preloaded list otherwise.
+  List<Order> _localIn(DateTime? from, DateTime? to) =>
+      widget.ordersIn?.call(from, to) ?? widget.allOrders;
+
   /// Local till orders in [period].
-  List<Order> _filteredFor(ReportPeriodChoice period) =>
-      _applyStaffType(widget.allOrders.where((o) => _inPeriod(o, period)));
+  List<Order> _filteredFor(ReportPeriodChoice period) {
+    final (from, to) = _windowOf(period);
+    return _applyStaffType(_localIn(from, to).where((o) => _inPeriod(o, period)));
+  }
 
   /// Every till on the LAN in [period] (Flash).
   List<Order> _shopFilteredFor(ReportPeriodChoice period) {
-    final source = widget.shopOrders ?? widget.allOrders;
+    final (from, to) = _windowOf(period);
+    final source = widget.shopOrdersIn?.call(from, to) ??
+        widget.shopOrders ??
+        _localIn(from, to);
     return _applyStaffType(source.where((o) => _inPeriod(o, period)));
   }
 
-  (DateTime?, DateTime?) _windowOf(ReportPeriodChoice period) {
-    final custom = period.custom;
-    if (custom != null) {
-      return (custom.start, custom.end.add(const Duration(days: 1)));
-    }
-    final now = DateTime.now();
-    final startOfToday = DateTime(now.year, now.month, now.day);
-    return switch (period.range ?? ReportRange.today) {
-      ReportRange.openShift => (_shiftOpenedAt, null),
-      ReportRange.today => (startOfToday, null),
-      ReportRange.yesterday => (
-          startOfToday.subtract(const Duration(days: 1)),
-          startOfToday
-        ),
-      ReportRange.last7 => (
-          startOfToday.subtract(const Duration(days: 6)),
-          null
-        ),
-      ReportRange.all => (null, null),
-    };
-  }
+  (DateTime?, DateTime?) _windowOf(ReportPeriodChoice period) =>
+      period.window(shiftOpenedAt: _shiftOpenedAt);
 
   double? _rangeHoursOf(ReportPeriodChoice period) {
     final (from, to) = _windowOf(period);
@@ -539,7 +540,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                                 .add(const Duration(days: 1));
                         final length = end.difference(from);
                         final prevFrom = from.subtract(length);
-                        previous = _applyStaffType(widget.allOrders.where((x) {
+                        previous = _applyStaffType(
+                            _localIn(prevFrom, from).where((x) {
                           final at = x.createdAt.toLocal();
                           return !at.isBefore(prevFrom) && at.isBefore(from);
                         }));

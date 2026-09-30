@@ -22,6 +22,7 @@ import '../../domain/delivery.dart';
 import '../../domain/order.dart';
 import '../customers/customer_management_screen.dart' show CustomerFormDialog, CustomerFormResult;
 import '../tables/floor_action_bar.dart';
+import 'lost_void_banner.dart';
 import 'modifier_sheet.dart';
 import 'order_actions.dart';
 import 'split_check_screen.dart';
@@ -42,6 +43,8 @@ class SellScreen extends StatefulWidget {
     this.onChanged,
     this.onSignOut,
     this.staleness,
+    this.lostVoids,
+    this.onLostVoidResolved,
     this.pricesAt,
     this.catalogueChanged,
     this.drawer,
@@ -51,6 +54,7 @@ class SellScreen extends StatefulWidget {
     this.onLineVoided,
     this.online,
     this.pendingToSync,
+    this.refusedToSync,
     this.spooledJobs,
     this.categoryColors = const {},
     this.productImages = const {},
@@ -139,6 +143,11 @@ class SellScreen extends StatefulWidget {
 
   final Duration? staleness;
 
+  /// Kitchen cancel slips that reached no printer, shown until each is reprinted
+  /// or the cashier says the kitchen was told.
+  final ValueListenable<List<LostKitchenVoid>>? lostVoids;
+  final void Function(int id)? onLostVoidResolved;
+
   /// When the menu on this till last came down from the server, in UTC. Shown
   /// beside the online badge as a plain fact rather than only as a warning once the
   /// prices are a day old, because "is this the current price?" is a question a
@@ -193,6 +202,10 @@ class SellScreen extends StatefulWidget {
 
   /// How many sales are held on the till waiting for the shift-close batch.
   final int Function()? pendingToSync;
+
+  /// How many of them the server refused. Shown in red beside the pending count,
+  /// because a refused sale leaves that count without ever arriving.
+  final int Function()? refusedToSync;
 
   /// How many print jobs (receipts and kitchen tickets) are held because a printer
   /// would not take them. Shown beside the online badge, since a held ticket is
@@ -1957,6 +1970,7 @@ class _SellScreenState extends State<SellScreen> {
     // "Sent to kitchen" before the printer has answered is the lie this fixes.
     final deliveryType =
         s.current.type.isDelivery ? s.current.type : null;
+    final fired = s.current.uuid;
     final result = await fire();
     if (!mounted) return;
     setState(() {});
@@ -1964,7 +1978,9 @@ class _SellScreenState extends State<SellScreen> {
     // Dishflow: after kitchen, every delivery bag auto-suspends so the till is
     // free for the next call. Park even when the printer spool failed — the
     // lines are marked and the waiting list is where the cashier resumes to pay.
-    if (deliveryType != null && widget.onHold != null) {
+    // Only the bag that was fired: a cashier who moved on while the printer was
+    // tried already parked it by moving on, and the order now on screen is not it.
+    if (deliveryType != null && widget.onHold != null && s.current.uuid == fired) {
       widget.onHold!();
     }
   }
@@ -3118,6 +3134,11 @@ class _SellScreenState extends State<SellScreen> {
               ),
             if (widget.staleness != null && widget.staleness!.inHours >= 24)
               _StaleBanner(age: widget.staleness!),
+            if (widget.lostVoids != null)
+              LostVoidBanner(
+                lost: widget.lostVoids!,
+                onResolved: widget.onLostVoidResolved ?? (_) {},
+              ),
             Expanded(
                 child: _noShift ? _noShiftGate() : _sellBody(products)),
           ],
@@ -3351,6 +3372,7 @@ class _SellScreenState extends State<SellScreen> {
     final online = widget.online;
     Widget badge(bool isOnline) {
       final pending = widget.pendingToSync?.call() ?? 0;
+      final refused = widget.refusedToSync?.call() ?? 0;
       final held = widget.spooledJobs?.call() ?? 0;
       final color = isOnline
           ? AppColors.success
@@ -3373,6 +3395,22 @@ class _SellScreenState extends State<SellScreen> {
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   label: Text('$pending ${tr(context, 'to sync')}', style: const TextStyle(fontSize: 11)),
+                ),
+              ),
+            if (refused > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Chip(
+                  key: const Key('refused-count'),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                  avatar: Icon(Icons.error_outline,
+                      size: 14, color: Theme.of(context).colorScheme.onErrorContainer),
+                  label: Text('$refused ${tr(context, 'refused')}',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context).colorScheme.onErrorContainer)),
                 ),
               ),
             // When the prices on the grid came down. The one fact behind "is this

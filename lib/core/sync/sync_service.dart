@@ -156,7 +156,10 @@ class SyncService {
   ///
   /// Runs on shift close and on the retry that finishes one — never on the
   /// read-only timer, and never as a silent fall-through to per-sale booking.
-  final Future<bool> Function({Set<String>? onlyUuids})? mergeBatch;
+  ///
+  /// [batchKey] is the idempotency key to book under: the uuid of the shift the
+  /// tickets belong to. Null falls back to the latest shift.
+  final Future<bool> Function({Set<String>? onlyUuids, String? batchKey})? mergeBatch;
 
   /// Retry a failed close the same way Close session books: shift-scoped merge.
   /// Injected from main so this class stays free of OrderStore / ShiftStore.
@@ -196,6 +199,10 @@ class SyncService {
 
   /// Badge number: Odoo queue plus Dishflow mirror queue.
   int get pendingToSync => pendingSales + pendingDishflow;
+
+  /// Sales and mirror copies the server refused: off the badge's pending count,
+  /// and not delivered either.
+  int get refusedToSync => _outboxStore.refusedCount;
 
   /// True when something is registered that can actually deliver.
   ///
@@ -521,6 +528,7 @@ class SyncService {
   /// [orderUuids] must be the paid tickets inside that shift's window (see
   /// [OrderStore.awaitingSyncInShift]). Rebuilds their wire payloads via
   /// [enqueueOrders] first so delivery/tip/service fees are not stale zeros.
+  /// [batchKey] is the uuid of the shift those tickets belong to.
   ///
   /// Does **not** fall back to per-sale booking: a refused merge leaves the
   /// tickets queued and returns [ShiftFlushResult.merged] false so the cashier
@@ -528,6 +536,7 @@ class SyncService {
   Future<ShiftFlushResult> flushClosedShift({
     required Set<String> orderUuids,
     required Future<void> Function() enqueueOrders,
+    String? batchKey,
   }) async {
     if (_state == SyncState.working) {
       final wait = _flushDone;
@@ -544,7 +553,7 @@ class SyncService {
       await _queueHeartbeat();
       final merged = orderUuids.isEmpty
           ? true
-          : await _mergeBatchIfAsked(onlyUuids: orderUuids);
+          : await _mergeBatchIfAsked(onlyUuids: orderUuids, batchKey: batchKey);
       // Audit/heartbeat only — never drain order.push one-by-one after a close.
       sentThisRun = await _outbox.drain(kinds: _nonSaleKinds);
       if (sentThisRun > 0) _outboxStore.pruneSent();
@@ -771,10 +780,10 @@ class SyncService {
     }
   }
 
-  Future<bool> _mergeBatchIfAsked({Set<String>? onlyUuids}) async {
+  Future<bool> _mergeBatchIfAsked({Set<String>? onlyUuids, String? batchKey}) async {
     final merge = mergeBatch;
     if (merge == null) return false;
-    return await merge(onlyUuids: onlyUuids);
+    return await merge(onlyUuids: onlyUuids, batchKey: batchKey);
   }
 
   /// Re-queue paid orders that are not yet on the wire. Exposed so a caller can run

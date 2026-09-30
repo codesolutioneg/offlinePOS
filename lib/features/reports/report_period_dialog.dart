@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../domain/business_day.dart';
 
 /// Preset windows offered when opening a single report.
 enum ReportRange { openShift, today, yesterday, last7, all }
@@ -34,28 +35,35 @@ class ReportPeriodChoice {
   final ReportRange? range;
   final DateTimeRange? custom;
 
-  /// Whether [when] falls inside this window, read in local time. A custom range
-  /// includes its whole last day.
-  bool contains(DateTime when, {DateTime? shiftOpenedAt}) {
-    final at = when.toLocal();
+  /// The window in local time, `to` exclusive, null ends open. Days are trading
+  /// days, opening at the shop's cutover hour rather than midnight, so "Today" at
+  /// 1am still holds the evening service it belongs to. A custom range includes
+  /// its whole last trading day.
+  (DateTime?, DateTime?) window({DateTime? shiftOpenedAt, DateTime? now}) {
     final c = custom;
-    if (c != null) {
-      final end = c.end.add(const Duration(days: 1));
-      return !at.isBefore(c.start) && at.isBefore(end);
-    }
-    final now = DateTime.now();
-    final startOfToday = DateTime(now.year, now.month, now.day);
+    if (c != null) return (_opens(c.start), _opens(c.end, plusDays: 1));
+    final today = BusinessDay.of(now ?? DateTime.now()).date;
     return switch (range ?? ReportRange.today) {
-      ReportRange.openShift =>
-        shiftOpenedAt != null && !at.isBefore(shiftOpenedAt),
-      ReportRange.today => !at.isBefore(startOfToday),
-      ReportRange.yesterday =>
-        !at.isBefore(startOfToday.subtract(const Duration(days: 1))) &&
-            at.isBefore(startOfToday),
-      ReportRange.last7 =>
-        !at.isBefore(startOfToday.subtract(const Duration(days: 6))),
-      ReportRange.all => true,
+      ReportRange.openShift => (shiftOpenedAt, null),
+      ReportRange.today => (_opens(today), null),
+      ReportRange.yesterday => (_opens(today, plusDays: -1), _opens(today)),
+      ReportRange.last7 => (_opens(today, plusDays: -6), null),
+      ReportRange.all => (null, null),
     };
+  }
+
+  static DateTime _opens(DateTime day, {int plusDays = 0}) => DateTime(
+      day.year, day.month, day.day + plusDays, BusinessDay.shopCutoverHour);
+
+  /// Whether [when] falls inside [window]. The open shift holds nothing when no
+  /// shift is open.
+  bool contains(DateTime when, {DateTime? shiftOpenedAt, DateTime? now}) {
+    if (custom == null && range == ReportRange.openShift && shiftOpenedAt == null) {
+      return false;
+    }
+    final at = when.toLocal();
+    final (from, to) = window(shiftOpenedAt: shiftOpenedAt, now: now);
+    return (from == null || !at.isBefore(from)) && (to == null || at.isBefore(to));
   }
 }
 

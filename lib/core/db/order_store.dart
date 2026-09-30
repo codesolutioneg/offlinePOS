@@ -119,9 +119,40 @@ class OrderStore {
   /// If the event cannot be written the order is committed on its own. A sale
   /// outranks replication every time: losing money because a peer bookkeeping table
   /// misbehaved would be a far worse bug than two tills disagreeing about a tab.
+  ///
+  /// Inside a caller's transaction the row and its event join that one instead of
+  /// opening their own: SQLite does not nest BEGIN, and rolling back here would
+  /// undo the caller's writes along with this one.
+  /// Run [body] as one transaction, so a sale and whatever is queued for it land
+  /// together or not at all: power lost between the two would leave a paid sale
+  /// nothing ever sends. Joins an outer transaction rather than nesting one.
+  void inTransaction(void Function() body) {
+    if (!_db.raw.autocommit) {
+      body();
+      return;
+    }
+    _db.raw.execute('BEGIN');
+    try {
+      body();
+      _db.raw.execute('COMMIT');
+    } catch (_) {
+      _db.raw.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
   void _write(Order order, void Function()? announce) {
     if (announce == null) {
       _insert(order);
+      return;
+    }
+    if (!_db.raw.autocommit) {
+      if (!_insert(order)) return;
+      try {
+        announce();
+      } catch (e) {
+        _onAnnounceFailed?.call(order.uuid, e);
+      }
       return;
     }
     _db.raw.execute('BEGIN');
@@ -139,7 +170,8 @@ class OrderStore {
   /// can change hands both ways: to another till, and to another cashier on this
   /// one. Leaving them behind would file the order under whoever used to have it
   /// while the bill on it says otherwise, and the reads that decide money are
-  /// scoped by exactly those columns.
+  /// scoped by exactly those columns. The sale time follows too: it is restamped at
+  /// payment, and the Z and the Odoo close pick sales by that column.
   ///
   /// Money only moves forward: a copy of an order read before it was paid (a
   /// course-fire loop waiting on a slow printer, a sheet left open) must not turn
@@ -154,6 +186,7 @@ class OrderStore {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(uuid) DO UPDATE SET
         device_id = excluded.device_id, cashier_id = excluded.cashier_id,
+        created_at = excluded.created_at,
         state = excluded.state, server_id = excluded.server_id,
         total = excluded.total, payload = excluded.payload
       WHERE ? = 1 OR orders.state NOT IN ('paid', 'synced')
@@ -272,6 +305,28 @@ class OrderStore {
       .map((r) =>
           Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
       .toList();
+
+  /// Completed sales from [from] up to [to] (exclusive), newest first, with no
+  /// cap: a report over a busy week has to hold every sale in it, not the last
+  /// thousand. Null ends are open. This till's own unless [anyDevice].
+  List<Order> paidBetween({DateTime? from, DateTime? to, bool anyDevice = false}) {
+    final own = anyDevice ? null : ownDeviceId;
+    final where = [
+      "state IN ('paid','synced')",
+      if (own != null) 'device_id = ?',
+      if (from != null) 'created_at >= ?',
+      if (to != null) 'created_at < ?',
+    ].join(' AND ');
+    return _db.raw
+        .select('SELECT payload FROM orders WHERE $where ORDER BY created_at DESC', [
+          ?own,
+          if (from != null) from.toUtc().toIso8601String(),
+          if (to != null) to.toUtc().toIso8601String(),
+        ])
+        .map((r) =>
+            Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
+        .toList();
+  }
 
   /// The highest order number among the newest [limit] rows from every till, so
   /// the next number climbs past it. Open tabs count: a table parked on another

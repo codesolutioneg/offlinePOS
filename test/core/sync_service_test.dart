@@ -85,7 +85,7 @@ void main() {
     Outbox? outbox,
     Future<bool> Function()? probe,
     Future<void> Function()? reconcile,
-    Future<bool> Function({Set<String>? onlyUuids})? mergeBatch,
+    Future<bool> Function({Set<String>? onlyUuids, String? batchKey})? mergeBatch,
     Future<ShiftFlushResult?> Function()? closedShiftRetry,
     Duration retryWindow = const Duration(hours: 12),
     Duration retryInterval = const Duration(minutes: 5),
@@ -133,7 +133,7 @@ void main() {
       retryInterval: retryInterval,
       now: now,
       arming: arming,
-      mergeBatch: ({Set<String>? onlyUuids}) async {
+      mergeBatch: ({Set<String>? onlyUuids, String? batchKey}) async {
         // Stand-in for BatchPush: one RPC for the shift, then mark those rows sent.
         await server.send(OutboxEntry(
           id: 0,
@@ -198,7 +198,7 @@ void main() {
     late final SyncService s;
     s = serviceWith(
       outbox: outbox,
-      mergeBatch: ({Set<String>? onlyUuids}) async {
+      mergeBatch: ({Set<String>? onlyUuids, String? batchKey}) async {
         for (final e in await store.pending(kinds: const {'order.push'})) {
           if (onlyUuids == null || onlyUuids.contains(e.payloadUuid)) {
             await store.markSent(e.id);
@@ -411,7 +411,7 @@ void main() {
       arming: saved,
       now: () => clock,
       probe: () async => true,
-      mergeBatch: ({Set<String>? onlyUuids}) async {
+      mergeBatch: ({Set<String>? onlyUuids, String? batchKey}) async {
         await till.server.send(OutboxEntry(
           id: 0,
           kind: 'order.push',
@@ -519,7 +519,7 @@ void main() {
       now: () => clock,
       probe: () async => true,
       retryWindow: const Duration(hours: 12),
-      mergeBatch: ({Set<String>? onlyUuids}) async {
+      mergeBatch: ({Set<String>? onlyUuids, String? batchKey}) async {
         await till.server.send(OutboxEntry(
           id: 0,
           kind: 'order.push',

@@ -456,7 +456,12 @@ class Order {
   final String uuid;
   final String deviceId;
   final String cashierId;
-  final DateTime createdAt;
+
+  /// When the sale happened: the moment it was rung, restamped with the moment it
+  /// is paid. The business day, the Z, the Odoo close and every report read this,
+  /// so a table opened last night and settled this morning books where the money
+  /// actually came in.
+  DateTime createdAt;
   OrderState state;
   OrderType type;
   final List<OrderLine> lines;

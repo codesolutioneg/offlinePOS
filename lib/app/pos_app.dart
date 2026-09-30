@@ -98,6 +98,7 @@ import '../features/reports/revenue_center_report_screen.dart';
 import '../features/reports/flash/flash_flow.dart';
 import '../features/reports/flash/flash_report_data.dart';import '../features/reports/flash/flash_thermal_escpos.dart';
 import '../features/reports/flash/flash_type_dialog.dart';
+import '../features/sell/lost_void_banner.dart';
 import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/bulletin_settings_screen.dart';
@@ -386,6 +387,10 @@ class _PosAppState extends State<PosApp> {
   /// entirely by barcode scanner counts as busy too.
   late DateTime _lastTouch = widget.nowFn();
 
+  /// Cancel slips the kitchen never got, on screen until each is dealt with.
+  final ValueNotifier<List<LostKitchenVoid>> _lostVoids = ValueNotifier(const []);
+  int _lostVoidSeq = 0;
+
   /// The bill that was just parked, for the line the floor says about it, or null
   /// when there is nothing to say. The table is null on a bill that was never
   /// seated.
@@ -484,6 +489,7 @@ class _PosAppState extends State<PosApp> {
 
   @override
   void dispose() {
+    _lostVoids.dispose();
     _background?.cancel();
     _primaryWatch?.cancel();
     _stopStoreOrderWatch();
@@ -594,6 +600,8 @@ class _PosAppState extends State<PosApp> {
         serviceChargeFor: widget.settings.serviceChargePercentFor,
         nextOrderNo: _nextOrderNo,
         settings: widget.settings,
+        shiftOpenedAt: () => widget.shifts.currentOpenShift()?.openedAt,
+        clock: widget.nowFn,
       );
       _firstSaleHelp = widget.wizards.shouldShow(WizardId.firstSale, cashier.id);
       // The provisioning account is whoever is standing at a till that has just
@@ -2097,6 +2105,8 @@ class _PosAppState extends State<PosApp> {
           session: session,
           formatAmount: PosApp.money,
           staleness: widget.catalogue.stalenessAt(DateTime.now().toUtc()),
+          lostVoids: _lostVoids,
+          onLostVoidResolved: _resolveLostVoid,
           // When the menu came down, said plainly beside the online badge. The
           // background loop now pulls every half hour, so this is usually within the
           // hour, and when it is not the cashier can see that rather than assume.
@@ -2106,6 +2116,7 @@ class _PosAppState extends State<PosApp> {
           // close, so the shared Odoo login is not hit per order.
           online: widget.sync.online,
           pendingToSync: () => widget.sync.pendingToSync,
+          refusedToSync: () => widget.sync.refusedToSync,
           // Tickets and receipts a printer would not take. They flush themselves,
           // but until they do the kitchen has not seen them.
           spooledJobs: () => _receiptPrinter.spooledCount,
@@ -2247,7 +2258,7 @@ class _PosAppState extends State<PosApp> {
             // when the kitchen already has a copy, or it would send a cancel for
             // food that was never ordered to the pass.
             if (line.printedToKitchen || line.firedStations.isNotEmpty) {
-              unawaited(_fireVoid(session.current, line, reason));
+              unawaited(_voidToKitchen(session.current, line, reason));
             }
             // Only while this order is being corrected, so the set stays the
             // size of one amendment rather than a shift's worth of voids.
@@ -2619,7 +2630,7 @@ class _PosAppState extends State<PosApp> {
           // Tell each station that holds the line to stop, so cancelling a sent
           // order does not leave food cooking.
           for (final line in firedLines) {
-            unawaited(_fireVoid(order, line, reason));
+            unawaited(_voidToKitchen(order, line, reason));
           }
           // The till's own record that the whole order was discarded, listing every
           // line and the total removed, printed alongside the audit entry.
@@ -2728,11 +2739,13 @@ class _PosAppState extends State<PosApp> {
     }
     // Mirror may already be in Firestore; PATCH status cancelled on the same doc.
     // A later re-pay enqueues status sale again.
-    unawaited(DishflowMirror.enqueueCancelIfEnabled(
-      outbox: widget.outbox,
-      settings: widget.settings,
-      order: order,
-    ));
+    _watchQueued(
+        DishflowMirror.enqueueCancelIfEnabled(
+          outbox: widget.outbox,
+          settings: widget.settings,
+          order: order,
+        ),
+        order);
     widget.audit.record(session.cashierId, 'order.amended',
         detail: '${order.uuid}|${PosApp.money(oldTotal)}');
     _amending[order.uuid] = before;
@@ -2760,13 +2773,19 @@ class _PosAppState extends State<PosApp> {
         onRefund: (refund) {
           // A refund is a durable order like a sale: saved, queued to sync, audited,
           // and a slip printed for the customer.
-          widget.orders.save(refund);
-          widget.outbox.enqueue('order.push', refund.uuid, refund.toServerPayload());
-          DishflowMirror.enqueueIfEnabled(
-            outbox: widget.outbox,
-            settings: widget.settings,
-            order: refund,
-          );
+          widget.orders.inTransaction(() {
+            widget.orders.save(refund);
+            _watchQueued(
+                widget.outbox.enqueue('order.push', refund.uuid, refund.toServerPayload()),
+                refund);
+            _watchQueued(
+                DishflowMirror.enqueueIfEnabled(
+                  outbox: widget.outbox,
+                  settings: widget.settings,
+                  order: refund,
+                ),
+                refund);
+          });
           widget.audit.record(refund.cashierId, 'order.refunded',
               detail: '${refund.uuid} of ${original.uuid}');
           unawaited(_printReceipt(refund));
@@ -2796,6 +2815,9 @@ class _PosAppState extends State<PosApp> {
         allOrders: widget.orders.recent(limit: 1000),
         // Flash sums every till: LAN replicas already sit in SQLite as paid/synced.
         shopOrders: widget.orders.recentAnywhere(limit: 2000),
+        ordersIn: (from, to) => widget.orders.paidBetween(from: from, to: to),
+        shopOrdersIn: (from, to) =>
+            widget.orders.paidBetween(from: from, to: to, anyDevice: true),
         categories: widget.catalogue.categories(),
         formatAmount: PosApp.money,
         audit: widget.audit,
@@ -5587,12 +5609,50 @@ class _PosAppState extends State<PosApp> {
     return outcome;
   }
 
-  Future<void> _fireVoid(Order order, OrderLine line, String reason) async {
-    final bytes = KitchenTicketBuilder(
-      sectionOf: widget.tables.sectionFor,
-      categoryNameOf: (id) => widget.catalogue.categoryById(id)?.name,
-      serverNameOf: (id) => widget.users.byId(id)?.name,
-    ).buildVoid(order, line, reason);
+  /// Tell the kitchen a fired line was voided, and keep telling the cashier until
+  /// it has been told. The line is already off the bill; a cancel slip that no
+  /// printer or spool took would leave the kitchen cooking it with nobody aware.
+  Future<void> _voidToKitchen(Order order, OrderLine line, String reason) async {
+    final snapshot = Order.fromMap(order.toMap());
+    final voided = OrderLine.fromMap(line.toMap());
+    if (await _fireVoid(snapshot, voided, reason) != KitchenFireResult.lost) return;
+    final entry = LostKitchenVoid(
+      id: ++_lostVoidSeq,
+      item: '${voided.quantity.toStringAsFixed(0)}× ${voided.name}',
+      where: snapshot.tableLabel ?? '#${snapshot.displayNo}',
+      retry: () async =>
+          await _fireVoid(snapshot, voided, reason) != KitchenFireResult.lost,
+    );
+    _lostVoids.value = [..._lostVoids.value, entry];
+  }
+
+  void _resolveLostVoid(int id) =>
+      _lostVoids.value = [for (final v in _lostVoids.value) if (v.id != id) v];
+
+  /// A queue write nobody waits on still has to be seen when it fails: it is a
+  /// record nothing will send.
+  void _watchQueued(Future<void> queued, Order order) {
+    unawaited(queued.catchError((Object e) {
+      widget.audit.record(_session?.cashierId ?? order.cashierId, 'outbox.enqueue.failed',
+          detail: '${order.uuid}: $e');
+    }));
+  }
+
+  /// Send one cancel slip to every station holding [line], and say how it went:
+  /// the worst of the stations, so one lost copy makes the whole void lost.
+  Future<KitchenFireResult> _fireVoid(Order order, OrderLine line, String reason) async {
+    final List<int> bytes;
+    try {
+      bytes = KitchenTicketBuilder(
+        sectionOf: widget.tables.sectionFor,
+        categoryNameOf: (id) => widget.catalogue.categoryById(id)?.name,
+        serverNameOf: (id) => widget.users.byId(id)?.name,
+      ).buildVoid(order, line, reason);
+    } catch (e) {
+      widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
+          detail: 'void-${order.uuid}-${line.uuid}: $e');
+      return KitchenFireResult.lost;
+    }
     // Void goes to the station(s) this line was actually fired to; only when that
     // was not recorded (older orders) do we fall back to the current routing.
     final stations = line.firedStations.isNotEmpty
@@ -5602,9 +5662,12 @@ class _PosAppState extends State<PosApp> {
                 productToStations: widget.settings.productStations)
             .keys
             .toList();
+    var outcome = KitchenFireResult.sent;
     for (final station in stations) {
-      await _sendToStation(station, bytes, 'void-${order.uuid}-${line.uuid}-$station');
+      outcome = outcome.worst(await _sendToStation(
+          station, bytes, 'void-${order.uuid}-${line.uuid}-$station'));
     }
+    return outcome;
   }
 
   /// Send a kitchen ticket to [station]: [KitchenFireResult.sent] if a printer took
@@ -5875,6 +5938,7 @@ class _PosAppState extends State<PosApp> {
                   : '#${widget.settings.odooSessionPartnerId}');
           final result = await widget.sync.flushClosedShift(
             orderUuids: {for (final o in shiftOrders) o.uuid},
+            batchKey: shift.uuid,
             enqueueOrders: () async {
               // Fresh wire payloads so delivery / tip / service fee are not
               // stale zeros left from an older enqueue.
@@ -6254,6 +6318,7 @@ class _PosAppState extends State<PosApp> {
         deviceId: widget.deviceId,
         cashierId: live.cashierId,
         nextOrderNo: _nextOrderNo,
+        shiftOpenedAt: () => widget.shifts.currentOpenShift()?.openedAt,
       ),
       catalogue: widget.catalogue,
       tables: widget.tables,

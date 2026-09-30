@@ -82,7 +82,7 @@ class BatchPush {
   Map<String, dynamic>? lastAck;
   String? lastSkipReason;
 
-  Future<bool> run({Set<String>? onlyUuids}) async {
+  Future<bool> run({Set<String>? onlyUuids, String? batchKey}) async {
     lastAck = null;
     lastSkipReason = null;
     if (!enabled()) {
@@ -91,7 +91,7 @@ class BatchPush {
     }
     // No shift is no key, and a batch with no stable key is the one thing this
     // must never send.
-    final uuid = batchUuid();
+    final uuid = batchKey ?? batchUuid();
     if (uuid == null) {
       lastSkipReason = 'no shift uuid';
       return false;
@@ -122,15 +122,29 @@ class BatchPush {
     }
     // Nothing is marked until the server has it, so a failure anywhere above
     // leaves the night queued rather than half booked and half forgotten.
-    lastAck = await send(batch.uuid, batch.payload);
-    for (final id in batch.entryIds) {
-      await outboxStore.markSent(id);
-    }
-    final serverId = (lastAck?['id'] as num?)?.toInt();
-    final serverName = lastAck?['name']?.toString();
-    for (final orderUuid in batch.orderUuids) {
-      onOrderBooked(orderUuid, serverId, serverName);
-    }
+    final ack = lastAck = await send(batch.uuid, batch.payload);
+    _recordBooked(batch.entryIds, batch.orderUuids, ack);
     return true;
+  }
+
+  /// Mark the queue rows sent and the sales synced as one write. Apart, a crash
+  /// between them leaves sales `paid` with their rows sent; the pre-push sweep
+  /// re-queues them and the next close books them a second time.
+  void _recordBooked(
+      List<int> entryIds, List<String> orderUuids, Map<String, dynamic>? ack) {
+    final serverId = (ack?['id'] as num?)?.toInt();
+    final serverName = ack?['name']?.toString();
+    final db = outboxStore.db.raw;
+    db.execute('BEGIN');
+    try {
+      outboxStore.markAllSent(entryIds);
+      for (final orderUuid in orderUuids) {
+        onOrderBooked(orderUuid, serverId, serverName);
+      }
+      db.execute('COMMIT');
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
   }
 }

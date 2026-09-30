@@ -27,7 +27,17 @@ class PosSession {
     this.taxRateFor,
     this.serviceChargeFor,
     this.nextOrderNo,
+    this.shiftOpenedAt,
+    this.clock,
   });
+
+  /// When the open shift started, or null with none open. A sale is never stamped
+  /// before it: a device clock set back mid-shift would otherwise put the sale
+  /// outside the shift's window, where neither the Z nor the Odoo close finds it.
+  final DateTime? Function()? shiftOpenedAt;
+
+  /// The till's clock. Injected by tests; the device clock otherwise.
+  final DateTime Function()? clock;
 
   final CatalogueStore catalogue;
   final OrderStore orders;
@@ -63,6 +73,13 @@ class PosSession {
     o.orderNo = nextOrderNo?.call();
   }
 
+  /// Stamp the moment [o] is paid as the moment of the sale; see [shiftOpenedAt].
+  void _stampSaleTime(Order o) {
+    final now = (clock?.call() ?? DateTime.now()).toUtc();
+    final opened = shiftOpenedAt?.call()?.toUtc();
+    o.createdAt = opened != null && now.isBefore(opened) ? opened : now;
+  }
+
   /// Public stamp so the kitchen fire path can number the bill before paper goes
   /// out — the KOT and the sale receipt must quote the same searchable sequence.
   void ensureOrderNo(Order o) => _stampOrderNo(o);
@@ -96,9 +113,34 @@ class PosSession {
   /// The order being built. Restored from disk if one was left unfinished, which is
   /// what gives a cashier their work back after a crash or a closed window. A restored
   /// draft keeps the service percentage it was opened with.
+  ///
+  /// Only this cashier's own draft comes back. A cart another cashier left behind
+  /// is parked as a tab under their name instead: taking the money on it here would
+  /// file the sale under whoever rang it and step around table security. Any
+  /// further draft of this cashier's with lines is parked too: only one can be on
+  /// the counter, and a draft that is not on it is on no screen at all.
   Order get current {
-    _current ??= orders.drafts().firstOrNull ?? _blankOrder();
-    return _current!;
+    return _current ??= _restoreDraft() ?? _blankOrder();
+  }
+
+  Order? _restoreDraft() {
+    Order? mine;
+    for (final d in orders.drafts()) {
+      if (d.cashierId == cashierId && mine == null) {
+        mine = d;
+      } else if (d.lines.isNotEmpty) {
+        _park(d);
+      }
+    }
+    return mine;
+  }
+
+  void _park(Order order) {
+    order.state = OrderState.held;
+    _stampOrderNo(order);
+    orders.save(order);
+    audit.record(cashierId, 'order.parked',
+        detail: '${order.uuid}|left by ${order.cashierId}');
   }
 
   bool get hasLines => current.lines.isNotEmpty;
@@ -747,6 +789,9 @@ class PosSession {
     if (active.uuid != uuid && active.lines.isNotEmpty) {
       active.state = OrderState.held;
       orders.save(active);
+    } else if (active.uuid != uuid) {
+      _detachFromSiblings(active);
+      orders.delete(active.uuid);
     }
     target.state = OrderState.draft;
     orders.save(target);
@@ -806,13 +851,11 @@ class PosSession {
     if (order.lines.isEmpty) return null;
     _detachFromSiblings(order);
     order.state = OrderState.paid;
+    _stampSaleTime(order);
     _stampOrderNo(order);
     order.payments = List.of(payments);
     order.cashReceived = cashReceived;
-    orders.save(order);
-    outbox.enqueue('order.push', order.uuid, order.toServerPayload());
-    _mirrorPaid(order);
-    audit.record(cashierId, 'order.paid', detail: order.uuid);
+    _bookPaid(order, order.uuid);
     _current = _blankOrder();
     return order;
   }
@@ -839,10 +882,8 @@ class PosSession {
     if (order.balance <= 0.001) {
       _detachFromSiblings(order);
       order.state = OrderState.paid;
-      orders.save(order);
-      outbox.enqueue('order.push', order.uuid, order.toServerPayload());
-      _mirrorPaid(order);
-      audit.record(cashierId, 'order.paid', detail: '${order.uuid}|even split settled');
+      _stampSaleTime(order);
+      _bookPaid(order, '${order.uuid}|even split settled');
       _current = _blankOrder();
       return 0;
     }
@@ -1280,13 +1321,11 @@ class PosSession {
       ..state = OrderState.paid
       ..payments = List.of(payments)
       ..cashReceived = cashReceived;
+    _stampSaleTime(check);
     // Its own number: a split check is its own paid sale, printed and reported on
     // its own, so it cannot share the table's.
     _stampOrderNo(check);
-    orders.save(check);
-    outbox.enqueue('order.push', check.uuid, check.toServerPayload());
-    _mirrorPaid(check);
-    audit.record(cashierId, 'order.paid', detail: '${check.uuid}|split check');
+    _bookPaid(check, '${check.uuid}|split check');
     order.lines.removeWhere((l) => ids.contains(l.uuid));
     if (order.lines.isEmpty) {
       // Whole table settled: discard the now-empty running order and start fresh.
@@ -1446,16 +1485,34 @@ class PosSession {
         detail: '${source.uuid}->${current.uuid}|${source.lines.length} line(s)');
   }
 
+  /// Save a paid sale and queue it for Odoo and the owner mirror as one write.
+  void _bookPaid(Order order, String detail) {
+    orders.inTransaction(() {
+      orders.save(order);
+      _watchQueued(
+          outbox.enqueue('order.push', order.uuid, order.toServerPayload()), order.uuid);
+      _mirrorPaid(order);
+    });
+    audit.record(cashierId, 'order.paid', detail: detail);
+  }
+
+  /// Not awaited, because selling must not wait on anything, but not dropped
+  /// either: a queue write that failed is a sale nothing will send, and the audit
+  /// log is where the shop can see it.
+  void _watchQueued(Future<void> queued, String uuid) {
+    unawaited(queued.catchError((Object e) {
+      audit.record(cashierId, 'outbox.enqueue.failed', detail: '$uuid: $e');
+    }));
+  }
+
   /// Queue the Dishflow owner mirror when configured. Fire-and-forget like
   /// order.push: the outbox append is durable and selling must not await a network.
   void _mirrorPaid(Order order) {
     final s = settings;
     if (s == null) return;
-    DishflowMirror.enqueueIfEnabled(
-      outbox: outbox,
-      settings: s,
-      order: order,
-    );
+    _watchQueued(
+        DishflowMirror.enqueueIfEnabled(outbox: outbox, settings: s, order: order),
+        order.uuid);
     unawaited(_completeEcommerceIfLinked(order));
   }
 
@@ -1470,7 +1527,10 @@ class PosSession {
         apiKey: s.dishflowApiKey!,
         orderId: id,
       );
-    } catch (_) {}
+    } catch (e) {
+      // The sale stands; only the customer's "preparing" screen is behind.
+      audit.record(cashierId, 'ecommerce.complete.failed', detail: '$id: $e');
+    }
   }
 
   static String? _blankToNull(String? v) =>

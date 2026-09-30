@@ -702,6 +702,7 @@ const Map<String, String> _ar = {
   'Remaining': 'المتبقي',
   'Rest of balance': 'باقي المبلغ',
   'to sync': 'للمزامنة',
+  'refused': 'مرفوض',
   // printers routing
   'Printers': 'الطابعات',
   'Printer': 'طابعة',
@@ -1211,6 +1212,9 @@ const Map<String, String> _ar = {
   'Stress Lab': 'مختبر الضغط',
   'Part of this bill is already paid. Move the whole table or settle it first.':
       'جزء من الفاتورة دي اتدفع خلاص. انقل الترابيزة كلها أو اقفل الحساب الأول.',
+  'Void for {item} ({where}) did not reach the kitchen. Tell the kitchen.':
+      'إلغاء {item} ({where}) ماوصلش المطبخ. بلّغ المطبخ بنفسك.',
+  'Kitchen told': 'بلّغت المطبخ',
   'Order flood, fill every table, pay on a full till':
       'سيل طلبات، ملء كل الطربيزات، الدفع على جهاز مليان',
   'Park or pay the order on the counter before the Stress Lab.':
