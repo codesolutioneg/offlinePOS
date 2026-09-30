@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 27;
+  static const int version = 28;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -633,6 +633,18 @@ class Schema {
       )
       ''',
       'CREATE INDEX idx_fp_user ON fingerprint_templates(user_id)',
+    ],
+    // v27 -> v28: one table per name, enforced.
+    //
+    // Orders recall by table name, and two tills could each add a "10" before
+    // they synced. The pair already on a till is split the way the LAN splits a new
+    // one (TableStore.conflictName): the smaller id keeps the name, the other takes
+    // a suffix from its own id, so every till lands on the same names unprompted.
+    [
+      "UPDATE pos_tables SET name = name || '-' || substr(id, 1, 4) "
+          'WHERE EXISTS (SELECT 1 FROM pos_tables o '
+          'WHERE o.name = pos_tables.name AND o.id < pos_tables.id)',
+      'CREATE UNIQUE INDEX idx_pos_tables_name ON pos_tables(name)',
     ],
   ];
 }

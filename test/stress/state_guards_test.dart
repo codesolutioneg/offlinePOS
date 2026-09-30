@@ -150,6 +150,37 @@ void main() {
     });
   });
 
+  group('C6 · refunds do not go to Odoo, and do not hang the close', () {
+    Order refundOf(Order sale) => Order(
+          deviceId: till.deviceId,
+          cashierId: 'sara',
+          lines: [OrderLine(productId: 1, name: 'Item 1', quantity: -1, unitPrice: 25)],
+        )
+          ..refundOfUuid = sale.uuid
+          ..state = OrderState.paid;
+
+    test('a refund is never owed to Odoo, in or out of the shift', () {
+      final s = till.session();
+      till.ring(s, lines: 1);
+      final sale = till.payCash(s);
+      till.orders.save(refundOf(sale), announce: false);
+
+      final shift = till.shifts.currentOpenShift()!;
+      expect(till.orders.awaitingSync().map((o) => o.uuid), [sale.uuid]);
+      expect(till.orders.awaitingSyncInShift(shift).map((o) => o.uuid), [sale.uuid],
+          reason: 'the close would count the refund as synced and arm a retry for it');
+    });
+
+    test('refund pushes queued before the change are closed out', () async {
+      await till.outboxStore.append('order.push', 'r-1', {'refund_of_uuid': 's-1'});
+      await till.outboxStore.append('order.push', 's-2', {'uuid': 's-2'});
+
+      expect(till.outboxStore.retireRefundPushes(), 1);
+      expect(till.outboxStore.pendingSalesCount, 1,
+          reason: 'only the real sale is still owed');
+    });
+  });
+
   group('C5 · a sale books on the day the money came in', () {
     Order seated(DateTime opened) => Order(
           deviceId: till.deviceId,
@@ -219,6 +250,28 @@ void main() {
       await outbox.drain();
 
       expect(sent, [2]);
+    });
+  });
+
+  group('M2 · lines never open a second tab on a table another till holds', () {
+    test('moving items onto a table busy elsewhere moves nothing', () {
+      final other = Order(deviceId: 'till-2', cashierId: 'omar', tableLabel: 'T7')
+        ..state = OrderState.held
+        ..lines.add(OrderLine(productId: 1, name: 'Soup', quantity: 1, unitPrice: 10));
+      till.orders.save(other, announce: false);
+      final s = till.session();
+      till.ring(s, lines: 3);
+      s.hold(table: 'T4');
+      s.recall(till.orders.held().single.uuid);
+
+      expect(s.tableBusyElsewhere('T7'), isTrue);
+      s.moveLinesToTable({s.current.lines.first.uuid}, 'T7');
+      s.moveLinesToTable(s.current.lines.map((l) => l.uuid).toSet(), 'T7');
+
+      final onT7 = till.orders.occupyingAnywhere().where((o) => o.tableLabel == 'T7');
+      expect(onT7.map((o) => o.uuid), [other.uuid]);
+      expect(s.current.lines, hasLength(3));
+      expect(s.current.tableLabel, 'T4');
     });
   });
 }

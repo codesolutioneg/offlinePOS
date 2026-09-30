@@ -56,6 +56,7 @@ import 'core/sync/odoo_endpoint.dart';
 import 'core/sync/odoo_puller.dart';
 import 'core/sync/odoo_wiring.dart';
 import 'core/sync/retry_arming.dart';
+import 'core/sync/server_change_guard.dart';
 import 'core/sync/server_probe.dart';
 import 'core/sync/sync_service.dart';
 import 'core/updates/update_gate.dart';
@@ -166,6 +167,10 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   final audit = AuditLog(db);
   _auditUncaught(audit);
   final outboxStore = SqliteOutboxStore(db);
+  final retired = outboxStore.retireRefundPushes();
+  if (retired > 0) {
+    audit.record('system', 'outbox.refunds.retired', detail: '$retired');
+  }
   final devices = DeviceStore(db);
 
   // Generated on this device on first launch. A constant would make every till in
@@ -428,6 +433,10 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   final savedEndpoint = endpoints.load();
   if (savedEndpoint != null && savedEndpoint.isComplete) {
     odoo.configure(savedEndpoint);
+    // A till set up before server changes were guarded has no fingerprint, and
+    // without one its first change of server would not be caught.
+    settings.odooServerFingerprint ??= odooServerFingerprint(savedEndpoint,
+        companyId: settings.odooCompanyId, branchId: settings.odooBranchId);
   }
 
   // Owner mirror into Dishflow Firestore. Separate from Odoo: drains on the

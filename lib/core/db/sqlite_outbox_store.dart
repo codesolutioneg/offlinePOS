@@ -136,6 +136,28 @@ class SqliteOutboxStore implements OutboxStore {
     return true;
   }
 
+  /// Park every sale still owed to Odoo, with [reason]. They stay in the queue,
+  /// unsent, and show in the refused count until a manager revives them. Returns
+  /// how many were held.
+  int holdPendingSales(String reason) {
+    _db.raw.execute(
+        "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$_order' "
+        'AND sent_at IS NULL AND dead_at IS NULL',
+        [DateTime.now().toUtc().toIso8601String(), reason]);
+    return _db.raw.updatedRows;
+  }
+
+  /// Close out refund pushes queued before refunds stopped going to Odoo. Nothing
+  /// sends them (the merge leaves credits out), so left alone they would sit in the
+  /// pending count forever. Returns how many were closed.
+  int retireRefundPushes() {
+    _db.raw.execute(
+        "UPDATE outbox SET sent_at = ? WHERE kind = '$_order' AND sent_at IS NULL "
+        r"AND json_extract(payload, '$.refund_of_uuid') IS NOT NULL",
+        [DateTime.now().toUtc().toIso8601String()]);
+    return _db.raw.updatedRows;
+  }
+
   /// Put a parked entry back in the queue, once whatever caused it is fixed.
   void revive(int id) => _db.raw.execute(
       'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 WHERE id = ?',

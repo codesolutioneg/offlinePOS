@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'http_post.dart';
 import 'outbox.dart';
 
 /// Writes one `sales/{docId}` document over the Firestore REST API.
@@ -58,7 +59,7 @@ class DishflowFirestoreSender {
       req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       req.add(utf8.encode(jsonEncode({'fields': encoded})));
       final res = await req.close().timeout(const Duration(seconds: 30));
-      final body = await res.transform(utf8.decoder).join();
+      final body = await readReply(res);
       if (res.statusCode == 200 || res.statusCode == 201) return;
       if (res.statusCode == 401 || res.statusCode == 403) {
         throw PermanentlyRejected(
@@ -131,7 +132,7 @@ class DishflowFirestoreSender {
       };
       req.add(utf8.encode(jsonEncode({'fields': fields})));
       final res = await req.close().timeout(const Duration(seconds: 20));
-      final body = await res.transform(utf8.decoder).join();
+      final body = await readReply(res, timeout: const Duration(seconds: 20));
       if (res.statusCode == 200 || res.statusCode == 201) {
         return 'ok';
       }

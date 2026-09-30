@@ -226,6 +226,11 @@ class TableStore {
     return '$desired-$n';
   }
 
+  /// The name [t] takes when another table already holds its name: a suffix from
+  /// its own id. Every till computes the same answer for the same table, so two
+  /// tills that each added a "10" settle on the same pair of names without asking.
+  static String conflictName(PosTable t) => '${t.name}-${t.id.substring(0, 4)}';
+
   /// [announce] is false only when the change arrived from another till, so the
   /// floor plan is not bounced back to the device that drew it.
   void upsert(PosTable t, {bool announce = true}) {
