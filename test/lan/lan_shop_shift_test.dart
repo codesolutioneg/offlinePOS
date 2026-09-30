@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/lan/lan_shift_board.dart';
 import 'package:offline_pos/core/lan/lan_wiring.dart';

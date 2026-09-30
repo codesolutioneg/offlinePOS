@@ -425,7 +425,7 @@ void main() {
   });
 
   testWidgets('a manager can take over even when takeovers are off', (t) async {
-    final tab = tabOnTheOtherTill();
+    tabOnTheOtherTill();
     settings.lanAllowTakeover = false;
     final lan = node();
 

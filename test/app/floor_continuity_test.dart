@@ -23,7 +23,6 @@ import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
-import 'package:offline_pos/core/widgets/select_pill.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
