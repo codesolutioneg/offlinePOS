@@ -703,6 +703,10 @@ const Map<String, String> _ar = {
   'Rest of balance': 'باقي المبلغ',
   'to sync': 'للمزامنة',
   'refused': 'مرفوض',
+  'Table {name} has an open bill. Settle or move it first.':
+      'ترابيزة {name} عليها حساب مفتوح. اقفله أو انقله الأول.',
+  '{n} queued sale(s) held: they belong to the old server and will not be sent.':
+      '{n} بيعة في الطابور اتوقفت: تبع السيرفر القديم ومش هتتبعت.',
   // printers routing
   'Printers': 'الطابعات',
   'Printer': 'طابعة',
@@ -1398,6 +1402,14 @@ const Map<String, String> _ar = {
       'الجهاز لم يُجِب وليس لدى هذا الجهاز نسخة من الطلب.',
   'That device would not hand the tab over.':
       'رفض ذلك الجهاز تسليم الطاولة.',
+  'Table {name} was just opened on another device.':
+      'ترابيزة {name} اتفتحت دلوقتي على جهاز تاني.',
+  'Table {name} is open on another device. Take it over there first.':
+      'ترابيزة {name} مفتوحة على جهاز تاني. خدها من هناك الأول.',
+  'Which bill?': 'أنهي حساب؟',
+  'this till': 'الجهاز ده',
+  'That device did not answer. A manager must approve taking the tab.':
+      'الجهاز لم يُجِب. أخذ الطاولة يحتاج موافقة مدير.',
   'That device is not answering. As the primary till, take the tab here anyway?':
       'الجهاز لا يرد. كجهاز أساسي، تأخذ الطاولة هنا على أي حال؟',
   'Take over': 'أخذ الطاولة',

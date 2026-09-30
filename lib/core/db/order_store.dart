@@ -260,7 +260,12 @@ class OrderStore {
   /// Scoped to this till, and that scoping is what keeps the books straight: this
   /// is the list the sync reconcile sweeps into the outbox, so a sale replicated
   /// from another till must never appear in it or the shop would book it twice.
-  List<Order> awaitingSync() => _mine("state = 'paid'");
+  List<Order> awaitingSync() => _mine("state = 'paid' AND $_notRefund");
+
+  /// Refunds never go to Odoo, by the owner's decision: the shop books them there
+  /// by hand. So they are never owed, never hold a close open, and never count as
+  /// synced.
+  static const String _notRefund = r"json_extract(payload, '$.refund_of_uuid') IS NULL";
 
   /// Paid sales on this till that fall inside [shift]'s open→close window.
   ///
@@ -271,7 +276,7 @@ class OrderStore {
     final from = shift.openedAt.toIso8601String();
     final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
     return _mine(
-      "state = 'paid' AND created_at >= ? AND created_at <= ?",
+      "state = 'paid' AND $_notRefund AND created_at >= ? AND created_at <= ?",
       [from, to],
     );
   }
@@ -328,9 +333,13 @@ class OrderStore {
         .toList();
   }
 
-  /// The highest order number among the newest [limit] rows from every till, so
-  /// the next number climbs past it. Open tabs count: a table parked on another
-  /// till already has its number on a kitchen ticket.
+  /// The highest order number among the newest [limit] rows and every open tab
+  /// from every till, so the next number climbs past it. Open tabs count however
+  /// old they are: a table parked on another till already has its number on a
+  /// kitchen ticket. Refunds and rows with no number are left out.
+  ///
+  /// A floor, not a lock: two tills handing out a number inside one replication
+  /// window can still pick the same one. It narrows the collision to that window.
   ///
   /// SQLite reads the one field out of the payload, so no bill is decoded:
   /// decoding 2000 of them was most of what a Pay cost on a till with a few
@@ -339,7 +348,9 @@ class OrderStore {
     var floor = 0;
     final rows = _db.raw.select(
         "SELECT json_extract(payload, '\$.order_no') AS n FROM orders "
-        'ORDER BY created_at DESC LIMIT ?',
+        "WHERE json_extract(payload, '\$.order_no') IS NOT NULL AND $_notRefund "
+        "AND (state IN ('draft','held') OR uuid IN "
+        '(SELECT uuid FROM orders ORDER BY created_at DESC LIMIT ?))',
         [limit]);
     for (final raw in rows.map((r) => r['n']).whereType<String>()) {
       final n = int.tryParse(Order.shortOrderNumber(raw.trim()));
@@ -486,10 +497,15 @@ class OrderStore {
         order.tableLabel!.isNotEmpty;
     if (order.state != OrderState.held && !seatedDraft) return null;
     if (order.deviceId == toDeviceId) return order;
-    return _moveOwnership(order, toDeviceId, seatedDraft: seatedDraft);
+    return _moveOwnership(order, toDeviceId, seatedDraft: seatedDraft, seized: true);
   }
 
-  Order _moveOwnership(Order order, String toDeviceId, {required bool seatedDraft}) {
+  Order _moveOwnership(
+    Order order,
+    String toDeviceId, {
+    required bool seatedDraft,
+    bool seized = false,
+  }) {
     final moved = _withDevice(
       seatedDraft
           ? (Order.fromMap({...order.toMap(), 'state': OrderState.held.name}))
@@ -502,7 +518,7 @@ class OrderStore {
       publish == null
           ? null
           : () => publish(LanEventKind.orderClaim, order.uuid,
-              {'to': toDeviceId, 'from': order.deviceId}),
+              {'to': toDeviceId, 'from': order.deviceId, if (seized) 'seized': true}),
     );
     return moved;
   }

@@ -155,7 +155,7 @@ class LanApplier {
     // a till only ever serves its own log, so this should not arrive at all.
     if (event.originDeviceId == deviceId) return _Landing.refused;
     try {
-      if (!_wins(event)) return _Landing.refused;
+      if (!_wins(event) && !_movesForward(event)) return _Landing.refused;
       if ((event.kind == LanEventKind.kitchenStatus ||
               event.kind == LanEventKind.orderClaim) &&
           _orders.byUuid(event.recordUuid) == null) {
@@ -215,6 +215,19 @@ class LanApplier {
     return event.originDeviceId.compareTo(clock.origin) > 0;
   }
 
+  /// An order that has moved further along than the copy here lands whatever the
+  /// sender's clock says. A till whose clock runs slow still took the money; a
+  /// skewed clock must not leave a paid bill looking open on the rest of the shop.
+  bool _movesForward(LanEvent event) {
+    if (event.kind != LanEventKind.orderUpsert) return false;
+    if (event.payload['deleted'] == true) return false;
+    final state = event.payload['state'];
+    final local = _orders.byUuid(event.recordUuid);
+    if (state is! String || local == null) return false;
+    final incoming = OrderState.values.asNameMap()[state];
+    return incoming != null && _rank(incoming) > _rank(local.state);
+  }
+
   bool _applyOrder(LanEvent event) {
     if (event.payload['deleted'] == true) {
       // A tab the owning till discarded. delete() only removes an unpaid order, so
@@ -249,6 +262,13 @@ class LanApplier {
   bool _applyClaim(LanEvent event) {
     final to = event.payload['to'];
     if (to is! String) throw FormatException('claim for ${event.recordUuid}');
+    if (event.payload['seized'] == true &&
+        _orders.byUuid(event.recordUuid)?.deviceId == deviceId) {
+      // This till was the owner and never let go: it was silent, and a manager
+      // took the bill elsewhere. Left in the trail so the overlap is explainable.
+      _onRefused?.call('lan.order.seized',
+          '${event.recordUuid} taken by ${event.originDeviceId} while this till was silent');
+    }
     return _orders.applyHandOver(event.recordUuid, to);
   }
 
@@ -355,7 +375,19 @@ class LanApplier {
       _tables.remove(event.recordUuid, announce: false);
       return true;
     }
-    _tables.upsert(PosTable.fromMap(event.payload), announce: false);
+    var incoming = PosTable.fromMap(event.payload);
+    // Two tills each added a table under one name before they synced. The smaller
+    // id keeps it and the other is suffixed, by the same rule on every till.
+    final clash = _tables.byName(incoming.name);
+    if (clash != null && clash.id != incoming.id) {
+      if (incoming.id.compareTo(clash.id) > 0) {
+        incoming = incoming.copyWith(name: TableStore.conflictName(incoming));
+      } else {
+        _tables.upsert(clash.copyWith(name: TableStore.conflictName(clash)),
+            announce: false);
+      }
+    }
+    _tables.upsert(incoming, announce: false);
     return true;
   }
 

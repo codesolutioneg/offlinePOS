@@ -26,6 +26,7 @@ import 'lan_credential.dart';
 import 'lan_event_log.dart';
 import 'lan_fabric.dart';
 import 'lan_peer.dart';
+import 'lan_seat_desk.dart';
 import 'lan_shift_board.dart';
 import 'lan_transport.dart';
 
@@ -61,17 +62,22 @@ class LanNode {
     required LanBeacon beacon,
     required LanHttpClient client,
     required LanClaimDesk claims,
+    required LanSeatDesk seats,
     required this.peers,
-    /// Primary is the shop authority: when an owning till cannot answer, only the
-    /// primary may seize the local replica so a dead handheld cannot strand a bill.
+    /// The primary answers table reservations; everyone else asks it.
     required bool Function() isPrimary,
+    required String? Function() primaryDeviceId,
+    required LanLog report,
   })  : _log = log,
+        _report = report,
         _fabric = fabric,
         _host = host,
         _beacon = beacon,
         _client = client,
         _claims = claims,
-        _isPrimary = isPrimary;
+        _seats = seats,
+        _isPrimary = isPrimary,
+        _primaryDeviceId = primaryDeviceId;
 
   /// Builds every part and joins them up. Nothing binds or announces until
   /// [start] is called.
@@ -149,6 +155,7 @@ class LanNode {
           (requesterId != null && requesterId == order.cashierId),
       audit: log,
     );
+    final seats = LanSeatDesk(orders: orders);
     final fabric = LanFabric(
       deviceId: deviceId,
       log: eventLog,
@@ -204,7 +211,10 @@ class LanNode {
       peers: peers,
       client: http,
       claims: claims,
+      seats: seats,
       isPrimary: () => settings.isLanPrimary,
+      primaryDeviceId: () => settings.lanPrimaryDeviceId,
+      report: log,
       host: LanHost(
         protocol: LanProtocol(
           deviceId: deviceId,
@@ -212,6 +222,7 @@ class LanNode {
           applier: applier,
           credential: credential,
           claims: claims,
+          seats: () => settings.isLanPrimary ? seats : null,
           onJoin: joinGate,
           onRefused: log,
         ),
@@ -247,9 +258,10 @@ class LanNode {
   final LanBeacon _beacon;
   final LanHttpClient _client;
   final LanClaimDesk _claims;
-  // Kept for API/wiring; seize-on-unreachable is available on every till now.
-  // ignore: unused_field
+  final LanSeatDesk _seats;
   final bool Function() _isPrimary;
+  final String? Function() _primaryDeviceId;
+  final LanLog _report;
 
   /// The start in flight, or the one that finished. Held so two callers cannot each
   /// bind the same port: the app shell starts the node, and the LAN switch can ask
@@ -386,67 +398,67 @@ class LanNode {
 
   /// Take a tab another till has parked, with that till's agreement.
   ///
-  /// Prefer asking the owner so it lets go in the same breath. When the owner is
-  /// unreachable, this till seizes its local replica (caller already gated:
-  /// opener / manager / shop-wide takeovers) and announces the claim so the dead
-  /// peer drops ownership when it rejoins. Previously only the primary could seize,
-  /// which stranded bills on secondaries whenever a handheld went offline.
+  /// The owner is asked, and asked again when it stays silent. Only after every
+  /// retry, and only with [asManager], does this till seize its local replica and
+  /// announce the claim so the silent peer drops ownership when it rejoins.
+  /// Without a manager the answer is [LanClaimRefusal.needsManager].
   ///
-  /// Never on a selling path: this is a deliberate action behind a manager gate,
+  /// Never on a selling path: this is a deliberate action behind a confirmation,
   /// and the till it runs on is not mid-sale.
   Future<LanClaimResult> claim(
     Order order, {
     String? cashier,
     bool asManager = false,
-  }) async {
+  }) {
     final owner = _peerFor(order.deviceId);
-    if (owner == null) {
-      return _unreachableClaim(order, cashier: cashier, detail: order.deviceId);
-    }
+    return _claims.take(
+      order,
+      ask: owner == null
+          ? null
+          : () => _client.claim(
+                owner,
+                orderUuid: order.uuid,
+                deviceId: deviceId,
+                cashier: cashier,
+                asManager: asManager,
+              ),
+      cashier: cashier,
+      asManager: asManager,
+    );
+  }
+
+  /// Reserve [table] with the shop's primary before seating a new tab on it.
+  ///
+  /// The primary answers from its own replica and its recent grants, so two tills
+  /// tapping one empty table inside the replication window cannot both seat it. A
+  /// primary that cannot be asked answers [LanSeatAnswer.unasked] and the till
+  /// seats anyway: selling does not stop because the switch did.
+  Future<LanSeatAnswer> reserveTable(String table) async {
+    if (_isPrimary()) return _seats.reserve(table, deviceId);
+    final primary = _primaryPeer();
+    if (primary == null) return LanSeatAnswer.unasked;
     try {
-      final payload = await _client.claim(
-        owner,
-        orderUuid: order.uuid,
-        deviceId: deviceId,
-        cashier: cashier,
-        asManager: asManager,
-      );
-      final taken = _claims.accept(payload, cashier: cashier);
-      if (taken == null) {
-        return (
-          order: null,
-          refusal: LanClaimRefusal.refused,
-          detail: 'the answer was not this tab',
-        );
-      }
-      return (order: taken, refusal: null, detail: null);
-    } on LanTabRefused catch (e) {
-      return (order: null, refusal: LanClaimRefusal.refused, detail: e.reason);
+      return await _client.seat(primary, table: table, deviceId: deviceId);
     } catch (e) {
-      return _unreachableClaim(order, cashier: cashier, detail: '$e');
+      _report('lan.seat.unasked', '$table: $e');
+      return LanSeatAnswer.unasked;
     }
   }
 
-  /// Owner silent: seize the local replica and announce ownership.
-  LanClaimResult _unreachableClaim(
-    Order order, {
-    String? cashier,
-    required String detail,
-  }) {
-    final seized = _claims.seizeUnreachable(order.uuid, cashier: cashier);
-    if (seized != null) {
-      return (
-        order: seized,
-        refusal: null,
-        detail: 'seized unreachable owner ($detail)',
-      );
+  LanPeer? _primaryPeer() {
+    final id = _primaryDeviceId()?.trim();
+    for (final peer in peers.active) {
+      if (id != null && id.isNotEmpty ? peer.deviceId == id : peer.role == DeviceRole.primary) {
+        return peer;
+      }
     }
-    return (
-      order: null,
-      refusal: LanClaimRefusal.ownerUnreachable,
-      detail: detail,
-    );
+    return null;
   }
+
+  /// Which tab is open on this till's screen, so it is never handed away while
+  /// being rung up. Set by the app shell once it has a session.
+  set tabOnScreen(bool Function(String orderUuid)? check) =>
+      _claims.isOnScreen = check;
 
   /// The peer that owns [deviceId], or null when this device has not seen it
   /// recently enough to ask it anything.

@@ -609,6 +609,7 @@ class PosSession {
   void splitTabToTable(String targetLabel) {
     final trimmed = targetLabel.trim();
     if (trimmed.isEmpty || trimmed == current.tableLabel) return;
+    if (tableBusyElsewhere(trimmed)) return;
     _detachFromSiblings(current);
     current.tableLabel = trimmed;
     orders.save(current);
@@ -1383,6 +1384,7 @@ class PosSession {
         (targetOrderUuid == null || targetOrderUuid == order.uuid)) {
       return order;
     }
+    if (tableBusyElsewhere(targetTableLabel)) return order;
     final taken = order.lines.where((l) => lineUuids.contains(l.uuid)).toList();
     if (taken.isEmpty || !canMoveLines(lineUuids)) return order;
     final whole = taken.length == order.lines.length;
@@ -1415,6 +1417,12 @@ class PosSession {
     }
     return target;
   }
+
+  /// Whether another till holds a tab on [label]. Lines cannot be moved there from
+  /// here: this till cannot write into a bill it does not own, and opening a second
+  /// tab beside it is how one table ends up with two bills on two tills.
+  bool tableBusyElsewhere(String label) => orders.occupyingAnywhere().any(
+      (o) => o.tableLabel == label.trim() && o.deviceId != deviceId);
 
   /// Whether [lineUuids] may leave the current order. Money taken on a table was
   /// paid toward the whole bill, so part of a part-paid table cannot move without

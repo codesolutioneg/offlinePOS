@@ -291,6 +291,15 @@ void main() {
     await t.pumpAndSettle();
   }
 
+  /// A silent owner is asked [kClaimAttempts] times with a pause between, so the
+  /// test clock has to run past those pauses before the seizure lands.
+  Future<void> waitOutRetries(WidgetTester t) async {
+    for (var i = 0; i < kClaimAttempts * 2; i++) {
+      await t.pump(kClaimRetryDelay);
+    }
+    await t.pumpAndSettle();
+  }
+
   /// Tap the busy table on the floor the app lands on after sign-in.
   Future<void> tapTableFive(WidgetTester t) async {
     final tile = find.byWidgetPredicate((w) =>
@@ -331,7 +340,7 @@ void main() {
     await signIn(t);
     await tapTableFive(t);
     await t.tap(find.byKey(const Key('confirm-takeover')));
-    await t.pumpAndSettle();
+    await waitOutRetries(t);
 
     expect(orders.byUuid(tab.uuid)!.deviceId, 'till-1');
     expect(find.byType(SellScreen), findsOneWidget);
@@ -349,7 +358,7 @@ void main() {
     await signIn(t);
     await tapTableFive(t);
     await t.tap(find.byKey(const Key('confirm-takeover')));
-    await t.pumpAndSettle();
+    await waitOutRetries(t);
 
     expect(orders.byUuid(tab.uuid)!.deviceId, 'till-1');
     expect(find.byType(SellScreen), findsOneWidget);

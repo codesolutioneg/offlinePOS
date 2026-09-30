@@ -20,7 +20,18 @@ enum LanClaimRefusal {
   /// The owner answered and said no: the tab is not parked any more, it was already
   /// handed on, or that device does not allow takeovers.
   refused,
+
+  /// The owner stayed silent through every retry and this till holds a copy, but
+  /// only a manager may take a bill from a till that cannot let go of it.
+  needsManager,
 }
+
+/// How many times the owning till is asked before it is treated as gone. One
+/// dropped packet or a busy till is not a dead till.
+const int kClaimAttempts = 3;
+
+/// The pause between two asks of a till that did not answer.
+const Duration kClaimRetryDelay = Duration(milliseconds: 400);
 
 /// The owning till answered and said no.
 ///
@@ -76,6 +87,11 @@ class LanClaimDesk {
   /// device on its own.
   final LanLog? _audit;
 
+  /// Whether a tab is open on this till's screen right now. Set by the app shell
+  /// once a session exists; a tab being rung up here is never handed away under
+  /// the cashier's hands, whatever its stored state says.
+  bool Function(String orderUuid)? isOnScreen;
+
   /// The owner's half: give [orderUuid] to [toDeviceId], or say why not.
   ///
   /// Runs on the event loop between taps like every other inbound request, and
@@ -97,6 +113,11 @@ class LanClaimDesk {
       _audit?.call('order.claim.refused',
           '$orderUuid to $toDeviceId: takeovers are switched off here');
       return (order: null, refusal: LanClaimRefusal.refused, detail: 'not allowed');
+    }
+    if (isOnScreen?.call(orderUuid) ?? false) {
+      _audit?.call('order.claim.refused',
+          '$orderUuid to $toDeviceId: open on this till right now');
+      return (order: null, refusal: LanClaimRefusal.refused, detail: 'open on screen');
     }
     final moved = _orders.handOver(orderUuid, toDeviceId);
     if (moved == null) {
@@ -127,6 +148,64 @@ class LanClaimDesk {
         '${order.uuid} from ${payload['claim_from'] ?? 'another till'}'
         '${cashier == null ? '' : ' by $cashier'}');
     return order;
+  }
+
+  /// The claimer's whole takeover: ask the owner through [ask], retrying a silent
+  /// owner, and fall back to seizing the local copy only with manager authority.
+  ///
+  /// [ask] is null when the owner is not a visible peer at all. A refusal from the
+  /// owner is final and never retried; only silence is.
+  Future<LanClaimResult> take(
+    Order order, {
+    required Future<Map<String, dynamic>> Function()? ask,
+    String? cashier,
+    bool asManager = false,
+    int attempts = kClaimAttempts,
+    Duration retryDelay = kClaimRetryDelay,
+  }) async {
+    var silence = order.deviceId;
+    if (ask != null) {
+      for (var i = 0; i < attempts; i++) {
+        if (i > 0) await Future<void>.delayed(retryDelay);
+        try {
+          final taken = accept(await ask(), cashier: cashier);
+          if (taken == null) {
+            return (
+              order: null,
+              refusal: LanClaimRefusal.refused,
+              detail: 'the answer was not this tab',
+            );
+          }
+          return (order: taken, refusal: null, detail: null);
+        } on LanTabRefused catch (e) {
+          return (order: null, refusal: LanClaimRefusal.refused, detail: e.reason);
+        } catch (e) {
+          silence = '$e';
+        }
+      }
+    }
+    return _unreachable(order, cashier: cashier, asManager: asManager, detail: silence);
+  }
+
+  LanClaimResult _unreachable(
+    Order order, {
+    String? cashier,
+    required bool asManager,
+    required String detail,
+  }) {
+    if (_orders.byUuid(order.uuid) == null) {
+      return (order: null, refusal: LanClaimRefusal.ownerUnreachable, detail: detail);
+    }
+    if (!asManager) {
+      _audit?.call('order.claim.refused',
+          '${order.uuid}: owner silent, manager approval needed');
+      return (order: null, refusal: LanClaimRefusal.needsManager, detail: detail);
+    }
+    final seized = seizeUnreachable(order.uuid, cashier: cashier);
+    if (seized == null) {
+      return (order: null, refusal: LanClaimRefusal.ownerUnreachable, detail: detail);
+    }
+    return (order: seized, refusal: null, detail: 'seized unreachable owner ($detail)');
   }
 
   /// Primary till: seize a parked tab whose owner did not answer.

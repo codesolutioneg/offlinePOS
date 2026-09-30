@@ -9,6 +9,7 @@ import 'lan_credential.dart';
 import 'lan_event.dart';
 import 'lan_event_log.dart';
 import 'lan_peer.dart';
+import 'lan_seat_desk.dart';
 
 /// A page of one peer's log, with the highest seq that page covers.
 ///
@@ -61,6 +62,7 @@ class LanProtocol {
     required LanCredential credential,
     LanClaimDesk? claims,
     this.onJoin,
+    this.seats,
     this.pageSize = 200,
     LanLog? onRefused,
   })  : _log = log,
@@ -83,6 +85,9 @@ class LanProtocol {
   /// keeps its tab.
   static const String claimPath = '/lan/claim';
 
+  /// A till asking the primary to reserve a table before it seats a new tab there.
+  static const String seatPath = '/lan/seat';
+
   /// A secondary till presenting a one-time join PIN to receive the shop key.
   ///
   /// Unauthenticated by design: the PIN is the admission proof before the peer
@@ -99,6 +104,10 @@ class LanProtocol {
 
   /// Null when this till cannot admit secondaries (not primary / no PIN bank).
   final LanJoinHandler? onJoin;
+
+  /// The seat desk, read per request because only the primary answers and the role
+  /// can change while the till is up. Null (or answering null) refuses with 409.
+  final LanSeatDesk? Function()? seats;
 
   final int pageSize;
   final LanLog? _onRefused;
@@ -131,7 +140,7 @@ class LanProtocol {
 
   LanReply handlePost(String path, String body, {String? auth}) {
     if (path == joinPath) return _handleJoin(body);
-    if (path != notifyPath && path != claimPath) {
+    if (path != notifyPath && path != claimPath && path != seatPath) {
       return const LanReply(404, {'error': 'unknown path'});
     }
     // Before the body is even parsed: an unpaired device gets no say in what this
@@ -154,6 +163,7 @@ class LanProtocol {
       return const LanReply(400, {'error': 'no device_id'});
     }
     if (path == claimPath) return _handleClaim(decoded, peer);
+    if (path == seatPath) return _handleSeat(decoded, peer);
     final raw = decoded['events'];
     if (raw is! List) return const LanReply(400, {'error': 'no events'});
     final events = <LanEvent>[];
@@ -245,6 +255,20 @@ class LanProtocol {
       // having to trust its own idea of who owned it a moment ago.
       'order': {...order.toMap(), 'claim_from': deviceId},
     });
+  }
+
+  /// Reserve a table for the peer about to seat it, or say another till has it.
+  LanReply _handleSeat(Map<String, dynamic> decoded, String peer) {
+    final desk = seats?.call();
+    if (desk == null) {
+      return const LanReply(409, {'error': 'this device is not the primary'});
+    }
+    final table = decoded['table'];
+    if (table is! String || table.trim().isEmpty) {
+      return const LanReply(400, {'error': 'no table'});
+    }
+    final answer = desk.reserve(table, peer);
+    return LanReply(200, {'device_id': deviceId, 'seat': answer.name});
   }
 
   /// The first gate every request passes: proof the caller holds the shop key.
@@ -488,6 +512,28 @@ class LanHttpClient {
     final order = decoded['order'];
     if (order is! Map) throw const FormatException('claim answered with no order');
     return order.cast<String, dynamic>();
+  }
+
+  /// Ask the primary [peer] to reserve [table] for this till. Throws when it cannot
+  /// be reached, which the caller treats as [LanSeatAnswer.unasked].
+  Future<LanSeatAnswer> seat(
+    LanPeer peer, {
+    required String table,
+    required String deviceId,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'table': table,
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.seatPath),
+      body,
+      _credential.stamp(method: 'POST', path: LanProtocol.seatPath, body: body),
+    );
+    final seat = (jsonDecode(text) as Map)['seat'];
+    return seat == LanSeatAnswer.busy.name ? LanSeatAnswer.busy : LanSeatAnswer.granted;
   }
 
   /// Present a join PIN to [peer] (the primary). No shop-key stamp — the PIN is

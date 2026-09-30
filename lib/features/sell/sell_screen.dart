@@ -2876,6 +2876,7 @@ class _SellScreenState extends State<SellScreen> {
       _changed(() => s.clearTableToTakeaway());
       return;
     }
+    if (_refuseBusyElsewhere(label)) return;
     final dest = await _targetTabOn(label);
     if (!mounted) return;
     if (dest == 'cancel') return;
@@ -2902,6 +2903,7 @@ class _SellScreenState extends State<SellScreen> {
           return;
         }
         if (!_mayMoveTable()) return;
+        if (_refuseBusyElsewhere(label)) return;
         final dest = await _targetTabOn(label);
         if (!mounted) return;
         if (dest == 'cancel') return;
@@ -2988,7 +2990,20 @@ class _SellScreenState extends State<SellScreen> {
   Future<void> _splitTabToTable() async {
     final label = await _pickTable(exclude: s.current.tableLabel);
     if (label == null || label.isEmpty || !mounted) return;
+    if (_refuseBusyElsewhere(label)) return;
     _changed(() => s.splitTabToTable(label));
+  }
+
+  /// Toast and true when [label] has a bill on another till.
+  bool _refuseBusyElsewhere(String label) {
+    if (!s.tableBusyElsewhere(label)) return false;
+    showToast(
+        context,
+        tr(context, 'Table {name} is open on another device. Take it over there first.')
+            .replaceAll('{name}', label),
+        kind: ToastKind.error,
+        key: const Key('move-refused-elsewhere'));
+    return true;
   }
 
   bool _mayMoveTable() {

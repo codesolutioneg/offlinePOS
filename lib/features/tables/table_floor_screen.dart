@@ -454,6 +454,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final result =
         await _tableDialog(title: '${tr(context, 'Table')} ${t.name}', initial: t);
     if (result == null) return;
+    if ((result.delete || result.name != t.name) && _refuseIfOccupied(t)) return;
     if (result.delete) {
       if (!mounted) return;
       final confirmed = await _confirmDeleteTable(t.name);
@@ -473,6 +474,21 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       ));
     }
     _reload();
+  }
+
+  /// A table with a bill on it keeps its name and its tile: the bill finds its
+  /// table by name, so renaming or removing it would take the bill off the floor.
+  bool _refuseIfOccupied(PosTable t) {
+    if (!widget.occupiedLabels.contains(t.name)) return false;
+    if (mounted) {
+      showToast(
+          context,
+          tr(context, 'Table {name} has an open bill. Settle or move it first.')
+              .replaceAll('{name}', t.name),
+          kind: ToastKind.error,
+          key: const Key('table-occupied-refused'));
+    }
+    return true;
   }
 
   /// A table removed here is gone with no trace, so a manager confirms before
@@ -800,6 +816,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   /// Delete from the editor bar, through the same confirmation the dialog uses.
   Future<void> _deleteSelected(PosTable t) async {
+    if (_refuseIfOccupied(t)) return;
     final confirmed = await _confirmDeleteTable(t.name);
     if (confirmed != true || !mounted) return;
     widget.store.remove(t.id);

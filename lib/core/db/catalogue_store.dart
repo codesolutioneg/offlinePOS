@@ -436,6 +436,28 @@ class CatalogueStore {
     return (groups: groups, productGroupIds: links);
   }
 
+  /// Drop everything pulled from Odoo, keeping what was made on the till. For a
+  /// till pointed at other books: their ids name other dishes, so the old menu
+  /// must not be sold against them. The next pull fills it again.
+  void forgetPulled() {
+    _db.raw.execute('BEGIN');
+    try {
+      for (final table in const [
+        'product_modifier_groups',
+        'modifiers',
+        'modifier_groups',
+        'products',
+        'categories',
+      ]) {
+        _db.raw.execute("DELETE FROM $table WHERE source = 'odoo'");
+      }
+      _db.raw.execute('COMMIT');
+    } catch (_) {
+      _db.raw.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
   /// How many modifier groups each product carries, and whether any of them has to
   /// be answered, so the grid can mark those tiles.
   ///

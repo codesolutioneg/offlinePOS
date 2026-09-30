@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -17,7 +18,7 @@ Future<HttpReply> httpPost(Uri url, Map<String, String> headers, String body) as
     headers.forEach(req.headers.set);
     req.add(utf8.encode(body));
     final res = await req.close().timeout(const Duration(seconds: 30));
-    final text = await res.transform(utf8.decoder).join();
+    final text = await readReply(res);
     final h = <String, String>{};
     res.headers.forEach((name, values) => h[name.toLowerCase()] = values.join(','));
     return HttpReply(res.statusCode, text, headers: h);
@@ -25,6 +26,18 @@ Future<HttpReply> httpPost(Uri url, Map<String, String> headers, String body) as
     client.close(force: true);
   }
 }
+
+/// How long the body of a reply may take once its headers are in.
+const Duration kReplyReadTimeout = Duration(seconds: 30);
+
+/// Read a reply to the end, or throw [TimeoutException] after [timeout].
+///
+/// A connection that drops half way through a reply without being closed never
+/// ends the read. Without a limit the close screen spins for ever, and the queue
+/// behind it waits with it. The sender treats the timeout as the line going away,
+/// so the sale stays queued and is retried.
+Future<String> readReply(Stream<List<int>> res, {Duration timeout = kReplyReadTimeout}) =>
+    res.transform(utf8.decoder).join().timeout(timeout);
 
 /// The [HttpPost] every Odoo call goes through: [httpPost] when this build carries
 /// no pins for the server, the pinned one when it does.
@@ -124,7 +137,7 @@ class PinnedSyncTransport {
         throw const HttpException('Odoo host presented an unpinned certificate');
       }
 
-      final text = await res.transform(utf8.decoder).join();
+      final text = await readReply(res);
       final h = <String, String>{};
       res.headers.forEach((name, values) => h[name.toLowerCase()] = values.join(','));
       return HttpReply(res.statusCode, text, headers: h);

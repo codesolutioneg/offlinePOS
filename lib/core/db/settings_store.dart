@@ -1917,6 +1917,11 @@ class SettingsStore {
   int? get odooCompanyId => _positiveId('odoo_company_id');
   set odooCompanyId(int? v) => _setOdooId('odoo_company_id', v);
 
+  /// Which Odoo books the queued sales were rung against (server, database,
+  /// company, branch). Null until the first save of the server settings.
+  String? get odooServerFingerprint => getString('odoo_server_fingerprint');
+  set odooServerFingerprint(String? v) => setString('odoo_server_fingerprint', v);
+
   int? get odooRestaurantId => _positiveId('odoo_restaurant_id');
   set odooRestaurantId(int? v) => _setOdooId('odoo_restaurant_id', v);
 

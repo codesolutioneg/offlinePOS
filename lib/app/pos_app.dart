@@ -32,6 +32,8 @@ import '../core/email/email_service.dart';
 import '../core/lan/lan_cart_board.dart';
 import '../core/lan/lan_claim.dart';
 import '../core/lan/lan_credential.dart';
+import '../core/lan/lan_peer.dart';
+import '../core/lan/lan_seat_desk.dart';
 import '../core/lan/lan_shift_board.dart';
 import '../core/lan/lan_wiring.dart';
 import '../core/onboarding/setup_checklist.dart';
@@ -56,6 +58,7 @@ import '../core/sync/odoo_puller.dart';
 import '../core/sync/odoo_wiring.dart';
 import '../core/sync/outbox.dart';
 import '../core/sync/store_order_alert.dart';
+import '../core/sync/server_change_guard.dart';
 import '../core/sync/server_probe.dart';
 import '../core/sync/sync_service.dart';
 import '../core/theme/app_colors.dart';
@@ -508,6 +511,10 @@ class _PosAppState extends State<PosApp> {
   Future<void> _startLan() async {
     final lan = widget.lan;
     if (lan == null) return;
+    lan.tabOnScreen = (uuid) {
+      final session = _session;
+      return _onCounter && session != null && session.current.uuid == uuid;
+    };
     try {
       await lan.start();
     } catch (e) {
@@ -2771,13 +2778,11 @@ class _PosAppState extends State<PosApp> {
         actingCashierId: _session?.cashierId ?? original.cashierId,
         deviceId: widget.deviceId,
         onRefund: (refund) {
-          // A refund is a durable order like a sale: saved, queued to sync, audited,
-          // and a slip printed for the customer.
+          // A refund is a durable order like a sale: saved, mirrored, audited, and a
+          // slip printed for the customer. It is not queued for Odoo: refunds are
+          // booked there by hand, by the owner's decision.
           widget.orders.inTransaction(() {
             widget.orders.save(refund);
-            _watchQueued(
-                widget.outbox.enqueue('order.push', refund.uuid, refund.toServerPayload()),
-                refund);
             _watchQueued(
                 DishflowMirror.enqueueIfEnabled(
                   outbox: widget.outbox,
@@ -3296,6 +3301,18 @@ class _PosAppState extends State<PosApp> {
                 for (final o in tabs)
                   if (o.deviceId == widget.deviceId) o,
               ];
+              if (local.length < tabs.length && tabs.length > 1) {
+                if (!floorContext.mounted) return;
+                final chosen = await _pickTableTab(floorContext, tabs);
+                if (chosen == null || !floorContext.mounted) return;
+                if (chosen.deviceId == widget.deviceId) {
+                  unawaited(_resumeTab(floorContext, session, chosen));
+                } else {
+                  _openElsewhere(floorContext, session, chosen,
+                      refusal: 'This table is open on another device. Settle it there.');
+                }
+                return;
+              }
               if (local.isEmpty && tabs.isNotEmpty) {
                 _openElsewhere(floorContext, session, tabs.first,
                     refusal: 'This table is open on another device. Settle it there.');
@@ -3347,6 +3364,8 @@ class _PosAppState extends State<PosApp> {
               } else if (dineIn && cfg.requireGuestCount == false) {
                 covers = 1;
               }
+              if (!floorContext.mounted) return;
+              if (!await _reserveSeat(floorContext, t.name)) return;
               if (!mounted) return;
               setState(() {
                 session.startFresh(type);
@@ -3362,6 +3381,53 @@ class _PosAppState extends State<PosApp> {
           );
         },
       );
+
+  /// Ask the shop's primary for [table] before a new tab is seated on it. False
+  /// when another till has just opened it; the floor is refreshed so it shows.
+  Future<bool> _reserveSeat(BuildContext context, String table) async {
+    final lan = widget.lan;
+    if (lan == null || !lan.isRunning) return true;
+    final answer = await lan.reserveTable(table);
+    if (answer != LanSeatAnswer.busy) return true;
+    unawaited(lan.pass());
+    if (context.mounted) {
+      showToast(
+          context,
+          tr(context, 'Table {name} was just opened on another device.')
+              .replaceAll('{name}', table),
+          kind: ToastKind.error,
+          key: const Key('seat-busy'));
+    }
+    return false;
+  }
+
+  /// Every tab on one table, from this till and the others, so the waiter picks
+  /// the bill instead of the till guessing. Null when they back out.
+  Future<Order?> _pickTableTab(BuildContext context, List<Order> tabs) {
+    final names = {for (final p in widget.lan?.peers.all ?? const <LanPeer>[]) p.deviceId: p.name};
+    final users = {for (final u in widget.users.all()) u.id: u.name};
+    return showDialog<Order>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(tr(ctx, 'Which bill?')),
+        children: [
+          for (final o in tabs)
+            SimpleDialogOption(
+              key: Key('table-tab-${o.uuid}'),
+              onPressed: () => Navigator.pop(ctx, o),
+              child: Text([
+                if (o.orderNo != null) '#${o.orderNo}',
+                users[o.cashierId] ?? o.cashierId,
+                PosApp.money(o.total),
+                o.deviceId == widget.deviceId
+                    ? tr(ctx, 'this till')
+                    : names[o.deviceId] ?? o.deviceId,
+              ].join(' · ')),
+            ),
+        ],
+      ),
+    );
+  }
 
   // ── the shop's trading day, across devices ───────────────────────
 
@@ -4526,14 +4592,24 @@ class _PosAppState extends State<PosApp> {
         if (await _authorizeManager(context) == null) return;
       }
     }
-    final result = await lan.claim(
+    final managerApproved =
+        asManager || (widget.auth.signedIn?.isManager ?? false) || !asOpener;
+    var result = await lan.claim(
       tab,
       cashier: session.cashierId,
-      asManager: asManager ||
-          (widget.auth.signedIn?.isManager ?? false) ||
-          !asOpener,
+      asManager: managerApproved,
     );
     if (!context.mounted) return;
+    if (result.refusal == LanClaimRefusal.needsManager) {
+      showToast(
+          context,
+          tr(context,
+              'That device did not answer. A manager must approve taking the tab.'),
+          kind: ToastKind.error);
+      if (await _authorizeManager(context) == null || !context.mounted) return;
+      result = await lan.claim(tab, cashier: session.cashierId, asManager: true);
+      if (!context.mounted) return;
+    }
     if (result.order == null) {
       showToast(
           context,
@@ -5751,8 +5827,28 @@ class _PosAppState extends State<PosApp> {
         // screen that points the till at a server also says which shop it is.
         settings: widget.settings,
         // Rewire the live sender the moment settings are saved, so a till just
-        // pointed at a server drains its queue without a restart.
-        onSaved: widget.odoo.configure,
+        // pointed at a server drains its queue without a restart. Sales queued for
+        // other books are held first, so none of them go to this one.
+        onSaved: (endpoint) {
+          final held = holdSalesOnServerChange(
+            endpoint: endpoint,
+            settings: widget.settings,
+            outbox: widget.outboxStore,
+            catalogue: widget.catalogue,
+            audit: widget.audit,
+            actor: _session?.cashierId ?? 'system',
+          );
+          widget.odoo.configure(endpoint);
+          if (held > 0 && context.mounted) {
+            showToast(
+                context,
+                tr(context,
+                        '{n} queued sale(s) held: they belong to the old server and will not be sent.')
+                    .replaceAll('{n}', '$held'),
+                kind: ToastKind.warning,
+                duration: const Duration(seconds: 8));
+          }
+        },
         check: widget.checkServer,
         // So the three ids are picked from what Odoo actually has rather than
         // guessed. Read through the same call_kw the catalogue uses, and only ever
