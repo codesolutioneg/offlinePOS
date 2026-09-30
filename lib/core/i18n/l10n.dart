@@ -1241,8 +1241,8 @@ const Map<String, String> _ar = {
   'Order {n} failed: {error}': 'الطلب {n} فشل: {error}',
   'Numbers: {distinct} distinct · repeated {repeated} {which}· without a number {none}':
       'الأرقام: {distinct} مختلف · متكرر {repeated} {which}· من غير رقم {none}',
-  'Paid and waiting for the shift close: {paid} · not in the queue: {missing}':
-      'مدفوع ومستني قفل الوردية: {paid} · مش في الطابور: {missing}',
+  'Paid on this till, waiting for the shift close: {paid} · not in the queue: {missing}':
+      'مدفوع على الجهاز ده ومستني قفل الوردية: {paid} · مش في الطابور: {missing}',
   'No free table on the floor: added 30 in section "{section}"':
       'مفيش طربيزة فاضية: اتضاف 30 طربيزة في قسم «{section}»',
   '{n} sales on the till while timing': '{n} بيعة على الجهاز وقت القياس',

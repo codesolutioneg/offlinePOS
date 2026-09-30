@@ -8,6 +8,7 @@ import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
+import 'package:offline_pos/core/db/stress_purge.dart';
 import 'package:offline_pos/core/db/table_assignment_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
 import 'package:offline_pos/core/lan/lan_applier.dart';
@@ -90,6 +91,7 @@ class TestTill {
       shifts: shifts,
       log: log,
       onShopBundleApplied: () => dishflow.apply(settings),
+      onStressCleanup: () => purgeStressOrders(db),
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
     claims = LanClaimDesk(

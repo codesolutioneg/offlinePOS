@@ -45,8 +45,10 @@ class LanApplier {
     ShiftStore? shifts,
     UserStore? users,
     void Function()? onShopBundleApplied,
+    void Function()? onStressCleanup,
     LanLog? onRefused,
   })  : _orders = orders,
+        _onStressCleanup = onStressCleanup,
         _tables = tables,
         _settings = settings,
         _reservations = reservations,
@@ -72,6 +74,9 @@ class LanApplier {
   final ShiftStore? _shifts;
   final UserStore? _users;
   final void Function()? _onShopBundleApplied;
+
+  /// Drops this till's Stress Lab rows when another till cleared its own.
+  final void Function()? _onStressCleanup;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -188,6 +193,7 @@ class LanApplier {
         LanEventKind.fingerprintUpsert => _applyFingerprint(event),
         LanEventKind.userUpsert => _applyUser(event),
         LanEventKind.cartDisplay => _applyCart(event),
+        LanEventKind.stressCleanup => _applyStressCleanup(),
       };
       if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
@@ -244,6 +250,14 @@ class LanApplier {
     // announce: false, so applying a peer's order does not make this till claim
     // authorship of it and send it back.
     _orders.save(incoming, announce: false);
+    return true;
+  }
+
+  /// Only rows carrying the lab's own note go; see `purgeStressOrders`.
+  bool _applyStressCleanup() {
+    final purge = _onStressCleanup;
+    if (purge == null) return false;
+    purge();
     return true;
   }
 

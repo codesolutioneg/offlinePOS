@@ -27,6 +27,7 @@ class PosSession {
     this.taxRateFor,
     this.serviceChargeFor,
     this.nextOrderNo,
+    this.onRinging,
     this.shiftOpenedAt,
     this.clock,
   });
@@ -64,6 +65,10 @@ class PosSession {
   /// no number and everything falls back to the uuid tail, which is what the till
   /// showed before there was a counter.
   final String Function()? nextOrderNo;
+
+  /// Told when a line goes onto an order that has no number yet, so a number that
+  /// has to come over the network can be on its way before [nextOrderNo] is asked.
+  final void Function()? onRinging;
 
   /// Give [o] its number the first time it leaves the cashier's hands (parked,
   /// paid, or sent to kitchen). Never re-numbered: a table that is recalled,
@@ -152,6 +157,7 @@ class PosSession {
   /// Add a product, applying chosen modifiers. Persisted immediately.
   void addProduct(Product product,
       {List<ChosenModifier> chosen = const [], double qty = 1}) {
+    if (current.orderNo == null) onRinging?.call();
     final line = OrderLine(
       productId: product.id,
       // Captured now, like the price: what this line books against in Odoo must not

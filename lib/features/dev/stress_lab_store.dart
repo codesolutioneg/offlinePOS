@@ -3,25 +3,38 @@ import 'dart:convert';
 
 import '../../core/db/database.dart';
 import '../../core/db/order_store.dart';
+import '../../core/db/stress_purge.dart';
 import '../../core/db/table_store.dart';
 import '../../domain/order.dart';
 import 'stress_note.dart';
 
-/// The note every Stress Lab order carries. Cleanup keys on it and nothing else.
-const String kStressNote = '[STRESS]';
+export '../../core/db/stress_purge.dart' show kStressNote;
 
 /// The floor section the lab adds tables to when the floor has none free.
 const String kStressSection = 'Stress';
 
 /// Reads and removes Stress Lab data on the till's own database.
 class StressLabStore {
-  StressLabStore({required this.db, required this.orders, required this.tables});
+  StressLabStore({
+    required this.db,
+    required this.orders,
+    required this.tables,
+    this.deviceId,
+    this.announceCleanup,
+  });
 
   final Db db;
   final OrderStore orders;
   final TableStore tables;
 
-  static const _noteMatch = '%"note":"[STRESS]"%';
+  /// This till. Only its own sales are queued for Odoo here, so only they are
+  /// checked against the queue; null counts every row (a till with no LAN).
+  final String? deviceId;
+
+  /// Tells the other tills to drop their copies of the lab's orders.
+  final void Function()? announceCleanup;
+
+  static const _noteMatch = '%"note":"$kStressNote"%';
 
   List<Order> _stressOrders(String stateClause) => db.raw
       .select('SELECT payload FROM orders WHERE $stateClause AND payload LIKE ?',
@@ -42,7 +55,8 @@ class StressLabStore {
       .select("SELECT COUNT(*) c FROM orders WHERE state IN ('paid','synced')")
       .first['c'] as int;
 
-  /// What a manager checks after a run: numbers repeated, sales left unqueued.
+  /// What a manager checks after a run: numbers repeated anywhere in the shop,
+  /// and this till's sales left unqueued.
   List<StressNote> auditNumbers() {
     final live = _stressOrders("state IN ('held','paid','synced')");
     final seen = <String, int>{};
@@ -52,7 +66,11 @@ class StressLabStore {
     }
     final repeated = seen.entries.where((e) => e.value > 1).map((e) => '#${e.key}').toList();
     final unnumbered = live.where((o) => o.orderNo == null).length;
-    final paid = live.where((o) => o.state == OrderState.paid).map((o) => o.uuid).toSet();
+    final paid = live
+        .where((o) => o.state == OrderState.paid)
+        .where((o) => deviceId == null || o.deviceId == deviceId)
+        .map((o) => o.uuid)
+        .toSet();
     final queued = db.raw
         .select("SELECT payload_uuid FROM outbox WHERE kind = 'order.push' "
             'AND sent_at IS NULL AND dead_at IS NULL')
@@ -71,7 +89,7 @@ class StressLabStore {
         repeated.isNotEmpty || unnumbered > 0,
       ),
       StressNote(
-        'Paid and waiting for the shift close: {paid} · not in the queue: {missing}',
+        'Paid on this till, waiting for the shift close: {paid} · not in the queue: {missing}',
         {'paid': paid.length, 'missing': missing},
         missing > 0,
       ),
@@ -104,21 +122,14 @@ class StressLabStore {
     }
   }
 
-  /// Remove every lab order, its queued deliveries and the lab's tables.
-  /// Returns how many orders went.
+  /// Remove every lab order on this till (the other tills' copies included), its
+  /// queued deliveries and the lab's tables, and have the other tills do the same.
+  /// Returns how many orders went here.
   int cleanup() {
-    final uuids = db.raw
-        .select('SELECT uuid FROM orders WHERE payload LIKE ?', [_noteMatch])
-        .map((r) => r['uuid'] as String)
-        .toList();
-    db.raw.execute('BEGIN');
-    for (final u in uuids) {
-      db.raw.execute('DELETE FROM outbox WHERE payload_uuid = ?', [u]);
-      db.raw.execute('DELETE FROM orders WHERE uuid = ?', [u]);
-    }
-    db.raw.execute('COMMIT');
+    final removed = purgeStressOrders(db);
     tables.deleteSection(kStressSection);
-    return uuids.length;
+    announceCleanup?.call();
+    return removed;
   }
 }
 

@@ -13,6 +13,7 @@ import '../db/order_store.dart';
 import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
 import '../db/shift_store.dart';
+import '../db/stress_purge.dart';
 import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
 import '../printing/printer_registry.dart';
@@ -25,6 +26,7 @@ import 'lan_event.dart';
 import 'lan_credential.dart';
 import 'lan_event_log.dart';
 import 'lan_fabric.dart';
+import 'lan_number_desk.dart';
 import 'lan_peer.dart';
 import 'lan_seat_desk.dart';
 import 'lan_shift_board.dart';
@@ -64,7 +66,8 @@ class LanNode {
     required LanClaimDesk claims,
     required LanSeatDesk seats,
     required this.peers,
-    /// The primary answers table reservations; everyone else asks it.
+    /// The primary answers table reservations and order numbers; everyone else
+    /// asks it.
     required bool Function() isPrimary,
     required String? Function() primaryDeviceId,
     required LanLog report,
@@ -141,6 +144,7 @@ class LanNode {
       users: users,
       log: eventLog,
       onShopBundleApplied: onShopBundleApplied,
+      onStressCleanup: () => purgeStressOrders(db),
       onRefused: log,
     );
     final credential = LanCredential.rotating(shopKey);
@@ -156,6 +160,8 @@ class LanNode {
       audit: log,
     );
     final seats = LanSeatDesk(orders: orders);
+    final numbers =
+        LanNumberDesk(deviceId: deviceId, settings: settings, orders: orders);
     final fabric = LanFabric(
       deviceId: deviceId,
       log: eventLog,
@@ -223,6 +229,7 @@ class LanNode {
           credential: credential,
           claims: claims,
           seats: () => settings.isLanPrimary ? seats : null,
+          numbers: () => settings.isLanPrimary ? numbers : null,
           onJoin: joinGate,
           onRefused: log,
         ),
@@ -396,6 +403,11 @@ class LanNode {
         ).toMap(),
       );
 
+  /// Tell the other tills the Stress Lab was cleared here, so they drop their
+  /// copies of its orders too.
+  void announceStressCleanup() => publish(LanEventKind.stressCleanup,
+      'stress-cleanup', {'note': kStressNote});
+
   /// Take a tab another till has parked, with that till's agreement.
   ///
   /// The owner is asked, and asked again when it stays silent. Only after every
@@ -443,6 +455,37 @@ class LanNode {
       _report('lan.seat.unasked', '$table: $e');
       return LanSeatAnswer.unasked;
     }
+  }
+
+  late final LanNumberSupply _numbers = LanNumberSupply(ask: _askNumber);
+
+  Future<String?> _askNumber() async {
+    if (_isPrimary()) return null;
+    final primary = _primaryPeer();
+    if (primary == null) return null;
+    try {
+      return await _client.number(primary, deviceId: deviceId);
+    } catch (e) {
+      _report('lan.number.unasked', '$e');
+      return null;
+    }
+  }
+
+  /// Reserve the next order number from the primary before the sale needs it.
+  /// Called as an order starts being rung; free when one is already held.
+  void prepareOrderNumber() {
+    if (_isPrimary() || !isRunning) return;
+    _numbers.prepare();
+  }
+
+  /// The number reserved from the primary, or null for the till to number
+  /// locally: on the primary itself, or with nothing reserved. Asks for the next
+  /// one straight away, so a queue of sales does not fall back to local numbers.
+  String? takeOrderNumber() {
+    if (_isPrimary()) return null;
+    final n = _numbers.take();
+    prepareOrderNumber();
+    return n;
   }
 
   LanPeer? _primaryPeer() {

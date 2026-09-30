@@ -370,14 +370,30 @@ class PrinterRegistry {
       return _sweptAndFoundNothing(name);
     }
 
-    if (candidates.length == 1) {
+    // With no identity, only a lone printer on the range it was last seen on is
+    // taken for it: a lease moves inside one /24. A till with an address on a
+    // second range sweeps that one too, and a printer answering there is another
+    // department's, not ours back from a busy moment.
+    final nearby = lastKnown == null
+        ? candidates
+        : [
+            for (final c in candidates)
+              if (_sameSubnet(c.host, lastKnown)) c,
+          ];
+    if (nearby.length == 1) {
       _sweepFailedAt.remove(name);
-      return _confirm(name, candidates.single.host);
+      return _confirm(name, nearby.single.host);
     }
 
     // Several printers answer and none of them has ever told us who it is, so there
     // is nothing to match on. Support picks, rather than the till guessing.
     return _sweptAndFoundNothing(name);
+  }
+
+  static bool _sameSubnet(String a, String b) {
+    final pa = a.split('.');
+    final pb = b.split('.');
+    return pa.length == 4 && pb.length == 4 && pa.take(3).join('.') == pb.take(3).join('.');
   }
 
   String? _sweptAndFoundNothing(String name) {

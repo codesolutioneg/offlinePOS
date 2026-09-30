@@ -89,7 +89,12 @@ enum LanEventKind {
   /// is being rung, so it is opt-in per till and superseding: the log keeps the
   /// latest one per device and drops the rest, because a cart from a minute ago is
   /// of no use to anybody and a shift's worth of taps is not something to keep.
-  cartDisplay('cart.display', snapshot: true);
+  cartDisplay('cart.display', snapshot: true),
+
+  /// A manager cleared the Stress Lab's test orders on one till. Every till drops
+  /// its copies too, because a till only ever removes rows it holds itself and the
+  /// lab's paid sales would otherwise sit on the others until the next Z.
+  stressCleanup('dev.stress_cleanup');
 
   const LanEventKind(this.wire, {this.snapshot = false});
 

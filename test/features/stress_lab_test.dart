@@ -44,6 +44,38 @@ void main() {
     expect(till.outboxStore.pendingSalesCount, 20);
   });
 
+  test('another till\'s lab sales are not expected in this till\'s queue', () async {
+    final own = StressLabRunner(
+      session: till.session(),
+      catalogue: CatalogueStore(till.db),
+      tables: tables,
+      store: StressLabStore(
+          db: till.db, orders: till.orders, tables: tables, deviceId: till.deviceId),
+    );
+    final theirs = Order(deviceId: 'till-2', cashierId: 'ana', note: kStressNote)
+      ..orderNo = '9001'
+      ..state = OrderState.paid
+      ..lines.add(OrderLine(productId: 1, name: 'x', quantity: 1, unitPrice: 10));
+    till.orders.save(theirs, announce: false);
+
+    final report = await own.flood(5, Duration.zero, noProgress);
+
+    final paid = report.notes.firstWhere((n) => n.template.startsWith('Paid on this till'));
+    expect(paid.args['paid'], 5);
+    expect(paid.args['missing'], 0);
+    expect(paid.alarm, isFalse);
+  });
+
+  test('cleanup tells the other tills to drop their copies', () async {
+    var announced = 0;
+    final store = StressLabStore(
+        db: till.db, orders: till.orders, tables: tables, announceCleanup: () => announced++);
+    await runner.flood(3, Duration.zero, noProgress);
+
+    expect(store.cleanup(), 3);
+    expect(announced, 1);
+  });
+
   test('every lab sale goes through the till printing, and lost tickets are flagged',
       () async {
     final fired = <String>[];

@@ -15,6 +15,7 @@ import 'core/auth/fingerprint_service.dart';
 import 'core/auth/fingerprint_store.dart';
 import 'core/auth/pin_hasher.dart';
 import 'core/auth/user_store.dart';
+import 'core/config/test_instance.dart';
 import 'core/config/till_config.dart';
 import 'core/db/attempt_store.dart';
 import 'core/db/catalogue_store.dart';
@@ -135,7 +136,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   final config = TillConfig.fromEnvironment();
 
   log.step('resolve the application support directory');
-  final dir = await getApplicationSupportDirectory();
+  final dir = TestInstance.dataDirectory(await getApplicationSupportDirectory());
   // Encrypted at rest with SQLCipher. The key is generated once and kept in the
   // platform keychain via SecureKeyStore, never in a file beside the data. If the
   // keychain is ever wiped, an existing database becomes unreadable rather than
@@ -483,7 +484,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       reservations: reservations,
       assignments: assignments,
       audit: audit,
-      port: config.lanPort,
+      port: TestInstance.lanPort(config.lanPort),
       beaconPort: config.lanBeaconPort,
       onShopBundleApplied: () => dishflow.apply(settings),
     );

@@ -79,6 +79,15 @@ void main() {
     expect(registry['kitchen']!.host, '192.168.8.77');
   });
 
+  test('a lone printer on another range is not taken for a busy one', () async {
+    final subnet = StillSubnet({'192.168.10.36'});
+    final registry = PrinterRegistry(discovery: subnet, identify: anonymous)
+      ..remember('receipt', host: '192.168.0.200');
+
+    expect(await registry.resolve('receipt'), isNull);
+    expect(registry['receipt']!.host, '192.168.0.200');
+  });
+
   test('refresh sweeps without waiting for the old address to fail', () async {
     final subnet = StillSubnet({'192.168.8.77'});
     final registry = PrinterRegistry(discovery: subnet, identify: anonymous)

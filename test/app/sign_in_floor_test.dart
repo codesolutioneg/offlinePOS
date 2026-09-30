@@ -24,6 +24,7 @@ import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/order.dart';
+import 'package:offline_pos/domain/table_section_config.dart';
 import 'package:offline_pos/core/widgets/select_pill.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
@@ -238,6 +239,33 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
     expect(find.byKey(Key('line-${parked.lines.single.uuid}')), findsOneWidget);
+  });
+
+  group('a secondary till', () {
+    setUp(() {
+      SettingsStore(db)
+        ..deviceRole = DeviceRole.secondary
+        ..setLanEnabled(true);
+    });
+
+    testWidgets('that has not joined a primary yet is not held on the waiting screen',
+        (t) async {
+      // "Join with a PIN" marks the till secondary before the PIN is typed; the
+      // PIN goes into Shop network, which the waiting screen would hide.
+      await boot(t);
+
+      expect(find.byKey(const Key('waiting-for-primary')), findsNothing);
+      expect(find.byType(TableFloorScreen), findsOneWidget);
+    });
+
+    testWidgets('that joined waits for its primary, with a way to Shop network',
+        (t) async {
+      SettingsStore(db).lanPrimaryDeviceId = 'till-primary';
+      await boot(t);
+
+      expect(find.byKey(const Key('waiting-for-primary')), findsOneWidget);
+      expect(find.byKey(const Key('waiting-primary-network')), findsOneWidget);
+    });
   });
 
   testWidgets('a draft restored after a crash lands on the counter, not the floor',

@@ -478,6 +478,10 @@ class _PosAppState extends State<PosApp> {
   bool get _needsPrimaryOnline {
     final s = widget.settings;
     if (s.deviceRole != DeviceRole.secondary) return false;
+    // "Join with a PIN" marks the till secondary before the PIN is entered. Until
+    // it has joined a primary there is nothing to wait for, and blocking here
+    // would hide the Shop network screen the PIN is typed into.
+    if ((s.lanPrimaryDeviceId ?? '').isEmpty) return false;
     if (!s.lanRequirePrimaryOnline) return false;
     if (!s.lanEnabled(fallback: widget.config.lanDefault)) return false;
     return true;
@@ -584,8 +588,14 @@ class _PosAppState extends State<PosApp> {
   /// The number staff and customers actually say out loud, handed out when an
   /// order is parked or paid. Climbs past any number already on this shop (other
   /// tills / older sales) so Flash never lists two different checks as the same #.
-  String _nextOrderNo() => widget.settings
-      .nextOrderNumber(widget.deviceId, atLeast: widget.orders.orderNumberFloor());
+  /// On a secondary the number comes off the primary's counter when one was
+  /// reserved in time, so two tills paying at once cannot share it.
+  String _nextOrderNo() =>
+      widget.lan?.takeOrderNumber() ??
+      widget.settings
+          .nextOrderNumber(widget.deviceId, atLeast: widget.orders.orderNumberFloor());
+
+  void _prepareOrderNo() => widget.lan?.prepareOrderNumber();
 
   void _signedIn(Cashier cashier) {
     _lastTouch = widget.nowFn();
@@ -606,6 +616,7 @@ class _PosAppState extends State<PosApp> {
         // the ones already on the floor.
         serviceChargeFor: widget.settings.serviceChargePercentFor,
         nextOrderNo: _nextOrderNo,
+        onRinging: _prepareOrderNo,
         settings: widget.settings,
         shiftOpenedAt: () => widget.shifts.currentOpenShift()?.openedAt,
         clock: widget.nowFn,
@@ -1886,6 +1897,23 @@ class _PosAppState extends State<PosApp> {
                     onPressed: () => setState(() {}),
                     icon: const Icon(Icons.refresh),
                     label: Text(tr(context, 'Retry')),
+                  ),
+                  const SizedBox(height: 12),
+                  // The way out when the primary is gone for good or this till
+                  // should join another one: re-join with a PIN, or leave the shop.
+                  OutlinedButton.icon(
+                    key: const Key('waiting-primary-network'),
+                    onPressed: () async {
+                      final nav = Navigator.of(context);
+                      if (await _authorizeManager(context) == null) return;
+                      unawaited(nav.push(MaterialPageRoute<void>(
+                        builder: (_) => _lanScreen(() {
+                          if (mounted) setState(() {});
+                        }),
+                      )));
+                    },
+                    icon: const Icon(Icons.lan_outlined),
+                    label: Text(tr(context, 'Shop network')),
                   ),
                 ],
               ),
@@ -6404,7 +6432,12 @@ class _PosAppState extends State<PosApp> {
       return;
     }
     final store = StressLabStore(
-        db: widget.outboxStore.db, orders: widget.orders, tables: widget.tables);
+      db: widget.outboxStore.db,
+      orders: widget.orders,
+      tables: widget.tables,
+      deviceId: widget.deviceId,
+      announceCleanup: () => widget.lan?.announceStressCleanup(),
+    );
     final runner = StressLabRunner(
       session: PosSession(
         catalogue: widget.catalogue,
@@ -6414,6 +6447,7 @@ class _PosAppState extends State<PosApp> {
         deviceId: widget.deviceId,
         cashierId: live.cashierId,
         nextOrderNo: _nextOrderNo,
+        onRinging: _prepareOrderNo,
         shiftOpenedAt: () => widget.shifts.currentOpenShift()?.openedAt,
       ),
       catalogue: widget.catalogue,
