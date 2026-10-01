@@ -41,6 +41,7 @@ import 'lan_transport.dart';
 /// lies, which is worse than no screen at all.
 typedef LanFacts = ({
   String? servingAt,
+  String? hostError,
   List<LanPeer> peers,
   List<LanPeer> refused,
   Map<String, int> cursors,
@@ -70,9 +71,12 @@ class LanNode {
     /// The primary answers table reservations and order numbers; everyone else
     /// asks it.
     required bool Function() isPrimary,
+    required bool Function() isSecondary,
     required String? Function() primaryDeviceId,
     required LanLog report,
+    this.hostRetry = const Duration(seconds: 30),
   })  : _log = log,
+        _isSecondary = isSecondary,
         _report = report,
         _fabric = fabric,
         _host = host,
@@ -117,12 +121,14 @@ class LanNode {
     Future<List<String>> Function()? localAddresses,
     Future<RawDatagramSocket> Function(InternetAddress address, int port)?
         beaconBind,
+    Future<HttpServer> Function(InternetAddress address, int port)? hostBind,
     /// The same kind of seam: a suite can stand two assembled tills next to each
     /// other and prove a tab really changes hands, without a shop network. Null on
     /// a till, which is the whole point.
     LanHttpClient? client,
     /// After a peer shop bundle lands (Dishflow mirror, …), re-wire senders.
     void Function()? onShopBundleApplied,
+    Duration hostRetry = const Duration(seconds: 30),
   }) {
     // Every fabric refusal, dead peer and failed announce lands in the audit trail
     // under 'system', which is where support already looks. A shop that quietly
@@ -210,6 +216,23 @@ class LanNode {
       };
     }
 
+    final host = LanHost(
+      protocol: LanProtocol(
+        deviceId: deviceId,
+        log: eventLog,
+        applier: applier,
+        credential: credential,
+        claims: claims,
+        seats: () => settings.isLanPrimary ? seats : null,
+        numbers: () => settings.isLanPrimary ? numbers : null,
+        onJoin: joinGate,
+        onRefused: log,
+      ),
+      port: port,
+      log: log,
+      bind: hostBind,
+      localAddresses: localAddresses,
+    );
     return LanNode(
       deviceId: deviceId,
       deviceName: deviceName,
@@ -220,24 +243,11 @@ class LanNode {
       claims: claims,
       seats: seats,
       isPrimary: () => settings.isLanPrimary,
+      isSecondary: () => settings.deviceRole == DeviceRole.secondary,
       primaryDeviceId: () => settings.lanPrimaryDeviceId,
       report: log,
-      host: LanHost(
-        protocol: LanProtocol(
-          deviceId: deviceId,
-          log: eventLog,
-          applier: applier,
-          credential: credential,
-          claims: claims,
-          seats: () => settings.isLanPrimary ? seats : null,
-          numbers: () => settings.isLanPrimary ? numbers : null,
-          onJoin: joinGate,
-          onRefused: log,
-        ),
-        port: port,
-        log: log,
-        localAddresses: localAddresses,
-      ),
+      hostRetry: hostRetry,
+      host: host,
       beacon: LanBeacon(
         deviceId: deviceId,
         name: deviceName,
@@ -245,6 +255,7 @@ class LanNode {
         port: beaconPort,
         onPeer: peers.seen,
         role: () => settings.deviceRole,
+        serving: () => host.isServing,
         log: log,
         bind: beaconBind,
         localAddresses: localAddresses,
@@ -268,6 +279,7 @@ class LanNode {
   final LanClaimDesk _claims;
   final LanSeatDesk _seats;
   final bool Function() _isPrimary;
+  final bool Function() _isSecondary;
   final String? Function() _primaryDeviceId;
   final LanLog _report;
 
@@ -275,6 +287,11 @@ class LanNode {
   /// bind the same port: the app shell starts the node, and the LAN switch can ask
   /// for it again in the same second.
   Future<void>? _starting;
+
+  /// How often a server that could not bind tries again. Without it a till that
+  /// started before its network was up served nobody until the app restarted.
+  final Duration hostRetry;
+  Timer? _hostRetryTimer;
 
   /// Whether the shop primary is currently visible on the LAN.
   ///
@@ -294,7 +311,10 @@ class LanNode {
   /// socket. Shown on the settings screen, because "the fabric is on" and "the
   /// fabric is reachable" are different facts and support needs both.
   String? get servingAt =>
-      _host.isServing ? '${_host.host}:${_host.boundPort}' : null;
+      _host.isServing ? '${_host.hosts.join(' / ')}:${_host.boundPort}' : null;
+
+  /// Why the server could not bind, while it is retrying.
+  String? get hostError => _host.isServing ? null : _host.lastError;
 
   DateTime? get lastPassAt => _fabric.lastPassAt;
   String? get lastError => _fabric.lastError;
@@ -305,6 +325,7 @@ class LanNode {
   /// This device's whole LAN state as the settings screen shows it.
   LanFacts get facts => (
         servingAt: servingAt,
+        hostError: hostError,
         peers: peers.all,
         refused: peers.refused,
         cursors: cursors,
@@ -312,8 +333,13 @@ class LanNode {
         lastError: lastError,
       );
 
-  /// Whether this device is on the LAN right now.
+  /// Whether this device is on the LAN right now. True with the beacon alone: a
+  /// secondary whose own server is down can still ask the primary.
   bool get isRunning => _host.isServing || _beacon.isRunning;
+
+  /// Whether the other devices can reach this one. Announced on the beacon, so a
+  /// primary that cannot serve is not mistaken for one that is up.
+  bool get isServing => _host.isServing;
 
   /// Bind, announce, and start catching up. Never throws: a fabric that cannot
   /// start leaves a till that sells exactly as it did before.
@@ -324,9 +350,19 @@ class LanNode {
   Future<void> start() => _starting ??= _start();
 
   Future<void> _start() async {
-    await _host.start();
+    if (!await _host.start()) _retryHost();
     await _beacon.start();
     _fabric.start();
+  }
+
+  void _retryHost() {
+    _hostRetryTimer?.cancel();
+    _hostRetryTimer = Timer.periodic(hostRetry, (timer) async {
+      if (!await _host.start()) return;
+      // Switched off while this bind was in flight: let the socket go again.
+      if (!timer.isActive) return _host.stop();
+      timer.cancel();
+    });
   }
 
   /// Come off the LAN: the socket closes and the announcements stop with the
@@ -337,6 +373,8 @@ class LanNode {
   /// reach its peers; letting it go is [dispose]'s job.
   Future<void> stop() async {
     _starting = null;
+    _hostRetryTimer?.cancel();
+    _hostRetryTimer = null;
     _fabric.stop();
     await _beacon.stop();
     await _host.stop();
@@ -458,17 +496,17 @@ class LanNode {
     }
   }
 
-  late final LanNumberSupply _numbers = LanNumberSupply(ask: _askNumber);
+  late final LanNumberSupply _numbers = LanNumberSupply(ask: _askNumbers);
 
-  Future<String?> _askNumber() async {
-    if (_isPrimary()) return null;
+  Future<List<String>> _askNumbers(int count) async {
+    if (_isPrimary()) return const [];
     final primary = _primaryPeer();
-    if (primary == null) return null;
+    if (primary == null) return const [];
     try {
-      return await _client.number(primary, deviceId: deviceId);
+      return await _client.numbers(primary, deviceId: deviceId, count: count);
     } catch (e) {
       _report('lan.number.unasked', '$e');
-      return null;
+      return const [];
     }
   }
 
@@ -489,9 +527,15 @@ class LanNode {
     return n;
   }
 
+  /// Whether the shared counter belongs to another till. Such a till must not
+  /// number from its own copy of it when nothing is reserved: the primary is
+  /// handing those same numbers out.
+  bool get numbersBelongToPrimary => _isSecondary();
+
   LanPeer? _primaryPeer() {
     final id = _primaryDeviceId()?.trim();
     for (final peer in peers.active) {
+      if (!peer.serving) continue;
       if (id != null && id.isNotEmpty ? peer.deviceId == id : peer.role == DeviceRole.primary) {
         return peer;
       }

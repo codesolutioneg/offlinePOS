@@ -599,11 +599,18 @@ class _PosAppState extends State<PosApp> {
   /// order is parked or paid. Climbs past any number already on this shop (other
   /// tills / older sales) so Flash never lists two different checks as the same #.
   /// On a secondary the number comes off the primary's counter when one was
-  /// reserved in time, so two tills paying at once cannot share it.
-  String _nextOrderNo() =>
-      widget.lan?.takeOrderNumber() ??
-      widget.settings
-          .nextOrderNumber(widget.deviceId, atLeast: widget.orders.orderNumberFloor());
+  /// reserved in time, so two tills paying at once cannot share it; with none
+  /// reserved it carries this till's tag instead, so it still cannot.
+  String _nextOrderNo() {
+    final lan = widget.lan;
+    final reserved = lan?.takeOrderNumber();
+    if (reserved != null) return reserved;
+    if (lan != null && lan.numbersBelongToPrimary) {
+      return widget.settings.nextOfflineOrderNumber(widget.deviceId);
+    }
+    return widget.settings
+        .nextOrderNumber(widget.deviceId, atLeast: widget.orders.orderNumberFloor());
+  }
 
   void _prepareOrderNo() => widget.lan?.prepareOrderNumber();
 

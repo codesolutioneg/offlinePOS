@@ -573,8 +573,13 @@ class Order {
     return shortOrderNumber(n);
   }
 
+  /// A secondary's number given without the primary (`T4D2-7`). Kept whole:
+  /// collapsed to digits it would read like a number off the shared counter.
+  static final RegExp offlineNumber = RegExp(r'^T[A-Z0-9]{3}-\d+$');
+
   /// Human-facing order number: plain digits, unique for legacy rows.
   static String shortOrderNumber(String raw) {
+    if (offlineNumber.hasMatch(raw)) return raw;
     final parts = raw.split('-');
     // DDMM-SEQ-TAG → DDMMSEQ (e.g. 2009-006-D50 → 2009006), never just "6".
     if (parts.length >= 2 &&

@@ -27,6 +27,7 @@ class LanBeacon {
     this.port = 45334,
     this.interval = const Duration(seconds: 10),
     this.role,
+    this.serving,
     LanLog? log,
     Future<RawDatagramSocket> Function(InternetAddress address, int port)? bind,
     Future<List<String>> Function()? localAddresses,
@@ -55,6 +56,10 @@ class LanBeacon {
 
   /// Optional primary/secondary role so secondaries can see the master is up.
   final DeviceRole? Function()? role;
+
+  /// Whether this device's HTTP server is up. Announced only when it is not, so
+  /// a peer does not ask a device that will refuse the connection.
+  final bool Function()? serving;
 
   /// Called for every peer heard from. Wired to the peer directory, which is what
   /// decides whether the peer is compatible.
@@ -112,6 +117,7 @@ class LanBeacon {
       'port': httpPort,
       'schema': Schema.version,
       if (r != null && r != DeviceRole.unset) 'role': r.wire,
+      if (serving?.call() == false) 'serving': false,
     }));
     for (final target in _targets) {
       try {

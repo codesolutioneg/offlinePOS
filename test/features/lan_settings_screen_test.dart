@@ -69,6 +69,7 @@ void main() {
     await open(t,
       facts: () => (
         servingAt: '10.0.0.5:45333',
+        hostError: null,
         peers: [peer()],
         refused: const [],
         cursors: const {'till-b': 42},
@@ -103,6 +104,7 @@ void main() {
     await open(t,
       facts: () => (
         servingAt: null,
+        hostError: 'cannot serve on port 45333: errno = 10049',
         peers: const [],
         refused: [peer(deviceId: 'till-c', schema: Schema.version + 1)],
         cursors: const {},
@@ -112,6 +114,8 @@ void main() {
     );
 
     expect(find.byKey(const Key('lan-last-error')), findsOneWidget);
+    // A server that could not bind says why, next to "not serving".
+    expect(find.byKey(const Key('lan-host-error')), findsOneWidget);
     // Down past the peer list: an unfinished rollout is visible on the device
     // rather than only in the audit trail.
     await t.dragUntilVisible(find.byKey(const Key('lan-refused-till-c')),

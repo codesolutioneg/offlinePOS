@@ -176,7 +176,7 @@ class LanProtocol {
     }
     if (path == claimPath) return _handleClaim(decoded, peer);
     if (path == seatPath) return _handleSeat(decoded, peer);
-    if (path == numberPath) return _handleNumber();
+    if (path == numberPath) return _handleNumber(decoded['count']);
     final raw = decoded['events'];
     if (raw is! List) return const LanReply(400, {'error': 'no events'});
     final events = <LanEvent>[];
@@ -285,12 +285,23 @@ class LanProtocol {
   }
 
   /// Hand the peer the next number off the shop's counter.
-  LanReply _handleNumber() {
+  /// Most numbers one ask can reserve, so a confused peer cannot drain the counter.
+  static const int maxNumbersPerAsk = 50;
+
+  /// One number when [count] is missing (older secondaries), else [count] in a
+  /// row. `order_no` always carries the first, so an older secondary reads it.
+  LanReply _handleNumber(Object? count) {
     final desk = numbers?.call();
     if (desk == null) {
       return const LanReply(409, {'error': 'this device is not the primary'});
     }
-    return LanReply(200, {'device_id': deviceId, 'order_no': desk.issue()});
+    final n = count is int ? count.clamp(1, maxNumbersPerAsk) : 1;
+    final issued = desk.issueMany(n);
+    return LanReply(200, {
+      'device_id': deviceId,
+      'order_no': issued.first,
+      'order_nos': issued,
+    });
   }
 
   /// The first gate every request passes: proof the caller holds the shop key.
@@ -365,9 +376,19 @@ class LanHost {
   final Future<List<String>> Function() _localAddresses;
 
   HttpServer? _server;
+  List<String> _addresses = const [];
+  String? _lastError;
 
   /// The address this till is reachable on, or null while it is not serving.
-  String? get host => _server?.address.address;
+  String? get host => _server == null || _addresses.isEmpty ? null : _addresses.first;
+
+  /// Every LAN address the socket answers on. Windows can list an address that a
+  /// disconnected adapter remembers, so support sees all of them, not a guess.
+  List<String> get hosts => _server == null ? const [] : _addresses;
+
+  /// Why the last bind failed, or null once serving. Shown on the LAN settings
+  /// screen: a primary that cannot serve sends every secondary to local numbering.
+  String? get lastError => _lastError;
 
   /// The port actually bound, which is [port] unless the caller asked for 0 to let
   /// the machine choose. Shown on the LAN settings screen so support can see where
@@ -382,21 +403,29 @@ class LanHost {
   Future<bool> start() async {
     if (_server != null) return true;
     final addresses = await _localAddresses();
-    if (addresses.isEmpty) {
-      _log?.call('lan.host.unavailable', 'no LAN address to bind to');
-      return false;
-    }
+    if (addresses.isEmpty) return _unavailable('no LAN address to bind to');
     try {
-      final server = await _bind(InternetAddress(addresses.first), port);
+      // Every interface, like the beacon: Windows can list an address a
+      // disconnected adapter remembers, and binding that one fails (errno 10049).
+      // Every request still has to carry the shop key's stamp.
+      final server = await _bind(InternetAddress.anyIPv4, port);
       _server = server;
+      _addresses = addresses;
+      _lastError = null;
       server.listen(_serve, onError: (Object e) {
         _log?.call('lan.host.error', '$e');
       });
       return true;
     } catch (e) {
-      _log?.call('lan.host.unavailable', 'cannot serve on ${addresses.first}:$port: $e');
-      return false;
+      return _unavailable('cannot serve on port $port: $e');
     }
+  }
+
+  /// Logged when the reason changes, not on every retry.
+  bool _unavailable(String why) {
+    if (why != _lastError) _log?.call('lan.host.unavailable', why);
+    _lastError = why;
+    return false;
   }
 
   Future<void> stop() async {
@@ -560,19 +589,27 @@ class LanHttpClient {
 
   /// Ask the primary [peer] for the next order number. Throws when it cannot be
   /// reached or refuses, which the caller treats as "number locally".
-  Future<String> number(LanPeer peer, {required String deviceId}) async {
-    final body = jsonEncode({'device_id': deviceId, 'schema': Schema.version});
+  /// Reserve [count] order numbers from the primary. An older primary answers
+  /// one, which is still a valid reserve.
+  Future<List<String>> numbers(LanPeer peer,
+      {required String deviceId, int count = 1}) async {
+    final body = jsonEncode(
+        {'device_id': deviceId, 'schema': Schema.version, 'count': count});
     final text = await _send(
       'POST',
       peer.baseUrl.replace(path: LanProtocol.numberPath),
       body,
       _credential.stamp(method: 'POST', path: LanProtocol.numberPath, body: body),
     );
-    final n = (jsonDecode(text) as Map)['order_no'];
-    if (n is! String || int.tryParse(n) == null) {
-      throw FormatException('number answered with $n');
-    }
-    return n;
+    final reply = jsonDecode(text) as Map;
+    final many = reply['order_nos'];
+    final answered = many is List ? many : [reply['order_no']];
+    final valid = [
+      for (final n in answered)
+        if (n is String && int.tryParse(n) != null) n,
+    ];
+    if (valid.isEmpty) throw FormatException('number answered with $answered');
+    return valid;
   }
 
   /// Present a join PIN to [peer] (the primary). No shop-key stamp — the PIN is

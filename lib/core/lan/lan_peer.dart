@@ -16,6 +16,7 @@ class LanPeer {
     required this.schemaVersion,
     required this.lastSeenAt,
     this.role,
+    this.serving = true,
   });
 
   /// The peer's own device id, which is its identity here. The address is not: a
@@ -39,6 +40,10 @@ class LanPeer {
   /// Primary / secondary when the peer's build announces it; null on older beacons.
   final DeviceRole? role;
 
+  /// False when the peer announced that its server could not bind: it is on the
+  /// network, but every request to it would be refused.
+  final bool serving;
+
   bool get isCompatible => schemaVersion == Schema.version;
 
   Uri get baseUrl => Uri.parse('http://$host:$port');
@@ -51,6 +56,7 @@ class LanPeer {
         schemaVersion: schemaVersion,
         lastSeenAt: at,
         role: role,
+        serving: serving,
       );
 
   /// The beacon datagram. Deliberately tiny and free of anything private: it is
@@ -62,6 +68,7 @@ class LanPeer {
         'port': port,
         'schema': schemaVersion,
         if (role != null && role != DeviceRole.unset) 'role': role!.wire,
+        if (!serving) 'serving': false,
       };
 
   /// Throws [FormatException] on a datagram this build cannot read. Anything at all
@@ -91,6 +98,7 @@ class LanPeer {
       schemaVersion: schema,
       lastSeenAt: at,
       role: role,
+      serving: m['serving'] != false,
     );
   }
 }
@@ -98,16 +106,17 @@ class LanPeer {
 /// Whether the shop primary is among [activePeers].
 ///
 /// Prefers [primaryDeviceId] from a prior join; otherwise any peer advertising
-/// [DeviceRole.primary].
+/// [DeviceRole.primary]. A primary announcing that it cannot serve is not reached.
 bool primaryReached({
   required Iterable<LanPeer> activePeers,
   required String? primaryDeviceId,
 }) {
   final id = primaryDeviceId?.trim();
+  final serving = activePeers.where((p) => p.serving);
   if (id != null && id.isNotEmpty) {
-    return activePeers.any((p) => p.deviceId == id);
+    return serving.any((p) => p.deviceId == id);
   }
-  return activePeers.any((p) => p.role == DeviceRole.primary);
+  return serving.any((p) => p.role == DeviceRole.primary);
 }
 
 /// Who is on the LAN right now, and who was refused.

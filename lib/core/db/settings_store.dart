@@ -66,6 +66,7 @@ class SettingsStore {
   static const _maxDiscountPercent = 'max_discount_percent';
   static const _allowAmountDiscount = 'allow_amount_discount';
   static const _orderNoSeq = 'order_no_seq';
+  static const _offlineOrderNoSeq = 'offline_order_no_seq';
   static const _categoryColors = 'category_colors';
   static const _categoryStations = 'category_stations';
   static const _productStations = 'product_stations';
@@ -583,6 +584,16 @@ class SettingsStore {
     setString(_orderNoSeq, '$seq');
     // deviceId / day key kept out of the printed number on purpose.
     return '$seq';
+  }
+
+  /// The number a secondary gives a sale when the primary could not reserve it
+  /// one: `T` + [tillTagFor] + its own sequence, e.g. `T4D2-7`. It cannot repeat
+  /// a number off the primary's counter, and [Order.shortOrderNumber] keeps it
+  /// whole so the receipt shows it as issued.
+  String nextOfflineOrderNumber(String deviceId) {
+    final seq = (int.tryParse(getString(_offlineOrderNoSeq) ?? '') ?? 0) + 1;
+    setString(_offlineOrderNoSeq, '$seq');
+    return 'T${tillTagFor(deviceId)}-$seq';
   }
 
   /// A short, stable tag for a device: the last three alphanumeric characters of its

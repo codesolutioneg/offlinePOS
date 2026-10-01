@@ -18,6 +18,7 @@ import '../../domain/table_section_config.dart';
 /// switch died.
 const LanFacts _noFabric = (
   servingAt: null,
+  hostError: null,
   peers: <LanPeer>[],
   refused: <LanPeer>[],
   cursors: <String, int>{},
@@ -688,6 +689,9 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
           _fact(tr(context, 'Answering on'),
               facts.servingAt ?? tr(context, 'not serving'),
               keyValue: 'lan-serving'),
+          if (facts.hostError case final problem?)
+            _fact(tr(context, 'Why not serving'), problem,
+                keyValue: 'lan-host-error'),
           _fact(tr(context, 'Data version'), '${Schema.version}'),
           _fact(tr(context, 'Last catch-up'), _ago(facts.lastPassAt),
               keyValue: 'lan-last-pass'),
@@ -727,7 +731,10 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.point_of_sale),
               title: Text(peer.name),
-              subtitle: Text('${peer.host}:${peer.port}  ${peer.deviceId}'),
+              subtitle: Text([
+                '${peer.host}:${peer.port}  ${peer.deviceId}',
+                if (!peer.serving) tr(context, 'not serving'),
+              ].join('\n')),
               trailing: Text([
                 _ago(peer.lastSeenAt),
                 if (facts.cursors[peer.deviceId] case final seq?)

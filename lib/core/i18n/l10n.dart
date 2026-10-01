@@ -429,6 +429,7 @@ const Map<String, String> _ar = {
   'data version': 'إصدار البيانات',
   'Last catch-up': 'آخر مزامنة',
   'Last problem': 'آخر مشكلة',
+  'Why not serving': 'سبب عدم الاستجابة',
   'Catch up now': 'المزامنة الآن',
   'Devices on this network': 'الأجهزة على هذه الشبكة',
   'Nothing else found yet. A single-till shop is expected to look like this.':

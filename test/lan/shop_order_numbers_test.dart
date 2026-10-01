@@ -56,6 +56,30 @@ void main() {
         protocol.handlePost(LanProtocol.numberPath, body, auth: stamp()).body['order_no']
             as String;
 
+    List<String> askMany(int count) {
+      final many = jsonEncode(
+          {'device_id': 'till-b', 'schema': Schema.version, 'count': count});
+      final reply = protocol.handlePost(LanProtocol.numberPath, many,
+          auth: b.credential
+              .stamp(method: 'POST', path: LanProtocol.numberPath, body: many));
+      return (reply.body['order_nos'] as List).cast<String>();
+    }
+
+    test('an older secondary asking without a count gets one number', () {
+      final reply = protocol.handlePost(LanProtocol.numberPath, body, auth: stamp());
+
+      expect(reply.body['order_nos'], [reply.body['order_no']]);
+    });
+
+    test('a reserve comes off the same counter as the primary\'s own sales', () {
+      final reserve = askMany(4);
+      final own = ownNumber(a);
+
+      expect(reserve.map(int.parse), [for (var i = 0; i < 4; i++) int.parse(reserve.first) + i]);
+      expect(int.parse(own), int.parse(reserve.last) + 1);
+      expect(askMany(500), hasLength(LanProtocol.maxNumbersPerAsk));
+    });
+
     test('only the primary answers', () {
       primary = false;
       expect(protocol.handlePost(LanProtocol.numberPath, body, auth: stamp()).status, 409);
@@ -75,7 +99,7 @@ void main() {
     });
 
     test('two tills paying at once never share a number', () async {
-      final supply = LanNumberSupply(ask: () async => ask());
+      final supply = LanNumberSupply(ask: (n) async => askMany(n));
       final numbers = <String>[];
       supply.prepare();
       for (var i = 0; i < 50; i++) {
@@ -87,15 +111,39 @@ void main() {
 
       expect(numbers.toSet(), hasLength(100));
     });
+
+    test('a split into three checks takes all three off the primary', () async {
+      final supply = LanNumberSupply(ask: (n) async => askMany(n))..prepare();
+      await supply.settled;
+
+      // One tap, three checks, no time for an ask in between.
+      final checks = [supply.take(), supply.take(), supply.take()];
+      final own = ownNumber(a);
+
+      expect(checks, everyElement(isNotNull));
+      expect({...checks, own}, hasLength(4));
+    });
   });
 
-  group('the secondary\'s reserved number', () {
+  group('the secondary\'s reserve', () {
+    var next = 0;
+    Future<List<String>> counter(int n) async => [for (var i = 0; i < n; i++) '${++next}'];
+    setUp(() => next = 0);
+
     test('with nothing reserved the till numbers locally', () {
-      expect(LanNumberSupply(ask: () async => '7').take(), isNull);
+      expect(LanNumberSupply(ask: counter).take(), isNull);
     });
 
-    test('a reserved number is used once', () async {
-      final supply = LanNumberSupply(ask: () async => '7')..prepare();
+    test('each reserved number is used once, oldest first', () async {
+      final supply = LanNumberSupply(ask: counter, batch: 3)..prepare();
+      await supply.settled;
+
+      expect([supply.take(), supply.take(), supply.take()], ['1', '2', '3']);
+      expect(supply.take(), isNull);
+    });
+
+    test('an older primary answering one number is still a reserve', () async {
+      final supply = LanNumberSupply(ask: (_) async => ['7'])..prepare();
       await supply.settled;
 
       expect(supply.take(), '7');
@@ -103,27 +151,47 @@ void main() {
     });
 
     test('a primary that cannot be asked leaves nothing reserved', () async {
-      final supply = LanNumberSupply(ask: () async => throw StateError('down'))..prepare();
+      final supply = LanNumberSupply(ask: (_) async => throw StateError('down'))..prepare();
       await supply.settled;
 
       expect(supply.take(), isNull);
     });
 
-    test('a number held over a quiet spell is swapped for a fresh one', () async {
-      var now = DateTime.utc(2026, 1, 1, 12);
+    test('is topped up only once half of it is used', () async {
       var asks = 0;
-      final supply = LanNumberSupply(ask: () async => '${++asks}', now: () => now);
-      supply.prepare();
+      final supply = LanNumberSupply(
+          ask: (n) async {
+            asks++;
+            return counter(n);
+          },
+          batch: 4)
+        ..prepare();
       await supply.settled;
-      supply.prepare();
+      supply
+        ..take()
+        ..prepare();
       await supply.settled;
-      expect(asks, 1, reason: 'a fresh number is kept');
+      expect(asks, 1, reason: 'three of four left');
+
+      supply
+        ..take()
+        ..prepare();
+      await supply.settled;
+      expect(asks, 2);
+      expect(supply.held, 4);
+    });
+
+    test('numbers held over a quiet spell are swapped for fresh ones', () async {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      final supply = LanNumberSupply(ask: counter, batch: 2, now: () => now)..prepare();
+      await supply.settled;
 
       now = now.add(supply.freshFor + const Duration(seconds: 1));
+      expect(supply.held, 0);
       supply.prepare();
       await supply.settled;
 
-      expect(supply.take(), '2');
+      expect(supply.take(), '3');
     });
   });
 
