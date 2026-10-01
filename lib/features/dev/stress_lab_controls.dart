@@ -17,8 +17,11 @@ class StressLabWarning extends StatelessWidget {
 }
 
 /// The warning's English source, which is also its translation key.
-const String kStressWarning = 'Test bench only. Lab orders are real rows on this till '
-    'and are queued for Odoo. Press "Clean up" before closing the shift.';
+const String kStressWarning =
+    'Test bench only. Lab orders are real rows on this till '
+    'but never leave it: Odoo and Dishflow skip them. Press "Clean up" before '
+    'closing the shift; the close is refused while any are left.';
+
 /// The inputs and run buttons of the Stress Lab.
 class StressLabControls extends StatelessWidget {
   const StressLabControls({

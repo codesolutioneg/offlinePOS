@@ -2,9 +2,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/catalogue_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
 import 'package:offline_pos/core/printing/kitchen_ticket.dart';
+import 'package:offline_pos/core/printing/print_probe.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/dev/stress_lab_runner.dart';
 import 'package:offline_pos/features/dev/stress_lab_store.dart';
+import 'package:offline_pos/features/dev/stress_note.dart';
 import 'package:offline_pos/features/dev/stress_printer.dart';
 
 import '../db/sqlite_loader.dart';
@@ -72,7 +74,7 @@ void main() {
         db: till.db, orders: till.orders, tables: tables, announceCleanup: () => announced++);
     await runner.flood(3, Duration.zero, noProgress);
 
-    expect(store.cleanup(), 3);
+    expect((await store.cleanup()).removed, 3);
     expect(announced, 1);
   });
 
@@ -104,6 +106,52 @@ void main() {
     expect(kitchen.alarm, isTrue);
   });
 
+  test('the run tells tickets at the kitchen from ones that landed at the till', () async {
+    PrintProbe? probe;
+    var n = 0;
+    var held = 3;
+    final printing = StressLabRunner(
+      session: till.session(),
+      catalogue: CatalogueStore(till.db),
+      tables: tables,
+      store: StressLabStore(db: till.db, orders: till.orders, tables: tables),
+      printer: StressPrinter(
+        attachProbe: (p) => probe = p,
+        heldPrints: () => held,
+        fireKitchen: (o) async {
+          final outcome = switch (++n % 3) {
+            0 => PrintOutcome.onReceiptPrinter,
+            1 => PrintOutcome.atPrinter,
+            _ => PrintOutcome.spooled,
+          };
+          probe?.record(PrintChannel.kitchen, outcome);
+          if (outcome == PrintOutcome.spooled) held++;
+          return outcome == PrintOutcome.spooled
+              ? KitchenFireResult.spooled
+              : KitchenFireResult.sent;
+        },
+        printReceipt: (o) async =>
+            probe?.record(PrintChannel.receipt, PrintOutcome.atPrinter),
+      ),
+    );
+
+    final report = await printing.flood(6, Duration.zero, noProgress);
+
+    StressNote note(String prefix) =>
+        report.notes.firstWhere((x) => x.template.startsWith(prefix));
+    final kitchen = note('Kitchen tickets:');
+    expect(kitchen.args['station'], 2);
+    expect(kitchen.args['rerouted'], 2);
+    expect(kitchen.args['held'], 2);
+    expect(kitchen.alarm, isTrue);
+    expect(note('Receipts:').args['printed'], 6);
+    final spool = note('Held prints');
+    expect(spool.args, {'before': 3, 'after': 5});
+    expect(spool.alarm, isTrue);
+    expect(note('Count the paper').args, {'kitchen': 2, 'till': 8});
+    expect(probe, isNull, reason: 'the till stops reporting once the run is read');
+  });
+
   test('an empty floor gets lab tables, and every one is filled then settled', () async {
     final filled = await runner.fillTables(noProgress);
     expect(filled.done, 30);
@@ -121,7 +169,7 @@ void main() {
     await runner.flood(10, Duration.zero, noProgress);
     await runner.fillTables(noProgress);
 
-    final removed = runner.store.cleanup();
+    final removed = (await runner.store.cleanup()).removed;
 
     expect(removed, 40);
     expect(till.orders.recent(limit: 100).map((o) => o.uuid), [kept.uuid]);

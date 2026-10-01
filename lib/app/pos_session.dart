@@ -30,7 +30,18 @@ class PosSession {
     this.onRinging,
     this.shiftOpenedAt,
     this.clock,
+    this.tagOrder,
   });
+
+  /// Stamps every order this session creates (a new bill, a split check, the tab a
+  /// move opens) before it is first saved. The Stress Lab marks its own this way,
+  /// so a check carved off a lab table is a lab order too and cannot leave the till.
+  final void Function(Order order)? tagOrder;
+
+  Order _tagged(Order o) {
+    tagOrder?.call(o);
+    return o;
+  }
 
   /// When the open shift started, or null with none open. A sale is never stamped
   /// before it: a device clock set back mid-shift would otherwise put the sale
@@ -108,7 +119,7 @@ class PosSession {
 
   /// A fresh empty bill for this till, with the service charge for its type on it.
   Order _blankOrder() {
-    final o = Order(deviceId: deviceId, cashierId: cashierId);
+    final o = _tagged(Order(deviceId: deviceId, cashierId: cashierId));
     _stampServiceCharge(o);
     return o;
   }
@@ -1200,18 +1211,20 @@ class PosSession {
       made.add(o);
     }
     for (final g in groups.skip(existing.length)) {
-      final check = Order(
-        deviceId: deviceId,
-        cashierId: cashierId,
-        type: order.type,
-        tableLabel: order.tableLabel,
-        partnerId: order.partnerId,
-        customerName: order.customerName,
-        customerPhone: order.customerPhone,
-        discountPercent: order.discountPercent,
-        discountReason: order.discountReason,
-        serviceChargePercent: order.serviceChargePercent,
-        lines: g,
+      final check = _tagged(
+        Order(
+          deviceId: deviceId,
+          cashierId: cashierId,
+          type: order.type,
+          tableLabel: order.tableLabel,
+          partnerId: order.partnerId,
+          customerName: order.customerName,
+          customerPhone: order.customerPhone,
+          discountPercent: order.discountPercent,
+          discountReason: order.discountReason,
+          serviceChargePercent: order.serviceChargePercent,
+          lines: g,
+        ),
       )..state = OrderState.held;
       _stampOrderNo(check);
       orders.save(check);
@@ -1310,24 +1323,27 @@ class PosSession {
     final ids = lineUuids.toSet();
     final taken = order.lines.where((l) => ids.contains(l.uuid)).toList();
     if (taken.isEmpty) return null;
-    final check = Order(
-      deviceId: deviceId,
-      cashierId: cashierId,
-      type: order.type,
-      tableLabel: order.tableLabel,
-      guestCount: order.guestCount,
-      partnerId: order.partnerId,
-      customerName: order.customerName,
-      customerPhone: order.customerPhone,
-      discountPercent: order.discountPercent,
-      discountReason: order.discountReason,
-      serviceChargePercent: order.serviceChargePercent,
-      tip: tip,
-      lines: taken,
-    )
-      ..state = OrderState.paid
-      ..payments = List.of(payments)
-      ..cashReceived = cashReceived;
+    final check =
+        _tagged(
+            Order(
+              deviceId: deviceId,
+              cashierId: cashierId,
+              type: order.type,
+              tableLabel: order.tableLabel,
+              guestCount: order.guestCount,
+              partnerId: order.partnerId,
+              customerName: order.customerName,
+              customerPhone: order.customerPhone,
+              discountPercent: order.discountPercent,
+              discountReason: order.discountReason,
+              serviceChargePercent: order.serviceChargePercent,
+              tip: tip,
+              lines: taken,
+            ),
+          )
+          ..state = OrderState.paid
+          ..payments = List.of(payments)
+          ..cashReceived = cashReceived;
     _stampSaleTime(check);
     // Its own number: a split check is its own paid sale, printed and reported on
     // its own, so it cannot share the table's.
@@ -1397,13 +1413,16 @@ class PosSession {
     final joined = _tabToJoin(order, targetTableLabel, targetOrderUuid);
     if (whole && joined == null) return _relabel(order, targetTableLabel);
     _carryOrderDiscount(order.discountPercent, taken);
-    final target = joined ??
-        (Order(
-          deviceId: deviceId,
-          cashierId: cashierId,
-          type: OrderType.dineIn,
-          tableLabel: targetTableLabel,
-          serviceChargePercent: order.serviceChargePercent,
+    final target =
+        joined ??
+        (_tagged(
+          Order(
+            deviceId: deviceId,
+            cashierId: cashierId,
+            type: OrderType.dineIn,
+            tableLabel: targetTableLabel,
+            serviceChargePercent: order.serviceChargePercent,
+          ),
         )..state = OrderState.held);
     // Flatten the target's own discount to line level first, so the moved lines
     // (already priced) are not discounted a second time by it.

@@ -2,6 +2,7 @@ import '../db/settings_store.dart';
 import '../../domain/order.dart';
 import 'dishflow_sale_mapper.dart';
 import 'outbox.dart';
+import 'stress_guard.dart';
 
 /// Owner-mirror channel: paid sales on this till, visible in Dishflow reports.
 ///
@@ -25,7 +26,7 @@ class DishflowMirror {
     String? cashierName,
     String? status,
   }) async {
-    if (!settings.dishflowMirrorReady) return;
+    if (!settings.dishflowMirrorReady || isStressOrder(order)) return;
     final payload = DishflowSaleMapper.toOutboxPayload(
       order,
       projectId: settings.dishflowProjectId!,

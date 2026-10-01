@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../sync/outbox.dart';
 import 'database.dart';
+import 'stress_purge.dart';
 
 /// Durable [OutboxStore]. Nothing leaves it until the server has acknowledged.
 class SqliteOutboxStore implements OutboxStore {
@@ -36,6 +37,8 @@ class SqliteOutboxStore implements OutboxStore {
     );
   }
 
+  /// Stress Lab rows stay queued, so a run can check every sale reached the queue,
+  /// but nothing ever hands them to a sender.
   @override
   Future<List<OutboxEntry>> pending({int limit = 20, Set<String>? kinds}) async {
     final filtered = kinds != null && kinds.isNotEmpty;
@@ -43,14 +46,16 @@ class SqliteOutboxStore implements OutboxStore {
         ? _db.raw.select(
             'SELECT id, kind, payload_uuid, payload, attempts, last_error '
             'FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL '
+            'AND payload NOT LIKE ? '
             'AND kind IN (${List.filled(kinds.length, '?').join(',')}) '
             'ORDER BY id ASC LIMIT ?',
-            [...kinds, limit],
+            [kStressNoteMatch, ...kinds, limit],
           )
         : _db.raw.select(
             'SELECT id, kind, payload_uuid, payload, attempts, last_error '
-            'FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL ORDER BY id ASC LIMIT ?',
-            [limit],
+            'FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL '
+            'AND payload NOT LIKE ? ORDER BY id ASC LIMIT ?',
+            [kStressNoteMatch, limit],
           );
     return rows
         .map((r) => OutboxEntry(

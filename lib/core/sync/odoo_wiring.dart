@@ -2,6 +2,7 @@ import 'http_post.dart';
 import 'odoo_endpoint.dart';
 import 'odoo_sender.dart';
 import 'outbox.dart';
+import 'stress_guard.dart';
 
 /// Connects a configured [OdooEndpoint] to the [Outbox].
 ///
@@ -73,7 +74,12 @@ class OdooWiring {
   /// Returns the module status dict (`id`, `name`, `status`) so End of Day can
   /// show the cashier the Odoo document that was booked.
   Future<Map<String, dynamic>?> pushPayload(
-      String uuid, Map<String, dynamic> payload) async {
+    String uuid,
+    Map<String, dynamic> payload,
+  ) async {
+    if (isStressPayload(payload)) {
+      throw PermanentlyRejected('stress lab order: never booked in Odoo');
+    }
     final sender = _sender;
     final endpoint = _endpoint;
     if (sender == null || endpoint == null) {

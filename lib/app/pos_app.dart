@@ -27,6 +27,7 @@ import '../core/db/table_assignment_store.dart';
 import '../core/db/settings_store.dart';
 import '../core/db/shift_store.dart';
 import '../core/db/sqlite_outbox_store.dart';
+import '../core/db/stress_purge.dart';
 import '../core/db/table_store.dart';
 import '../core/email/email_service.dart';
 import '../core/lan/lan_cart_board.dart';
@@ -44,6 +45,7 @@ import '../core/widgets/feedback.dart';
 import '../core/widgets/icon_pad.dart';
 import '../core/widgets/numeric_keypad.dart';
 import '../core/printing/kitchen_ticket.dart';
+import '../core/printing/print_probe.dart';
 import '../core/printing/printer_logo.dart';
 import '../core/printing/printer_registry.dart';
 import '../core/printing/printer_transport.dart';
@@ -83,6 +85,11 @@ import '../features/dev/stress_lab_screen.dart';
 import '../features/dev/stress_lab_store.dart';
 import '../features/dev/stress_printer.dart';
 import '../features/dev/stress_report_log.dart';
+import '../features/dev/scenario/stress_day_dialog.dart';
+import '../features/dev/scenario/stress_day_log.dart';
+import '../features/dev/scenario/stress_day_runner.dart';
+import '../features/dev/scenario/stress_day_screen.dart';
+import '../features/dev/scenario/stress_deps.dart';
 import '../features/display/customer_display_screen.dart';
 import '../features/kitchen/kitchen_display_screen.dart';
 import '../features/menu/menu_editor_screen.dart';
@@ -429,6 +436,9 @@ class _PosAppState extends State<PosApp> {
   /// One spool for the life of the app, above the registry rather than above an
   /// address: a receipt that could not print stays reprintable even if the printer
   /// comes back on a different lease.
+  /// Set only while a Stress Lab run is listening to where print jobs land.
+  PrintProbe? _printProbe;
+
   late final SpooledPrinter _receiptPrinter = SpooledPrinter(
     RegistryPrinter(widget.printers, PosApp.receiptPrinter),
     spool: widget.receiptSpool,
@@ -1290,9 +1300,17 @@ class _PosAppState extends State<PosApp> {
     final hide = s.subReceiptHidePrices;
     // Hiding prices takes the money off the whole slip, not just the item column: a
     // copy that still footed a total is a second receipt.
-    final bytes = _receiptBuilder(showItemPrice: !hide, showTotals: !hide)
-        .build(order);
-    await _sendToStation(station, bytes, 'subreceipt-${order.uuid}-$station');
+    final bytes = _receiptBuilder(
+      showItemPrice: !hide,
+      showTotals: !hide,
+    ).build(order);
+    await _sendToStation(
+      station,
+      bytes,
+      'subreceipt-${order.uuid}-$station',
+      channel: PrintChannel.subReceipt,
+      order: order,
+    );
   }
 
   /// Write the shop's mark into the receipt printer's own flash, once, by hand.
@@ -1470,18 +1488,23 @@ class _PosAppState extends State<PosApp> {
   /// only paper that comes out.
   Future<void> _printDeliveryBagSlip(Order order) async {
     if (!order.type.isDelivery) return;
+    final ref =
+        'delivery-bag-${order.uuid}-${DateTime.now().microsecondsSinceEpoch}';
     try {
       final bytes = _receiptBuilder().buildBill(order);
       final name = _customerSlipPrinterName(order);
-      await _sendCustomerSlip(bytes,
-          printerName: name,
-          reference:
-              'delivery-bag-${order.uuid}-${DateTime.now().microsecondsSinceEpoch}');
+      await _sendCustomerSlip(bytes, printerName: name, reference: ref);
+      _probe(PrintChannel.bagSlip, PrintOutcome.atPrinter, order, ref);
     } on PrinterUnavailable {
       // Spool / offline — same as a sale receipt.
+      _probe(PrintChannel.bagSlip, PrintOutcome.spooled, order, ref);
     } catch (e) {
-      widget.audit.record(order.cashierId, 'receipt.failed',
-          detail: 'delivery-bag ${order.uuid}: $e');
+      widget.audit.record(
+        order.cashierId,
+        'receipt.failed',
+        detail: 'delivery-bag ${order.uuid}: $e',
+      );
+      _probe(PrintChannel.bagSlip, PrintOutcome.lost, order, ref);
     }
   }
 
@@ -1510,16 +1533,19 @@ class _PosAppState extends State<PosApp> {
       final wantDrawer = isCash && !reprint && s.openDrawerOnSale;
       final printerName = _customerSlipPrinterName(order);
       for (var i = 0; i < s.receiptCopies; i++) {
+        final ref = i == 0 ? base : '$base-c$i';
         try {
           await _sendCustomerSlip(
             build(openDrawer: wantDrawer && i == 0),
             printerName: printerName,
-            reference: i == 0 ? base : '$base-c$i',
+            reference: ref,
           );
+          _probe(PrintChannel.receipt, PrintOutcome.atPrinter, order, ref);
         } on PrinterUnavailable {
           // Each copy is spooled independently by SpooledPrinter before it rethrows,
           // so keep queuing the rest rather than losing the remaining copies when the
           // printer is down.
+          _probe(PrintChannel.receipt, PrintOutcome.spooled, order, ref);
         }
       }
       // After the customer's copies, so the slip a cashier is waiting for is never
@@ -1539,6 +1565,7 @@ class _PosAppState extends State<PosApp> {
         'receipt.failed',
         detail: '${order.uuid}: $e',
       );
+      _probe(PrintChannel.receipt, PrintOutcome.lost, order, order.uuid);
       if (mounted) setState(() => _printError = '$e');
     }
   }
@@ -3138,6 +3165,7 @@ class _PosAppState extends State<PosApp> {
                   color: a.color,
                   onTap: _gated(context, 'floor.${a.id}', taps[a.id]),
                 ),
+            ..._stressTiles(context),
           ],
         );
       });
@@ -3545,7 +3573,7 @@ class _PosAppState extends State<PosApp> {
       if (toGo != null)
         (label: tr(context, 'To go'), icon: Icons.shopping_bag_outlined, go: toGo),
     ];
-    return _barFrom(context, {
+    final bar = _barFrom(context, {
       'begin': () => _openAttendance(context),
       'end': _signOut,
       'table': order,
@@ -3595,6 +3623,80 @@ class _PosAppState extends State<PosApp> {
       },
       'quit': () => unawaited(_quitApp(context)),
     });
+    if (!kStressLabEnabled || bar.isEmpty) return bar;
+    return [...bar, ..._stressTiles(context)];
+  }
+
+  /// The Stress Lab's tiles on the floor and delivery bars, in STRESS_LAB builds
+  /// only. Clean up shows while lab orders are left, wherever the run was left.
+  List<FloorAction> _stressTiles(BuildContext context) {
+    if (!kStressLabEnabled) return const [];
+    return [
+      FloorAction(
+        id: 'stress-day',
+        label: tr(context, 'Full-day stress'),
+        icon: Icons.bolt,
+        color: const Color(0xFF6D28D9),
+        newWork: true,
+        onTap: () => _openStressDay(context, StressDayMode.fullDay),
+      ),
+      FloorAction(
+        id: 'stress-delivery',
+        label: tr(context, 'Delivery stress'),
+        icon: Icons.electric_moped,
+        color: const Color(0xFF9D174D),
+        newWork: true,
+        onTap: () => _openStressDay(context, StressDayMode.deliveryOnly),
+      ),
+      if (stressOrderCount(widget.outboxStore.db) > 0)
+        FloorAction(
+          id: 'stress-cleanup',
+          label: tr(context, 'Clean up lab orders'),
+          icon: Icons.cleaning_services,
+          color: const Color(0xFF7F1D1D),
+          onTap: () => unawaited(_cleanupStress(context)),
+        ),
+    ];
+  }
+
+  /// Clean up from the floor: the same purge as the Stress Lab's button, so the
+  /// lab's orders can go without opening a run first.
+  Future<void> _cleanupStress(BuildContext context) async {
+    if (!await _authorize(Permission.openSettings, context) || !context.mounted) {
+      return;
+    }
+    final n = stressOrderCount(widget.outboxStore.db);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Clean up lab orders')),
+        content: Text(
+          tr(
+            ctx,
+            'Delete {n} Stress Lab orders from this till, the other tills and Dishflow?',
+          ).replaceAll('{n}', '$n'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+          FilledButton(
+            key: const Key('stress-cleanup-confirm'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Clean up')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    final done = await _stressStore().cleanup();
+    if (!context.mounted) return;
+    setState(() {});
+    final text = [
+      for (final note in cleanupNotes(done)) note.fill(tr(context, note.template)),
+    ].join('\n');
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   /// The bottom bar in catalogue order, minus what settings switched off. A button
@@ -5694,7 +5796,12 @@ class _PosAppState extends State<PosApp> {
           : entry.value.where((l) => !l.firedStations.contains(station)).toList();
       if (pending.isEmpty) continue;
       final bytes = builder.build(order, only: pending, station: station);
-      final result = await _sendToStation(station, bytes, 'kot-${order.uuid}-$station');
+      final result = await _sendToStation(
+        station,
+        bytes,
+        'kot-${order.uuid}-$station',
+        order: order,
+      );
       outcome = outcome.worst(result);
       if (result == KitchenFireResult.lost) continue;
       for (final l in pending) {
@@ -5768,8 +5875,15 @@ class _PosAppState extends State<PosApp> {
             .toList();
     var outcome = KitchenFireResult.sent;
     for (final station in stations) {
-      outcome = outcome.worst(await _sendToStation(
-          station, bytes, 'void-${order.uuid}-${line.uuid}-$station'));
+      outcome = outcome.worst(
+        await _sendToStation(
+          station,
+          bytes,
+          'void-${order.uuid}-${line.uuid}-$station',
+          channel: PrintChannel.kitchenVoid,
+          order: order,
+        ),
+      );
     }
     return outcome;
   }
@@ -5779,10 +5893,17 @@ class _PosAppState extends State<PosApp> {
   /// [KitchenFireResult.lost] if it reached neither (so the caller can keep the lines
   /// un-fired and retry later).
   Future<KitchenFireResult> _sendToStation(
-      String station, List<int> bytes, String reference) async {
+    String station,
+    List<int> bytes,
+    String reference, {
+    PrintChannel channel = PrintChannel.kitchen,
+    Order? order,
+  }) async {
     final payload = Uint8List.fromList(bytes);
+    void probe(PrintOutcome o) => _probe(channel, o, order, reference);
     try {
       await RegistryPrinter(widget.printers, station).send(payload);
+      probe(PrintOutcome.atPrinter);
       return KitchenFireResult.sent;
     } on PrinterUnavailable {
       // No station printer: fall back to the receipt printer. It persists the ticket
@@ -5791,27 +5912,53 @@ class _PosAppState extends State<PosApp> {
       // delivered: firing the lines here is what stops a re-fire duplicating it.
       try {
         await _receiptPrinter.send(payload, reference: reference);
+        probe(PrintOutcome.onReceiptPrinter);
         return KitchenFireResult.sent;
       } on PrinterUnavailable {
         // Held in the spool; the background flush will retry it. Nothing is cooking
         // yet, so say so.
+        probe(PrintOutcome.spooled);
         return KitchenFireResult.spooled;
       } catch (e) {
         // Also spooled (SpooledPrinter persists before it rethrows); note it for
         // diagnostics. Durable, but still not on a pass anybody can read.
-        widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.spooled',
-            detail: '$reference: $e');
+        widget.audit.record(
+          _session?.cashierId ?? 'system',
+          'kitchen.spooled',
+          detail: '$reference: $e',
+        );
+        probe(PrintOutcome.spooled);
         return KitchenFireResult.spooled;
       }
     } catch (e) {
       // The station printer failed with something other than "unavailable", so the
       // ticket reached neither a printer nor the spool: keep the lines un-fired so a
       // later re-fire retries them.
-      widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
-          detail: '$reference: $e');
+      widget.audit.record(
+        _session?.cashierId ?? 'system',
+        'kitchen.failed',
+        detail: '$reference: $e',
+      );
+      probe(PrintOutcome.lost);
       return KitchenFireResult.lost;
     }
   }
+
+  /// Tell the Stress Lab's probe, when one is listening, where a job went and
+  /// which order (number and total as printed) it was for.
+  void _probe(
+    PrintChannel channel,
+    PrintOutcome outcome,
+    Order? order,
+    String reference,
+  ) => _printProbe?.record(
+    channel,
+    outcome,
+    orderUuid: order?.uuid,
+    orderNo: order?.orderNo,
+    total: order?.total,
+    reference: reference,
+  );
 
   /// Kick the cash drawer open outside a sale (to make change, drop a float),
   /// printing a short NO SALE slip so the open is on paper. Permissioned, and
@@ -5962,144 +6109,163 @@ class _PosAppState extends State<PosApp> {
         .where((m) => m.isCash)
         .map((m) => m.id)
         .toSet();
-    return Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => ShiftScreen(
-        store: widget.shifts,
-        cashierId: session.cashierId,
-        startCloseOnOpen: startClose,
-        startMovement: startMovement,
-        // Right after the shift opens, ask who is working this session so sales and
-        // tables can be attributed to whoever is actually on the floor. Opt-in.
-        onShiftOpened: () {
-          _announceShiftOpen(session);
-          if (widget.settings.askSessionStaff) {
-            unawaited(_pickSessionStaff(context, session));
-          }
-        },
-        cashMethodIds: cashMethodIds,
-        formatAmount: PosApp.money,
-        onPrintReport: _printShiftReport,
-        // Read at the moment the Z is attempted, not only when the screen was
-        // built: a tab can be settled while the shift screen is open.
-        openWork: () => _openWork(context),
-        // Dishflow session-close: jump back to the floor to settle parked tabs.
-        onNavigateToFloor: () {
-          Navigator.of(context).pop();
-          _toFloor();
-        },
-        pendingSyncCount: () {
-          final shift = widget.shifts.currentOpenShift() ??
-              widget.shifts.latestShift();
-          if (shift == null) return widget.sync.pendingSales;
-          return widget.orders.awaitingSyncInShift(shift).length;
-        },
-        sessionPartnerName: () {
-          final name = widget.settings.odooSessionPartnerName;
-          if (name != null && name.isNotEmpty) return name;
-          final id = widget.settings.odooSessionPartnerId;
-          return id == null ? null : '#$id';
-        },
-        // Dishflow: arm consolidated merge. Session customer comes from the branch
-        // in Odoo (Session close tab); we pull it live if this till has not cached it.
-        onPrepareCloseSync: () async {
-          final shift = widget.shifts.currentOpenShift();
-          if (shift == null) return null;
-          // Tickets in THIS open shift only — not the whole outbox backlog.
-          if (widget.orders.awaitingSyncInShift(shift).isEmpty) return null;
-          widget.settings.mergeBatchIntoOneSaleOrder = true;
-          final needsPartnerMsg = tr(context,
-              'Consolidated close needs a branch with a session invoice customer. '
-              'Pick the branch under Server settings, and set the customer on '
-              'Offline POS ▸ Branches ▸ Session close in Odoo.');
-          await _ensureSessionPartnerFromBranch();
-          if (widget.settings.odooSessionPartnerId == null &&
-              widget.settings.odooBranchId == null) {
-            return needsPartnerMsg;
-          }
-          return null;
-        },
-        // The allowance the counted drawer is held to, zero unless the shop set one.
-        cashVarianceTolerance: widget.settings.cashVarianceTolerance,
-        // A refused Z is worth knowing about the morning after: it says a till was
-        // left with work on it or a drawer that did not add up.
-        onCloseBlocked: (reason) =>
-            widget.audit.record(session.cashierId, reason),
-        // Gated BEFORE the shift closes, since the close is irreversible: the
-        // cashier's role may allow it outright, otherwise a manager approves.
-        authorizeClose: () => _authorize(Permission.closeShift, context),
-        // A copy of the day for whoever is not in the building. Queued and left
-        // to the background lane, so the cash-up is over before the first packet
-        // is sent and a mail server that is down changes nothing about closing.
-        onZClosed: (closed, rows) {
-          // The room goes back to nobody as the shift ends: a table still assigned to
-          // whoever went home is one the next service cannot open. Before the report,
-          // so a mail server that misbehaves cannot leave the room shared out.
-          _clearAssignments(session);
-          _emailZReport(closed, rows);
-        },
-        // Closing the shift is when the day's orders are pushed to Odoo in one
-        // batch. Returns a message for the cashier: how it went, or that the
-        // orders are safe and will sync once the connection is back.
-        onCloseSync: () async {
-          _announceDayClose(session);
-          final shift = widget.shifts.latestShift();
-          if (shift == null) return 'No shift to sync.';
-          // Same window the Z used: paid tickets created between open and close.
-          final shiftOrders = widget.orders.awaitingSyncInShift(shift);
-          if (shiftOrders.isEmpty) {
-            final existing = widget.sync.lastOdooOrderRef ??
-                await _resolveOdooSaleName(null);
-            if (existing != null && existing.isNotEmpty) {
-              return 'No new orders in this shift.\nLast Odoo order: $existing';
-            }
-            return 'No orders in this shift to sync.';
-          }
-          widget.settings.mergeBatchIntoOneSaleOrder = true;
-          await _ensureSessionPartnerFromBranch();
-          final partner = widget.settings.odooSessionPartnerName ??
-              (widget.settings.odooSessionPartnerId == null
-                  ? null
-                  : '#${widget.settings.odooSessionPartnerId}');
-          final result = await widget.sync.flushClosedShift(
-            orderUuids: {for (final o in shiftOrders) o.uuid},
-            batchKey: shift.uuid,
-            enqueueOrders: () async {
-              // Fresh wire payloads so delivery / tip / service fee are not
-              // stale zeros left from an older enqueue.
-              for (final o in shiftOrders) {
-                await widget.outbox.enqueue(
-                    'order.push', o.uuid, o.toServerPayload());
-              }
-            },
-          );
-          if (result.merged) {
-            var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
-            if (odooRef == null ||
-                odooRef.isEmpty ||
-                odooRef.startsWith('#')) {
-              final resolved = await _resolveOdooSaleName(odooRef);
-              if (resolved != null) odooRef = resolved;
-            }
-            if (odooRef != null && odooRef.isNotEmpty) {
-              widget.sync.lastOdooOrderRef = odooRef;
-              return 'Synced ${result.orderCount} order(s) from this shift '
-                  'to Odoo as one sale order'
-                  '${partner != null ? ' under $partner' : ''}.\n'
-                  'Odoo order: $odooRef';
-            }
-            return 'Sent ${result.orderCount} order(s) from this shift'
-                '${partner != null ? ' under $partner' : ''}, '
-                'but Odoo did not return the sale number yet.\n'
-                'Check Sales orders for today under the session customer.';
-          }
-          final why = result.skipReason ?? widget.sync.lastError;
-          return 'Could not book this shift as one sale order'
-              '${why != null && why.isNotEmpty ? ': $why' : '.'}\n'
-              '${result.orderCount} order(s) stay on this till — '
-              'will retry in the background, or use Support ▸ Sync now.';
-        },
-      ),
-    ))
+    return Navigator.of(context)
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => ShiftScreen(
+              store: widget.shifts,
+              cashierId: session.cashierId,
+              startCloseOnOpen: startClose,
+              startMovement: startMovement,
+              // Right after the shift opens, ask who is working this session so sales and
+              // tables can be attributed to whoever is actually on the floor. Opt-in.
+              onShiftOpened: () {
+                _announceShiftOpen(session);
+                if (widget.settings.askSessionStaff) {
+                  unawaited(_pickSessionStaff(context, session));
+                }
+              },
+              cashMethodIds: cashMethodIds,
+              formatAmount: PosApp.money,
+              onPrintReport: _printShiftReport,
+              // Read at the moment the Z is attempted, not only when the screen was
+              // built: a tab can be settled while the shift screen is open.
+              openWork: () => _openWork(context),
+              // Dishflow session-close: jump back to the floor to settle parked tabs.
+              onNavigateToFloor: () {
+                Navigator.of(context).pop();
+                _toFloor();
+              },
+              pendingSyncCount: () {
+                final shift =
+                    widget.shifts.currentOpenShift() ??
+                    widget.shifts.latestShift();
+                if (shift == null) return widget.sync.pendingSales;
+                return widget.orders.awaitingSyncInShift(shift).length;
+              },
+              sessionPartnerName: () {
+                final name = widget.settings.odooSessionPartnerName;
+                if (name != null && name.isNotEmpty) return name;
+                final id = widget.settings.odooSessionPartnerId;
+                return id == null ? null : '#$id';
+              },
+              // Dishflow: arm consolidated merge. Session customer comes from the branch
+              // in Odoo (Session close tab); we pull it live if this till has not cached it.
+              onPrepareCloseSync: () async {
+                final stress = stressOrderCount(widget.outboxStore.db);
+                if (stress > 0) {
+                  return tr(
+                    context,
+                    'This till still has {n} Stress Lab orders. Press "Clean up" in the '
+                    'Stress Lab before closing the session.',
+                  ).replaceAll('{n}', '$stress');
+                }
+                final shift = widget.shifts.currentOpenShift();
+                if (shift == null) return null;
+                // Tickets in THIS open shift only — not the whole outbox backlog.
+                if (widget.orders.awaitingSyncInShift(shift).isEmpty) return null;
+                widget.settings.mergeBatchIntoOneSaleOrder = true;
+                final needsPartnerMsg = tr(
+                  context,
+                  'Consolidated close needs a branch with a session invoice customer. '
+                  'Pick the branch under Server settings, and set the customer on '
+                  'Offline POS ▸ Branches ▸ Session close in Odoo.',
+                );
+                await _ensureSessionPartnerFromBranch();
+                if (widget.settings.odooSessionPartnerId == null &&
+                    widget.settings.odooBranchId == null) {
+                  return needsPartnerMsg;
+                }
+                return null;
+              },
+              // The allowance the counted drawer is held to, zero unless the shop set one.
+              cashVarianceTolerance: widget.settings.cashVarianceTolerance,
+              // A refused Z is worth knowing about the morning after: it says a till was
+              // left with work on it or a drawer that did not add up.
+              onCloseBlocked: (reason) =>
+                  widget.audit.record(session.cashierId, reason),
+              // Gated BEFORE the shift closes, since the close is irreversible: the
+              // cashier's role may allow it outright, otherwise a manager approves.
+              authorizeClose: () => _authorize(Permission.closeShift, context),
+              // A copy of the day for whoever is not in the building. Queued and left
+              // to the background lane, so the cash-up is over before the first packet
+              // is sent and a mail server that is down changes nothing about closing.
+              onZClosed: (closed, rows) {
+                // The room goes back to nobody as the shift ends: a table still assigned to
+                // whoever went home is one the next service cannot open. Before the report,
+                // so a mail server that misbehaves cannot leave the room shared out.
+                _clearAssignments(session);
+                _emailZReport(closed, rows);
+              },
+              // Closing the shift is when the day's orders are pushed to Odoo in one
+              // batch. Returns a message for the cashier: how it went, or that the
+              // orders are safe and will sync once the connection is back.
+              onCloseSync: () async {
+                _announceDayClose(session);
+                final shift = widget.shifts.latestShift();
+                if (shift == null) return 'No shift to sync.';
+                // Same window the Z used: paid tickets created between open and close.
+                final shiftOrders = widget.orders.awaitingSyncInShift(shift);
+                if (shiftOrders.isEmpty) {
+                  final existing =
+                      widget.sync.lastOdooOrderRef ??
+                      await _resolveOdooSaleName(null);
+                  if (existing != null && existing.isNotEmpty) {
+                    return 'No new orders in this shift.\nLast Odoo order: $existing';
+                  }
+                  return 'No orders in this shift to sync.';
+                }
+                widget.settings.mergeBatchIntoOneSaleOrder = true;
+                await _ensureSessionPartnerFromBranch();
+                final partner =
+                    widget.settings.odooSessionPartnerName ??
+                    (widget.settings.odooSessionPartnerId == null
+                        ? null
+                        : '#${widget.settings.odooSessionPartnerId}');
+                final result = await widget.sync.flushClosedShift(
+                  orderUuids: {for (final o in shiftOrders) o.uuid},
+                  batchKey: shift.uuid,
+                  enqueueOrders: () async {
+                    // Fresh wire payloads so delivery / tip / service fee are not
+                    // stale zeros left from an older enqueue.
+                    for (final o in shiftOrders) {
+                      await widget.outbox.enqueue(
+                        'order.push',
+                        o.uuid,
+                        o.toServerPayload(),
+                      );
+                    }
+                  },
+                );
+                if (result.merged) {
+                  var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
+                  if (odooRef == null ||
+                      odooRef.isEmpty ||
+                      odooRef.startsWith('#')) {
+                    final resolved = await _resolveOdooSaleName(odooRef);
+                    if (resolved != null) odooRef = resolved;
+                  }
+                  if (odooRef != null && odooRef.isNotEmpty) {
+                    widget.sync.lastOdooOrderRef = odooRef;
+                    return 'Synced ${result.orderCount} order(s) from this shift '
+                        'to Odoo as one sale order'
+                        '${partner != null ? ' under $partner' : ''}.\n'
+                        'Odoo order: $odooRef';
+                  }
+                  return 'Sent ${result.orderCount} order(s) from this shift'
+                      '${partner != null ? ' under $partner' : ''}, '
+                      'but Odoo did not return the sale number yet.\n'
+                      'Check Sales orders for today under the session customer.';
+                }
+                final why = result.skipReason ?? widget.sync.lastError;
+                return 'Could not book this shift as one sale order'
+                    '${why != null && why.isNotEmpty ? ': $why' : '.'}\n'
+                    '${result.orderCount} order(s) stay on this till — '
+                    'will retry in the background, or use Support ▸ Sync now.';
+              },
+            ),
+          ),
+        )
         // Coming back from a shift opened or closed changes whether the till may
         // sell, so the screen underneath is rebuilt rather than left stale.
         .then((_) {
@@ -6431,13 +6597,7 @@ class _PosAppState extends State<PosApp> {
               'Park or pay the order on the counter before the Stress Lab.'))));
       return;
     }
-    final store = StressLabStore(
-      db: widget.outboxStore.db,
-      orders: widget.orders,
-      tables: widget.tables,
-      deviceId: widget.deviceId,
-      announceCleanup: () => widget.lan?.announceStressCleanup(),
-    );
+    final store = _stressStore();
     final runner = StressLabRunner(
       session: PosSession(
         catalogue: widget.catalogue,
@@ -6449,14 +6609,106 @@ class _PosAppState extends State<PosApp> {
         nextOrderNo: _nextOrderNo,
         onRinging: _prepareOrderNo,
         shiftOpenedAt: () => widget.shifts.currentOpenShift()?.openedAt,
+        tagOrder: (o) => o.note = kStressNote,
       ),
       catalogue: widget.catalogue,
       tables: widget.tables,
       store: store,
-      printer: StressPrinter(fireKitchen: _fireKitchen, printReceipt: _printReceipt),
+      printer: StressPrinter(
+        fireKitchen: _fireKitchen,
+        printReceipt: _printReceipt,
+        heldPrints: () => _receiptPrinter.spooledCount,
+        attachProbe: (probe) => _printProbe = probe,
+      ),
     );
     unawaited(pushGated(Permission.openSettings,
         StressLabScreen(runner: runner, onChanged: refresh, log: StressReportLog())));
+  }
+
+  StressLabStore _stressStore() => StressLabStore(
+    db: widget.outboxStore.db,
+    orders: widget.orders,
+    tables: widget.tables,
+    deviceId: widget.deviceId,
+    announceCleanup: () => widget.lan?.announceStressCleanup(),
+  );
+
+  /// A virtual cashier for the full-day stress: numbered, taxed and serviced like
+  /// a real cashier's session, with every order it opens marked as a lab order so
+  /// none of them can leave the till.
+  PosSession _stressSession(String cashierId) => PosSession(
+    catalogue: widget.catalogue,
+    orders: widget.orders,
+    outbox: widget.outbox,
+    audit: widget.audit,
+    deviceId: widget.deviceId,
+    cashierId: cashierId,
+    taxRateFor: (categoryId, type) => categoryId == null
+        ? null
+        : widget.settings.categoryTaxRate(categoryId, type),
+    serviceChargeFor: widget.settings.serviceChargePercentFor,
+    nextOrderNo: _nextOrderNo,
+    onRinging: _prepareOrderNo,
+    settings: widget.settings,
+    shiftOpenedAt: () => widget.shifts.currentOpenShift()?.openedAt,
+    tagOrder: (o) => o.note = kStressNote,
+  );
+
+  /// The floor's full-day and delivery stress: asks how big, then runs it through
+  /// the till's own kitchen, receipt and course-timer paths.
+  Future<void> _openStressDay(BuildContext context, StressDayMode mode) async {
+    final live = _session;
+    if (live == null) return;
+    if (live.hasLines) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              'Park or pay the order on the counter before the Stress Lab.',
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    if (!await _authorize(Permission.openSettings, context) || !context.mounted) {
+      return;
+    }
+    final config = await showStressDayDialog(context, mode, canPrint: true);
+    if (config == null || !context.mounted) return;
+    final deps = StressDeps(
+      db: widget.outboxStore.db,
+      deviceId: widget.deviceId,
+      orders: widget.orders,
+      tables: widget.tables,
+      catalogue: widget.catalogue,
+      newSession: _stressSession,
+      fireKitchen: _fireKitchen,
+      printReceipt: _printReceipt,
+      printBagSlip: _printDeliveryBagSlip,
+      voidToKitchen: _fireVoid,
+      fireDueTimed: _fireDueTimedLines,
+      drivers: widget.delivery == null
+          ? null
+          : () => widget.delivery!.drivers(activeOnly: true),
+      zones: widget.delivery == null ? null : () => widget.delivery!.zones(),
+      attachProbe: (probe) => _printProbe = probe,
+      heldPrints: () => _receiptPrinter.spooledCount,
+    );
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => StressDayScreen(
+          runner: StressDayRunner(deps: deps),
+          config: config,
+          store: _stressStore(),
+          onChanged: () {
+            if (mounted) setState(() {});
+          },
+          log: StressDayLog(),
+        ),
+      ),
+    );
   }
 
   void _openDiagnosticsNow(BuildContext context) {

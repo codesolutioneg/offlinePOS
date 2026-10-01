@@ -1,5 +1,6 @@
 import '../../domain/payload_balance.dart';
 import 'outbox.dart';
+import 'stress_guard.dart';
 
 /// One payload holding a whole shift's sales, for the shop that wants its night in
 /// the books as a single sales order rather than three hundred.
@@ -83,6 +84,7 @@ MergeOutcome mergeOrderPushes(
     // cannot settle inside a merged payment. Both go out on their own, which is
     // also what Dishflow does with its on-account sales.
     if (e.payload['refund_of_uuid'] != null) continue;
+    if (isStressPayload(e.payload)) continue;
     sales.add(e);
   }
   final minSales = partnerId != null ? 1 : 2;

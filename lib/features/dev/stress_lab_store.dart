@@ -5,10 +5,13 @@ import '../../core/db/database.dart';
 import '../../core/db/order_store.dart';
 import '../../core/db/stress_purge.dart';
 import '../../core/db/table_store.dart';
+import '../../core/sync/stress_firebase_purge.dart';
 import '../../domain/order.dart';
 import 'stress_note.dart';
 
 export '../../core/db/stress_purge.dart' show kStressNote;
+export '../../core/sync/stress_firebase_purge.dart'
+    show StressCleanup, StressFirebasePurge;
 
 /// The floor section the lab adds tables to when the floor has none free.
 const String kStressSection = 'Stress';
@@ -21,7 +24,11 @@ class StressLabStore {
     required this.tables,
     this.deviceId,
     this.announceCleanup,
-  });
+    StressFirebasePurge? firebase,
+  }) : firebase = firebase ?? StressFirebasePurge();
+
+  /// Takes the lab's copies back out of Dishflow on cleanup.
+  final StressFirebasePurge firebase;
 
   final Db db;
   final OrderStore orders;
@@ -34,12 +41,16 @@ class StressLabStore {
   /// Tells the other tills to drop their copies of the lab's orders.
   final void Function()? announceCleanup;
 
-  static const _noteMatch = '%"note":"$kStressNote"%';
-
   List<Order> _stressOrders(String stateClause) => db.raw
-      .select('SELECT payload FROM orders WHERE $stateClause AND payload LIKE ?',
-          [_noteMatch])
-      .map((r) => Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
+      .select(
+        'SELECT payload FROM orders WHERE $stateClause AND payload LIKE ?',
+        [kStressNoteMatch],
+      )
+      .map(
+        (r) => Order.fromMap(
+          jsonDecode(r['payload'] as String) as Map<String, dynamic>,
+        ),
+      )
       .toList();
 
   /// Tables with no open tab on them anywhere in the shop.
@@ -105,7 +116,7 @@ class StressLabStore {
       db.raw.execute('BEGIN');
       for (var i = start; i < start + batch && i < count; i++) {
         final o = Order(
-          deviceId: 'stress-history',
+          deviceId: kStressHistoryDevice,
           cashierId: 'stress',
           createdAt: base.add(Duration(seconds: i * 20)),
           note: kStressNote,
@@ -123,14 +134,33 @@ class StressLabStore {
   }
 
   /// Remove every lab order on this till (the other tills' copies included), its
-  /// queued deliveries and the lab's tables, and have the other tills do the same.
-  /// Returns how many orders went here.
-  int cleanup() {
-    final removed = purgeStressOrders(db);
+  /// queued deliveries, any copy Dishflow already holds and the lab's tables, and
+  /// have the other tills do the same.
+  Future<StressCleanup> cleanup() async {
+    final purge = firebase.purgeEverywhere(db);
     tables.deleteSection(kStressSection);
     announceCleanup?.call();
-    return removed;
+    return purge;
   }
 }
 
 typedef StressProgress = void Function(int done, int total);
+
+/// What a cleanup did, as report lines: what left the till, what left Dishflow,
+/// and any lab order Odoo booked before the guard, which only a person can undo.
+List<StressNote> cleanupNotes(StressCleanup c) => [
+  StressNote(
+    'Removed {n} lab orders, their queued deliveries and the "{section}" tables',
+    {'n': c.removed, 'section': kStressSection},
+  ),
+  if (c.firebaseDeleted + c.firebaseFailed > 0)
+    StressNote(
+      'Dishflow copies: {deleted} deleted · {failed} could not be deleted',
+      {'deleted': c.firebaseDeleted, 'failed': c.firebaseFailed},
+      c.firebaseFailed > 0,
+    ),
+  if (c.inOdoo.isNotEmpty)
+    StressNote('Already booked in Odoo, cancel by hand: {orders}', {
+      'orders': c.inOdoo.take(20).join(', '),
+    }, true),
+];

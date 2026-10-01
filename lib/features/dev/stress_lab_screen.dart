@@ -85,13 +85,13 @@ class _StressLabScreenState extends State<StressLabScreen> {
       () => widget.runner.growAndTime(_read(_history, 5000), _tick));
 
   void _cleanup() => _run('Clean up', () async {
-        final removed = widget.runner.store.cleanup();
-        return StressReport('Clean up', done: removed, notes: [
-          StressNote(
-              'Removed {n} lab orders, their queued deliveries and the "{section}" tables',
-              {'n': removed, 'section': kStressSection}),
-        ]);
-      });
+    final done = await widget.runner.store.cleanup();
+    return StressReport(
+      'Clean up',
+      done: done.removed,
+      notes: cleanupNotes(done),
+    );
+  });
 
   @override
   Widget build(BuildContext context) {

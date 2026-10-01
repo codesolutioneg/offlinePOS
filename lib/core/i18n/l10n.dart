@@ -1223,10 +1223,14 @@ const Map<String, String> _ar = {
       'سيل طلبات، ملء كل الطربيزات، الدفع على جهاز مليان',
   'Park or pay the order on the counter before the Stress Lab.':
       'علّق أو ادفع الطلب اللي على الشاشة الأول قبل مختبر الضغط.',
-  'Test bench only. Lab orders are real rows on this till and are queued for Odoo. '
-          'Press "Clean up" before closing the shift.':
-      'للتجربة فقط. طلبات المختبر طلبات حقيقية على الجهاز ومتحطّة في طابور أودو. '
-          'اضغط «تنظيف» قبل قفل الوردية.',
+  'Test bench only. Lab orders are real rows on this till but never leave it: Odoo '
+          'and Dishflow skip them. Press "Clean up" before closing the shift; the close '
+          'is refused while any are left.':
+      'للتجربة فقط. طلبات المختبر طلبات حقيقية على الجهاز بس عمرها ما بتخرج منه: أودو '
+      'وDishflow بيتخطّوها. اضغط «تنظيف» قبل قفل الوردية؛ القفل بيترفض طول ما فيه أي طلب منها.',
+  'This till still has {n} Stress Lab orders. Press "Clean up" in the Stress Lab '
+          'before closing the session.':
+      'الجهاز لسه عليه {n} طلب من مختبر الضغط. اضغط «تنظيف» في مختبر الضغط قبل قفل الوردية.',
   'Seconds': 'ثواني',
   'Old sales': 'مبيعات قديمة',
   'Order flood': 'سيل طلبات',
@@ -1249,10 +1253,107 @@ const Map<String, String> _ar = {
   'Print to the kitchen and receipt printers': 'اطبع على طابعات المطبخ والإيصالات',
   'Kitchen: {asked} orders · sent {sent} · spooled {spooled} · lost {lost} · '
           'no answer {none} · receipts {receipts} · printers done after {s} s':
-      'المطبخ: {asked} طلب · اتطبع {sent} · في طابور الطباعة {spooled} · ضاع {lost} · '
-          'من غير رد {none} · إيصالات {receipts} · الطابعات خلصت بعد {s} ثانية',
+      'المطبخ: {asked} طلب · الطابعة استلمت {sent} · في طابور الطباعة {spooled} · ضاع {lost} · '
+      'من غير رد {none} · إيصالات {receipts} · الطابعات خلصت بعد {s} ثانية',
+  'Kitchen tickets: {station} at the kitchen printer · {rerouted} on the receipt '
+          'printer instead · {held} held · {lost} lost':
+      'تذاكر المطبخ: {station} على طابعة المطبخ · {rerouted} طلعت على طابعة الإيصالات بدلها · '
+      '{held} في طابور الطباعة · {lost} ضاعت',
+  'Receipts: {printed} printed · {held} held · {failed} failed':
+      'الإيصالات: {printed} الطابعة استلمتها · {held} في طابور الطباعة · {failed} فشلت',
+  'Pass copies: {printed} printed · {rerouted} on the receipt printer · '
+          '{held} held · {lost} lost':
+      'نسخة المطبخ الفرعية: {printed} الطابعة استلمتها · {rerouted} على طابعة الإيصالات · '
+      '{held} في طابور الطباعة · {lost} ضاعت',
+  'Held prints on this till: {before} before the run · {after} now':
+      'طباعات معلقة على الجهاز: {before} قبل الاختبار · {after} دلوقتي',
+  'Count the paper: {kitchen} slips at the kitchen printer, {till} at the '
+          'receipt printer':
+      'عدّ الورق: المفروض {kitchen} ورقة على طابعة المطبخ و{till} على طابعة الإيصالات',
   'Removed {n} lab orders, their queued deliveries and the "{section}" tables':
       'اتمسح {n} طلب من المختبر ومن طابور الإرسال، واتمسحت طربيزات قسم «{section}»',
+  'Dishflow copies: {deleted} deleted · {failed} could not be deleted':
+      'نسخ Dishflow: اتمسح {deleted} · {failed} ماتمسحوش',
+  'Already booked in Odoo, cancel by hand: {orders}':
+      'متسجلين في أودو خلاص، لازم يتلغوا بالإيد: {orders}',
+  'Full-day stress': 'اختبار يوم كامل',
+  'Delivery stress': 'اختبار الدليفري',
+  'Clean up lab orders': 'مسح طلبات الاختبار',
+  'Delete {n} Stress Lab orders from this till, the other tills and Dishflow?':
+      'مسح {n} طلب اختبار من الجهاز ده والأجهزة التانية وDishflow؟',
+  'Cashiers at once': 'عدد الكاشيرات مع بعض',
+  'Problems only': 'المشاكل بس',
+  'steps': 'خطوة',
+  'Stopped': 'وقف',
+  'Lab orders never leave this till. Press "Clean up" when you are done.':
+      'طلبات الاختبار مابتطلعش من الكاشير ده. اضغط "Clean up" لما تخلص.',
+  'Stopped: {error}': 'وقف: {error}',
+  'Step failed: {step} ({detail})': 'خطوة فشلت: {step} ({detail})',
+  'Slow step: {step} took {ms} ms': 'خطوة بطيئة: {step} خدت {ms} ms',
+  'Should be gone but is still on the till: {order}':
+      'المفروض اتشال بس لسه على الكاشير: {order}',
+  'Lost: {order} is not on the till any more':
+      'ضاع: {order} مش موجود على الكاشير',
+  'Changed after the run: #{no} {field} should be {want}, is {got}':
+      'اتغير بعد التشغيل: #{no} {field} المفروض {want}، لقيناه {got}',
+  'Paid {paid} of {total} on #{no}': 'اتدفع {paid} من {total} على #{no}',
+  'Paid with {n} lines that never reached the kitchen: #{no}':
+      'اتدفع وفيه {n} صنف ماوصلوش المطبخ: #{no}',
+  'Split checks add up to {sum}, the bill was {total}':
+      'الشيكات المقسومة مجموعها {sum}، والفاتورة كانت {total}',
+  'Timed course never reached the kitchen': 'الكورس المؤقت ماوصلش المطبخ',
+  'Timed course late by {s} s': 'الكورس المؤقت اتأخر {s} ث',
+  '{paper} shows #{printed} / {ptotal}, the order is #{no} / {total}':
+      '{paper} مطبوع عليه #{printed} / {ptotal}، والطلب #{no} / {total}',
+  'No bag slip came out for this delivery': 'ماطلعش بون الشنطة للدليفري ده',
+  'Number #{no} is also on {others}': 'الرقم #{no} موجود كمان على {others}',
+  'Numbers: {distinct} distinct · repeated {repeated} {which}':
+      'الأرقام: {distinct} مختلف · متكرر {repeated} {which}',
+  'Paid but not in the Odoo queue': 'اتدفع بس مش في طابور أودو',
+  'Still open on this till after the run: {n} lab tabs ({tables})':
+      'لسه مفتوح على الكاشير بعد التشغيل: {n} طلب اختبار ({tables})',
+  'Table {table} has {n} separate open bills ({tills})':
+      'طاولة {table} عليها {n} فواتير مفتوحة منفصلة ({tills})',
+  '{n} orders · {bad} with problems · {stopped} stopped · {s} s':
+      '{n} طلب · {bad} فيهم مشاكل · {stopped} وقفوا · {s} ث',
+  '{scenario}: {n} run · {bad} with problems':
+      '{scenario}: {n} اتشغل · {bad} فيهم مشاكل',
+  'takeaway': 'تيك أواي',
+  'hold & recall': 'تعليق واسترجاع',
+  'timed send': 'إرسال مؤقت',
+  'transfer': 'نقل',
+  'merge': 'دمج',
+  'split by items': 'تقسيم بالأصناف',
+  'split check': 'تقسيم الشيك',
+  'split by persons': 'تقسيم بالأشخاص',
+  'void after kitchen': 'إلغاء بعد المطبخ',
+  'delivery': 'دليفري',
+  'new order': 'طلب جديد',
+  'ring': 'تسجيل',
+  'seat': 'جلوس',
+  'kitchen': 'المطبخ',
+  'kitchen (simulated)': 'المطبخ (محاكاة)',
+  'kitchen answer': 'رد المطبخ',
+  'pay': 'دفع',
+  'recall': 'استرجاع',
+  'hold': 'تعليق',
+  'take table': 'أخذ طاولة',
+  'course timer': 'مؤقت الكورس',
+  'timed fire': 'إرسال الكورس',
+  'move items': 'نقل أصناف',
+  'move table': 'نقل طاولة',
+  'merge tables': 'دمج طاولات',
+  'merge total': 'إجمالي الدمج',
+  'void item': 'إلغاء صنف',
+  'kitchen cancel': 'إلغاء للمطبخ',
+  'kitchen cancel answer': 'رد إلغاء المطبخ',
+  'pay own items': 'دفع أصنافه',
+  'shares settle': 'تسوية الحصص',
+  'customer': 'العميل',
+  'zone': 'المنطقة',
+  'driver': 'السائق',
+  'bag slip': 'بون الشنطة',
+  'status': 'الحالة',
   'Run a statement to see rows.': 'شغّل جملة لترى الصفوف.',
   'Running...': 'جارٍ التشغيل...',
   'Copy SQL': 'نسخ SQL',

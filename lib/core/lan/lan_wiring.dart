@@ -18,6 +18,7 @@ import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
 import '../printing/printer_registry.dart';
 import '../sync/odoo_endpoint.dart';
+import '../sync/stress_firebase_purge.dart';
 import '../../domain/table_section_config.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
@@ -144,7 +145,7 @@ class LanNode {
       users: users,
       log: eventLog,
       onShopBundleApplied: onShopBundleApplied,
-      onStressCleanup: () => purgeStressOrders(db),
+      onStressCleanup: () => unawaited(StressFirebasePurge().purgeEverywhere(db)),
       onRefused: log,
     );
     final credential = LanCredential.rotating(shopKey);
