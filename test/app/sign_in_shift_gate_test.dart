@@ -22,6 +22,7 @@ import 'package:offline_pos/core/sync/odoo_endpoint.dart';
 import 'package:offline_pos/core/sync/odoo_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
+import 'package:offline_pos/features/shift/shift_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -37,10 +38,10 @@ class _NoPrinters extends PrinterDiscovery {
 
 /// Who may unlock the till, and what unlocking does.
 ///
-/// Opening the shift is the manager's: until one is open only a manager signs
-/// in, so a cashier cannot open a drawer or ring a table on their own. Once it
-/// is open anyone on the roster signs in with their PIN, and signing in is also
-/// clocking in.
+/// Anyone on the roster signs in with their PIN at any time, and signing in is
+/// also clocking in. Opening the shift is the manager's: with none open a
+/// cashier reaches the shift screen only on a manager's PIN, and the floor's own
+/// no-shift refusal (see shift_gate_test) keeps them from ringing anything.
 void main() {
   late Db db;
   late AttendanceStore attendance;
@@ -115,25 +116,58 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  testWidgets('with no shift open a cashier is turned away before the PIN',
+  testWidgets('with no shift open a cashier still signs in, and is clocked in',
       (t) async {
     await signIn(t, 'ana', '4321');
 
-    expect(find.byType(TableFloorScreen), findsNothing);
-    expect(find.byKey(const Key('key-1')), findsNothing);
-    expect(find.textContaining('A manager must open it first'), findsOneWidget);
-    expect(attendance.isClockedIn('ana'), isFalse,
-        reason: 'a refused sign-in is not a day at work');
-  });
-
-  testWidgets('with no shift open a manager still signs in, and is clocked in',
-      (t) async {
-    await signIn(t, 'mo', '9999');
-
     expect(find.byType(TableFloorScreen), findsOneWidget);
-    expect(attendance.isClockedIn('mo'), isTrue);
+    expect(attendance.isClockedIn('ana'), isTrue);
     expect(find.byKey(const Key('signed-in-clocked-in')), findsNothing,
         reason: 'the note fades by itself');
+  });
+
+  testWidgets('a cashier cannot open the shift without a manager', (t) async {
+    await signIn(t, 'ana', '4321');
+
+    await t.tap(find.byKey(const Key('shift-nudge-open')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('manager-pin')), findsOneWidget);
+    await t.tap(find.text('Cancel'));
+    await t.pumpAndSettle();
+
+    expect(find.byType(ShiftScreen), findsNothing);
+    expect(find.byKey(const Key('shift-open-manager-only')), findsOneWidget);
+    expect(ShiftStore(db).currentOpenShift(), isNull);
+  });
+
+  testWidgets('a manager PIN lets the cashier through to open it', (t) async {
+    await signIn(t, 'ana', '4321');
+
+    await t.tap(find.byKey(const Key('shift-nudge-open')));
+    await t.pumpAndSettle();
+    for (final d in '9999'.split('')) {
+      await t.tap(find.byKey(Key('key-$d')).last);
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('manager-ok')));
+    for (var i = 0; i < 20; i++) {
+      await t.pump(const Duration(milliseconds: 50));
+      if (find.byType(ShiftScreen).evaluate().isNotEmpty) break;
+    }
+    await t.pumpAndSettle();
+
+    expect(find.byType(ShiftScreen), findsOneWidget);
+  });
+
+  testWidgets('a manager goes straight to the shift screen', (t) async {
+    await signIn(t, 'mo', '9999');
+
+    await t.tap(find.byKey(const Key('shift-nudge-open')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('manager-pin')), findsNothing);
+    expect(find.byType(ShiftScreen), findsOneWidget);
+    expect(attendance.isClockedIn('mo'), isTrue);
   });
 
   testWidgets('once the shift is open a cashier signs in and is clocked in',

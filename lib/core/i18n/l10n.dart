@@ -362,8 +362,7 @@ const Map<String, String> _ar = {
   'Locked. Press Begin to sign in, or place your finger on the reader.':
       'الشاشة مقفولة. اضغط بداية لتسجيل الدخول، أو ضع بصمتك على الجهاز.',
   'Fingerprint not recognised': 'البصمة غير معروفة',
-  'The shift is not open yet. A manager must open it first.':
-      'الوردية لم تُفتح بعد. يجب أن يفتحها المدير أولاً.',
+  'Only a manager can open the shift.': 'فتح الوردية للمدير فقط.',
   'Not sent yet': 'لم تُرسل للمطبخ',
   'Bill printed, not paid': 'طُبع الحساب ولم يُدفع',
   'Delivery orders': 'طلبات التوصيل',

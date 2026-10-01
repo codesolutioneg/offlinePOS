@@ -31,11 +31,10 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Widget app({String? Function(Cashier)? refusal}) => MaterialApp(
+  Widget app() => MaterialApp(
         home: LoginScreen(
           auth: auth, users: users,
           onSignedIn: (c) => signedIn = c,
-          refusal: refusal,
         ),
       );
 
@@ -79,28 +78,6 @@ void main() {
     await t.pump();
     expect(find.byKey(const Key('login-staff-grid')), findsOneWidget);
     expect(find.byKey(const Key('key-1')), findsNothing);
-  });
-
-  testWidgets('a refused person never reaches the keypad', (t) async {
-    await t.pumpWidget(app(refusal: (_) => 'Shift closed'));
-    await t.tap(find.byKey(const Key('user-sara')));
-    await t.pump();
-    expect(find.byKey(const Key('key-1')), findsNothing);
-    expect(find.text('Shift closed'), findsOneWidget);
-    expect(signedIn, isNull);
-  });
-
-  testWidgets('a refusal that lands mid-PIN is checked before the PIN',
-      (t) async {
-    var shut = false;
-    await t.pumpWidget(app(refusal: (_) => shut ? 'Shift closed' : null));
-    await t.tap(find.byKey(const Key('user-sara')));
-    await t.pump();
-    shut = true;
-    await enter(t, '1234');
-    expect(signedIn, isNull);
-    expect(auth.signedIn, isNull);
-    expect(find.text('Shift closed'), findsOneWidget);
   });
 
   testWidgets('the right PIN signs in with no network', (t) async {

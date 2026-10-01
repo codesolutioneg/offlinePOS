@@ -29,7 +29,6 @@ class LoginScreen extends StatefulWidget {
     required this.onSignedIn,
     this.provisioningPin,
     this.attendance,
-    this.refusal,
     this.fingerprints,
     this.fingerprintStore,
     this.asPopup = false,
@@ -48,11 +47,6 @@ class LoginScreen extends StatefulWidget {
 
   /// Colours each tile by whether that person is on the clock.
   final AttendanceStore? attendance;
-
-  /// Why this person may not unlock the till right now (an untranslated
-  /// message), or null when they may. Asked before the PIN and again before it
-  /// is checked, since a shift can open on another till in between.
-  final String? Function(Cashier)? refusal;
 
   /// ZK reader when present: unlock by finger, else PIN.
   final FingerprintService? fingerprints;
@@ -75,21 +69,9 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _message;
   bool _busy = false;
 
-  /// Sends [who] back to the roster with the reason when the gate refuses them.
-  bool _refused(Cashier who) {
-    final why = widget.refusal?.call(who);
-    if (why == null) return false;
-    setState(() {
-      _selected = null;
-      _pin = '';
-      _message = tr(context, why);
-    });
-    return true;
-  }
-
   Future<void> _submit() async {
     final who = _selected;
-    if (who == null || _busy || _refused(who)) return;
+    if (who == null || _busy) return;
     setState(() => _busy = true);
     final result = await widget.auth.unlock(who.id, _pin);
     if (!mounted) return;
@@ -127,13 +109,8 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     if (result.isFingerprint) {
-      final matched = result.matchedUserId;
-      final owner = matched == null ? null : widget.users.byId(matched);
-      if (owner != null && _refused(owner)) {
-        setState(() => _busy = false);
-        return;
-      }
-      final authResult = await widget.auth.unlockByFingerprint(matched ?? '');
+      final authResult = await widget.auth
+          .unlockByFingerprint(result.matchedUserId ?? '');
       if (!mounted) return;
       setState(() => _busy = false);
       _applyUnlock(authResult);
@@ -145,10 +122,6 @@ class _LoginScreenState extends State<LoginScreen> {
         _busy = false;
         _message = tr(context, 'Pick who is signing in');
       });
-      return;
-    }
-    if (_refused(who)) {
-      setState(() => _busy = false);
       return;
     }
     final authResult = await widget.auth.unlock(who.id, result.pin!);
@@ -331,8 +304,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
 
-  /// Step one: who is signing in. The hint says the order of things, and a
-  /// refusal from the gate lands on the same row.
+  /// Step one: who is signing in. The hint says the order of things.
   List<Widget> _rosterStep(List<Cashier> staff) => [
         Text(tr(context, 'Select your name, then enter your PIN'),
             key: const Key('pick-name-hint'),
@@ -410,7 +382,7 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
   void _choose(Cashier c) {
-    if (_busy || _refused(c)) return;
+    if (_busy) return;
     setState(() {
       _selected = c;
       _pin = '';

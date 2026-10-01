@@ -1715,21 +1715,11 @@ class _PosAppState extends State<PosApp> {
         onSignedIn: onSignedIn,
         provisioningPin: _provisioningPin,
         attendance: widget.attendance,
-        refusal: _signInRefusal,
         fingerprints: widget.fingerprints,
         fingerprintStore: widget.fingerprintStore,
         asPopup: asPopup,
         onClose: onClose,
       );
-
-  /// Opening the shift is a manager's job, so until one is open (here, or on the
-  /// primary and passed down the LAN) only a manager unlocks the till. A roster
-  /// with no manager at all is not gated, or nobody could ever open one.
-  String? _signInRefusal(Cashier who) {
-    if (who.isManager || widget.shifts.currentOpenShift() != null) return null;
-    final anyManager = widget.users.active().any((u) => u.isManager);
-    return anyManager ? 'The shift is not open yet. A manager must open it first.' : null;
-  }
 
   /// Signing in is also clocking in: whoever unlocks the till is at work, so
   /// they need not go round by the attendance card first.
@@ -1866,13 +1856,6 @@ class _PosAppState extends State<PosApp> {
         if (!live()) break;
         switch (outcome) {
           case FingerprintIdentifyMatch(:final userId):
-            final user = widget.users.byId(userId);
-            final refusal = user == null ? null : _signInRefusal(user);
-            if (refusal != null) {
-              _lockToast(refusal, ToastKind.error);
-              await Future<void>.delayed(const Duration(seconds: 2));
-              continue;
-            }
             final result = await widget.auth.unlockByFingerprint(userId);
             if (!live()) break;
             if (result is AuthOk) {
@@ -6122,8 +6105,24 @@ class _PosAppState extends State<PosApp> {
   Future<void> _openShift(BuildContext context, PosSession session,
       {bool startClose = false, String? startMovement}) async {
     if (!await _screenOk(context, 'screen.shift') || !context.mounted) return;
+    if (!await _mayOpenShift(context) || !context.mounted) return;
     return _openShiftNow(context, session,
         startClose: startClose, startMovement: startMovement);
+  }
+
+  /// Opening the shift is a manager's job: with none open, a cashier reaches the
+  /// shift screen only on a manager's PIN or finger. A roster with no manager at
+  /// all is not gated, or nobody could ever open one.
+  Future<bool> _mayOpenShift(BuildContext context) async {
+    if (widget.shifts.currentOpenShift() != null) return true;
+    if (widget.auth.signedIn?.isManager ?? false) return true;
+    if (!widget.users.active().any((u) => u.isManager)) return true;
+    if (await _authorizeManager(context) != null) return true;
+    if (context.mounted) {
+      showToast(context, tr(context, 'Only a manager can open the shift.'),
+          kind: ToastKind.error, key: const Key('shift-open-manager-only'));
+    }
+    return false;
   }
 
   Future<void> _openShiftNow(BuildContext context, PosSession session,
