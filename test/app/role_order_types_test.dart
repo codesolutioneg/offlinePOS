@@ -24,6 +24,7 @@ import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
+import 'package:offline_pos/features/tables/floor_action_bar.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -44,7 +45,6 @@ void main() {
   late OrderStore orders;
   late SettingsStore settings;
   late TableStore tables;
-  late PosTable table5;
   late AuditLog audit;
 
   setUpAll(useSystemSqlite);
@@ -55,9 +55,11 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     tables = TableStore(db);
     audit = AuditLog(db);
-    table5 = tables.add(name: '5');
+    tables.add(name: '5');
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234');
     WizardStore(db).dismiss(WizardId.firstSale, 'sara');
@@ -117,7 +119,7 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  /// Everything on, which is what an unconfigured till is.
+  /// Delivery subtypes only — no seating or counter takeaway for this role.
   void deliveryDeskOnly() {
     settings.setRoleOrderType('cashier', OrderType.dineIn, false);
     settings.setRoleOrderType('cashier', OrderType.takeaway, false);
@@ -142,11 +144,25 @@ void main() {
 
   testWidgets('a delivery-only role is offered no other kind of sale', (t) async {
     deliveryDeskOnly();
-    draftOnTheTill(type: OrderType.delivery);
+    draftOnTheTill(type: OrderType.storeDelivery);
     await t.pumpWidget(app());
     await signIn(t);
+    // A delivery with nobody on it opens its details first; not what this is about.
+    if (find.byKey(const Key('delivery-cost')).evaluate().isNotEmpty) {
+      await t.tap(find.text('Cancel'));
+      await t.pumpAndSettle();
+    }
 
-    expect(find.byKey(const Key('order-type-delivery')), findsOneWidget);
+    for (final name in [
+      'order-type-storedelivery',
+      'order-type-deliveryfromcompany',
+      'order-type-cardelivery',
+    ]) {
+      final chip = find.byKey(Key(name));
+      await t.dragUntilVisible(
+          chip, find.byKey(const Key('order-type-strip')), const Offset(-60, 0));
+      expect(chip, findsOneWidget);
+    }
     expect(find.byKey(const Key('order-type-dinein')), findsNothing);
     expect(find.byKey(const Key('order-type-takeaway')), findsNothing);
     expect(find.byKey(const Key('order-type-togo')), findsNothing);
@@ -166,28 +182,34 @@ void main() {
 
   testWidgets('the floor drops the buttons for the types the role cannot ring',
       (t) async {
-    settings.setRoleOrderType('cashier', OrderType.delivery, false);
+    settings.setRoleOrderType('cashier', OrderType.deliveryFromCompany, false);
+    settings.setRoleOrderType('cashier', OrderType.storeDelivery, false);
+    settings.setRoleOrderType('cashier', OrderType.carDelivery, false);
     await t.pumpWidget(app());
     // No draft, so sign-in lands on the floor.
     await signIn(t);
     await t.pumpAndSettle();
 
     expect(find.byType(TableFloorScreen), findsOneWidget);
-    expect(find.byKey(const Key('floor-takeaway')), findsOneWidget);
-    expect(find.byKey(const Key('floor-delivery')), findsNothing);
+    final bar = t.widget<FloorActionBar>(find.byType(FloorActionBar));
+    FloorAction tile(String id) => bar.actions.firstWhere((a) => a.id == id);
+    expect(tile('table').onTap, isNotNull);
+    expect(tile('delivery').onTap, isNull);
   });
 
-  testWidgets('tapping a table says no rather than opening a sale the role cannot',
+  testWidgets('a delivery-only role works from the delivery station, not the floor',
       (t) async {
     deliveryDeskOnly();
     await t.pumpWidget(app());
     await signIn(t);
     await t.pumpAndSettle();
 
-    await t.tap(find.byKey(Key('table-tile-${table5.id}')));
-    await t.pumpAndSettle();
-
-    expect(find.text('This role does not open dine-in orders.'), findsOneWidget);
+    expect(find.byKey(const Key('delivery-home')), findsOneWidget);
+    expect(find.byType(TableFloorScreen), findsNothing);
+    expect(find.byKey(const Key('delivery-home-back')), findsNothing,
+        reason: 'the role has no floor to go back to');
+    expect(find.byKey(const Key('delivery-action-table')), findsNothing);
+    expect(find.byKey(const Key('delivery-home-storeDelivery')), findsOneWidget);
     expect(orders.held(), isEmpty);
   });
 }

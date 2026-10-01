@@ -3,14 +3,21 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/db/catalogue_store.dart';
 import '../../core/db/reservation_store.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/db/table_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/theme/dishflow_brand.dart';
 import '../../core/widgets/feedback.dart';
-import '../../domain/order.dart' show OrderType, OrderTypeLabel;
+import '../../domain/order.dart' show OrderType;
+import '../../domain/floor_bulletin.dart';
+import '../../domain/table_floor_info.dart';
+import 'floor_action_bar.dart';
+import 'floor_bulletin_panel.dart';
 import 'reservations_screen.dart';
+import 'section_settings_sheet.dart';
 import '../../core/theme/table_palette.dart';
 
 /// The floor plan: tables drawn where the shop placed them, tapped to start or
@@ -37,6 +44,7 @@ class TableFloorScreen extends StatefulWidget {
     this.seatTypes = const [OrderType.dineIn],
     this.sectionsAtSide = true,
     this.settings,
+    this.catalogue,
     this.onTransferTables,
     this.onEditPreorders,
     this.authorize,
@@ -49,6 +57,7 @@ class TableFloorScreen extends StatefulWidget {
     this.shiftOpen,
     this.onOpenShift,
     this.onSignOut,
+    this.onEndShift,
     this.section,
     this.onSectionChanged,
     this.seatAs,
@@ -61,7 +70,32 @@ class TableFloorScreen extends StatefulWidget {
     this.onAssign,
     this.authorizeAssign,
     this.assignHint = false,
+    this.onDuty = const [],
+    this.onOpenAttendance,
+    this.actions = const [],
+    this.bulletin,
+    this.bulletinHidden = const {},
+    this.locked = false,
+    this.onUnlock,
   });
+
+  /// Bulletin rows switched off in settings.
+  final Set<String> bulletinHidden;
+
+  /// Opens sign-in from the locked strip. Only read while [locked].
+  final VoidCallback? onUnlock;
+
+  /// Nobody is signed in: the room is shown for reading only, with no tools and no
+  /// way to start an order. Table taps still reach [onOpenTable], which the shell
+  /// turns into "sign in first".
+  final bool locked;
+
+  /// The numbers for the Bulletin board on the right. Null draws no board.
+  final FloorBulletin? bulletin;
+
+  /// The coloured tiles along the bottom (Begin, End, Tabs, Flash report...). Empty
+  /// draws no bar, which is what the picker and the plan-only suites want.
+  final List<FloorAction> actions;
 
   /// Who each table belongs to for this service, by table id.
   ///
@@ -102,6 +136,17 @@ class TableFloorScreen extends StatefulWidget {
   /// shell for whoever may do it, so a waiter is not shown a button that only ever
   /// asks them for a manager's PIN.
   final bool assignHint;
+
+  /// Staff currently on the clock (attendance). Shown on the floor so a manager
+  /// sees who may open tables; empty when nobody has clocked in.
+  final List<({String id, String name})> onDuty;
+
+  /// Opens the attendance / clock-in screen from the floor strip.
+  final VoidCallback? onOpenAttendance;
+
+  /// Opens the End-of-Day / cash-up screen (Dishflow "End shift"). Prefer this
+  /// over [onSignOut] for the toolbar button: signing out is a different action.
+  final VoidCallback? onEndShift;
 
   /// The room to open on, and the way back up to whoever remembers it.
   ///
@@ -167,6 +212,9 @@ class TableFloorScreen extends StatefulWidget {
   /// what the table picker wants.
   final SettingsStore? settings;
 
+  /// Menu catalogue for section category / payment pickers. Null hides those tools.
+  final CatalogueStore? catalogue;
+
   /// Move every tab one cashier is holding to another one, for the manager whose
   /// waiter went home mid-service. Null hides the action.
   final VoidCallback? onTransferTables;
@@ -214,7 +262,7 @@ class TableFloorScreen extends StatefulWidget {
 
   /// Per occupied table: its running total and when it was opened, so a waiter sees
   /// the bill and how long the table has been sitting straight off the floor.
-  final Map<String, ({double total, DateTime since})> occupiedInfo;
+  final Map<String, TableFloorInfo> occupiedInfo;
   final String Function(double)? formatAmount;
 
   /// Start a new order on a free table, or recall the order parked on an occupied
@@ -250,16 +298,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   String? _section;
   Timer? _tick;
 
-  /// The kind of order the next free-table tap opens. Held here rather than in the
-  /// shell because the selector redraws with the plan, and the shell cannot repaint
-  /// a pushed route.
-  OrderType? _seatAs;
-
+  /// The kind of order a free-table tap opens: the first kind the shop seats (a
+  /// section's own default still wins in the shell). The order screen switches it.
   /// A shop that seats nobody still reports dine-in on a tap; the shell refuses the
   /// seating either way, and an occupied table is recalled without reading this.
-  OrderType get _seatType => widget.seatTypes.contains(_seatAs)
-      ? _seatAs!
-      : (widget.seatTypes.firstOrNull ?? OrderType.dineIn);
+  OrderType get _seatType => widget.seatTypes.firstOrNull ?? OrderType.dineIn;
 
   /// No shift, no orders. Read per build, exactly as the counter reads it.
   bool get _noShift => widget.shiftOpen != null && !widget.shiftOpen!();
@@ -284,7 +327,6 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     // room out, and resuming it silently after a sale would put drag handles under
     // a waiter's fingers.
     _section = widget.section;
-    _seatAs = widget.seatAs;
     // Re-render every 30s so the "sitting for N minutes" ages on occupied tables
     // keep counting up while the floor is open instead of freezing.
     if (widget.occupiedInfo.isNotEmpty) {
@@ -330,11 +372,6 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
   }
 
   /// Set what the next table tap seats, and tell the shell for the same reason.
-  void _setSeatAs(OrderType type) {
-    setState(() => _seatAs = type);
-    widget.onSeatAsChanged?.call(type);
-  }
-
   Future<void> _addTable() async {
     final result = await _tableDialog(title: tr(context, 'Add table'));
     if (result == null) return;
@@ -346,6 +383,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       shape: result.shape,
       x: spot.x.toDouble(),
       y: spot.y.toDouble(),
+      displayLabel: result.displayLabel,
     );
     // Selected on arrival, so the arrows are already under the manager's thumb
     // and the new tile does not have to be hunted for.
@@ -416,6 +454,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final result =
         await _tableDialog(title: '${tr(context, 'Table')} ${t.name}', initial: t);
     if (result == null) return;
+    if ((result.delete || result.name != t.name) && _refuseIfOccupied(t)) return;
     if (result.delete) {
       if (!mounted) return;
       final confirmed = await _confirmDeleteTable(t.name);
@@ -431,9 +470,25 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         shape: result.shape,
         vertical: result.vertical,
         span: result.span,
+        displayLabel: result.displayLabel,
       ));
     }
     _reload();
+  }
+
+  /// A table with a bill on it keeps its name and its tile: the bill finds its
+  /// table by name, so renaming or removing it would take the bill off the floor.
+  bool _refuseIfOccupied(PosTable t) {
+    if (!widget.occupiedLabels.contains(t.name)) return false;
+    if (mounted) {
+      showToast(
+          context,
+          tr(context, 'Table {name} has an open bill. Settle or move it first.')
+              .replaceAll('{name}', t.name),
+          kind: ToastKind.error,
+          key: const Key('table-occupied-refused'));
+    }
+    return true;
   }
 
   /// A table removed here is gone with no trace, so a manager confirms before
@@ -498,6 +553,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   Future<_TableEdit?> _tableDialog({required String title, PosTable? initial}) {
     final nameCtrl = TextEditingController(text: initial?.name ?? '');
+    final labelCtrl = TextEditingController(text: initial?.displayLabel ?? '');
     final seatsCtrl = TextEditingController(text: '${initial?.seats ?? 4}');
     final isDivider = initial?.isDivider ?? false;
     var shape = initial?.shape ?? TableShape.square;
@@ -518,6 +574,17 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
               decoration: InputDecoration(
                   labelText: tr(ctx, 'Name / number'), border: const OutlineInputBorder()),
             ),
+            if (!isDivider) ...[
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('table-display-label'),
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                    labelText: tr(ctx, 'Display label'),
+                    hintText: tr(ctx, 'Optional, e.g. a staff name'),
+                    border: const OutlineInputBorder()),
+              ),
+            ],
             // A divider seats nobody and has a fixed shape, so neither field
             // applies to one; keep the dialog to just its name.
             if (!isDivider) ...[
@@ -616,6 +683,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                   ctx,
                   _TableEdit(
                     name: name,
+                    displayLabel: labelCtrl.text.trim(),
                     seats: isDivider ? 0 : (int.tryParse(seatsCtrl.text.trim()) ?? 4),
                     shape: isDivider ? TableShape.divider : shape,
                     vertical: vertical,
@@ -692,6 +760,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       shape: t.shape,
       x: spot.x.toDouble(),
       y: spot.y.toDouble(),
+      displayLabel: t.displayLabel,
     );
     final moved = widget.store.byId(added.id);
     if (moved != null && t.isDivider) {
@@ -747,6 +816,7 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
 
   /// Delete from the editor bar, through the same confirmation the dialog uses.
   Future<void> _deleteSelected(PosTable t) async {
+    if (_refuseIfOccupied(t)) return;
     final confirmed = await _confirmDeleteTable(t.name);
     if (confirmed != true || !mounted) return;
     widget.store.remove(t.id);
@@ -802,14 +872,21 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       appBar: AppBar(
         title: Text(tr(context, widget.pickMode ? 'Choose a table' : 'Tables')),
         actions: [
-          if (widget.pickMode)
+          if (widget.pickMode) ...[
             TextButton.icon(
               key: const Key('pick-other'),
               onPressed: _pickOther,
               icon: const Icon(Icons.edit_note),
               label: Text(tr(context, 'Other')),
-            )
-          else ...[
+            ),
+            TextButton.icon(
+              key: const Key('pick-no-table'),
+              onPressed: () => Navigator.pop(context, ''),
+              icon: const Icon(Icons.table_restaurant_outlined),
+              label: Text(tr(context, 'No table')),
+            ),
+          ]
+          else if (!widget.locked) ...[
             if (widget.onAssign != null)
               IconButton(
                 key: const Key('toggle-assign'),
@@ -836,12 +913,19 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                 widget.onEditPreorders != null ||
                 widget.reservations != null)
               _floorMenu(),
-            if (widget.onSignOut != null)
-              TextButton.icon(
+            if (widget.onEndShift != null)
+              IconButton(
+                key: const Key('end-shift'),
+                tooltip: tr(context, 'End shift'),
+                onPressed: widget.onEndShift,
+                icon: const Icon(Icons.lock_clock),
+              )
+            else if (widget.onSignOut != null)
+              IconButton(
                 key: const Key('sign-out'),
+                tooltip: tr(context, 'End shift'),
                 onPressed: widget.onSignOut,
                 icon: const Icon(Icons.logout),
-                label: Text(tr(context, 'End shift')),
               ),
           ],
         ],
@@ -858,10 +942,13 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         children: [
           // Above the day notice: with no drawer open nothing can be rung at all,
           // which outranks anything another till has to say about the day.
+          if (widget.locked) _lockedStrip(),
           if (_noShift) _noShiftStrip(),
           if (widget.dayNotice case final notice?) _dayNoticeStrip(notice),
           if (widget.parkedNotice case final parked?) _parkedStrip(parked),
           if (_assigning) _assigningStrip(),
+          if (!widget.pickMode && !_editing && !_noShift && !widget.locked)
+            _attendanceStrip(),
           // Only with a drawer open and a room to share out: before that the strip
           // above it is the one that matters, and an empty floor has its own prompt.
           if (!_assigning &&
@@ -874,7 +961,6 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             _assignHintStrip(),
           // The sections moved to the side, so the room above the plan is where the
           // waiter now says what they are seating.
-          if (widget.seatTypes.length > 1) _seatTypeStrip(),
           if (!widget.sectionsAtSide) _sectionStrip(),
           if (widget.pickMode) _legend(),
           const Divider(height: 1),
@@ -896,10 +982,24 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
                           child: _canvas(tables),
                         ),
                 ),
+                if (widget.bulletin case final b?
+                    when !widget.pickMode &&
+                        !_editing &&
+                        MediaQuery.of(context).size.width >= 900)
+                  FloorBulletinPanel(
+                    bulletin: b,
+                    hidden: widget.bulletinHidden,
+                    formatAmount: widget.formatAmount ?? (v) => v.toStringAsFixed(2),
+                  ),
               ],
             ),
           ),
-          if (!widget.pickMode && !_editing) _tablelessRow(),
+          if (!widget.pickMode && !_editing && !widget.locked) _tablelessRow(),
+          if (!widget.pickMode && !_editing && widget.actions.isNotEmpty)
+            FloorActionBar(
+              actions: widget.actions,
+              guard: (_) => !_orderingHeld(newWork: true),
+            ),
           if (!widget.pickMode && _editing) _editBar(),
         ],
       ),
@@ -1157,6 +1257,37 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         ),
       );
 
+  Widget _lockedStrip() => Material(
+        key: const Key('floor-locked'),
+        color: const Color(0xFF263238),
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(children: [
+              const Icon(Icons.lock, size: 18, color: Colors.white),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                    tr(context,
+                        'Locked. Press Begin to sign in, or place your finger on the reader.'),
+                    style: const TextStyle(color: Colors.white)),
+              ),
+              if (widget.onUnlock != null)
+                FilledButton.icon(
+                  key: const Key('floor-unlock'),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFE67E22),
+                      foregroundColor: Colors.white),
+                  onPressed: widget.onUnlock,
+                  icon: const Icon(Icons.lock_open, size: 18),
+                  label: Text(tr(context, 'Begin')),
+                ),
+            ]),
+          ),
+        ),
+      );
+
   String get _noShiftMessage => tr(context,
       'No shift is open. Open one before you start an order.');
 
@@ -1378,35 +1509,6 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
         label: FittedBox(fit: BoxFit.scaleDown, child: Text(label)),
       );
 
-  /// What the next free table opens. Only drawn when the shop seats more than one
-  /// kind of order: a to-go that sits down while it is packed occupies the floor
-  /// exactly like a dine-in, and the only thing that says which it is is this.
-  Widget _seatTypeStrip() => Material(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withValues(alpha: 0.4),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-          child: Row(children: [
-            Text(tr(context, 'Seat as'),
-                style: Theme.of(context).textTheme.labelMedium),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Wrap(spacing: 8, children: [
-                for (final t in widget.seatTypes)
-                  ChoiceChip(
-                    key: Key('seat-as-${t.name.toLowerCase()}'),
-                    label: Text(tr(context, t.label)),
-                    selected: _seatType == t,
-                    onSelected: (_) => _setSeatAs(t),
-                  ),
-              ]),
-            ),
-          ]),
-        ),
-      );
-
   /// Whether starting something new is held right now, telling the cashier why when
   /// it is. A tab already open is never held: it is settled through the tile, which
   /// does not come through here.
@@ -1433,6 +1535,11 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           if (!(await widget.authorize?.call() ?? true)) return;
           if (!mounted) return;
           setState(() => settings.tableSecurity = !settings.tableSecurity);
+        } else if (value == 'open-auth' && settings != null) {
+          if (!(await widget.authorize?.call() ?? true)) return;
+          if (!mounted) return;
+          setState(
+              () => settings.tableOpenRequireAuth = !settings.tableOpenRequireAuth);
         } else if (value == 'transfer') {
           widget.onTransferTables?.call();
         } else if (value == 'preorders') {
@@ -1461,6 +1568,13 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             checked: settings.tableSecurity,
             child: Text(tr(ctx, 'Ask before opening someone else\'s tab')),
           ),
+        if (settings != null)
+          CheckedPopupMenuItem(
+            key: const Key('floor-table-open-auth'),
+            value: 'open-auth',
+            checked: settings.tableOpenRequireAuth,
+            child: Text(tr(ctx, 'Require PIN or fingerprint to open a table')),
+          ),
         if (widget.onEditPreorders != null)
           PopupMenuItem(
             key: const Key('floor-preorders'),
@@ -1488,6 +1602,14 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             title: Text(tr(ctx, 'Rename section')),
             onTap: () => Navigator.pop(ctx, 'rename'),
           ),
+          if (widget.settings != null && widget.catalogue != null)
+            ListTile(
+              key: const Key('section-settings'),
+              leading: const Icon(Icons.tune),
+              title: Text(tr(ctx, 'Section settings')),
+              subtitle: Text(tr(ctx, 'Categories, payments, staff rules')),
+              onTap: () => Navigator.pop(ctx, 'settings'),
+            ),
           ListTile(
             key: const Key('section-delete'),
             leading: const Icon(Icons.delete_outline, color: Colors.red),
@@ -1520,12 +1642,28 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       if (!mounted) return;
       if (name != null && name.isNotEmpty && name != section) {
         widget.store.renameSection(section, name);
+        widget.settings?.renameSectionSettings(section, name);
         _setSection(name);
       }
+    } else if (action == 'settings') {
+      final settings = widget.settings;
+      final catalogue = widget.catalogue;
+      if (settings == null || catalogue == null) return;
+      await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => SectionSettingsSheet(
+          section: section,
+          settings: settings,
+          catalogue: catalogue,
+          staff: widget.staff,
+        ),
+      );
     } else if (action == 'delete') {
       final confirmed = await _confirmDeleteSection(section);
       if (confirmed != true || !mounted) return;
       widget.store.deleteSection(section);
+      widget.settings?.deleteSectionSettings(section);
       _reload();
     }
   }
@@ -1554,6 +1692,74 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     );
   }
 
+  /// Who is on the clock — these are the people offered when a table is opened.
+  /// Branded as Dishflow (not "Attendance") so the floor reads like the Dishflow till.
+  Widget _attendanceStrip() {
+    final duty = widget.onDuty;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Material(
+      key: const Key('floor-attendance'),
+      color: dark
+          ? AppColors.surfaceDark.withValues(alpha: 0.9)
+          : AppColors.primary.withValues(alpha: 0.06),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Row(
+          children: [
+            const DishflowBrandMark(height: 26),
+            const SizedBox(width: 12),
+            Expanded(
+              child: duty.isEmpty
+                  ? Text(
+                      tr(context, 'Nobody clocked in — roster will be offered'),
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    )
+                  : SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          for (final u in duty) ...[
+                            Container(
+                              margin: const EdgeInsets.only(right: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: dark
+                                    ? AppColors.backgroundLightDark
+                                    : Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                    color: AppColors.primary
+                                        .withValues(alpha: 0.45)),
+                              ),
+                              child: Text(
+                                u.name,
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: Theme.of(context).colorScheme.onSurface,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+            ),
+            if (widget.onOpenAttendance != null)
+              TextButton(
+                key: const Key('floor-attendance-open'),
+                onPressed: widget.onOpenAttendance,
+                child: Text(tr(context, 'Manage')),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// A Free/Occupied colour key, shown only while picking so a waiter reads the
   /// tile colours without guessing.
   Widget _legend() => Padding(
@@ -1562,6 +1768,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
           _legendDot(TablePalette.shared.free, tr(context, 'Free')),
           const SizedBox(width: 14),
           _legendDot(TablePalette.shared.occupied, tr(context, 'Occupied')),
+          const SizedBox(width: 14),
+          _legendDot(TablePalette.shared.sent, tr(context, 'Sent to kitchen')),
+          const SizedBox(width: 14),
+          _legendDot(TablePalette.shared.billed, tr(context, 'Bill printed')),
         ]),
       );
 
@@ -1609,10 +1819,10 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
       // the top does not change how the floor is driven.
       key: Key('section-${s.toLowerCase()}'),
       borderRadius: BorderRadius.circular(12),
-      onTap: () => _setSection(s),
+      onTap: () => widget.locked ? widget.onUnlock?.call() : _setSection(s),
       // In edit mode a long-press renames or deletes the whole section, exactly as
       // it does on the top strip.
-      onLongPress: _editing ? () => _sectionMenu(s) : null,
+      onLongPress: () => _sectionMenu(s),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
         decoration: BoxDecoration(
@@ -1650,12 +1860,13 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             for (final s in _sections) ...[
               GestureDetector(
                 // In edit mode a long-press renames or deletes the whole section.
-                onLongPress: _editing ? () => _sectionMenu(s) : null,
+                onLongPress: () => _sectionMenu(s),
                 child: ChoiceChip(
                   key: Key('section-${s.toLowerCase()}'),
                   label: Text(s),
                   selected: _activeSection == s,
-                  onSelected: (_) => _setSection(s),
+                  onSelected: (_) =>
+                      widget.locked ? widget.onUnlock?.call() : _setSection(s),
                 ),
               ),
               const SizedBox(width: 6),
@@ -1769,8 +1980,8 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
     final tile = _TableTile(
       table: t,
       occupied: occupied,
-      // The waiter's name on the tile, so the room reads as shared out at a glance
-      // rather than only when a tap is refused.
+      life: info?.life,
+      tabCount: info?.tabCount ?? 0,
       assignee: owner == null ? null : (_staffNames[owner] ?? owner),
       mine: owner != null && owner == widget.myCashierId,
       locked: !isDivider && _lockedFor(t),
@@ -1932,6 +2143,8 @@ class _TableTile extends StatelessWidget {
   const _TableTile({
     required this.table,
     required this.occupied,
+    this.life,
+    this.tabCount = 0,
     this.total,
     this.ageMinutes,
     this.booking,
@@ -1941,6 +2154,8 @@ class _TableTile extends StatelessWidget {
   });
   final PosTable table;
   final bool occupied;
+  final TableFloorLife? life;
+  final int tabCount;
   final String? total;
   final int? ageMinutes;
 
@@ -1967,22 +2182,21 @@ class _TableTile extends StatelessWidget {
     // The shop's own two colours, which default to the green/red every floor has
     // been drawn in until a manager says otherwise.
     final palette = TablePalette.shared;
-    final color = occupied ? palette.occupied : palette.free;
+    final color = palette.colorFor(life, occupied: occupied);
     final wide = table.shape == TableShape.rectangle;
-    final round = table.shape == TableShape.round;
     final tile = Container(
       // A rectangle is short rather than extra-wide so it still fits one grid slot
       // and cannot overlap the table snapped into the next cell.
-      width: 120,
-      height: wide ? 72 : 120,
+      width: 128,
+      height: wide ? 96 : 132,
       margin: const EdgeInsets.all(6),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
+        color: color.withValues(alpha: 0.10),
         // A waiter's own table is ringed in the app's colour, so their section is
         // findable across a room of free/occupied greens and reds.
         border: Border.all(
             color: mine ? AppColors.primary : color, width: mine ? 3 : 2),
-        borderRadius: round ? BorderRadius.circular(999) : BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
       ),
       // A short rectangle tile cannot fit the full name+seats+status stack at full
       // size, so scale the content down to fit rather than overflow the fixed
@@ -1993,25 +2207,37 @@ class _TableTile extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(table.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-              const SizedBox(height: 2),
-              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                const Icon(Icons.event_seat, size: 13),
-                const SizedBox(width: 2),
-                Text('${table.seats}', style: const TextStyle(fontSize: 12)),
-              ]),
+              _TableVisual(
+                seats: table.seats,
+                color: mine ? AppColors.primary : color,
+                shape: table.shape,
+              ),
+              const SizedBox(height: 4),
+              Text(table.shownName,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
+                      color: AppColors.brandNavy)),
+              if (occupied && tabCount > 1)
+                Text('$tabCount ${tr(context, 'bills')}',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: color)),
               if (occupied && total != null)
                 Text(total!,
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: color))
+              else
+                Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
+                    style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
               if (occupied && ageMinutes != null)
                 Text('${ageMinutes}m',
                     style: TextStyle(
                         fontSize: 11,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant))
-              else
-                Text(occupied ? tr(context, 'Occupied') : tr(context, 'Free'),
-                    style: TextStyle(fontSize: 11, color: color)),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
               if (assignee case final who?)
                 Padding(
                   key: Key('table-waiter-${table.id}'),
@@ -2088,9 +2314,109 @@ class _TableTile extends StatelessWidget {
   }
 }
 
+/// Dishflow-style top-down table with chairs around it.
+class _TableVisual extends StatelessWidget {
+  const _TableVisual({
+    required this.seats,
+    required this.color,
+    required this.shape,
+  });
+
+  final int seats;
+  final Color color;
+  final TableShape shape;
+
+  @override
+  Widget build(BuildContext context) {
+    final chairColor = color.withValues(alpha: 0.65);
+    final topChairs = (seats / 2).ceil().clamp(1, 4);
+    final bottomChairs = (seats / 2).floor().clamp(1, 4);
+
+    final BorderRadius radius;
+    final double w;
+    final double h;
+    switch (shape) {
+      case TableShape.round:
+        radius = BorderRadius.circular(24);
+        w = 44;
+        h = 44;
+      case TableShape.rectangle:
+        radius = BorderRadius.circular(8);
+        w = 56;
+        h = 28;
+      case TableShape.square:
+      case TableShape.divider:
+        radius = BorderRadius.circular(8);
+        w = 44;
+        h = 44;
+    }
+
+    return SizedBox(
+      width: 78,
+      height: 64,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(
+                topChairs, (_) => _Chair(color: chairColor)),
+          ),
+          const SizedBox(height: 3),
+          Container(
+            width: w,
+            height: h,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.18),
+              borderRadius: radius,
+              border: Border.all(color: color, width: 1.5),
+            ),
+          ),
+          const SizedBox(height: 3),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(
+                bottomChairs, (_) => _Chair(color: chairColor, flip: true)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Chair extends StatelessWidget {
+  const _Chair({required this.color, this.flip = false});
+  final Color color;
+  final bool flip;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Transform.rotate(
+        angle: flip ? 3.14159 : 0,
+        child: Container(
+          width: 11,
+          height: 7,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(4),
+              topRight: Radius.circular(4),
+              bottomLeft: Radius.circular(2),
+              bottomRight: Radius.circular(2),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _TableEdit {
   const _TableEdit({
     required this.name,
+    this.displayLabel = '',
     required this.seats,
     this.shape = TableShape.square,
     this.vertical = false,
@@ -2098,12 +2424,14 @@ class _TableEdit {
   }) : delete = false;
   const _TableEdit.remove()
       : name = '',
+        displayLabel = '',
         seats = 0,
         shape = TableShape.square,
         vertical = false,
         span = 140,
         delete = true;
   final String name;
+  final String displayLabel;
   final int seats;
   final TableShape shape;
   // Divider-only geometry; ignored for a seatable table.

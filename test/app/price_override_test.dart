@@ -54,6 +54,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     CatalogueStore(db).replaceAll(
       categories: const [Category(id: 1, name: 'Pizza')],
@@ -167,7 +168,10 @@ void main() {
     await t.pumpAndSettle();
 
     expect(find.byKey(const Key('manager-pin')), findsOneWidget);
-    await t.enterText(find.byKey(const Key('manager-pin')), '9999');
+    for (final d in '9999'.split('')) {
+      await t.tap(find.byKey(Key('key-$d')).last);
+      await t.pump();
+    }
     await t.tap(find.byKey(const Key('manager-ok')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('line-price-value')), findsOneWidget);

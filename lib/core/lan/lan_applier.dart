@@ -1,7 +1,11 @@
 import '../../domain/order.dart';
+import '../auth/fingerprint_store.dart';
+import '../auth/user_store.dart';
+import '../db/attendance_store.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
+import '../db/shift_store.dart';
 import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
 import 'lan_cart_board.dart';
@@ -36,12 +40,24 @@ class LanApplier {
     required ReservationStore reservations,
     required TableAssignmentStore assignments,
     required LanEventLog log,
+    AttendanceStore? attendance,
+    FingerprintStore? fingerprints,
+    ShiftStore? shifts,
+    UserStore? users,
+    void Function()? onShopBundleApplied,
+    void Function()? onStressCleanup,
     LanLog? onRefused,
   })  : _orders = orders,
+        _onStressCleanup = onStressCleanup,
         _tables = tables,
         _settings = settings,
         _reservations = reservations,
         _assignments = assignments,
+        _attendance = attendance,
+        _fingerprints = fingerprints,
+        _shifts = shifts,
+        _users = users,
+        _onShopBundleApplied = onShopBundleApplied,
         _log = log,
         _onRefused = onRefused;
 
@@ -53,6 +69,14 @@ class LanApplier {
   final SettingsStore _settings;
   final ReservationStore _reservations;
   final TableAssignmentStore _assignments;
+  final AttendanceStore? _attendance;
+  final FingerprintStore? _fingerprints;
+  final ShiftStore? _shifts;
+  final UserStore? _users;
+  final void Function()? _onShopBundleApplied;
+
+  /// Drops this till's Stress Lab rows when another till cleared its own.
+  final void Function()? _onStressCleanup;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -136,7 +160,7 @@ class LanApplier {
     // a till only ever serves its own log, so this should not arrive at all.
     if (event.originDeviceId == deviceId) return _Landing.refused;
     try {
-      if (!_wins(event)) return _Landing.refused;
+      if (!_wins(event) && !_movesForward(event)) return _Landing.refused;
       if ((event.kind == LanEventKind.kitchenStatus ||
               event.kind == LanEventKind.orderClaim) &&
           _orders.byUuid(event.recordUuid) == null) {
@@ -162,8 +186,14 @@ class LanApplier {
         LanEventKind.reservationUpsert => _applyReservation(event),
         LanEventKind.tableAssignment => _applyAssignment(event),
         LanEventKind.tablePreorders => _applyPreorders(event),
+        LanEventKind.sectionConfig => _applySectionConfig(event),
+        LanEventKind.shopBundle => _applyShopBundle(event),
         LanEventKind.shiftLifecycle => _applyShiftNotice(event),
+        LanEventKind.attendanceUpsert => _applyAttendance(event),
+        LanEventKind.fingerprintUpsert => _applyFingerprint(event),
+        LanEventKind.userUpsert => _applyUser(event),
         LanEventKind.cartDisplay => _applyCart(event),
+        LanEventKind.stressCleanup => _applyStressCleanup(),
       };
       if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
@@ -191,6 +221,19 @@ class LanApplier {
     return event.originDeviceId.compareTo(clock.origin) > 0;
   }
 
+  /// An order that has moved further along than the copy here lands whatever the
+  /// sender's clock says. A till whose clock runs slow still took the money; a
+  /// skewed clock must not leave a paid bill looking open on the rest of the shop.
+  bool _movesForward(LanEvent event) {
+    if (event.kind != LanEventKind.orderUpsert) return false;
+    if (event.payload['deleted'] == true) return false;
+    final state = event.payload['state'];
+    final local = _orders.byUuid(event.recordUuid);
+    if (state is! String || local == null) return false;
+    final incoming = OrderState.values.asNameMap()[state];
+    return incoming != null && _rank(incoming) > _rank(local.state);
+  }
+
   bool _applyOrder(LanEvent event) {
     if (event.payload['deleted'] == true) {
       // A tab the owning till discarded. delete() only removes an unpaid order, so
@@ -210,6 +253,14 @@ class LanApplier {
     return true;
   }
 
+  /// Only rows carrying the lab's own note go; see `purgeStressOrders`.
+  bool _applyStressCleanup() {
+    final purge = _onStressCleanup;
+    if (purge == null) return false;
+    purge();
+    return true;
+  }
+
   bool _applyKitchenStatus(LanEvent event) {
     final status = KitchenStatus.values.byName('${event.payload['status']}');
     // Belt and braces: [_land] already deferred this case, holding the cursor so the
@@ -225,6 +276,13 @@ class LanApplier {
   bool _applyClaim(LanEvent event) {
     final to = event.payload['to'];
     if (to is! String) throw FormatException('claim for ${event.recordUuid}');
+    if (event.payload['seized'] == true &&
+        _orders.byUuid(event.recordUuid)?.deviceId == deviceId) {
+      // This till was the owner and never let go: it was silent, and a manager
+      // took the bill elsewhere. Left in the trail so the overlap is explainable.
+      _onRefused?.call('lan.order.seized',
+          '${event.recordUuid} taken by ${event.originDeviceId} while this till was silent');
+    }
     return _orders.applyHandOver(event.recordUuid, to);
   }
 
@@ -242,11 +300,47 @@ class LanApplier {
     return true;
   }
 
-  /// A till telling the shop its day is over. Written to the board the floor reads,
-  /// never acted on here: what a device does about it is a policy the device owns,
-  /// and applying an event must not be able to stop anybody selling.
+  /// A till telling the shop the shift opened or the day closed.
+  ///
+  /// Open: quiet-open the local drawer when none is open (cash float stays local).
+  /// Close: remember for warn/block UI and quiet-close any open drawer here.
   bool _applyShiftNotice(LanEvent event) {
-    LanShiftBoard(_settings).remember(LanShiftNotice.fromMap(event.payload));
+    final notice = LanShiftNotice.fromMap(event.payload);
+    if (notice.action == LanShiftAction.open) {
+      LanShiftBoard(_settings).forgetClosed(notice.businessDate);
+      _shifts?.openQuietly(cashierId: notice.cashierId ?? 'system');
+      return true;
+    }
+    LanShiftBoard(_settings).remember(notice);
+    _shifts?.closeOpenQuietly();
+    return true;
+  }
+
+  bool _applyShopBundle(LanEvent event) {
+    _settings.applyShopBundle(event.payload);
+    _onShopBundleApplied?.call();
+    return true;
+  }
+
+  bool _applyAttendance(LanEvent event) {
+    final store = _attendance;
+    if (store == null) return false;
+    store.applyRemote(event.payload);
+    return true;
+  }
+
+  bool _applyUser(LanEvent event) {
+    final store = _users;
+    if (store == null) return false;
+    store.applyRemote(event.payload);
+    _settings.bumpSharedRevision();
+    return true;
+  }
+
+  bool _applyFingerprint(LanEvent event) {
+    final store = _fingerprints;
+    if (store == null) return false;
+    store.applyRemote(event.payload);
     return true;
   }
 
@@ -285,12 +379,29 @@ class LanApplier {
     return true;
   }
 
+  bool _applySectionConfig(LanEvent event) {
+    _settings.applySectionConfig(event.payload);
+    return true;
+  }
+
   bool _applyTable(LanEvent event) {
     if (event.payload['deleted'] == true) {
       _tables.remove(event.recordUuid, announce: false);
       return true;
     }
-    _tables.upsert(PosTable.fromMap(event.payload), announce: false);
+    var incoming = PosTable.fromMap(event.payload);
+    // Two tills each added a table under one name before they synced. The smaller
+    // id keeps it and the other is suffixed, by the same rule on every till.
+    final clash = _tables.byName(incoming.name);
+    if (clash != null && clash.id != incoming.id) {
+      if (incoming.id.compareTo(clash.id) > 0) {
+        incoming = incoming.copyWith(name: TableStore.conflictName(incoming));
+      } else {
+        _tables.upsert(clash.copyWith(name: TableStore.conflictName(clash)),
+            announce: false);
+      }
+    }
+    _tables.upsert(incoming, announce: false);
     return true;
   }
 

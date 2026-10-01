@@ -34,6 +34,8 @@ void main() {
     final closed = shifts.closeShift(countedCash: 130);
     expect(closed.isOpen, isFalse);
     expect(shifts.currentOpenShift(), isNull);
+    expect(shifts.recentClosed(), hasLength(1));
+    expect(shifts.recentClosed().first.id, closed.id);
   });
 
   test('a paid-out carries an expense category that round-trips through storage', () {

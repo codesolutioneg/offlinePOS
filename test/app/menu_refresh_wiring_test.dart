@@ -58,6 +58,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     pulls = 0;
     price = 10;
@@ -208,6 +209,8 @@ void main() {
     // till is minutes old, so the ordinary half-hour gate would hold it back.
     price = 14;
     await openSettingsHub(t);
+    await t.scrollUntilVisible(find.byKey(const Key('set-refresh-menu')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-refresh-menu')));
     await t.pumpAndSettle();
 
@@ -228,6 +231,8 @@ void main() {
 
     serverUp = false;
     await openSettingsHub(t);
+    await t.scrollUntilVisible(find.byKey(const Key('set-refresh-menu')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-refresh-menu')));
     await t.pumpAndSettle();
 
@@ -247,6 +252,8 @@ void main() {
     await signIn(t);
     await t.pumpAndSettle();
     await openSettingsHub(t);
+    await t.scrollUntilVisible(find.byKey(const Key('set-refresh-menu')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-refresh-menu')));
     await t.pumpAndSettle();
 

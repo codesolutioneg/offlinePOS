@@ -52,18 +52,13 @@ void main() {
         reason: 'a single-shop till has no branch to filter by and never had one');
   });
 
-  test('a till in a branch asks for that branch and the unrestricted products',
+  test('a till in a branch asks only for products listed on that branch',
       () async {
     await puller(branch: 3).pull();
     final domain = domains.single;
     expect(mentionsBranch(domain), isTrue);
-    // Empty means every branch, so those have to come too or installing branches
-    // would empty the menu of every product nobody has ticked yet.
-    expect(domain, contains('|'));
-    expect(
-        domain.any((c) =>
-            c is List && '${c.first}'.contains('branch_ids') && c.last == false),
-        isTrue);
+    expect(domain, isNot(contains('|')),
+        reason: 'empty branch_ids must not mean every branch any more');
     expect(
         domain.any((c) =>
             c is List &&

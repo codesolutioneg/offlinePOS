@@ -39,8 +39,8 @@ void main() {
 
   void stock(List<Product> products) => cat.replaceAll(
         categories: const [
-          Category(id: 1, name: 'Pizza'),
-          Category(id: 2, name: 'Desserts'),
+          Category(id: 1, name: 'Pizza', sequence: 1),
+          Category(id: 2, name: 'Desserts', sequence: 2),
         ],
         products: products,
         groups: const [],
@@ -59,10 +59,26 @@ void main() {
       (t) async {
     stock(const [Product(id: 10, name: 'Margherita', price: 250, categoryId: 1)]);
     await t.pumpWidget(app());
+    await t.pumpAndSettle();
 
+    expect(find.text('All'), findsNothing);
     expect(find.byKey(const Key('cat-chip-1')), findsOneWidget);
     expect(find.byKey(const Key('cat-chip-2')), findsNothing,
         reason: 'tapping it could only ever show an empty grid');
+  });
+
+  testWidgets('opens on the first stocked category, not an All tab', (t) async {
+    stock(const [
+      Product(id: 10, name: 'Margherita', price: 250, categoryId: 1),
+      Product(id: 11, name: 'Basbousa', price: 40, categoryId: 2),
+    ]);
+    await t.pumpWidget(app());
+    await t.pumpAndSettle();
+
+    expect(find.text('All'), findsNothing);
+    // First rail tab is selected — only that category's dishes are on the grid.
+    expect(find.byKey(const Key('product-10')), findsOneWidget);
+    expect(find.byKey(const Key('product-11')), findsNothing);
   });
 
   testWidgets('the category comes back with the first dish filed under it',

@@ -39,6 +39,21 @@ void main() {
         ),
       );
 
+  /// A report asks for its own period once its tile is tapped.
+  Future<void> openReport(WidgetTester t, String key,
+      {String period = 'today'}) async {
+    await t.tap(find.byKey(Key(key)));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(Key('period-$period')));
+    await t.pumpAndSettle();
+  }
+
+  /// The order count on the sales report's overview.
+  Finder ordersRow(String count) => find.descendant(
+        of: find.ancestor(of: find.text('Orders'), matching: find.byType(Row)),
+        matching: find.text(count),
+      );
+
   /// Every existing tile key, title and destination must survive the switch
   /// from flat ListTiles to coloured cards.
   const tiles = <String, String>{
@@ -51,7 +66,7 @@ void main() {
     'rep-cashier': 'Cashier performance',
     'rep-activity': 'Cancelled, voided & refunded',
     'rep-time': 'Sales by hour',
-    'rep-comparison': 'Period comparison',
+    'rep-period-compare': 'Period comparison',
     'rep-modifiers': 'Modifiers',
     'rep-refunds': 'Refunds & voids',
   };
@@ -65,8 +80,7 @@ void main() {
     }
 
     for (final entry in tiles.entries) {
-      await t.tap(find.byKey(Key(entry.key)));
-      await t.pumpAndSettle();
+      await openReport(t, entry.key);
       expect(find.text(entry.value), findsWidgets, reason: 'tile ${entry.key} did not open');
       await t.pageBack();
       await t.pumpAndSettle();
@@ -117,18 +131,16 @@ void main() {
     await t.pumpWidget(hubWith([
       order('sara', OrderType.dineIn),
       order('sara', OrderType.takeaway),
-      order('omar', OrderType.delivery),
+      order('omar', OrderType.storeDelivery),
     ]));
-
-    // All three of today's orders before any filter.
-    expect(find.text('3 order(s) in range'), findsOneWidget);
 
     await t.tap(find.byKey(const Key('report-cashier-filter')));
     await t.pumpAndSettle();
     await t.tap(find.text('sara').last);
     await t.pumpAndSettle();
 
-    expect(find.text('2 order(s) in range'), findsOneWidget);
+    await openReport(t, 'rep-summary');
+    expect(ordersRow('2'), findsOneWidget);
   });
 
   testWidgets('the order-type filter narrows the windowed orders', (t) async {
@@ -136,15 +148,16 @@ void main() {
     await t.pumpWidget(hubWith([
       order('sara', OrderType.dineIn),
       order('sara', OrderType.takeaway),
-      order('omar', OrderType.delivery),
+      order('omar', OrderType.storeDelivery),
     ]));
 
     await t.tap(find.byKey(const Key('report-type-filter')));
     await t.pumpAndSettle();
-    await t.tap(find.text('Delivery').last);
+    await t.tap(find.text('Store delivery').last);
     await t.pumpAndSettle();
 
-    expect(find.text('1 order(s) in range'), findsOneWidget);
+    await openReport(t, 'rep-summary');
+    expect(ordersRow('1'), findsOneWidget);
   });
 
   Order sale(double amount, {int daysAgo = 0}) {
@@ -191,8 +204,7 @@ void main() {
       ),
     ));
 
-    await t.tap(find.byKey(const Key('rep-expenses')));
-    await t.pumpAndSettle();
+    await openReport(t, 'rep-expenses');
 
     expect(find.text('Taxi'), findsOneWidget);
     expect(find.text('25.00'), findsWidgets);
@@ -211,8 +223,7 @@ void main() {
       ),
     ));
 
-    await t.tap(find.byKey(const Key('rep-expenses')));
-    await t.pumpAndSettle();
+    await openReport(t, 'rep-expenses');
     expect(find.byKey(const Key('expenses-empty-state')), findsOneWidget);
   });
 
@@ -220,9 +231,8 @@ void main() {
     tallWindow(t);
     await t.pumpWidget(hubWith([sale(100), sale(40, daysAgo: 1)]));
 
-    // The default range is today, so the period before it is yesterday.
-    await t.tap(find.byKey(const Key('rep-comparison')));
-    await t.pumpAndSettle();
+    // Today was picked, so the period before it is yesterday.
+    await openReport(t, 'rep-period-compare');
 
     expect(find.text('Today  vs  Previous period'), findsOneWidget);
     expect(find.text('100.00'), findsWidgets);

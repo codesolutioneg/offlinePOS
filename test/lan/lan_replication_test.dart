@@ -71,6 +71,50 @@ void main() {
         reason: 'a discarded tab must not sit on another floor plan forever');
   });
 
+  test('an empty seated claim occupies the other till before any item is rung',
+      () async {
+    final a = shop.add('till-a');
+    final b = shop.add('till-b');
+    shop.introduceAll();
+
+    final claim = Order(
+      deviceId: 'till-a',
+      cashierId: 'ana',
+      tableLabel: '5',
+    )..state = OrderState.held;
+    a.orders.save(claim);
+    await shop.settle();
+
+    expect(b.orders.occupyingAnywhere().single.tableLabel, '5');
+    expect(b.orders.occupyingAnywhere().single.lines, isEmpty);
+
+    a.orders.delete(claim.uuid);
+    await shop.settle();
+    expect(b.orders.occupyingAnywhere(), isEmpty);
+  });
+
+  test('an empty claim made while the peer is unreachable lands once the cable is back',
+      () async {
+    final a = shop.add('till-a');
+    final b = shop.add('till-b');
+    shop.introduceAll();
+
+    shop.unreachable.add('till-b');
+    final claim = Order(
+      deviceId: 'till-a',
+      cashierId: 'ana',
+      tableLabel: '8',
+    )..state = OrderState.held;
+    a.orders.save(claim);
+    await shop.settle();
+    expect(b.orders.occupyingAnywhere(), isEmpty);
+
+    shop.unreachable.remove('till-b');
+    await shop.settle();
+    expect(b.orders.occupyingAnywhere().single.uuid, claim.uuid);
+    expect(b.orders.occupyingAnywhere().single.tableLabel, '8');
+  });
+
   test('a partition heals by uuid, with no duplicate orders', () async {
     final a = shop.add('till-a');
     final b = shop.add('till-b');

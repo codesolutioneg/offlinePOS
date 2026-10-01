@@ -106,3 +106,44 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# ZK fingerprint agent + native SDK (auto-started by the till on Windows).
+# Layout next to the exe: tools/start_zk_agent.bat, tools/zk_sdk/*.dll, …
+set(ZK_TOOLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../tools")
+if(EXISTS "${ZK_TOOLS_DIR}/start_zk_agent.bat")
+  install(FILES
+    "${ZK_TOOLS_DIR}/start_zk_agent.bat"
+    "${ZK_TOOLS_DIR}/zk_fingerprint_agent.py"
+    "${ZK_TOOLS_DIR}/zk_setup_check.py"
+    "${ZK_TOOLS_DIR}/zk_ensure_python.py"
+    "${ZK_TOOLS_DIR}/requirements-zk.txt"
+    "${ZK_TOOLS_DIR}/install_zk_autostart.bat"
+    "${ZK_TOOLS_DIR}/install_zk_autostart.ps1"
+    "${ZK_TOOLS_DIR}/uninstall_zk_autostart.bat"
+    "${ZK_TOOLS_DIR}/install_vcredist.bat"
+    "${ZK_TOOLS_DIR}/RunOfflinePOS.bat"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/tools"
+    COMPONENT Runtime)
+  # Launcher next to the exe (easier for cashiers on a USB stick).
+  if(EXISTS "${ZK_TOOLS_DIR}/RunOfflinePOS.bat")
+    install(FILES "${ZK_TOOLS_DIR}/RunOfflinePOS.bat"
+      DESTINATION "${CMAKE_INSTALL_PREFIX}"
+      COMPONENT Runtime)
+  endif()
+  if(EXISTS "${ZK_TOOLS_DIR}/vcredist/VC_redist.x64.exe")
+    install(FILES "${ZK_TOOLS_DIR}/vcredist/VC_redist.x64.exe"
+      DESTINATION "${CMAKE_INSTALL_PREFIX}/tools/vcredist"
+      COMPONENT Runtime)
+  endif()
+  if(EXISTS "${ZK_TOOLS_DIR}/zk_sdk")
+    install(DIRECTORY "${ZK_TOOLS_DIR}/zk_sdk/"
+      DESTINATION "${CMAKE_INSTALL_PREFIX}/tools/zk_sdk"
+      COMPONENT Runtime
+      PATTERN "__pycache__" EXCLUDE)
+  endif()
+  if(EXISTS "${ZK_TOOLS_DIR}/zk_driver")
+    install(DIRECTORY "${ZK_TOOLS_DIR}/zk_driver/"
+      DESTINATION "${CMAKE_INSTALL_PREFIX}/tools/zk_driver"
+      COMPONENT Runtime)
+  endif()
+endif()

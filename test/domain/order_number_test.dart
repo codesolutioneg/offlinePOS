@@ -24,6 +24,19 @@ void main() {
       expect(o.displayNo, hasLength(6));
       expect(o.displayNo, o.uuid.replaceAll('-', '').substring(0, 6).toUpperCase());
     });
+
+    test('legacy DDMM-SEQ-TAG keeps day+seq so two days do not share #6', () {
+      final a = Order(deviceId: 'd', cashierId: 'c', orderNo: '2009-006-D50');
+      final b = Order(deviceId: 'd', cashierId: 'c', orderNo: '1909-006-D50');
+      expect(a.displayNo, '20096');
+      expect(b.displayNo, '19096');
+      expect(a.displayNo, isNot(b.displayNo));
+    });
+
+    test('displayNo is unchanged for plain sequential numbers', () {
+      final o = Order(deviceId: 'd', cashierId: 'c', orderNo: '42');
+      expect(o.displayNo, '42');
+    });
   });
 
   group('the till counter', () {
@@ -37,32 +50,19 @@ void main() {
     });
     tearDown(() => db.close());
 
-    test('counts up through the day', () {
-      final at = DateTime(2026, 8, 15, 12);
-      expect(settings.nextOrderNumber('till-a1b', now: at), '1508-001-A1B');
-      expect(settings.nextOrderNumber('till-a1b', now: at), '1508-002-A1B');
-      expect(settings.nextOrderNumber('till-a1b', now: at), '1508-003-A1B');
-    });
-
-    test('a service running past midnight keeps counting on the same day', () {
-      expect(settings.nextOrderNumber('till-a1b', now: DateTime(2026, 8, 15, 23, 30)),
-          '1508-001-A1B');
-      // 01:00 is still the evening that produced it, before the 04:00 cutover.
-      expect(settings.nextOrderNumber('till-a1b', now: DateTime(2026, 8, 16, 1)),
-          '1508-002-A1B');
-    });
-
-    test('the next trading day starts at one again', () {
-      settings.nextOrderNumber('till-a1b', now: DateTime(2026, 8, 15, 23, 30));
+    test('counts up and never restarts at a new trading day', () {
+      expect(settings.nextOrderNumber('till-a1b', now: DateTime(2026, 8, 15, 12)),
+          '1');
+      expect(settings.nextOrderNumber('till-a1b', now: DateTime(2026, 8, 15, 18)),
+          '2');
+      // Next calendar / trading day keeps climbing — no second "#1".
       expect(settings.nextOrderNumber('till-a1b', now: DateTime(2026, 8, 16, 9)),
-          '1608-001-A1B');
+          '3');
     });
 
-    test('two tills on one floor cannot hand out the same number', () {
-      final at = DateTime(2026, 8, 15, 12);
-      expect(settings.nextOrderNumber('a1b2c3', now: at), endsWith('-2C3'));
-      expect(SettingsStore.tillTagFor('a1b2c3'),
-          isNot(SettingsStore.tillTagFor('a1b2c4')));
+    test('atLeast climbs past numbers already issued elsewhere', () {
+      expect(settings.nextOrderNumber('till-a1b', atLeast: 100), '101');
+      expect(settings.nextOrderNumber('till-a1b'), '102');
     });
 
     test('a device id with nothing to take a tag from still gets one', () {

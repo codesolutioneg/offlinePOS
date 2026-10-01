@@ -30,6 +30,7 @@ import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/report_period.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -56,6 +57,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234');
@@ -147,12 +149,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-report')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('range-all')));
-    await t.pumpAndSettle();
-    await t.scrollUntilVisible(find.byKey(Key(tile)), 200,
-        scrollable: find.byType(Scrollable).last);
-    await t.tap(find.byKey(Key(tile)));
-    await t.pumpAndSettle();
+    await tapReport(t, tile);
   }
 
   void tallWindow(WidgetTester t) {
@@ -171,7 +168,7 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
-    await openReport(t, 'rep-cost');
+    await openReport(t, 'rep-cost-sales');
 
     expect(find.byType(CostSalesReportScreen), findsOneWidget);
     expect(find.byKey(const Key('cost-empty-state')), findsNothing,
@@ -192,7 +189,7 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
-    await openReport(t, 'rep-menu');
+    await openReport(t, 'rep-menu-eng');
 
     expect(find.byType(MenuEngineeringReportScreen), findsOneWidget);
     expect(find.byKey(const Key('menu-empty-state')), findsNothing);
@@ -214,7 +211,7 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
-    await openReport(t, 'rep-cost');
+    await openReport(t, 'rep-cost-sales');
 
     expect(find.byKey(const Key('cost-empty-state')), findsOneWidget);
   });

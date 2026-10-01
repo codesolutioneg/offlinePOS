@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 25;
+  static const int version = 28;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -613,6 +613,38 @@ class Schema {
     // the catalogue brings the value down.
     [
       'ALTER TABLE modifiers ADD COLUMN max_quantity INTEGER NOT NULL DEFAULT 0',
+    ],
+    // v25 -> v26: a staff-section display name that is not the recall key.
+    //
+    // Orders recall by table name, and names stay unique across the floor. A staff
+    // slot still needs to read as the employee (TOGO / officer) on the tile and the
+    // slip without renaming the bill's key, so the label is its own column.
+    [
+      'ALTER TABLE pos_tables ADD COLUMN display_label TEXT',
+    ],
+    // v26 -> v27: ZKTeco fingerprint templates per staff member (LAN-synced).
+    [
+      '''
+      CREATE TABLE fingerprint_templates (
+        user_id   TEXT NOT NULL,
+        slot      INTEGER NOT NULL,
+        template  TEXT NOT NULL,
+        PRIMARY KEY (user_id, slot)
+      )
+      ''',
+      'CREATE INDEX idx_fp_user ON fingerprint_templates(user_id)',
+    ],
+    // v27 -> v28: one table per name, enforced.
+    //
+    // Orders recall by table name, and two tills could each add a "10" before
+    // they synced. The pair already on a till is split the way the LAN splits a new
+    // one (TableStore.conflictName): the smaller id keeps the name, the other takes
+    // a suffix from its own id, so every till lands on the same names unprompted.
+    [
+      "UPDATE pos_tables SET name = name || '-' || substr(id, 1, 4) "
+          'WHERE EXISTS (SELECT 1 FROM pos_tables o '
+          'WHERE o.name = pos_tables.name AND o.id < pos_tables.id)',
+      'CREATE UNIQUE INDEX idx_pos_tables_name ON pos_tables(name)',
     ],
   ];
 }

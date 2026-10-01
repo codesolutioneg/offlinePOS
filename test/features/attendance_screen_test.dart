@@ -14,21 +14,31 @@ void main() {
   late Db db;
   late UserStore users;
   late AttendanceStore attendance;
+  late AuthService auth;
 
   setUpAll(useSystemSqlite);
   setUp(() async {
     db = Db.open(':memory:');
     users = UserStore(db);
     attendance = AttendanceStore(db);
-    final auth =
-        AuthService(users: users, hasher: FakePinHasher(), audit: AuditLog(db));
+    auth = AuthService(users: users, hasher: FakePinHasher(), audit: AuditLog(db));
     await auth.enrol(id: 'sara', name: 'Sara', pin: '1234');
   });
   tearDown(() => db.close());
 
   Widget app() => MaterialApp(
-        home: AttendanceScreen(users: users, attendance: attendance),
+        home: AttendanceScreen(users: users, attendance: attendance, auth: auth),
       );
+
+  Future<void> enterPin(WidgetTester t, String pin) async {
+    expect(find.byKey(const Key('attend-pin')), findsOneWidget);
+    for (final d in pin.split('')) {
+      await t.tap(find.byKey(Key('key-$d')).last);
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('attend-pin-ok')));
+    await t.pumpAndSettle();
+  }
 
   testWidgets('lists staff with a clock-in control when off the clock', (t) async {
     await t.pumpWidget(app());
@@ -36,19 +46,30 @@ void main() {
     expect(find.byKey(const Key('clock-in-sara')), findsOneWidget);
   });
 
-  testWidgets('clocking in flips the row to clocked-in and shows clock-out', (t) async {
+  testWidgets('clocking in asks for PIN then flips the row', (t) async {
     await t.pumpWidget(app());
     await t.tap(find.byKey(const Key('clock-in-sara')));
     await t.pumpAndSettle();
+    await enterPin(t, '1234');
     expect(attendance.isClockedIn('sara'), isTrue);
     expect(find.byKey(const Key('clock-out-sara')), findsOneWidget);
   });
 
-  testWidgets('clocking out returns the row to off the clock', (t) async {
+  testWidgets('a wrong clock-in PIN leaves them off the clock', (t) async {
+    await t.pumpWidget(app());
+    await t.tap(find.byKey(const Key('clock-in-sara')));
+    await t.pumpAndSettle();
+    await enterPin(t, '9999');
+    expect(attendance.isClockedIn('sara'), isFalse);
+    expect(find.byKey(const Key('clock-in-sara')), findsOneWidget);
+  });
+
+  testWidgets('clocking out asks for PIN then returns off the clock', (t) async {
     attendance.clockIn('sara');
     await t.pumpWidget(app());
     await t.tap(find.byKey(const Key('clock-out-sara')));
     await t.pumpAndSettle();
+    await enterPin(t, '1234');
     expect(attendance.isClockedIn('sara'), isFalse);
     expect(find.byKey(const Key('clock-in-sara')), findsOneWidget);
   });

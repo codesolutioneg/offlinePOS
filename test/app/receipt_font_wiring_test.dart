@@ -28,6 +28,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -72,6 +73,7 @@ void main() {
     // Built after the catalogue so the print profile is published from a settled
     // database, exactly as it is on a real start-up.
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
   });
   tearDown(() {
     db.close();
@@ -132,7 +134,7 @@ void main() {
     // Signing in lands on the floor home. These tests ring a sale up, so walk to
     // the counter the way a cashier does; a takeaway needs no table on the plan.
     if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
-      await t.tap(find.byKey(const Key('floor-takeaway')));
+      await t.tap(find.byKey(const Key('floor-action-table')));
       await t.pumpAndSettle();
     }
   }
@@ -140,7 +142,7 @@ void main() {
   Future<void> sellAPizza(WidgetTester t) async {
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-1')));
     await t.pumpAndSettle();
@@ -197,6 +199,8 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-settings')));
     await t.pumpAndSettle();
+    await t.scrollUntilVisible(find.byKey(const Key('set-receipt')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-receipt')));
     await t.pumpAndSettle();
     expect(find.byType(ReceiptDesignerScreen), findsOneWidget);

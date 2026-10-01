@@ -56,6 +56,8 @@ void main() {
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234');
     WizardStore(db).dismiss(WizardId.firstSale, 'sara');
+    // Tests are single-till shops; skip the first-run LAN role prompt.
+    SettingsStore(db).lanRolePromptDismissed = true;
   });
   tearDown(() => db.close());
 

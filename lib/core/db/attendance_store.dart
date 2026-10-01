@@ -1,3 +1,4 @@
+import '../lan/lan_event.dart';
 import 'database.dart';
 
 /// One clock-in (and later clock-out) for a member of staff.
@@ -18,6 +19,21 @@ class AttendanceEntry {
 
   /// Worked time so far (to now if still open), for the day's timesheet.
   Duration worked(DateTime now) => (clockOut ?? now).difference(clockIn);
+
+  Map<String, dynamic> toMap() => {
+        'staff_id': staffId,
+        'clock_in': clockIn.toUtc().toIso8601String(),
+        'clock_out': clockOut?.toUtc().toIso8601String(),
+      };
+
+  factory AttendanceEntry.fromMap(Map<String, dynamic> m) => AttendanceEntry(
+        id: 0,
+        staffId: '${m['staff_id']}',
+        clockIn: DateTime.parse('${m['clock_in']}').toUtc(),
+        clockOut: m['clock_out'] == null
+            ? null
+            : DateTime.parse('${m['clock_out']}').toUtc(),
+      );
 }
 
 /// Staff attendance on this till: who is clocked in, and the day's timesheet.
@@ -26,10 +42,21 @@ class AttendanceEntry {
 /// the clock at once against a single till, which the single-open-shift drawer
 /// model cannot express.
 class AttendanceStore {
-  AttendanceStore(this._db, {DateTime Function()? now}) : _now = now ?? DateTime.now;
+  AttendanceStore(
+    this._db, {
+    DateTime Function()? now,
+    void Function(LanEventKind kind, String recordUuid, Map<String, dynamic> payload)?
+        publish,
+  })  : _now = now ?? DateTime.now,
+        _publish = publish;
 
   final Db _db;
   final DateTime Function() _now;
+  final void Function(
+      LanEventKind kind, String recordUuid, Map<String, dynamic> payload)? _publish;
+
+  /// Stable fabric key for one staff member's open attendance row.
+  static String recordKey(String staffId) => 'attendance:$staffId';
 
   /// The open (not-yet-clocked-out) entry for a staff member, or null.
   AttendanceEntry? openFor(String staffId) {
@@ -44,21 +71,80 @@ class AttendanceStore {
 
   /// Clock a staff member in. A no-op that returns the existing entry if they are
   /// already on the clock, so a double tap cannot open two.
-  AttendanceEntry clockIn(String staffId) {
+  AttendanceEntry clockIn(String staffId, {bool announce = true}) {
     final existing = openFor(staffId);
     if (existing != null) return existing;
-    final at = _now().toUtc().toIso8601String();
+    final at = _now().toUtc();
     _db.raw.execute(
-        'INSERT INTO attendance (staff_id, clock_in) VALUES (?, ?)', [staffId, at]);
-    return openFor(staffId)!;
+        'INSERT INTO attendance (staff_id, clock_in) VALUES (?, ?)',
+        [staffId, at.toIso8601String()]);
+    final entry = openFor(staffId)!;
+    if (announce) _announce(entry);
+    return entry;
   }
 
   /// Clock a staff member out. A no-op if they are not on the clock.
-  void clockOut(String staffId) {
+  void clockOut(String staffId, {bool announce = true}) {
     final open = openFor(staffId);
     if (open == null) return;
+    final at = _now().toUtc();
     _db.raw.execute('UPDATE attendance SET clock_out = ? WHERE id = ?',
-        [_now().toUtc().toIso8601String(), open.id]);
+        [at.toIso8601String(), open.id]);
+    if (announce) {
+      _announce(AttendanceEntry(
+        id: open.id,
+        staffId: open.staffId,
+        clockIn: open.clockIn,
+        clockOut: at,
+      ));
+    }
+  }
+
+  /// Apply a peer's attendance snapshot without echoing it back on the fabric.
+  void applyRemote(Map<String, dynamic> payload) {
+    final entry = AttendanceEntry.fromMap(payload);
+    final open = openFor(entry.staffId);
+    if (entry.clockOut == null) {
+      if (open != null) return;
+      _db.raw.execute(
+          'INSERT INTO attendance (staff_id, clock_in) VALUES (?, ?)',
+          [entry.staffId, entry.clockIn.toIso8601String()]);
+      return;
+    }
+    if (open == null) {
+      // Closed elsewhere after we never saw the open — store the full span.
+      _db.raw.execute(
+          'INSERT INTO attendance (staff_id, clock_in, clock_out) VALUES (?, ?, ?)',
+          [
+            entry.staffId,
+            entry.clockIn.toIso8601String(),
+            entry.clockOut!.toIso8601String(),
+          ]);
+      return;
+    }
+    _db.raw.execute('UPDATE attendance SET clock_out = ? WHERE id = ?',
+        [entry.clockOut!.toIso8601String(), open.id]);
+  }
+
+  /// Who is on the clock right now, for a join snapshot.
+  List<Map<String, dynamic>> exportOpen() =>
+      [for (final e in onNow()) e.toMap()];
+
+  /// Replace open attendance with a primary's join snapshot (no LAN echo).
+  void applyOpenSnapshot(List<dynamic> rows) {
+    for (final e in onNow()) {
+      clockOut(e.staffId, announce: false);
+    }
+    for (final raw in rows) {
+      if (raw is! Map) continue;
+      applyRemote(raw.cast<String, dynamic>());
+    }
+  }
+
+  void _announce(AttendanceEntry entry) {
+    final publish = _publish;
+    if (publish == null) return;
+    publish(LanEventKind.attendanceUpsert, recordKey(entry.staffId), entry.toMap());
   }
 
   /// Everyone currently on the clock.

@@ -12,6 +12,7 @@ import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
+import 'pay_button.dart';
 
 void main() {
   late Db db;
@@ -55,32 +56,31 @@ void main() {
 
   testWidgets('the move/merge chip appears once a dine-in order has lines', (t) async {
     await t.pumpWidget(app());
-    expect(find.byKey(const Key('bill-options')), findsNothing);
+    await t.tap(find.byKey(const Key('bill-options')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('bill-move')), findsNothing);
+    expect(find.byKey(const Key('bill-merge')), findsNothing);
+    await t.tapAt(const Offset(8, 8));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
-    expect(find.byKey(const Key('bill-options')), findsOneWidget);
+    await t.tap(find.byKey(const Key('bill-options')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('bill-move')), findsOneWidget);
+    expect(find.byKey(const Key('bill-merge')), findsOneWidget);
   });
 
-  testWidgets('split by item lets you choose how many units of a line to take', (t) async {
+  testWidgets('Split Check on the payment sheet opens the split screen', (t) async {
     await t.pumpWidget(app(tables: ['5']));
     await t.tap(find.byKey(const Key('product-10'))); // Pizza
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('product-10'))); // second -> qty 2 on one line
-    await t.pumpAndSettle();
-    final line = session.current.lines.single;
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay-mode-item')));
+    expect(find.byKey(const Key('pay-mode-item')), findsNothing);
+    await t.tap(find.byKey(const Key('pay-mode-guest')));
     await t.pumpAndSettle();
-
-    // Including the multi-unit line reveals a quantity stepper so a subset can be
-    // taken as its own check.
-    await t.tap(find.descendant(
-        of: find.widgetWithText(ListTile, 'Pizza'), matching: find.byType(Checkbox)));
-    await t.pumpAndSettle();
-    expect(find.byKey(Key('pick-plus-${line.uuid}')), findsOneWidget);
-    expect(find.byKey(Key('pick-minus-${line.uuid}')), findsOneWidget);
+    expect(find.byKey(const Key('split-check-screen')), findsOneWidget);
   });
 
   testWidgets('even split asks how many ways, then opens a share payment sheet', (t) async {
@@ -88,7 +88,7 @@ void main() {
     await t.tap(find.byKey(const Key('product-10'))); // Pizza 100
     await t.pumpAndSettle();
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pay-mode-evenly')));
     await t.pumpAndSettle();
@@ -102,31 +102,20 @@ void main() {
     expect(find.textContaining('50.00'), findsWidgets);
   });
 
-  testWidgets('cancelling the pay sheet after a partial pick does not split the bill', (t) async {
+  testWidgets('cancelling the split screen does not split the bill', (t) async {
     await t.pumpWidget(app(tables: ['5']));
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('product-10'))); // qty 2 on one line
     await t.pumpAndSettle();
-    final line = session.current.lines.single;
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay-mode-item')));
+    await t.tap(find.byKey(const Key('pay-mode-guest')));
     await t.pumpAndSettle();
-    await t.tap(find.descendant(
-        of: find.widgetWithText(ListTile, 'Pizza'), matching: find.byType(Checkbox)));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(Key('pick-minus-${line.uuid}'))); // take 1 of 2
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pick-confirm')));
-    await t.pumpAndSettle(); // payment sheet opens
-
-    // Dismiss the payment sheet without paying (tap the scrim).
-    await t.tapAt(const Offset(5, 5));
+    await t.tap(find.byKey(const Key('split-cancel')));
     await t.pumpAndSettle();
 
-    // The peel is deferred to payment, so the bill is untouched: still one line of 2.
     expect(session.current.lines.length, 1);
     expect(session.current.lines.single.quantity, 2);
   });
@@ -211,7 +200,9 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('bill-merge')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(Key('merge-${other.uuid}')));
+    await t.tap(find.byKey(Key('merge-table-${other.uuid}')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('merge-one-bill')));
     await t.pumpAndSettle();
 
     expect(session.current.lines.map((l) => l.productId).toSet(), {10, 11});

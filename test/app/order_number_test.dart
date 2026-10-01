@@ -54,6 +54,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234');
@@ -131,10 +132,9 @@ void main() {
     final held = orders.held().single;
     expect(held.orderNo, isNotNull,
         reason: 'the shell must hand the session a counter, or nothing is numbered');
-    // DDMM-SEQ-TAG, with the tag taken from this device's id.
-    expect(held.orderNo, matches(RegExp(r'^\d{4}-\d{3}-2C3$')));
-    expect(held.orderNo, endsWith('-001-2C3'));
-    expect(held.displayNo, held.orderNo);
+    // Plain daily sequence — same digits on kitchen, receipt and flash.
+    expect(held.orderNo, '1');
+    expect(held.displayNo, '1');
   });
 
   testWidgets('the second sale of the service takes the next number', (t) async {
@@ -154,7 +154,7 @@ void main() {
     // Parking put the till back on the floor home, so the second order of the
     // service starts there, the way the next one always does. Nothing to wait out:
     // the parked confirmation is a strip above the plan, clear of this button.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('product-11')));
     await t.pumpAndSettle();
@@ -162,8 +162,7 @@ void main() {
     await t.pumpAndSettle();
 
     final numbers = orders.held().map((o) => o.orderNo).toList()..sort();
-    expect(numbers.first, endsWith('-001-2C3'));
-    expect(numbers.last, endsWith('-002-2C3'));
+    expect(numbers, ['1', '2']);
   });
 
   testWidgets('a parked order keeps its number when it is recalled and paid',

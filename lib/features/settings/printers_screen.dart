@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/printing/printer_registry.dart';
+import '../../core/printing/printer_transport.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/catalogue.dart';
 
@@ -132,6 +133,14 @@ class _PrintersScreenState extends State<PrintersScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           _sectionHeader(context, tr(context, 'Printers'), Icons.print, AppColors.info),
+          Text(
+            tr(context,
+                'receipt / delivery = this till only. kitchen / bar = shared on LAN join.'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.textMutedLight,
+                ),
+          ),
+          const SizedBox(height: 8),
           ..._printerRows(),
           const SizedBox(height: 8),
           OutlinedButton.icon(
@@ -183,14 +192,23 @@ class _PrintersScreenState extends State<PrintersScreen> {
     final cols = widget.settings.receiptColumns;
     final copies = widget.settings.receiptCopies;
     final subStation = widget.settings.subReceiptStation;
+    final deliveryPrinter = widget.settings.deliveryReceiptPrinter;
     // Only printers that actually exist, unlike the routing chips below: a category
     // can be pointed at a station before its printer is bought, but a copy sent to a
     // name nothing answers to just prints a second slip at the till.
+    final existing = {for (final printer in widget.printers.printers) printer.name};
+    // Whatever is already chosen stays pickable, even if that printer was removed
+    // since, so the setting never disappears out from under a manager. Each list
+    // keeps only its own choice: the delivery printer's default name is not a
+    // printer to send the pass copy to.
     final configured = <String>{
-      for (final printer in widget.printers.printers) printer.name,
-      // Whatever is already chosen stays pickable, even if that printer was removed
-      // since, so the setting never disappears out from under a manager.
+      ...existing,
       if (subStation.isNotEmpty) subStation,
+    }.toList()
+      ..sort();
+    final deliveryChoices = <String>{
+      ...existing,
+      if (deliveryPrinter.isNotEmpty) deliveryPrinter,
     }.toList()
       ..sort();
     return Card(
@@ -282,6 +300,40 @@ class _PrintersScreenState extends State<PrintersScreen> {
                 _notify();
               },
             ),
+          const Divider(),
+          // Delivery bag + paid delivery receipt — separate from kitchen tickets
+          // so store delivery can print the customer slip even when kitchen is
+          // the only station that was answering before.
+          Row(children: [
+            Expanded(
+              child: Text(tr(context, 'Delivery receipt printer'),
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            DropdownButton<String>(
+              key: const Key('delivery-receipt-printer'),
+              value: deliveryPrinter.isNotEmpty &&
+                      deliveryChoices.contains(deliveryPrinter)
+                  ? deliveryPrinter
+                  : '',
+              items: [
+                DropdownMenuItem(
+                    value: '',
+                    child: Text(tr(context, 'Same as receipt'))),
+                for (final station in deliveryChoices)
+                  DropdownMenuItem(value: station, child: Text(station)),
+              ],
+              onChanged: (v) {
+                widget.settings.deliveryReceiptPrinter =
+                    (v == null || v.isEmpty) ? '' : v;
+                _notify();
+              },
+            ),
+          ]),
+          Text(
+            tr(context,
+                'Bag slip and paid receipt for store / company delivery'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
           const Divider(),
           // Which script the printer itself can spell, and what to do about the
           // lines it cannot. Here rather than in the receipt designer because both
@@ -402,12 +454,16 @@ class _PrintersScreenState extends State<PrintersScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('$name: ${tr(context, 'test receipt sent')}')));
-    } catch (_) {
-      // The named printer answered nothing: say so rather than claim success.
+    } catch (e) {
+      // Surface the real reason (timeout, refused, no route) — "not reachable"
+      // alone hid that a typed IP was never tried after a short probe failed.
       if (!mounted) return;
+      final detail = e is PrinterUnavailable
+          ? e.message
+          : '$e';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           backgroundColor: AppColors.error,
-          content: Text('$name: ${tr(context, 'not reachable')}')));
+          content: Text('$name: ${tr(context, 'not reachable')}\n$detail')));
     }
   }
 
@@ -597,7 +653,7 @@ class _AddPrinterDialog extends StatefulWidget {
 }
 
 class _AddPrinterDialogState extends State<_AddPrinterDialog> {
-  static const _nameSuggestions = ['receipt', 'kitchen', 'bar'];
+  static const _nameSuggestions = ['receipt', 'kitchen', 'delivery', 'bar'];
 
   late final TextEditingController _name;
   late final TextEditingController _host;
@@ -635,7 +691,12 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
     if (oldName != null && oldName != name) {
       widget.printers.forget(oldName);
     }
-    widget.printers.remember(name, host: host.isEmpty ? null : host, port: port);
+    widget.printers.remember(
+      name,
+      host: host.isEmpty ? null : host,
+      port: port,
+      pinned: true,
+    );
     // After the remember, so it lands on the printer that now exists under this
     // name, and explicitly, because clearing the spare has to be possible too.
     widget.printers.setBackup(name, _backup.isEmpty ? null : _backup);

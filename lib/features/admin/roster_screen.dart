@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/auth/auth_service.dart';
+import '../../core/auth/fingerprint_diagnostics.dart';
+import '../../core/auth/fingerprint_service.dart';
+import '../../core/auth/fingerprint_store.dart';
 import '../../core/auth/totp.dart';
 import '../../core/auth/user_store.dart';
 import '../../core/i18n/l10n.dart';
@@ -21,6 +24,8 @@ class RosterScreen extends StatefulWidget {
     required this.onChanged,
     this.canAssignManager = true,
     this.roles = const ['cashier'],
+    this.fingerprints,
+    this.fingerprintStore,
   });
 
   final UserStore users;
@@ -35,6 +40,10 @@ class RosterScreen extends StatefulWidget {
   /// be able to mint a manager (or reset a manager's PIN) and self-promote, so
   /// the caller passes false unless a real manager is signed in.
   final bool canAssignManager;
+
+  /// ZK reader + local template bank. Null hides fingerprint actions.
+  final FingerprintService? fingerprints;
+  final FingerprintStore? fingerprintStore;
 
   /// Called after any change so the caller can refresh whatever list it is
   /// holding of the roster (this screen owns no state the caller can see).
@@ -142,6 +151,33 @@ class _RosterScreenState extends State<RosterScreen> {
     setState(() {});
   }
 
+  Future<void> _enrolFingerprint(Cashier cashier) async {
+    final svc = widget.fingerprints;
+    final store = widget.fingerprintStore;
+    if (svc == null || store == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _EnrolFingerprintDialog(
+        service: svc,
+        userId: cashier.id,
+        userName: cashier.name,
+        store: store,
+      ),
+    );
+    if (ok == true) {
+      widget.onChanged();
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _clearFingerprint(Cashier cashier) {
+    widget.fingerprintStore?.clearUser(cashier.id);
+    unawaited(widget.fingerprints?.deleteTemplate(cashier.id) ?? Future.value());
+    widget.onChanged();
+    setState(() {});
+  }
+
   bool _showInactive = false;
 
   void _reactivate(Cashier cashier) {
@@ -197,6 +233,8 @@ class _RosterScreenState extends State<RosterScreen> {
                     roleLabel(context, c.role),
                     if (!c.active) tr(context, 'inactive'),
                     if (c.hasSecondFactor) tr(context, 'authenticator on'),
+                    if (widget.fingerprintStore?.hasAny(c.id) == true)
+                      tr(context, 'fingerprint enrolled'),
                   ].join(' · ')),
                   // Actions live in an overflow menu so a long name can never push
                   // buttons off the row.
@@ -207,6 +245,8 @@ class _RosterScreenState extends State<RosterScreen> {
                           onSelected: (v) {
                             if (v == 'edit') _openEditDialog(c);
                             if (v == 'totp') _openTotpDialog(c);
+                            if (v == 'fingerprint') _enrolFingerprint(c);
+                            if (v == 'clear_fp') _clearFingerprint(c);
                             if (v == 'deactivate') _deactivate(c);
                             if (v == 'reactivate') _reactivate(c);
                           },
@@ -220,6 +260,18 @@ class _RosterScreenState extends State<RosterScreen> {
                                   key: Key('totp-${c.id}'),
                                   value: 'totp',
                                   child: Text(tr(context, 'Authenticator'))),
+                            if (widget.fingerprints != null &&
+                                widget.fingerprintStore != null) ...[
+                              PopupMenuItem(
+                                  key: Key('fp-${c.id}'),
+                                  value: 'fingerprint',
+                                  child: Text(tr(context, 'Enrol fingerprint'))),
+                              if (widget.fingerprintStore!.hasAny(c.id))
+                                PopupMenuItem(
+                                    key: Key('fp-clear-${c.id}'),
+                                    value: 'clear_fp',
+                                    child: Text(tr(context, 'Clear fingerprint'))),
+                            ],
                             if (c.active)
                               PopupMenuItem(
                                   key: Key('deactivate-${c.id}'),
@@ -499,6 +551,177 @@ class _StaffFormDialogState extends State<_StaffFormDialog> {
           key: const Key('staff-form-save'),
           onPressed: _save,
           child: Text(tr(context, 'Save')),
+        ),
+      ],
+    );
+  }
+}
+
+/// Capture three prints, merge via the agent, store locally (and on LAN).
+class _EnrolFingerprintDialog extends StatefulWidget {
+  const _EnrolFingerprintDialog({
+    required this.service,
+    required this.store,
+    required this.userId,
+    required this.userName,
+  });
+
+  final FingerprintService service;
+  final FingerprintStore store;
+  final String userId;
+  final String userName;
+
+  @override
+  State<_EnrolFingerprintDialog> createState() =>
+      _EnrolFingerprintDialogState();
+}
+
+class _EnrolFingerprintDialogState extends State<_EnrolFingerprintDialog> {
+  final _captures = <List<int>>[];
+  String? _status;
+  bool _busy = false;
+  bool _cancelled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_runAutoEnrol());
+    });
+  }
+
+  @override
+  void dispose() {
+    _cancelled = true;
+    unawaited(widget.service.clearPending());
+    super.dispose();
+  }
+
+  Future<void> _runAutoEnrol() async {
+    if (!mounted || _cancelled) return;
+    setState(() {
+      _busy = true;
+      _status = tr(context, 'Checking fingerprint setup…');
+    });
+    final diag = await FingerprintDiagnostics().probe();
+    if (!mounted || _cancelled) return;
+    if (!diag.ok) {
+      final detail = [
+        diag.summary,
+        if (diag.issues.isNotEmpty) diag.issues.take(3).join('\n'),
+        if (diag.trackingHint.isNotEmpty) diag.trackingHint,
+      ].where((s) => s.trim().isNotEmpty).join('\n\n');
+      setState(() {
+        _busy = false;
+        _status = detail;
+      });
+      return;
+    }
+
+    setState(() {
+      _status = tr(context, 'Place your finger on the reader…');
+    });
+    final ready = await widget.service.warmUp(force: true);
+    if (!mounted || _cancelled) return;
+    if (!ready) {
+      final err = widget.service.lastError;
+      setState(() {
+        _busy = false;
+        _status = [
+          tr(context, 'Fingerprint reader not connected'),
+          if (err != null && err.isNotEmpty) err,
+          if (diag.trackingHint.isNotEmpty) diag.trackingHint,
+        ].join('\n\n');
+      });
+      return;
+    }
+
+    while (mounted && !_cancelled && _captures.length < 3) {
+      final n = _captures.length + 1;
+      setState(() {
+        _status =
+            '${tr(context, 'Place your finger on the reader…')} ($n/3)';
+      });
+      await widget.service.clearPending();
+      final tmpl = await widget.service.captureTemplate(
+        timeout: const Duration(seconds: 20),
+      );
+      if (!mounted || _cancelled) return;
+      if (tmpl == null) {
+        setState(() {
+          _status = tr(context, 'No finger detected — try again');
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
+      _captures.add(tmpl);
+      setState(() {
+        _status = '${tr(context, 'Captured')} ${_captures.length}/3 — '
+            '${tr(context, 'Lift finger, then place again…')}';
+      });
+      if (_captures.length < 3) {
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+      }
+    }
+
+    if (!mounted || _cancelled || _captures.length < 3) return;
+    await _finish();
+  }
+
+  Future<void> _finish() async {
+    setState(() {
+      _busy = true;
+      _status = tr(context, 'Saving fingerprint…');
+    });
+    final merged = await widget.service.mergeTemplates(_captures);
+    if (!mounted || _cancelled) return;
+    if (merged == null) {
+      setState(() {
+        _status = tr(context, 'Could not merge captures');
+        _captures.clear();
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      if (!mounted || _cancelled) return;
+      unawaited(_runAutoEnrol());
+      return;
+    }
+    await widget.service.registerUser(userId: widget.userId, template: merged);
+    widget.store.saveUserTemplates(widget.userId, [merged]);
+    if (!mounted || _cancelled) return;
+    Navigator.pop(context, true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('${tr(context, 'Enrol fingerprint')}: ${widget.userName}'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.fingerprint, size: 56),
+          const SizedBox(height: 12),
+          if (_busy)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          Text(
+            _status ?? tr(context, 'Place your finger on the reader…'),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            _cancelled = true;
+            Navigator.pop(context, false);
+          },
+          child: Text(tr(context, 'Cancel')),
         ),
       ],
     );

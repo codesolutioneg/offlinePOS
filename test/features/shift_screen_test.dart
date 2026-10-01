@@ -76,6 +76,9 @@ void main() {
       rows = reportRows;
     }));
 
+    // Under the session card, below the fold.
+    await t.scrollUntilVisible(find.byKey(const Key('print-x')), 200,
+        scrollable: find.byType(Scrollable).first);
     await t.tap(find.byKey(const Key('print-x')));
     await t.pumpAndSettle();
 
@@ -87,5 +90,29 @@ void main() {
       ('  Cash', '40.00'),
       ('  Visa', '30.00'),
     ]);
+  });
+
+  testWidgets('Money Drop from the floor opens straight into a cash out',
+      (t) async {
+    shifts.openShift(openingFloat: 100, cashierId: 'sara');
+    await t.pumpWidget(MaterialApp(
+      home: ShiftScreen(
+        store: shifts,
+        cashierId: 'sara',
+        formatAmount: (v) => v.toStringAsFixed(2),
+        startMovement: 'drop',
+      ),
+    ));
+    await t.pumpAndSettle();
+
+    expect(find.text('Money Drop'), findsWidgets);
+    await t.enterText(find.byType(TextField).first, '50');
+    await t.tap(find.text('OK'));
+    await t.pumpAndSettle();
+
+    final m = shifts.currentOpenShift()!.movements.single;
+    expect(m.type, 'out');
+    expect(m.amount, 50);
+    expect(m.reason, 'Money Drop');
   });
 }

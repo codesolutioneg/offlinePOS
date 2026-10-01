@@ -53,15 +53,31 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  testWidgets('lists the cashiers held on the device', (t) async {
+  testWidgets('lists everyone held on the device as tiles', (t) async {
+    await auth.enrol(id: 'mo', name: 'Mo', pin: '9999', role: 'manager');
     await t.pumpWidget(app());
+    expect(find.byKey(const Key('login-staff-grid')), findsOneWidget);
     expect(find.byKey(const Key('user-sara')), findsOneWidget);
+    expect(find.byKey(const Key('user-mo')), findsOneWidget);
   });
 
-  testWidgets('the keypad is inert until a cashier is picked', (t) async {
+  testWidgets('the keypad only appears once a name is picked', (t) async {
     await t.pumpWidget(app());
-    final key = t.widget<InkWell>(find.byKey(const Key('key-1')));
-    expect(key.onTap, isNull);
+    expect(find.byKey(const Key('key-1')), findsNothing);
+    await t.tap(find.byKey(const Key('user-sara')));
+    await t.pump();
+    expect(find.byKey(const Key('key-1')), findsOneWidget);
+    expect(find.byKey(const Key('login-picked-name')), findsOneWidget);
+  });
+
+  testWidgets('back returns to the roster', (t) async {
+    await t.pumpWidget(app());
+    await t.tap(find.byKey(const Key('user-sara')));
+    await t.pump();
+    await t.tap(find.byKey(const Key('login-back')));
+    await t.pump();
+    expect(find.byKey(const Key('login-staff-grid')), findsOneWidget);
+    expect(find.byKey(const Key('key-1')), findsNothing);
   });
 
   testWidgets('the right PIN signs in with no network', (t) async {
@@ -115,55 +131,21 @@ void main() {
     expect(t.widget<Text>(find.byKey(const Key('pin-dots'))).data, '•');
   });
 
-  testWidgets('a small roster stays as quick-tap chips', (t) async {
-    await t.pumpWidget(app());
-    // One cashier enrolled: chips, no search field.
-    expect(find.byKey(const Key('user-sara')), findsOneWidget);
-    expect(find.byKey(const Key('account-search')), findsNothing);
-  });
-
-  testWidgets('a large roster switches to a searchable account field', (t) async {
-    // Seven accounts pushes past the chip limit, so the field appears instead.
+  testWidgets('picking a tile from a long roster signs that person in',
+      (t) async {
     for (var i = 0; i < 7; i++) {
       await auth.enrol(id: 'staff-$i', name: 'Staff $i', pin: '1234');
     }
+    await t.binding.setSurfaceSize(const Size(800, 1400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(app());
     await t.pumpAndSettle();
 
-    expect(find.byKey(const Key('account-search')), findsOneWidget);
-    expect(find.byKey(const Key('user-sara')), findsNothing);
-
-    // Type a name, pick it from the options, and the keypad unlocks for that person.
-    await t.enterText(find.byKey(const Key('account-search')), 'Staff 3');
-    await t.pumpAndSettle();
-    await t.tap(find.text('Staff 3').last);
+    await t.tap(find.byKey(const Key('user-staff-3')));
     await t.pumpAndSettle();
 
-    expect(find.byKey(const Key('signing-in-as')), findsOneWidget);
     await enter(t, '1234');
     expect(signedIn?.id, 'staff-3');
-  });
-
-  testWidgets('editing the search after choosing someone drops the selection', (t) async {
-    for (var i = 0; i < 7; i++) {
-      await auth.enrol(id: 'staff-$i', name: 'Staff $i', pin: '1234');
-    }
-    await t.pumpWidget(app());
-    await t.pumpAndSettle();
-
-    await t.enterText(find.byKey(const Key('account-search')), 'Staff 3');
-    await t.pumpAndSettle();
-    await t.tap(find.text('Staff 3').last);
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('signing-in-as')), findsOneWidget);
-    expect(t.widget<FilledButton>(find.byKey(const Key('pin-ok'))).onPressed, isNotNull);
-
-    // The next cashier types a different name without tapping a suggestion: the old
-    // selection is cleared and the keypad locks until someone is picked again.
-    await t.enterText(find.byKey(const Key('account-search')), 'Staff 5');
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('signing-in-as')), findsNothing);
-    expect(t.widget<FilledButton>(find.byKey(const Key('pin-ok'))).onPressed, isNull);
   });
 
   testWidgets('a device with no cashiers says so instead of hanging', (t) async {

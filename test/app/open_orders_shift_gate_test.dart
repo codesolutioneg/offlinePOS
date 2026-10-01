@@ -117,7 +117,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       config: const TillConfig(),
@@ -205,9 +205,14 @@ void main() {
     await t.pumpAndSettle();
     expect(shifts.currentOpenShift(), isNotNull);
 
-    // Back on the list, which re-reads the drawer rather than keeping the strip up.
-    await t.pageBack();
-    await t.pumpAndSettle();
+    // Opening a shift lands on the floor, where service starts; the list re-reads
+    // the drawer when it is opened again rather than keeping the strip up.
+    if (find.byType(OpenOrdersScreen).evaluate().isEmpty) {
+      await t.tap(find.byTooltip('Open navigation menu'));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('nav-open-orders')));
+      await t.pumpAndSettle();
+    }
     expect(find.byKey(const Key('open-orders-no-shift')), findsNothing);
 
     await t.tap(find.byKey(Key('recall-${tab.uuid}')));

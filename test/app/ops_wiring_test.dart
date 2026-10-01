@@ -100,7 +100,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       // Exactly what main.dart hands down, with the network and the platform
@@ -150,6 +150,8 @@ void main() {
         detail: 'Access denied');
     await boot(t);
     await openDrawerItem(t, 'nav-settings');
+    await t.scrollUntilVisible(find.byKey(const Key('set-server')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-server')));
     await t.pumpAndSettle();
     expect(find.byType(ServerSettingsScreen), findsOneWidget);

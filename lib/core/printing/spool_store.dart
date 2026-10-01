@@ -42,6 +42,10 @@ abstract interface class SpoolStore {
   /// no receipt is ever discarded without somebody being told.
   Future<List<SpooledJob>> trimTo(int keep);
 
+  /// Throw away every held job for this printer. Used when a long outage filled
+  /// the queue with tickets nobody wants replayed.
+  Future<int> clearAll();
+
   int get count;
 }
 
@@ -92,6 +96,13 @@ class MemorySpoolStore implements SpoolStore {
       dropped.add(_jobs.removeAt(0));
     }
     return dropped;
+  }
+
+  @override
+  Future<int> clearAll() async {
+    final n = _jobs.length;
+    _jobs.clear();
+    return n;
   }
 
   @override

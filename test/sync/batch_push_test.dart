@@ -35,10 +35,11 @@ void main() {
         send: (uuid, payload) async {
           if (failWith != null) throw failWith!;
           sent.add(payload);
+          return {'status': 'created', 'id': 1, 'name': 'Order/TEST'};
         },
         enabled: () => merging,
         batchUuid: () => shift,
-        onOrderBooked: marked.add,
+        onOrderBooked: (u, [id, name]) => marked.add(u),
       );
 
   Future<Order> queueASale({double price = 100}) async {
@@ -95,10 +96,13 @@ void main() {
   test('a queue longer than the bound goes out the ordinary way', () async {
     final small = BatchPush(
       outboxStore: store,
-      send: (uuid, payload) async => sent.add(payload),
+      send: (uuid, payload) async {
+        sent.add(payload);
+        return null;
+      },
       enabled: () => true,
       batchUuid: () => 'shift-1',
-      onOrderBooked: marked.add,
+      onOrderBooked: (u, [id, name]) => marked.add(u),
       maxOrders: 2,
     );
     for (var i = 0; i < 3; i++) {
@@ -109,6 +113,29 @@ void main() {
         reason: 'a window that was cut short would leave sales out of the batch');
     expect(sent, isEmpty);
     expect(await store.pending(limit: 10), hasLength(3));
+  });
+
+  test('a single sale with a session partner leaves as one batch', () async {
+    final a = await queueASale();
+    final withPartner = BatchPush(
+      outboxStore: store,
+      send: (uuid, payload) async {
+        sent.add(payload);
+        return {'status': 'created', 'id': 42, 'name': 'Order/42'};
+      },
+      enabled: () => true,
+      batchUuid: () => 'shift-1',
+      partnerId: () => 99,
+      partnerName: () => 'Session Customer',
+      onOrderBooked: (u, [id, name]) => marked.add(u),
+    );
+
+    expect(await withPartner.run(), isTrue);
+    expect(withPartner.lastAck?['name'], 'Order/42');
+    expect(sent, hasLength(1));
+    expect(sent.single['partner_id'], 99);
+    expect(sent.single['customer_name'], 'Session Customer');
+    expect(marked, [a.uuid]);
   });
 
   test('a retry after a lost acknowledgement rebuilds the same key', () async {

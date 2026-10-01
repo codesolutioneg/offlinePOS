@@ -54,7 +54,7 @@ void main() {
   Order delivery() => Order(
         deviceId: 'till-1',
         cashierId: 'sara',
-        type: OrderType.delivery,
+        type: OrderType.storeDelivery,
         guestCount: 1,
         createdAt: day,
         lines: [

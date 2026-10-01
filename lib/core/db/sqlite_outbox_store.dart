@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../sync/outbox.dart';
 import 'database.dart';
+import 'stress_purge.dart';
 
 /// Durable [OutboxStore]. Nothing leaves it until the server has acknowledged.
 class SqliteOutboxStore implements OutboxStore {
@@ -9,15 +10,25 @@ class SqliteOutboxStore implements OutboxStore {
 
   final Db _db;
 
+  /// The same handle the till is already using, so a support console can inspect
+  /// and patch rows without opening a second connection onto the encrypted file.
+  Db get db => _db;
+
   @override
   Future<void> append(String kind, String payloadUuid, Map<String, dynamic> payload) async {
     // Re-queuing the same record replaces the payload rather than adding a second
     // entry, so a redraw or an edit cannot turn one sale into two deliveries.
+    //
+    // The replacement also takes a fresh id, which is what makes the id a version.
+    // A send already on the wire holds the old id, so its [markSent] finds no row
+    // and the newer payload stays owed; without this the send of the old payload
+    // would mark the new one delivered and it would never go out.
     _db.raw.execute(
       '''
       INSERT INTO outbox (kind, payload_uuid, payload, created_at)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(kind, payload_uuid) DO UPDATE SET
+        id         = (SELECT MAX(id) FROM outbox) + 1,
         payload    = excluded.payload,
         sent_at    = NULL,
         last_error = NULL
@@ -26,13 +37,26 @@ class SqliteOutboxStore implements OutboxStore {
     );
   }
 
+  /// Stress Lab rows stay queued, so a run can check every sale reached the queue,
+  /// but nothing ever hands them to a sender.
   @override
-  Future<List<OutboxEntry>> pending({int limit = 20}) async {
-    final rows = _db.raw.select(
-      'SELECT id, kind, payload_uuid, payload, attempts, last_error '
-      'FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL ORDER BY id ASC LIMIT ?',
-      [limit],
-    );
+  Future<List<OutboxEntry>> pending({int limit = 20, Set<String>? kinds}) async {
+    final filtered = kinds != null && kinds.isNotEmpty;
+    final rows = filtered
+        ? _db.raw.select(
+            'SELECT id, kind, payload_uuid, payload, attempts, last_error '
+            'FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL '
+            'AND payload NOT LIKE ? '
+            'AND kind IN (${List.filled(kinds.length, '?').join(',')}) '
+            'ORDER BY id ASC LIMIT ?',
+            [kStressNoteMatch, ...kinds, limit],
+          )
+        : _db.raw.select(
+            'SELECT id, kind, payload_uuid, payload, attempts, last_error '
+            'FROM outbox WHERE sent_at IS NULL AND dead_at IS NULL '
+            'AND payload NOT LIKE ? ORDER BY id ASC LIMIT ?',
+            [kStressNoteMatch, limit],
+          );
     return rows
         .map((r) => OutboxEntry(
               id: r['id'] as int,
@@ -49,6 +73,15 @@ class SqliteOutboxStore implements OutboxStore {
   Future<void> markSent(int id) async {
     _db.raw.execute('UPDATE outbox SET sent_at = ? WHERE id = ?',
         [DateTime.now().toUtc().toIso8601String(), id]);
+  }
+
+  /// Mark several rows sent in one synchronous step, so a caller can put it inside
+  /// its own transaction with the writes it has to agree with.
+  void markAllSent(Iterable<int> ids) {
+    final at = DateTime.now().toUtc().toIso8601String();
+    for (final id in ids) {
+      _db.raw.execute('UPDATE outbox SET sent_at = ? WHERE id = ?', [at, id]);
+    }
   }
 
   @override
@@ -108,6 +141,28 @@ class SqliteOutboxStore implements OutboxStore {
     return true;
   }
 
+  /// Park every sale still owed to Odoo, with [reason]. They stay in the queue,
+  /// unsent, and show in the refused count until a manager revives them. Returns
+  /// how many were held.
+  int holdPendingSales(String reason) {
+    _db.raw.execute(
+        "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$_order' "
+        'AND sent_at IS NULL AND dead_at IS NULL',
+        [DateTime.now().toUtc().toIso8601String(), reason]);
+    return _db.raw.updatedRows;
+  }
+
+  /// Close out refund pushes queued before refunds stopped going to Odoo. Nothing
+  /// sends them (the merge leaves credits out), so left alone they would sit in the
+  /// pending count forever. Returns how many were closed.
+  int retireRefundPushes() {
+    _db.raw.execute(
+        "UPDATE outbox SET sent_at = ? WHERE kind = '$_order' AND sent_at IS NULL "
+        r"AND json_extract(payload, '$.refund_of_uuid') IS NOT NULL",
+        [DateTime.now().toUtc().toIso8601String()]);
+    return _db.raw.updatedRows;
+  }
+
   /// Put a parked entry back in the queue, once whatever caused it is fixed.
   void revive(int id) => _db.raw.execute(
       'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 WHERE id = ?',
@@ -165,7 +220,24 @@ class SqliteOutboxStore implements OutboxStore {
           "AND dead_at IS NULL AND kind = '$_order'")
       .first['c'] as int;
 
+  /// Paid sales still waiting to reach Dishflow's owner view, and the bags still
+  /// waiting to reach their driver's app.
+  int get pendingDishflowCount => _db.raw
+      .select('SELECT COUNT(*) c FROM outbox WHERE sent_at IS NULL '
+          "AND dead_at IS NULL AND kind IN ('$_dishflow', '$_driver')")
+      .first['c'] as int;
+
+  /// Sales, mirror copies and driver bags the server refused, heartbeat and audit
+  /// aside. They leave the pending count when refused, so without their own count
+  /// a refusal would read as delivered.
+  int get refusedCount => _db.raw
+      .select('SELECT COUNT(*) c FROM outbox WHERE dead_at IS NOT NULL '
+          "AND kind IN ('$_order', '$_dishflow', '$_driver')")
+      .first['c'] as int;
+
   /// Kinds are part of the on-disk contract; see docs/ODOO_SYNC.md.
   static const String _heartbeat = 'device.status';
   static const String _order = 'order.push';
+  static const String _dishflow = 'dishflow.sale.push';
+  static const String _driver = 'dishflow.driver.order.push';
 }
