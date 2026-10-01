@@ -89,6 +89,9 @@ class StressDayRunner {
   final StressDeps deps;
   final Duration pace;
 
+  /// Longest a run waits for the primary's numbers before starting anyway.
+  static const Duration numberWait = Duration(seconds: 5);
+
   Future<StressDayReport> run(
     StressDayConfig config, {
     StressProgress? onProgress,
@@ -100,6 +103,7 @@ class StressDayRunner {
     d.attachProbe?.call(probe);
     final traces = <OrderTrace>[];
     try {
+      await d.readyToNumber?.call().timeout(numberWait, onTimeout: () {});
       final cashiers = _cashiers(d, config.cashiers);
       final names = config.mode == StressDayMode.fullDay
           ? kFullDayScenarios.keys.toList()
@@ -174,7 +178,8 @@ class StressDayRunner {
         methods.where((m) => m.isCash).firstOrNull ??
         methods.firstOrNull ??
         const PaymentMethod(id: 1, name: 'Cash', isCash: true);
-    final tables = StressTablePool(orders: d.orders, tables: d.tables);
+    final tables =
+        StressTablePool(orders: d.orders, tables: d.tables, deviceId: d.deviceId);
     final ticker = StressTimedTicker();
     return [
       for (var k = 1; k <= count.clamp(1, 8); k++)

@@ -155,6 +155,14 @@ void main() {
       await supply.settled;
 
       expect(supply.take(), isNull);
+      expect(supply.everFilled, isFalse);
+    });
+
+    test('remembers that the primary has answered once', () async {
+      final supply = LanNumberSupply(ask: counter)..prepare();
+      await supply.settled;
+
+      expect(supply.everFilled, isTrue);
     });
 
     test('is topped up only once half of it is used', () async {

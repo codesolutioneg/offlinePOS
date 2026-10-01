@@ -6708,6 +6708,7 @@ class _PosAppState extends State<PosApp> {
         if (lan == null || !lan.isRunning) return true;
         return await lan.reserveTable(table) != LanSeatAnswer.busy;
       },
+      readyToNumber: widget.lan?.readyToNumber,
     );
     await Navigator.of(context).push(
       MaterialPageRoute<void>(

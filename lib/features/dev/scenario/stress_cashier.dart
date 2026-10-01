@@ -162,11 +162,14 @@ class StressCashier {
     return o.uuid;
   }, where: table);
 
-  /// How many tables one take tries before calling the floor full.
-  static const int seatAttempts = 5;
+  /// Upper bound on the tables one take tries, so a primary refusing everything
+  /// ends the step instead of looping. Larger than any floor plus the lab's own.
+  static const int seatAttempts = 200;
 
   /// A free table the primary agreed to, or a failed step when the floor is full.
-  /// A table another till has just taken is passed over, as a cashier would.
+  /// A table another till has just taken is passed over, as a cashier would, and
+  /// the walk goes on through the whole floor: stopping after a handful called a
+  /// floor full while thirty tables stood empty behind the other till's holds.
   Future<String> takeTable(OrderTrace t) => step(t, 'take table', () async {
     final refused = <String>[];
     try {
@@ -179,7 +182,8 @@ class StressCashier {
       }
       throw StateError(refused.isEmpty
           ? 'no free table'
-          : 'no free table (taken on another till: ${refused.join(', ')})');
+          : 'no free table (${refused.length} taken on another till: '
+              '${refused.take(5).join(', ')}${refused.length > 5 ? ', …' : ''})');
     } finally {
       refused.forEach(tables.release);
     }

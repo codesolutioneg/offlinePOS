@@ -48,7 +48,7 @@ class LanNumberSupply {
   LanNumberSupply({
     required Future<List<String>> Function(int count) ask,
     this.batch = 8,
-    this.freshFor = const Duration(seconds: 60),
+    this.freshFor = const Duration(minutes: 5),
     DateTime Function()? now,
   })  : _ask = ask,
         _now = now ?? DateTime.now;
@@ -60,12 +60,18 @@ class LanNumberSupply {
   final int batch;
 
   /// How long a reserved number is kept before it is dropped for a newer one. A
-  /// number held over a quiet spell would otherwise print well below the ones the
-  /// primary has handed out since; a skipped number is the smaller harm.
+  /// number held over a long quiet spell would print well below the ones the
+  /// primary has handed out since. Minutes rather than seconds: every drop skips
+  /// up to [batch] numbers, and an empty reserve sends the next sale to a tagged
+  /// local number.
   final Duration freshFor;
 
   final List<({String number, DateTime at})> _held = [];
   Future<void>? _asking;
+  bool _everFilled = false;
+
+  /// Whether the primary has answered at least once since this till started.
+  bool get everFilled => _everFilled;
 
   /// How many fresh numbers are reserved right now.
   int get held {
@@ -88,6 +94,7 @@ class LanNumberSupply {
       for (final n in await _ask(count)) {
         if (int.tryParse(n) != null) _held.add((number: n, at: at));
       }
+      if (_held.isNotEmpty) _everFilled = true;
     } catch (_) {
       // The caller numbers locally; nothing to keep.
     } finally {

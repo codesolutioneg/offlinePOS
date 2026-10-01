@@ -353,6 +353,7 @@ class LanNode {
     if (!await _host.start()) _retryHost();
     await _beacon.start();
     _fabric.start();
+    _warmUpNumbers();
   }
 
   void _retryHost() {
@@ -375,6 +376,8 @@ class LanNode {
     _starting = null;
     _hostRetryTimer?.cancel();
     _hostRetryTimer = null;
+    _numberWarmUpTimer?.cancel();
+    _numberWarmUpTimer = null;
     _fabric.stop();
     await _beacon.stop();
     await _host.stop();
@@ -525,6 +528,28 @@ class LanNode {
     final n = _numbers.take();
     prepareOrderNumber();
     return n;
+  }
+
+  /// Reserve numbers now and settle once the primary has answered (or could not
+  /// be asked), so a run that pays within milliseconds of starting has them.
+  Future<void> readyToNumber() {
+    prepareOrderNumber();
+    return _numbers.settled;
+  }
+
+  /// How often a secondary that has not had numbers yet asks again. The first
+  /// sale after start-up would otherwise come before the first reserve.
+  static const Duration numberWarmUp = Duration(seconds: 10);
+  Timer? _numberWarmUpTimer;
+
+  void _warmUpNumbers() {
+    _numberWarmUpTimer?.cancel();
+    if (!_isSecondary()) return;
+    prepareOrderNumber();
+    _numberWarmUpTimer = Timer.periodic(numberWarmUp, (timer) {
+      if (_numbers.everFilled) return timer.cancel();
+      prepareOrderNumber();
+    });
   }
 
   /// Whether the shared counter belongs to another till. Such a till must not

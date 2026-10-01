@@ -32,6 +32,7 @@ class StressDeps {
     this.attachProbe,
     this.heldPrints,
     this.reserveSeat,
+    this.readyToNumber,
   });
 
   final Db db;
@@ -67,6 +68,11 @@ class StressDeps {
   /// one. False when another till has just taken it. Null seats without asking.
   final Future<bool> Function(String table)? reserveSeat;
 
+  /// Settles once a secondary holds order numbers from the primary. Awaited
+  /// before the cashiers start: they pay within milliseconds, faster than any
+  /// cashier, and would otherwise all take tagged local numbers.
+  final Future<void> Function()? readyToNumber;
+
   /// The same till with printing switched off for one run.
   StressDeps withoutPrinting() => StressDeps(
     db: db,
@@ -78,6 +84,7 @@ class StressDeps {
     drivers: drivers,
     zones: zones,
     reserveSeat: reserveSeat,
+    readyToNumber: readyToNumber,
   );
 
   bool get prints => fireKitchen != null;
