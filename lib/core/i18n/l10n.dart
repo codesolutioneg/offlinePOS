@@ -362,7 +362,8 @@ const Map<String, String> _ar = {
   'Locked. Press Begin to sign in, or place your finger on the reader.':
       'الشاشة مقفولة. اضغط بداية لتسجيل الدخول، أو ضع بصمتك على الجهاز.',
   'Fingerprint not recognised': 'البصمة غير معروفة',
-  'Manager fingerprint required': 'مطلوب بصمة مدير',
+  'The shift is not open yet. A manager must open it first.':
+      'الوردية لم تُفتح بعد. يجب أن يفتحها المدير أولاً.',
   'Not sent yet': 'لم تُرسل للمطبخ',
   'Bill printed, not paid': 'طُبع الحساب ولم يُدفع',
   'Delivery orders': 'طلبات التوصيل',
@@ -892,7 +893,6 @@ const Map<String, String> _ar = {
   'Paid': 'المدفوع',
   'balance': 'المتبقي',
   'Search your name': 'ابحث عن اسمك',
-  'Select user': 'اختر المستخدم',
   'Tap your name, then enter your PIN': 'اضغط على اسمك ثم أدخل الرقم السري',
   'Select your name, then enter your PIN': 'اختر اسمك ثم أدخل الرقم السري',
   'Signing in as': 'تسجيل الدخول باسم',

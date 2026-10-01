@@ -44,6 +44,7 @@ import '../core/printing/escpos.dart';
 import '../core/widgets/feedback.dart';
 import '../core/widgets/icon_pad.dart';
 import '../core/widgets/numeric_keypad.dart';
+import '../core/widgets/passing_note.dart';
 import '../core/printing/kitchen_ticket.dart';
 import '../core/printing/print_probe.dart';
 import '../core/printing/printer_logo.dart';
@@ -177,7 +178,6 @@ class PosApp extends StatefulWidget {
     this.reservations,
     this.assignments,
     this.dishflow,
-    this.loginManagersOnly = true,
     this.lockedFloorHome = false,
     this.nowFn = DateTime.now,
   });
@@ -189,10 +189,6 @@ class PosApp extends StatefulWidget {
   /// The clock the idle lock reads. Injectable for the tests, exactly as the
   /// floor's booking badges inject theirs; production reads the real one.
   final DateTime Function() nowFn;
-
-  /// When true, the lock screen lists managers only. Cashiers clock in from
-  /// Attendance and open tables with their PIN.
-  final bool loginManagersOnly;
 
   /// Tables booked ahead. Null on a shop that does not take bookings and in the
   /// suites that predate them, and then the floor reads exactly as it did.
@@ -1700,7 +1696,7 @@ class _PosAppState extends State<PosApp> {
                 : session == null
                     ? (_showLockedFloor
                         ? _lockedFloor()
-                        : _loginScreen(onSignedIn: _signedIn))
+                        : _loginScreen(onSignedIn: _admit))
                     : _primaryBlocked
                         ? _waitingForPrimary(session)
                         : _home(session),
@@ -1718,12 +1714,38 @@ class _PosAppState extends State<PosApp> {
         users: widget.users,
         onSignedIn: onSignedIn,
         provisioningPin: _provisioningPin,
-        managersOnly: widget.loginManagersOnly,
+        attendance: widget.attendance,
+        refusal: _signInRefusal,
         fingerprints: widget.fingerprints,
         fingerprintStore: widget.fingerprintStore,
         asPopup: asPopup,
         onClose: onClose,
       );
+
+  /// Opening the shift is a manager's job, so until one is open (here, or on the
+  /// primary and passed down the LAN) only a manager unlocks the till. A roster
+  /// with no manager at all is not gated, or nobody could ever open one.
+  String? _signInRefusal(Cashier who) {
+    if (who.isManager || widget.shifts.currentOpenShift() != null) return null;
+    final anyManager = widget.users.active().any((u) => u.isManager);
+    return anyManager ? 'The shift is not open yet. A manager must open it first.' : null;
+  }
+
+  /// Signing in is also clocking in: whoever unlocks the till is at work, so
+  /// they need not go round by the attendance card first.
+  void _admit(Cashier cashier) {
+    if (cashier.id != BootstrapCashier.id &&
+        !widget.attendance.isClockedIn(cashier.id)) {
+      widget.attendance.clockIn(cashier.id);
+      final ctx = _navigator.currentContext;
+      final overlay = _navigator.currentState?.overlay;
+      if (ctx != null && overlay != null) {
+        showPassingNote(overlay, '${cashier.name}: ${tr(ctx, 'Clocked in')}',
+            key: const Key('signed-in-clocked-in'));
+      }
+    }
+    _signedIn(cashier);
+  }
 
   /// The locked floor stands in for the sign-in screen once the till is set up. A
   /// fresh install still lands on sign-in, where the setup PIN is shown.
@@ -1794,7 +1816,7 @@ class _PosAppState extends State<PosApp> {
           onClose: () => Navigator.of(loginContext).pop(),
           onSignedIn: (cashier) {
             Navigator.of(loginContext).pop();
-            _signedIn(cashier);
+            _admit(cashier);
           },
         ),
       ),
@@ -1845,19 +1867,16 @@ class _PosAppState extends State<PosApp> {
         switch (outcome) {
           case FingerprintIdentifyMatch(:final userId):
             final user = widget.users.byId(userId);
-            final managers = widget.users.active().where((u) => u.isManager);
-            if (user != null &&
-                widget.loginManagersOnly &&
-                managers.isNotEmpty &&
-                !user.isManager) {
-              _lockToast('Manager fingerprint required', ToastKind.error);
+            final refusal = user == null ? null : _signInRefusal(user);
+            if (refusal != null) {
+              _lockToast(refusal, ToastKind.error);
               await Future<void>.delayed(const Duration(seconds: 2));
               continue;
             }
             final result = await widget.auth.unlockByFingerprint(userId);
             if (!live()) break;
             if (result is AuthOk) {
-              _signedIn(result.cashier);
+              _admit(result.cashier);
               return;
             }
             _lockToast('Fingerprint not recognised', ToastKind.error);

@@ -151,6 +151,9 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
+    expect(attendance.isClockedIn('sara'), isTrue,
+        reason: 'signing in is also clocking in');
+    attendance.clockOut('sara');
     await openReports(t);
 
     expect(find.byKey(const Key('rep-hours')), findsOneWidget,

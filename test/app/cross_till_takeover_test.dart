@@ -243,7 +243,7 @@ void main() {
     return built;
   }
 
-  Widget app(LanNode? lan, {bool loginManagersOnly = true}) {
+  Widget app(LanNode? lan) {
     final outbox = Outbox(store: SqliteOutboxStore(db), senders: {});
     return PosApp(
       auth: AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit),
@@ -272,7 +272,6 @@ void main() {
       attendance: AttendanceStore(db),
       config: const TillConfig(),
       lan: lan,
-      loginManagersOnly: loginManagersOnly,
     );
   }
 
@@ -412,7 +411,7 @@ void main() {
     settings.lanAllowTakeover = false;
     final lan = node();
 
-    await t.pumpWidget(app(lan, loginManagersOnly: false));
+    await t.pumpWidget(app(lan));
     await t.tap(find.byKey(const Key('user-ana')));
     await t.pumpAndSettle();
     for (final d in '4321'.split('')) {
@@ -453,7 +452,7 @@ void main() {
     final tab = tabOnTheOtherTill();
     final lan = node();
 
-    await t.pumpWidget(app(lan, loginManagersOnly: false));
+    await t.pumpWidget(app(lan));
     await t.tap(find.byKey(const Key('user-ana')));
     await t.pumpAndSettle();
     for (final d in '4321'.split('')) {

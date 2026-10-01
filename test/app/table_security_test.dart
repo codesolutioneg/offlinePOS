@@ -112,7 +112,6 @@ void main() {
       settings: settings,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
-      loginManagersOnly: false,
       config: const TillConfig(),
     );
   }

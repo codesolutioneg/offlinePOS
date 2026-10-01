@@ -123,7 +123,6 @@ void main() {
       customers: CustomerStore(db),
       attendance: attendance,
       assignments: assignments,
-      loginManagersOnly: false,
       config: const TillConfig(),
     );
   }

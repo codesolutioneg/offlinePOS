@@ -31,11 +31,11 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Widget app() => MaterialApp(
+  Widget app({String? Function(Cashier)? refusal}) => MaterialApp(
         home: LoginScreen(
           auth: auth, users: users,
           onSignedIn: (c) => signedIn = c,
-          managersOnly: false,
+          refusal: refusal,
         ),
       );
 
@@ -54,16 +54,53 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  testWidgets('lists the cashiers held on the device', (t) async {
+  testWidgets('lists everyone held on the device as tiles', (t) async {
+    await auth.enrol(id: 'mo', name: 'Mo', pin: '9999', role: 'manager');
     await t.pumpWidget(app());
-    expect(find.byKey(const Key('account-dropdown')), findsOneWidget);
+    expect(find.byKey(const Key('login-staff-grid')), findsOneWidget);
     expect(find.byKey(const Key('user-sara')), findsOneWidget);
+    expect(find.byKey(const Key('user-mo')), findsOneWidget);
   });
 
-  testWidgets('the keypad is inert until a cashier is picked', (t) async {
+  testWidgets('the keypad only appears once a name is picked', (t) async {
     await t.pumpWidget(app());
-    final key = t.widget<InkWell>(find.byKey(const Key('key-1')));
-    expect(key.onTap, isNull);
+    expect(find.byKey(const Key('key-1')), findsNothing);
+    await t.tap(find.byKey(const Key('user-sara')));
+    await t.pump();
+    expect(find.byKey(const Key('key-1')), findsOneWidget);
+    expect(find.byKey(const Key('login-picked-name')), findsOneWidget);
+  });
+
+  testWidgets('back returns to the roster', (t) async {
+    await t.pumpWidget(app());
+    await t.tap(find.byKey(const Key('user-sara')));
+    await t.pump();
+    await t.tap(find.byKey(const Key('login-back')));
+    await t.pump();
+    expect(find.byKey(const Key('login-staff-grid')), findsOneWidget);
+    expect(find.byKey(const Key('key-1')), findsNothing);
+  });
+
+  testWidgets('a refused person never reaches the keypad', (t) async {
+    await t.pumpWidget(app(refusal: (_) => 'Shift closed'));
+    await t.tap(find.byKey(const Key('user-sara')));
+    await t.pump();
+    expect(find.byKey(const Key('key-1')), findsNothing);
+    expect(find.text('Shift closed'), findsOneWidget);
+    expect(signedIn, isNull);
+  });
+
+  testWidgets('a refusal that lands mid-PIN is checked before the PIN',
+      (t) async {
+    var shut = false;
+    await t.pumpWidget(app(refusal: (_) => shut ? 'Shift closed' : null));
+    await t.tap(find.byKey(const Key('user-sara')));
+    await t.pump();
+    shut = true;
+    await enter(t, '1234');
+    expect(signedIn, isNull);
+    expect(auth.signedIn, isNull);
+    expect(find.text('Shift closed'), findsOneWidget);
   });
 
   testWidgets('the right PIN signs in with no network', (t) async {
@@ -117,23 +154,17 @@ void main() {
     expect(t.widget<Text>(find.byKey(const Key('pin-dots'))).data, '•');
   });
 
-  testWidgets('the roster is always a dropdown', (t) async {
-    await t.pumpWidget(app());
-    expect(find.byKey(const Key('account-dropdown')), findsOneWidget);
-    expect(find.byKey(const Key('account-search')), findsNothing);
-  });
-
-  testWidgets('picking from the dropdown unlocks the keypad', (t) async {
+  testWidgets('picking a tile from a long roster signs that person in',
+      (t) async {
     for (var i = 0; i < 7; i++) {
       await auth.enrol(id: 'staff-$i', name: 'Staff $i', pin: '1234');
     }
+    await t.binding.setSurfaceSize(const Size(800, 1400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(app());
     await t.pumpAndSettle();
 
-    expect(find.byKey(const Key('account-dropdown')), findsOneWidget);
-    await t.tap(find.byKey(const Key('account-dropdown')));
-    await t.pumpAndSettle();
-    await t.tap(find.text('Staff 3').last);
+    await t.tap(find.byKey(const Key('user-staff-3')));
     await t.pumpAndSettle();
 
     await enter(t, '1234');

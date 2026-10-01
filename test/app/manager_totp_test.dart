@@ -91,7 +91,6 @@ void main() {
       settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
-      loginManagersOnly: false,
       config: const TillConfig(),
     );
   }

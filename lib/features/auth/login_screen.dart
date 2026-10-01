@@ -4,10 +4,12 @@ import '../../core/auth/auth_service.dart';
 import '../../core/auth/fingerprint_service.dart';
 import '../../core/auth/fingerprint_store.dart';
 import '../../core/auth/user_store.dart';
+import '../../core/db/attendance_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/dishflow_brand.dart';
 import 'fingerprint_or_pin_dialog.dart';
+import 'login_staff_grid.dart';
 
 /// PIN sign-in.
 ///
@@ -15,9 +17,10 @@ import 'fingerprint_or_pin_dialog.dart';
 /// without a line. There is no probe of a remote service that can hang, which is the
 /// failure mode that leaves a cashier staring at a spinner with no way in.
 ///
-/// Laid out as a till lock screen: who is signing in as a dropdown, the PIN as a
-/// row of dots, and a pad big enough to hit at speed. A shift change is a quick
-/// pick-and-PIN, because it happens with a queue watching.
+/// Laid out as a till lock screen in two steps: everyone on the roster as tiles,
+/// then the picked person's PIN as a row of dots over a pad big enough to hit at
+/// speed. A shift change is a quick pick-and-PIN, because it happens with a queue
+/// watching.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
     super.key,
@@ -25,7 +28,8 @@ class LoginScreen extends StatefulWidget {
     required this.users,
     required this.onSignedIn,
     this.provisioningPin,
-    this.managersOnly = true,
+    this.attendance,
+    this.refusal,
     this.fingerprints,
     this.fingerprintStore,
     this.asPopup = false,
@@ -42,9 +46,13 @@ class LoginScreen extends StatefulWidget {
   final UserStore users;
   final void Function(Cashier) onSignedIn;
 
-  /// When true (product default), only managers unlock the till. Cashiers appear
-  /// after Attendance → Clock in and open tables with their own PIN.
-  final bool managersOnly;
+  /// Colours each tile by whether that person is on the clock.
+  final AttendanceStore? attendance;
+
+  /// Why this person may not unlock the till right now (an untranslated
+  /// message), or null when they may. Asked before the PIN and again before it
+  /// is checked, since a shift can open on another till in between.
+  final String? Function(Cashier)? refusal;
 
   /// ZK reader when present: unlock by finger, else PIN.
   final FingerprintService? fingerprints;
@@ -67,9 +75,21 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _message;
   bool _busy = false;
 
+  /// Sends [who] back to the roster with the reason when the gate refuses them.
+  bool _refused(Cashier who) {
+    final why = widget.refusal?.call(who);
+    if (why == null) return false;
+    setState(() {
+      _selected = null;
+      _pin = '';
+      _message = tr(context, why);
+    });
+    return true;
+  }
+
   Future<void> _submit() async {
     final who = _selected;
-    if (who == null || _busy) return;
+    if (who == null || _busy || _refused(who)) return;
     setState(() => _busy = true);
     final result = await widget.auth.unlock(who.id, _pin);
     if (!mounted) return;
@@ -107,8 +127,13 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     if (result.isFingerprint) {
-      final authResult =
-          await widget.auth.unlockByFingerprint(result.matchedUserId!);
+      final matched = result.matchedUserId;
+      final owner = matched == null ? null : widget.users.byId(matched);
+      if (owner != null && _refused(owner)) {
+        setState(() => _busy = false);
+        return;
+      }
+      final authResult = await widget.auth.unlockByFingerprint(matched ?? '');
       if (!mounted) return;
       setState(() => _busy = false);
       _applyUnlock(authResult);
@@ -120,6 +145,10 @@ class _LoginScreenState extends State<LoginScreen> {
         _busy = false;
         _message = tr(context, 'Pick who is signing in');
       });
+      return;
+    }
+    if (_refused(who)) {
+      setState(() => _busy = false);
       return;
     }
     final authResult = await widget.auth.unlock(who.id, result.pin!);
@@ -160,10 +189,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final active = widget.users.active();
-    final managers = active.where((u) => u.isManager).toList();
-    // Managers unlock the till. Until a manager exists, everyone can (setup).
-    final staff = widget.managersOnly && managers.isNotEmpty ? managers : active;
+    final staff = widget.users.active();
     final pin = widget.provisioningPin;
     final form = Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -197,23 +223,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Text(tr(context, 'No cashiers on this device yet'),
                         key: const Key('no-users')),
                   )
-                else ...[
-                  _accountSelector(staff),
-                  const SizedBox(height: 12),
-                  _pinDots(context),
-                  if (_message != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(_message!,
-                          key: const Key('login-message'),
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              color: scheme.error,
-                              fontWeight: FontWeight.w600)),
-                    ),
-                  const SizedBox(height: 10),
-                  _keypad(),
-                ],
+                else if (_selected == null)
+                  ..._rosterStep(staff)
+                else
+                  ..._pinStep(),
               ],
             ),
           ),
@@ -318,89 +331,108 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
 
+  /// Step one: who is signing in. The hint says the order of things, and a
+  /// refusal from the gate lands on the same row.
+  List<Widget> _rosterStep(List<Cashier> staff) => [
+        Text(tr(context, 'Select your name, then enter your PIN'),
+            key: const Key('pick-name-hint'),
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                fontSize: 13,
+                color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        _messageLine(),
+        const SizedBox(height: 10),
+        LoginStaffGrid(
+            staff: staff, attendance: widget.attendance, onPick: _choose),
+        if (widget.fingerprints != null) ...[
+          const SizedBox(height: 10),
+          SizedBox(width: 300, child: _fingerprintButton()),
+        ],
+      ];
+
+  /// Step two: the picked person's PIN, with a way back to the roster.
+  List<Widget> _pinStep() => [
+        _pickedHeader(),
+        const SizedBox(height: 8),
+        _pinDots(context),
+        _messageLine(),
+        const SizedBox(height: 10),
+        _keypad(),
+      ];
+
+  Widget _pickedHeader() {
+    final who = _selected;
+    return Row(children: [
+      IconButton(
+        key: const Key('login-back'),
+        icon: const Icon(Icons.arrow_back),
+        tooltip: tr(context, 'Back'),
+        onPressed: _busy ? null : _backToRoster,
+      ),
+      Expanded(
+        child: Text(who?.name ?? '',
+            key: const Key('login-picked-name'),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+      ),
+      const SizedBox(width: 48),
+    ]);
+  }
+
+  Widget _messageLine() {
+    final message = _message;
+    if (message == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Text(message,
+          key: const Key('login-message'),
+          textAlign: TextAlign.center,
+          style: TextStyle(
+              color: Theme.of(context).colorScheme.error,
+              fontWeight: FontWeight.w600)),
+    );
+  }
+
   /// The typed PIN as dots the customer side of the counter cannot read. One Text
   /// so its length is checkable, sized to be legible from the cashier's arm's
-  /// length; the reserved height stops the pad jumping as digits land. Until a
-  /// name is picked the same row explains the greyed pad instead of sitting
-  /// empty, so a new cashier is told the order of things rather than left to
-  /// poke dead keys.
+  /// length; the reserved height stops the pad jumping as digits land.
   Widget _pinDots(BuildContext context) => SizedBox(
         height: 32,
         child: Center(
-          child: _selected == null
-              ? Text(tr(context, 'Select your name, then enter your PIN'),
-                  key: const Key('pick-name-hint'),
-                  style: TextStyle(
-                      fontSize: 13,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant))
-              : Text('•' * _pin.length,
-                  key: const Key('pin-dots'),
-                  style: TextStyle(
-                      fontSize: 26,
-                      letterSpacing: 8,
-                      color: Theme.of(context).colorScheme.primary)),
+          child: Text('•' * _pin.length,
+              key: const Key('pin-dots'),
+              style: TextStyle(
+                  fontSize: 26,
+                  letterSpacing: 8,
+                  color: Theme.of(context).colorScheme.primary)),
         ),
       );
 
-  void _choose(Cashier c) => setState(() {
-        _selected = c;
+  void _choose(Cashier c) {
+    if (_busy || _refused(c)) return;
+    setState(() {
+      _selected = c;
+      _pin = '';
+      _message = null;
+    });
+  }
+
+  void _backToRoster() => setState(() {
+        _selected = null;
         _pin = '';
         _message = null;
       });
 
-  /// One dropdown for every roster size — easier than a tile wall once the
-  /// shop has more than a few cashiers.
-  Widget _accountSelector(List<Cashier> staff) {
-    final selectedId =
-        staff.any((c) => c.id == _selected?.id) ? _selected!.id : null;
-    return Column(
-      children: [
-        DropdownButtonFormField<String>(
-          key: const Key('account-dropdown'),
-          value: selectedId,
-          isExpanded: true,
-          decoration: InputDecoration(
-            labelText: tr(context, 'Select user'),
-            prefixIcon: const Icon(Icons.person_outline),
-            border: const OutlineInputBorder(),
-          ),
-          hint: Text(tr(context, 'Select user')),
-          items: [
-            for (final c in staff)
-              DropdownMenuItem<String>(
-                value: c.id,
-                child: Text(c.name, overflow: TextOverflow.ellipsis),
-              ),
-          ],
-          onChanged: (id) {
-            if (id == null) return;
-            final match = staff.where((c) => c.id == id);
-            if (match.isEmpty) return;
-            _choose(match.first);
-          },
+  Widget _fingerprintButton() => SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          key: const Key('login-fingerprint'),
+          onPressed: _busy ? null : _submitFingerprint,
+          icon: const Icon(Icons.fingerprint),
+          label: Text(tr(context, 'Use fingerprint')),
         ),
-        // Tiny invisible hit-targets so wiring tests can pick `user-*` without
-        // opening the dropdown (same keys as before the dropdown change).
-        Opacity(
-          opacity: 0,
-          child: Wrap(
-            children: [
-              for (final c in staff)
-                SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: GestureDetector(
-                    key: Key('user-${c.id}'),
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => _choose(c),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+      );
 
   Widget _keypad() => SizedBox(
         width: 300,
@@ -410,15 +442,7 @@ class _LoginScreenState extends State<LoginScreen> {
             if (widget.fingerprints != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    key: const Key('login-fingerprint'),
-                    onPressed: _busy ? null : _submitFingerprint,
-                    icon: const Icon(Icons.fingerprint),
-                    label: Text(tr(context, 'Use fingerprint')),
-                  ),
-                ),
+                child: _fingerprintButton(),
               ),
             GridView.count(
               shrinkWrap: true,
