@@ -6152,7 +6152,8 @@ class _PosAppState extends State<PosApp> {
               // Dishflow: arm consolidated merge. Session customer comes from the branch
               // in Odoo (Session close tab); we pull it live if this till has not cached it.
               onPrepareCloseSync: () async {
-                final stress = stressOrderCount(widget.outboxStore.db);
+                final stress = stressOrderCount(widget.outboxStore.db,
+                    deviceId: widget.deviceId);
                 if (stress > 0) {
                   return tr(
                     context,

@@ -84,6 +84,18 @@ void main() {
     expect(stressOrderCount(till.db), 0);
   });
 
+  test('another till\'s lab copies do not hold this till\'s close', () {
+    final own = paidLabOrder();
+    till.orders.save(
+      Order.fromMap({...own.toMap(), 'uuid': 'copy-1', 'device_id': 'till-2'}),
+      announce: false,
+    );
+
+    expect(stressOrderCount(till.db), 2);
+    expect(stressOrderCount(till.db, deviceId: till.deviceId), 1);
+    expect(stressOrderCount(till.db, deviceId: 'till-3'), 0);
+  });
+
   group('Clean up reaches past the till', () {
     late Order sale;
 

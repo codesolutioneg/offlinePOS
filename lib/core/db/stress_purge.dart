@@ -13,12 +13,18 @@ List<String> stressOrderUuids(Db db) => db.raw
     .map((r) => r['uuid'] as String)
     .toList();
 
-/// How many Stress Lab orders are on this till. A shift does not close over any.
-int stressOrderCount(Db db) =>
-    db.raw.select('SELECT COUNT(*) c FROM orders WHERE payload LIKE ?', [
-          kStressNoteMatch,
-        ]).first['c']
-        as int;
+/// How many Stress Lab orders are on this till, or only those [deviceId] rang.
+///
+/// A shift does not close over its own: those are the ones its queue holds. Copies
+/// from another till never reach this till's queue, and a shop build that only
+/// received them has no Clean up button to clear them with.
+int stressOrderCount(Db db, {String? deviceId}) => db.raw
+    .select(
+      'SELECT COUNT(*) c FROM orders WHERE payload LIKE ?'
+      '${deviceId == null ? '' : ' AND device_id = ?'}',
+      [kStressNoteMatch, ?deviceId],
+    )
+    .first['c'] as int;
 
 /// Remove every Stress Lab order on this till, its own and the copies replicated
 /// from other tills, with anything still queued for them. Returns how many went.
