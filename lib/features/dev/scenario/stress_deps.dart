@@ -31,6 +31,7 @@ class StressDeps {
     this.zones,
     this.attachProbe,
     this.heldPrints,
+    this.reserveSeat,
   });
 
   final Db db;
@@ -62,6 +63,10 @@ class StressDeps {
   final void Function(PrintProbe? probe)? attachProbe;
   final int Function()? heldPrints;
 
+  /// Asks the shop's primary for a table, the way the floor does before seating
+  /// one. False when another till has just taken it. Null seats without asking.
+  final Future<bool> Function(String table)? reserveSeat;
+
   /// The same till with printing switched off for one run.
   StressDeps withoutPrinting() => StressDeps(
     db: db,
@@ -72,6 +77,7 @@ class StressDeps {
     newSession: newSession,
     drivers: drivers,
     zones: zones,
+    reserveSeat: reserveSeat,
   );
 
   bool get prints => fireKitchen != null;

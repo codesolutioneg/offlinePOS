@@ -162,10 +162,26 @@ class StressCashier {
     return o.uuid;
   }, where: table);
 
-  /// A free table, or a failed step when the floor is full.
-  Future<String> takeTable(OrderTrace t) => step(t, 'take table', () {
-    final table = tables.take();
-    if (table == null) throw StateError('no free table');
-    return table;
+  /// How many tables one take tries before calling the floor full.
+  static const int seatAttempts = 5;
+
+  /// A free table the primary agreed to, or a failed step when the floor is full.
+  /// A table another till has just taken is passed over, as a cashier would.
+  Future<String> takeTable(OrderTrace t) => step(t, 'take table', () async {
+    final refused = <String>[];
+    try {
+      for (var i = 0; i < seatAttempts; i++) {
+        final table = tables.take();
+        if (table == null) break;
+        final reserve = deps.reserveSeat;
+        if (reserve == null || await reserve(table)) return table;
+        refused.add(table);
+      }
+      throw StateError(refused.isEmpty
+          ? 'no free table'
+          : 'no free table (taken on another till: ${refused.join(', ')})');
+    } finally {
+      refused.forEach(tables.release);
+    }
   });
 }

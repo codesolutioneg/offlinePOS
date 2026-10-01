@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/stress_purge.dart';
 import 'package:offline_pos/core/printing/print_probe.dart';
 import 'package:offline_pos/features/dev/scenario/stress_day_runner.dart';
+import 'package:offline_pos/features/dev/scenario/stress_deps.dart';
 import 'package:offline_pos/features/dev/scenario/stress_integrity.dart';
 import 'package:offline_pos/features/dev/scenario/stress_trace.dart';
 import 'package:offline_pos/features/dev/stress_lab_store.dart';
@@ -52,6 +53,40 @@ void main() {
     );
     await store.cleanup();
     expect(stressOrderCount(till.db), 0);
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('a table the primary says another till has is passed over', () async {
+    final base = labDeps(till);
+    final asked = <String>[];
+    final refused = <String>{};
+    final deps = StressDeps(
+      db: base.db,
+      deviceId: base.deviceId,
+      orders: base.orders,
+      tables: base.tables,
+      catalogue: base.catalogue,
+      newSession: base.newSession,
+      reserveSeat: (table) async {
+        asked.add(table);
+        if (refused.length < 3 && !refused.contains(table)) refused.add(table);
+        return !refused.contains(table);
+      },
+    );
+
+    final report = await StressDayRunner(deps: deps, pace: Duration.zero).run(
+      const StressDayConfig(
+        mode: StressDayMode.fullDay,
+        orders: 20,
+        cashiers: 3,
+        printing: false,
+      ),
+    );
+
+    expect(refused, hasLength(3));
+    expect(report.withProblems, 0, reason: problemsOf(report));
+    for (final t in report.traces) {
+      expect(refused.contains(t.table), isFalse, reason: '${t.index} ${t.scenario}');
+    }
   }, timeout: const Timeout(Duration(minutes: 2)));
 
   test('the delivery run walks every delivery type to delivered', () async {

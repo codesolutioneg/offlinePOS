@@ -6696,6 +6696,11 @@ class _PosAppState extends State<PosApp> {
       zones: widget.delivery == null ? null : () => widget.delivery!.zones(),
       attachProbe: (probe) => _printProbe = probe,
       heldPrints: () => _receiptPrinter.spooledCount,
+      reserveSeat: (table) async {
+        final lan = widget.lan;
+        if (lan == null || !lan.isRunning) return true;
+        return await lan.reserveTable(table) != LanSeatAnswer.busy;
+      },
     );
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
