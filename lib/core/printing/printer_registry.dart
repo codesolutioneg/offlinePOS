@@ -20,6 +20,7 @@ class ConfiguredPrinter {
     this.identity,
     this.lastSeenAt,
     this.backup,
+    this.pinned = false,
   });
 
   /// The stable, human-chosen identity: 'kitchen', 'bar', 'receipt'. Receipts are
@@ -43,6 +44,11 @@ class ConfiguredPrinter {
   /// through a lease change too.
   final String? backup;
 
+  /// [host] was typed in by support, so a sweep never moves it: a printer that is
+  /// off at that address spools there rather than being swapped for whichever
+  /// printer happens to answer on the range.
+  final bool pinned;
+
   ConfiguredPrinter copyWith({
     String? host,
     int? port,
@@ -57,6 +63,7 @@ class ConfiguredPrinter {
         identity: identity ?? this.identity,
         lastSeenAt: lastSeenAt ?? this.lastSeenAt,
         backup: backup ?? this.backup,
+        pinned: pinned,
       );
 
   Map<String, Object?> toMap() => {
@@ -66,6 +73,7 @@ class ConfiguredPrinter {
         'identity': identity,
         'last_seen_at': lastSeenAt?.toUtc().toIso8601String(),
         'backup': backup,
+        'pinned': pinned,
       };
 
   /// Returns null for a row that cannot be trusted, so one corrupt record cannot
@@ -83,6 +91,7 @@ class ConfiguredPrinter {
       backup: map['backup'] is String && (map['backup'] as String).isNotEmpty
           ? map['backup'] as String
           : null,
+      pinned: map['pinned'] == true,
     );
   }
 }
@@ -203,7 +212,15 @@ class PrinterRegistry {
   /// The spare survives a re-point: support typing in a new address for the kitchen
   /// printer is not saying the shop stopped having a spare. [setBackup] is how it
   /// changes or goes away.
-  void remember(String name, {String? host, int port = 9100, String? backup}) {
+  ///
+  /// [pinned] is for an address support typed in: see [ConfiguredPrinter.pinned].
+  void remember(
+    String name, {
+    String? host,
+    int port = 9100,
+    String? backup,
+    bool pinned = false,
+  }) {
     final existing = _printers[name];
     final spare = backup ?? existing?.backup;
     _printers[name] = ConfiguredPrinter(
@@ -217,6 +234,7 @@ class PrinterRegistry {
       // is dropped rather than carried onto whatever now answers there.
       identity: existing != null && existing.host == host ? existing.identity : null,
       lastSeenAt: existing != null && existing.host == host ? existing.lastSeenAt : null,
+      pinned: pinned && host != null,
     );
     _identityAsked.remove(name);
     // Pointing the till somewhere new is an explicit statement that the world
@@ -238,6 +256,7 @@ class PrinterRegistry {
       identity: printer.identity,
       lastSeenAt: printer.lastSeenAt,
       backup: spare,
+      pinned: printer.pinned,
     );
     onChanged?.call();
   }
@@ -339,7 +358,8 @@ class PrinterRegistry {
     Duration left() => resolveBudget - spent.elapsed;
 
     final lastKnown = printer.host;
-    if (tryLastKnown &&
+    final pinned = printer.pinned && lastKnown != null;
+    if ((tryLastKnown || pinned) &&
         lastKnown != null &&
         await _discovery.probe(lastKnown, port: printer.port)) {
       _sweepFailedAt.remove(name);
@@ -351,6 +371,7 @@ class PrinterRegistry {
     // and the two look identical from here, so a sweep that finds nothing buys a
     // cooling-off period. Without it a dead printer costs a full subnet sweep per
     // receipt, for as long as it stays dead.
+    if (pinned) return null;
     if (tryLastKnown && sweepHeldOffFor(name)) return null;
 
     final candidates =

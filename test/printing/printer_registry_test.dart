@@ -88,6 +88,42 @@ void main() {
     expect(registry['receipt']!.host, '192.168.0.200');
   });
 
+  group('an address typed in by hand', () {
+    test('is never swapped for another printer on the range', () async {
+      final subnet = StillSubnet({'192.168.10.36'});
+      final registry = PrinterRegistry(discovery: subnet, identify: anonymous)
+        ..remember('receipt', host: '192.168.10.150', pinned: true);
+
+      expect(await registry.resolve('receipt'), isNull);
+      expect(await registry.refresh('receipt'), isNull);
+      expect(registry['receipt']!.host, '192.168.10.150');
+      expect(subnet.sweeps, 0);
+    });
+
+    test('is used as soon as the printer there answers', () async {
+      final subnet = StillSubnet({'192.168.10.150', '192.168.10.36'});
+      final registry = PrinterRegistry(discovery: subnet, identify: anonymous)
+        ..remember('receipt', host: '192.168.10.150', pinned: true);
+
+      expect(await registry.refresh('receipt'), '192.168.10.150');
+    });
+
+    test('stays locked across a restart and a new spare', () {
+      final registry = PrinterRegistry(discovery: StillSubnet(), identify: anonymous)
+        ..remember('receipt', host: '192.168.10.150', pinned: true)
+        ..remember('bar', host: '192.168.10.158')
+        ..setBackup('receipt', 'bar');
+      final restored = PrinterRegistry.fromMap(
+        registry.toMap(),
+        discovery: StillSubnet(),
+        identify: anonymous,
+      );
+
+      expect(restored['receipt']!.pinned, isTrue);
+      expect(restored['bar']!.pinned, isFalse);
+    });
+  });
+
   test('refresh sweeps without waiting for the old address to fail', () async {
     final subnet = StillSubnet({'192.168.8.77'});
     final registry = PrinterRegistry(discovery: subnet, identify: anonymous)

@@ -691,7 +691,12 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
     if (oldName != null && oldName != name) {
       widget.printers.forget(oldName);
     }
-    widget.printers.remember(name, host: host.isEmpty ? null : host, port: port);
+    widget.printers.remember(
+      name,
+      host: host.isEmpty ? null : host,
+      port: port,
+      pinned: true,
+    );
     // After the remember, so it lands on the printer that now exists under this
     // name, and explicitly, because clearing the spare has to be possible too.
     widget.printers.setBackup(name, _backup.isEmpty ? null : _backup);

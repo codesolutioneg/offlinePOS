@@ -209,7 +209,12 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     if (result.deleted) {
       registry.forget(result.name);
     } else {
-      registry.remember(result.name, host: result.host, port: result.port);
+      registry.remember(
+        result.name,
+        host: result.host,
+        port: result.port,
+        pinned: true,
+      );
     }
     if (mounted) setState(() {});
   }
