@@ -419,6 +419,58 @@ void main() {
       expect(result, isNull);
     });
 
+    group('an item shared four ways and already applied', () {
+      /// Four checks on the table, each holding its own quarter-pizza line, as
+      /// the session leaves them after the split is applied.
+      List<Order> quartered() {
+        session.addProduct(pizza);
+        session.addProduct(cola);
+        final p = lineFor(10);
+        session.splitIntoChecks([
+          [(line: p, quantity: 0.25), (line: lineFor(11), quantity: 1)],
+          [(line: p, quantity: 0.25)],
+          [(line: p, quantity: 0.25)],
+          [(line: p, quantity: 0.25)],
+        ]);
+        return session.tableChecks();
+      }
+
+      testWidgets('taking the guests off makes the pizza whole again',
+          (t) async {
+        await open(t, const [], checks: quartered());
+        for (final i in [3, 2, 1]) {
+          await t.tap(find.byKey(Key('split-remove-$i')));
+          await t.pump();
+        }
+        expect(find.text('Pizza'), findsOneWidget);
+        expect(find.textContaining('1/4'), findsNothing);
+      });
+
+      testWidgets('Unsplit Item gathers every quarter into one', (t) async {
+        await open(t, const [], checks: quartered());
+        await t.tap(find.text('1/4 Pizza').first);
+        await t.pump();
+        await t.tap(find.byKey(const Key('split-unsplit')));
+        await t.pump();
+        expect(find.text('Pizza'), findsOneWidget);
+        expect(find.textContaining('1/4'), findsNothing);
+      });
+
+      testWidgets('Unsplit Check puts one whole pizza back on one bill',
+          (t) async {
+        await open(t, const [], checks: quartered());
+        await t.tap(find.byKey(const Key('split-unsplit-all')));
+        await t.pumpAndSettle();
+
+        session.splitIntoChecks(result!, among: session.tableChecks());
+        expect(session.tableChecks(), hasLength(1));
+        final pizzas =
+            session.current.lines.where((l) => l.productId == 10).toList();
+        expect(pizzas.single.quantity, 1);
+        expect(session.current.subtotal, closeTo(120, 1e-9));
+      });
+    });
+
     testWidgets('once the host says the table is settled the screen closes',
         (t) async {
       await open(t, sample(), onAction: (_, _, _) async => const []);

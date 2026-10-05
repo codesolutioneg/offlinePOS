@@ -8,10 +8,16 @@ import '../../domain/order.dart';
 typedef SplitShare = ({String line, double quantity});
 
 class _Piece {
-  _Piece(this.id, this.line, this.quantity);
+  _Piece(this.id, this.line, this.quantity, [List<String>? absorbed])
+      : absorbed = absorbed ?? [];
   final int id;
   final String line;
   double quantity;
+
+  /// Other bill lines folded into this row (the quarters of a burger that were
+  /// separate lines once the split was applied). They are handed back with no
+  /// quantity so the host takes them off their checks instead of leaving them.
+  final List<String> absorbed;
 }
 
 /// What a guest's column asks the host to do with that guest's check.
@@ -92,6 +98,7 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
         _addColumn(o);
         _cols.last.addAll(
             [for (final l in o.lines) _Piece(_nextId++, l.uuid, l.quantity)]);
+        _tidy(_cols.length - 1);
       }
       return;
     }
@@ -106,6 +113,9 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
     for (final l in lines) {
       final at = ((l.seat ?? 1) - 1).clamp(0, _cols.length - 1);
       _cols[at].add(_Piece(_nextId++, l.uuid, l.quantity));
+    }
+    for (var i = 0; i < _cols.length; i++) {
+      _tidy(i);
     }
   }
 
@@ -137,6 +147,7 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
     setState(() {
       final into = i == 0 ? 1 : 0;
       _cols[into].addAll(_cols[i]);
+      _tidy(into);
       _selected.clear();
       _removeColumn(i);
       _active = (into > i ? into - 1 : into).clamp(0, _cols.length - 1);
@@ -145,8 +156,14 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
 
   List<List<SplitShare>> _layout() => [
         for (final c in _cols)
-          if (c.isNotEmpty)
-            [for (final p in c) (line: p.line, quantity: p.quantity)],
+          if (c.isNotEmpty) _shares(c),
+      ];
+
+  static List<SplitShare> _shares(List<_Piece> col) => [
+        for (final p in col) ...[
+          (line: p.line, quantity: p.quantity),
+          for (final a in p.absorbed) (line: a, quantity: 0.0),
+        ],
       ];
 
   Future<void> _act(int i, SplitAction action) async {
@@ -198,19 +215,62 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
     _active = target;
   }
 
-  /// Slices of the same item on one guest read as one row ("3× Burger").
+  /// Slices of the same item on one guest read as one row ("3× Burger"): the
+  /// same bill line, or shares of one item that became separate lines when the
+  /// split was applied (four quarters make the burger again).
   void _tidy(int col) {
     final c = _cols[col];
     for (var i = 0; i < c.length; i++) {
       for (var j = c.length - 1; j > i; j--) {
-        if (c[j].line != c[i].line) continue;
-        c[i].quantity += c[j].quantity;
-        if ((c[i].quantity - c[i].quantity.roundToDouble()).abs() < 1e-9) {
-          c[i].quantity = c[i].quantity.roundToDouble();
-        }
+        if (!_joinable(c[i], c[j])) continue;
+        _fold(c[i], c[j]);
         c.removeAt(j);
       }
     }
+  }
+
+  void _fold(_Piece into, _Piece other) {
+    into.quantity += other.quantity;
+    if ((into.quantity - into.quantity.roundToDouble()).abs() < 1e-9) {
+      into.quantity = into.quantity.roundToDouble();
+    }
+    if (other.line != into.line && !into.absorbed.contains(other.line)) {
+      into.absorbed.add(other.line);
+    }
+    for (final a in other.absorbed) {
+      if (a != into.line && !into.absorbed.contains(a)) into.absorbed.add(a);
+    }
+  }
+
+  /// Whole lines of the same dish keep their own rows, as on the bill; only a
+  /// share (a fractional quantity) joins another line of the same item.
+  bool _joinable(_Piece a, _Piece b) {
+    if (a.line == b.line) return true;
+    if (_whole(a.quantity) && _whole(b.quantity)) return false;
+    final x = _lines[a.line];
+    final y = _lines[b.line];
+    if (x == null || y == null) return false;
+    return x.productId == y.productId &&
+        x.name == y.name &&
+        x.unitPrice == y.unitPrice &&
+        x.taxRate == y.taxRate &&
+        x.note == y.note &&
+        x.discountPercent == y.discountPercent &&
+        x.printedToKitchen == y.printedToKitchen &&
+        _sameModifiers(x.modifiers, y.modifiers);
+  }
+
+  static bool _sameModifiers(List<OrderModifier> a, List<OrderModifier> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].productId != b[i].productId ||
+          a[i].name != b[i].name ||
+          a[i].quantity != b[i].quantity ||
+          a[i].unitPrice != b[i].unitPrice) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Move what is selected onto [target]. One item of several units asks how
@@ -356,7 +416,8 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
         for (var k = 0; k < guests.length; k++) {
           final q = k == guests.length - 1 ? p.quantity - given : share;
           given += q;
-          _cols[guests[k]].add(_Piece(_nextId++, p.line, q));
+          _cols[guests[k]].add(
+              _Piece(_nextId++, p.line, q, k == 0 ? p.absorbed : null));
         }
       }
       for (final g in guests) {
@@ -460,23 +521,17 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
   /// Put every guest back on one check and leave: the table goes back to a single
   /// bill with nothing selected needed.
   void _unsplitAll() {
-    final merged = <String, double>{};
-    for (final c in _cols) {
-      for (final p in c) {
-        merged[p.line] = (merged[p.line] ?? 0) + p.quantity;
-      }
-    }
     if (_openChecks < 2) {
       Navigator.pop(context);
       return;
     }
-    Navigator.pop<List<List<SplitShare>>>(context, [
-      [
-        for (final e in merged.entries) (line: e.key, quantity: e.value),
-      ],
-    ]);
+    _cols.insert(0, [for (final c in _cols) ...c]);
+    _tidy(0);
+    Navigator.pop<List<List<SplitShare>>>(context, [_shares(_cols.first)]);
   }
 
+  /// Gather every share of the selected item back onto the guest it was
+  /// picked on, whole again.
   void _unsplitItem() {
     if (_selected.isEmpty) {
       _unsplitAll();
@@ -488,10 +543,11 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
         if (col == null) continue;
         final keep = _cols[col].firstWhere((p) => p.id == id);
         for (final c in _cols) {
-          for (final p in c.where((p) => p.line == keep.line && p != keep)) {
-            keep.quantity += p.quantity;
+          final same = c.where((p) => p != keep && _joinable(keep, p)).toList();
+          for (final p in same) {
+            _fold(keep, p);
+            c.remove(p);
           }
-          c.removeWhere((p) => p.line == keep.line && p != keep);
         }
       }
       _selected.clear();
@@ -548,6 +604,7 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
     setState(() {
       _cols[into].addAll(_cols[from]);
       _cols[from].clear();
+      _tidy(into);
       _selected.clear();
       _active = into;
       _reassign();
