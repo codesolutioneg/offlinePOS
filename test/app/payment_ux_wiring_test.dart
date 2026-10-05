@@ -268,16 +268,14 @@ void main() {
     expect(tab.balance, closeTo(150, 0.01));
     expect(tab.state, OrderState.held);
 
-    // The share put its own detail slip on the roll: what was paid, and what the
-    // table still owes. No sale receipt yet, because the tab is not settled.
+    // The share printed in the sale receipt's own layout: its share as the due
+    // figure and what the table still owes. The tab itself is not settled yet.
     final paper = await slip('part-${order.uuid}-');
-    expect(paper, contains('PAYMENT'));
-    expect(paper, contains('PAID NOW'));
-    expect(paper, contains('STILL OWED'));
-    expect(paper, contains('150.00'));
+    expect(paper, isNot(contains('Share of')));
+    expect(paper, contains('TOTAL DUE: 150.00'));
+    expect(paper, contains('Balance remaining'));
     expect(paper, contains('Table 5'));
-    // Not a tax receipt: that one prints when the tab settles.
-    expect(paper, contains('NOT A TAX RECEIPT'));
+    expect(paper, isNot(contains('PAID NOW')));
     expect(await slipCount(order.uuid), 0);
   });
 

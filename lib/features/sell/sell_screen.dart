@@ -1328,14 +1328,15 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   /// How many units to take off a consolidated line. Returns null on cancel.
-  Future<double?> _askVoidQuantity(OrderLine line) {
+  Future<double?> _askVoidQuantity(OrderLine line,
+      {String title = 'How many to void?', String all = 'Void all'}) {
     final max = line.quantity.round();
     var picked = 1;
     return showDialog<double>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) => AlertDialog(
-          title: Text(tr(ctx, 'How many to void?')),
+          title: Text(tr(ctx, title)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1371,7 +1372,7 @@ class _SellScreenState extends State<SellScreen> {
               TextButton(
                 key: const Key('void-qty-all'),
                 onPressed: () => setSt(() => picked = max),
-                child: Text('${tr(ctx, 'Void all')} ($max)'),
+                child: Text('${tr(ctx, all)} ($max)'),
               ),
             ],
           ),
@@ -2131,8 +2132,7 @@ class _SellScreenState extends State<SellScreen> {
   /// Settle a part payment / even-split share against the open balance. Closes the
   /// table and prints once the balance reaches zero; otherwise keeps it open.
   void _completeShare(
-      List<OrderPayment> payments, String label, double tip, double? cashReceived,
-      {String? slipTitle}) {
+      List<OrderPayment> payments, String label, double tip, double? cashReceived) {
     final settling = s.current; // finalized in place if this share settles it
     final balance = s.payShare(payments: payments, cashReceived: cashReceived, tip: tip);
     if (balance == null) return;
@@ -2156,7 +2156,6 @@ class _SellScreenState extends State<SellScreen> {
         order: settling,
         paidNow: paidNow,
         stillOwed: balance,
-        title: slipTitle ?? tr(context, 'Part payment'),
         tenders: payments,
         cashReceived: cashReceived,
       ));
@@ -2250,7 +2249,6 @@ class _SellScreenState extends State<SellScreen> {
         order: check,
         paidNow: check.total,
         stillOwed: owed,
-        title: label ?? tr(context, 'Check'),
         tenders: check.payments,
         covered: check.lines,
         cashReceived: cashReceived,
@@ -2650,7 +2648,7 @@ class _SellScreenState extends State<SellScreen> {
     if (ways == null || ways < 2 || !mounted) return;
     final share = s.current.total / ways;
     final due = share < s.current.balance ? share : s.current.balance;
-    _payShareSheet(due, slipTitle: '${tr(context, 'Share of')} $ways');
+    _payShareSheet(due);
   }
 
   Future<int?> _askShareCount() {
@@ -2680,7 +2678,7 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   /// Take one share/part payment against the open balance via the payment sheet.
-  void _payShareSheet(double amount, {String? slipTitle}) {
+  void _payShareSheet(double amount) {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -2693,7 +2691,7 @@ class _SellScreenState extends State<SellScreen> {
         methods: _offeredMethods(),
         onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
-          _completeShare(payments, label, tip, cashReceived, slipTitle: slipTitle);
+          _completeShare(payments, label, tip, cashReceived);
         },
       ),
     );
@@ -3985,6 +3983,66 @@ class _SellScreenState extends State<SellScreen> {
     if (mounted) setState(() {});
   }
 
+  /// The rail's Clr: deletes the picked line, asking how many when it holds
+  /// more than one; several picked lines are confirmed first. A line the
+  /// kitchen already has goes through the void (manager, reason, slip) instead.
+  Future<void> _deletePicked() async {
+    final picked = _pickedLines;
+    if (picked.isEmpty) {
+      showToast(context, tr(context, 'Pick an item first'),
+          kind: ToastKind.info);
+      return;
+    }
+    if (picked.length == 1) return _deleteLine(picked.single);
+    if (!await _confirmDeleteMany(picked.length) || !mounted) return;
+    for (final l in picked) {
+      if (!mounted) return;
+      await _deleteLine(l, whole: true);
+    }
+  }
+
+  Future<void> _deleteLine(OrderLine line, {bool whole = false}) async {
+    if (_isFired(line)) {
+      return _voidLine(line, units: whole ? line.quantity : null);
+    }
+    var qty = line.quantity;
+    final countable = line.quantity > 1 && qty == qty.roundToDouble();
+    if (!whole && countable) {
+      final n = await _askVoidQuantity(line,
+          title: 'How many to delete?', all: 'Delete all');
+      if (n == null || !mounted) return;
+      qty = n;
+    }
+    _changed(() {
+      if (qty >= line.quantity) {
+        s.removeLine(line.uuid);
+      } else {
+        s.setQuantity(line.uuid, line.quantity - qty);
+      }
+    });
+  }
+
+  Future<bool> _confirmDeleteMany(int count) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          key: const Key('confirm-delete-many'),
+          title: Text(tr(ctx, 'Delete the selected items?')),
+          content: Text('${tr(ctx, 'Items selected')}: $count'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(tr(ctx, 'Cancel'))),
+            FilledButton(
+              key: const Key('confirm-delete-many-ok'),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(tr(ctx, 'Delete')),
+            ),
+          ],
+        ),
+      ) ??
+      false;
+
   void _stepSeat(int by) {
     final picked = _pickedLines;
     if (picked.isEmpty) return;
@@ -4148,7 +4206,7 @@ class _SellScreenState extends State<SellScreen> {
             ..addAll(lines.map((l) => l.uuid)));
         }),
         key('cart-clear', Icons.indeterminate_check_box_outlined, 'Clr',
-            () => setState(_picked.clear)),
+            () => unawaited(_deletePicked())),
         key('cart-down', Icons.keyboard_arrow_down, 'Down',
             () => _pickAt(at < 0 ? 0 : at + 1)),
         key('cart-pgdn', Icons.keyboard_double_arrow_down, 'Pgdn',

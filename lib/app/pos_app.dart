@@ -1391,8 +1391,7 @@ class _PosAppState extends State<PosApp> {
           payment.tenders.any((t) => cashIds.contains(t.methodId));
       final kick =
           isCash && !payment.alsoReceipted && widget.settings.openDrawerOnSale;
-      final bytes = _receiptBuilder(openDrawer: kick).buildPartialPayment(payment,
-          at: DateTime.now(), actor: _session?.cashierId ?? order.cashierId);
+      final bytes = _receiptBuilder(openDrawer: kick).buildPartialPayment(payment);
       // Several shares land against the same order, so the timestamp keeps each one
       // out of the spool's dedupe rather than folding the second guest into the first.
       await _receiptPrinter.send(bytes,

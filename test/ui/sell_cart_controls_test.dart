@@ -109,7 +109,7 @@ void main() {
     expect(line(10).seat, isNull);
   });
 
-  testWidgets('Up / Top / All / Clr move and clear the pick', (t) async {
+  testWidgets('Up / All / Btm move the pick', (t) async {
     await open(t);
     await t.tap(find.byKey(const Key('product-10')));
     await t.pump();
@@ -130,17 +130,78 @@ void main() {
     expect(line(10).quantity, 3);
     expect(line(11).quantity, 2);
 
-    await t.tap(find.byKey(const Key('cart-clear')));
-    await t.pump();
-    await t.tap(find.byKey(const Key('cart-qty-plus')));
-    await t.pump();
-    expect(line(10).quantity, 3);
-
     await t.tap(find.byKey(const Key('cart-btm')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('cart-qty-plus')));
     await t.pump();
+    expect(line(10).quantity, 3);
     expect(line(11).quantity, 3);
+  });
+
+  group('Clr deletes what is picked', () {
+    testWidgets('a single item goes straight away', (t) async {
+      await open(t);
+      await t.tap(find.byKey(const Key('product-10')));
+      await t.pump();
+      await t.tap(find.byKey(const Key('product-11')));
+      await t.pump();
+
+      await t.tap(find.byKey(const Key('cart-clear')));
+      await t.pumpAndSettle();
+
+      expect(session.current.lines.map((l) => l.productId), [10]);
+    });
+
+    testWidgets('a line of several asks how many first', (t) async {
+      await open(t);
+      await t.tap(find.byKey(const Key('product-10')));
+      await t.pump();
+      session.setQuantity(line(10).uuid, 3);
+      await t.pump();
+
+      await t.tap(find.byKey(const Key('cart-clear')));
+      await t.pumpAndSettle();
+      expect(find.text('How many to delete?'), findsOneWidget);
+      await t.tap(find.byKey(const Key('void-qty-plus')));
+      await t.pump();
+      await t.tap(find.byKey(const Key('confirm-void-qty')));
+      await t.pumpAndSettle();
+
+      expect(line(10).quantity, 1);
+    });
+
+    testWidgets('cancelling the count leaves the line alone', (t) async {
+      await open(t);
+      await t.tap(find.byKey(const Key('product-10')));
+      await t.pump();
+      session.setQuantity(line(10).uuid, 3);
+      await t.pump();
+
+      await t.tap(find.byKey(const Key('cart-clear')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Cancel'));
+      await t.pumpAndSettle();
+
+      expect(line(10).quantity, 3);
+    });
+
+    testWidgets('several picked lines are confirmed, then all go', (t) async {
+      await open(t);
+      await t.tap(find.byKey(const Key('product-10')));
+      await t.pump();
+      await t.tap(find.byKey(const Key('product-11')));
+      await t.pump();
+      await t.tap(find.byKey(const Key('cart-all')));
+      await t.pump();
+
+      await t.tap(find.byKey(const Key('cart-clear')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('confirm-delete-many')), findsOneWidget);
+      await t.tap(find.byKey(const Key('confirm-delete-many-ok')));
+      await t.pumpAndSettle();
+
+      expect(session.current.lines, isEmpty);
+    });
   });
 
   testWidgets('tapping a line picks it; tapping it again opens its menu',
