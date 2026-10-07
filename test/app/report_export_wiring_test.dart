@@ -167,11 +167,6 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  /// The order count on the sales report's overview.
-  Finder ordersRow(String count) => find.descendant(
-        of: find.ancestor(of: find.text('Orders'), matching: find.byType(Row)),
-        matching: find.text(count),
-      );
 
   /// Pick a format off the download menu of whatever report is on screen.
   Future<void> download(WidgetTester t, String format) async {
@@ -222,12 +217,12 @@ void main() {
     // opened. Compared against All rather than Today, so the test does not depend
     // on which side of midnight it runs.
     await tapReport(t, 'rep-summary');
-    expect(ordersRow('3'), findsOneWidget);
-    await t.pageBack();
+    expect(pageLine(t, 'Orders'), contains('3'));
+    await closeReport(t);
     await t.pumpAndSettle();
 
     await tapReport(t, 'rep-summary', period: 'openShift');
-    expect(ordersRow('2'), findsOneWidget);
+    expect(pageLine(t, 'Orders'), contains('2'));
   });
 
   testWidgets('with no shift open there is no such range to pick', (t) async {
@@ -257,7 +252,7 @@ void main() {
     await tapReport(t, 'rep-expenses', period: 'today');
 
     await download(t, 'xlsx');
-    expect(find.textContaining('Saved to'), findsOneWidget);
+    expect(find.textContaining('Saved to'), findsWidgets);
 
     final book = Excel.decodeBytes(exported('xlsx').readAsBytesSync());
     final sheet = book.tables[book.tables.keys.first]!;

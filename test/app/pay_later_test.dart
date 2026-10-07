@@ -254,6 +254,6 @@ void main() {
     await t.pumpAndSettle();
     await tapReport(t, 'rep-receivables');
 
-    expect(find.byKey(const Key('receivables-empty')), findsOneWidget);
+    expect(find.byKey(const Key('receivables-empty'), skipOffstage: false), findsOneWidget);
   });
 }

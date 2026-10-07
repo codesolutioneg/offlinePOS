@@ -6,8 +6,10 @@ import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/theme/app_colors.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/reports/reports_hub_screen.dart';
+import 'package:offline_pos/features/reports/rm/rm_report_viewer.dart';
 
 import '../db/sqlite_loader.dart';
+import '../ui/report_period.dart';
 
 void main() {
   late Db db;
@@ -39,20 +41,19 @@ void main() {
         ),
       );
 
-  /// A report asks for its own period once its tile is tapped.
+  /// Pick the report in the tree, set the period on the form, and open it.
   Future<void> openReport(WidgetTester t, String key,
       {String period = 'today'}) async {
     await t.tap(find.byKey(Key(key)));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(Key('period-$period')));
+    await t.tap(find.byKey(const Key('report-period')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(Key('period-$period')).last);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('report-run')));
     await t.pumpAndSettle();
   }
 
-  /// The order count on the sales report's overview.
-  Finder ordersRow(String count) => find.descendant(
-        of: find.ancestor(of: find.text('Orders'), matching: find.byType(Row)),
-        matching: find.text(count),
-      );
 
   /// Every existing tile key, title and destination must survive the switch
   /// from flat ListTiles to coloured cards.
@@ -81,8 +82,9 @@ void main() {
 
     for (final entry in tiles.entries) {
       await openReport(t, entry.key);
-      expect(find.text(entry.value), findsWidgets, reason: 'tile ${entry.key} did not open');
-      await t.pageBack();
+      expect(find.text(entry.value, skipOffstage: false), findsWidgets,
+          reason: 'tile ${entry.key} did not open');
+      await closeReport(t);
       await t.pumpAndSettle();
     }
   });
@@ -140,7 +142,7 @@ void main() {
     await t.pumpAndSettle();
 
     await openReport(t, 'rep-summary');
-    expect(ordersRow('2'), findsOneWidget);
+    expect(pageLine(t, 'Orders'), contains('2'));
   });
 
   testWidgets('the order-type filter narrows the windowed orders', (t) async {
@@ -157,7 +159,73 @@ void main() {
     await t.pumpAndSettle();
 
     await openReport(t, 'rep-summary');
-    expect(ordersRow('1'), findsOneWidget);
+    expect(pageLine(t, 'Orders'), contains('1'));
+  });
+
+  testWidgets('the table filter narrows the windowed orders', (t) async {
+    tallWindow(t);
+    await t.pumpWidget(hubWith([
+      order('sara', OrderType.dineIn)..tableLabel = 'T1',
+      order('sara', OrderType.dineIn)..tableLabel = 'T2',
+      order('omar', OrderType.takeaway),
+    ]));
+
+    await t.enterText(find.byKey(const Key('report-table-filter')), 't1');
+    await openReport(t, 'rep-summary');
+    expect(pageLine(t, 'Orders'), contains('1'));
+  });
+
+  testWidgets('a bundled back-office layout opens in the page viewer',
+      (t) async {
+    tallWindow(t);
+    await t.pumpWidget(app());
+    await t.pumpAndSettle();
+
+    // Folded shut until asked for.
+    expect(find.byKey(const Key('rm-ItemSales')), findsNothing);
+    await t.tap(find.byKey(const Key('rm-group-Sales Reports')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('rm-ItemSales')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('report-run')));
+    await t.pumpAndSettle();
+
+    expect(find.byType(RmReportViewer), findsOneWidget);
+    expect(find.byKey(const Key('rm-unwired')), findsOneWidget);
+  });
+
+  testWidgets('nothing runs until a report is picked in the tree', (t) async {
+    tallWindow(t);
+    await t.pumpWidget(app());
+
+    final run = t.widget<InkWell>(find.byKey(const Key('report-run')));
+    expect(run.onTap, isNull);
+  });
+
+  testWidgets('picking a session sets the period to that shift', (t) async {
+    tallWindow(t);
+    final shifts = ShiftStore(db);
+    final shift = shifts.openShift(openingFloat: 0, cashierId: 'sara');
+    shifts.addMovement('out', 25, reason: 'Taxi', category: 'Transport');
+
+    await t.pumpWidget(MaterialApp(
+      home: ReportsHubScreen(
+        allOrders: const [],
+        categories: const [],
+        formatAmount: (v) => v.toStringAsFixed(2),
+        audit: audit,
+        shifts: shifts,
+      ),
+    ));
+
+    await t.tap(find.byKey(Key('report-session-${shift.id}')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('rep-expenses')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('report-run')));
+    await t.pumpAndSettle();
+
+    expect(find.text('Taxi'), findsWidgets);
   });
 
   Order sale(double amount, {int daysAgo = 0}) {
@@ -173,7 +241,7 @@ void main() {
     );
   }
 
-  testWidgets('the glance card sits at the top of the hub', (t) async {
+  testWidgets('the glance card sits in the hub', (t) async {
     tallWindow(t);
     await t.pumpWidget(hubWith([sale(100)]));
 
@@ -206,7 +274,7 @@ void main() {
 
     await openReport(t, 'rep-expenses');
 
-    expect(find.text('Taxi'), findsOneWidget);
+    expect(find.text('Taxi'), findsWidgets);
     expect(find.text('25.00'), findsWidgets);
   });
 
@@ -224,7 +292,8 @@ void main() {
     ));
 
     await openReport(t, 'rep-expenses');
-    expect(find.byKey(const Key('expenses-empty-state')), findsOneWidget);
+    expect(find.byKey(const Key('expenses-empty-state'), skipOffstage: false),
+        findsOneWidget);
   });
 
   testWidgets('the comparison gets the period before the chosen one', (t) async {
@@ -234,9 +303,10 @@ void main() {
     // Today was picked, so the period before it is yesterday.
     await openReport(t, 'rep-period-compare');
 
-    expect(find.text('Today  vs  Previous period'), findsOneWidget);
+    expect(find.text('Today  vs  Previous period', skipOffstage: false),
+        findsOneWidget);
     expect(find.text('100.00'), findsWidgets);
     expect(find.text('40.00'), findsWidgets);
-    expect(find.text('+150%'), findsWidgets);
+    expect(find.text('+150%', skipOffstage: false), findsWidgets);
   });
 }

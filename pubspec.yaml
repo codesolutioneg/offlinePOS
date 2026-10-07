@@ -89,6 +89,11 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  # The back-office report layouts the reports hub draws (see
+  # tool/arf_to_layouts.py for where they come from).
+  assets:
+    - assets/report_layouts/
+
   # The receipt renderer names this family explicitly (see LineRasteriser). A till
   # is a locked-down Windows box whose system font fallback for Arabic cannot be
   # relied on, and a shaped line drawn in a font with no Arabic glyphs comes out of

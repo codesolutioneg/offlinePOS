@@ -162,10 +162,10 @@ void main() {
     await tapReport(t, 'rep-hours');
 
     // Names, not ids: the shell has to pass the roster too.
-    expect(find.text('Sara'), findsOneWidget);
-    expect(find.text('Omar'), findsOneWidget);
-    expect(find.text('9h 0m'), findsWidgets);
-    expect(find.text('11h 0m'), findsOneWidget);
+    expect(find.text('Sara'), findsWidgets);
+    expect(find.text('Omar'), findsWidgets);
+    expect(find.text('9h 0m', skipOffstage: false), findsWidgets);
+    expect(find.text('11h 0m', skipOffstage: false), findsWidgets);
   });
 
   testWidgets('the cashier filter narrows the hours to one person', (t) async {
@@ -195,7 +195,7 @@ void main() {
     await t.pumpAndSettle();
     await tapReport(t, 'rep-hours');
 
-    expect(find.text('Sara'), findsOneWidget);
+    expect(find.text('Sara'), findsWidgets);
     expect(find.text('Omar'), findsNothing);
   });
 }

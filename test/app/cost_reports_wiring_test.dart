@@ -170,14 +170,14 @@ void main() {
     await signIn(t);
     await openReport(t, 'rep-cost-sales');
 
-    expect(find.byType(CostSalesReportScreen), findsOneWidget);
-    expect(find.byKey(const Key('cost-empty-state')), findsNothing,
+    expect(find.byType(CostSalesReportScreen, skipOffstage: false), findsOneWidget);
+    expect(find.byKey(const Key('cost-empty-state'), skipOffstage: false), findsNothing,
         reason: 'the shell must hand the hub the costs, or the report is dead');
     // Two pizzas at 100 cost 40 each: 200 in, 80 out, 120 kept. The draft on the
     // till is not a sale and the uncosted water stays out of the totals.
-    expect(find.byKey(const Key('cost-product-1')), findsOneWidget);
+    expect(find.byKey(const Key('cost-product-1'), skipOffstage: false), findsOneWidget);
     expect(find.text('120.00'), findsWidgets);
-    expect(find.byKey(const Key('cost-not-costed')), findsOneWidget);
+    expect(find.byKey(const Key('cost-not-costed'), skipOffstage: false), findsOneWidget);
   });
 
   testWidgets('menu engineering places the dishes the till actually sold',
@@ -191,9 +191,9 @@ void main() {
     await signIn(t);
     await openReport(t, 'rep-menu-eng');
 
-    expect(find.byType(MenuEngineeringReportScreen), findsOneWidget);
-    expect(find.byKey(const Key('menu-empty-state')), findsNothing);
-    expect(find.byKey(const Key('menu-item-1')), findsOneWidget);
+    expect(find.byType(MenuEngineeringReportScreen, skipOffstage: false), findsOneWidget);
+    expect(find.byKey(const Key('menu-empty-state'), skipOffstage: false), findsNothing);
+    expect(find.byKey(const Key('menu-item-1'), skipOffstage: false), findsOneWidget);
   });
 
   testWidgets('a till whose Odoo states no costs says so instead of guessing',
@@ -213,6 +213,6 @@ void main() {
     await signIn(t);
     await openReport(t, 'rep-cost-sales');
 
-    expect(find.byKey(const Key('cost-empty-state')), findsOneWidget);
+    expect(find.byKey(const Key('cost-empty-state'), skipOffstage: false), findsOneWidget);
   });
 }

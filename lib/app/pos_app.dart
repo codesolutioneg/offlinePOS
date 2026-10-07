@@ -2998,6 +2998,9 @@ class _PosAppState extends State<PosApp> {
         shopName: widget.settings.shopName ?? widget.config.shopName,
         ranBy: _session?.cashierId ?? '',
         drivers: widget.delivery?.drivers() ?? const [],
+        favoriteFilters: widget.settings.getString('report_favorite_filters'),
+        onFavoriteFiltersChanged: (json) =>
+            widget.settings.setString('report_favorite_filters', json),
       ),
     ));
   }

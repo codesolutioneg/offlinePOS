@@ -29,8 +29,15 @@ class ReportScope extends InheritedWidget {
     required this.shopName,
     required this.periodLabel,
     required this.ranBy,
+    this.onTable,
     required super.child,
   });
+
+  /// Told about the report under it as soon as it builds: its file stem, its
+  /// title and the table it would export. The hub's report window draws the
+  /// report as a page from this instead of showing the report's own screen.
+  final void Function(String name, String title, ReportTable Function() table)?
+      onTable;
 
   final String shopName;
 
@@ -55,6 +62,8 @@ ExportHeader reportHeader(BuildContext context, String title) {
   final scope = ReportScope.of(context);
   return ExportHeader(
     title: title,
+    shop: scope?.shopName ?? '',
+    pageLabel: tr(context, 'Page'),
     lines: [
       if (scope != null && scope.shopName.isNotEmpty)
         (tr(context, 'Shop'), scope.shopName),
@@ -79,8 +88,10 @@ PopupMenuButton<String> reportExportAction(
   required String name,
   required String title,
   required ReportTable Function() table,
-}) =>
-    PopupMenuButton<String>(
+}) {
+  ReportScope.of(context)?.onTable?.call(name, title, table);
+  return PopupMenuButton<String>(
+
       key: const Key('report-export'),
       tooltip: tr(context, 'Download'),
       icon: const Icon(Icons.download),
@@ -104,6 +115,7 @@ PopupMenuButton<String> reportExportAction(
         ),
       ],
     );
+}
 
 /// Writes one report to the export directory in [format] and tells the user where
 /// it landed, or that it could not be saved. Never throws at the caller: a report

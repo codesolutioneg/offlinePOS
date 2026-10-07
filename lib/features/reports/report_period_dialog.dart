@@ -23,6 +23,8 @@ class ReportPeriodChoice {
     required this.label,
     this.range,
     this.custom,
+    this.from,
+    this.to,
   });
 
   factory ReportPeriodChoice.preset(ReportRange range, String label) =>
@@ -31,15 +33,24 @@ class ReportPeriodChoice {
   factory ReportPeriodChoice.customRange(DateTimeRange custom, String label) =>
       ReportPeriodChoice._(label: label, custom: custom);
 
+  /// Exactly these two local moments, `to` exclusive and null still open: one
+  /// shift, which starts and ends at whatever time the drawer did.
+  factory ReportPeriodChoice.exact(DateTime from, DateTime? to, String label) =>
+      ReportPeriodChoice._(label: label, from: from, to: to);
+
   final String label;
   final ReportRange? range;
   final DateTimeRange? custom;
+  final DateTime? from;
+  final DateTime? to;
 
   /// The window in local time, `to` exclusive, null ends open. Days are trading
   /// days, opening at the shop's cutover hour rather than midnight, so "Today" at
   /// 1am still holds the evening service it belongs to. A custom range includes
   /// its whole last trading day.
   (DateTime?, DateTime?) window({DateTime? shiftOpenedAt, DateTime? now}) {
+    final exactFrom = from;
+    if (exactFrom != null) return (exactFrom, to);
     final c = custom;
     if (c != null) return (_opens(c.start), _opens(c.end, plusDays: 1));
     final today = BusinessDay.of(now ?? DateTime.now()).date;
@@ -58,7 +69,10 @@ class ReportPeriodChoice {
   /// Whether [when] falls inside [window]. The open shift holds nothing when no
   /// shift is open.
   bool contains(DateTime when, {DateTime? shiftOpenedAt, DateTime? now}) {
-    if (custom == null && range == ReportRange.openShift && shiftOpenedAt == null) {
+    if (custom == null &&
+        this.from == null &&
+        range == ReportRange.openShift &&
+        shiftOpenedAt == null) {
       return false;
     }
     final at = when.toLocal();
