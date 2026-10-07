@@ -63,6 +63,11 @@ app.*.map.json
 /dist/
 /test_out.txt
 
+# Local cashier / business docs — keep on disk, never commit or push
+docs/CASHIER_BUSINESS_FLOW.md
+docs/CASHIER_BUSINESS_LOGIC_ISSUES.md
+docs/_local/
+
 # ZK agent local bootstrap (downloaded per till)
 tools/.py311/
 tools/.venv311/

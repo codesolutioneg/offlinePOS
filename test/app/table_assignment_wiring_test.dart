@@ -31,6 +31,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -81,6 +82,7 @@ void main() {
       products: const [Product(id: 10, name: 'Pizza', price: 100, categoryId: 1)],
       groups: const [],
       productGroupIds: const {},
+      paymentMethods: const [PaymentMethod(id: 1, name: 'Cash', isCash: true)],
       refreshedAt: DateTime.utc(2026, 1, 1),
     );
     final auth =
@@ -234,10 +236,11 @@ void main() {
     await t.tap(find.byKey(const Key('foreign-table-approve')));
     await t.pumpAndSettle();
     await managerPin(t, '9999');
-    // After the foreign-table gate, opener + PIN still stamp who owns the new tab.
-    await pickOpener(t, 'sara', '1234');
 
+    // Whoever is signed in is the one opening it, so the table becomes Sara's.
+    expect(find.text('Who is opening this table?'), findsNothing);
     expect(find.byType(SellScreen), findsOneWidget);
+    expect(assignments.cashierFor(tableFive), 'sara');
   });
 
   testWidgets('a wrong PIN leaves the table shut', (t) async {
@@ -278,9 +281,49 @@ void main() {
     await signIn(t, 'sara', '1234');
     await t.tap(find.byKey(Key('table-tile-${six.id}')));
     await t.pumpAndSettle();
-    await pickOpener(t, 'sara', '1234');
 
+    // No second "who are you": the table opens on the account signed in.
+    expect(find.text('Who is opening this table?'), findsNothing);
     expect(find.byType(SellScreen), findsOneWidget);
+    expect(assignments.cashierFor(six.id), 'sara');
+  });
+
+  testWidgets('the waiter\'s name comes off the table once its bill is gone',
+      (t) async {
+    final six = tables.byName('6')!;
+    await t.pumpWidget(app());
+    await signIn(t, 'sara', '1234');
+    await t.tap(find.byKey(Key('table-tile-${six.id}')));
+    await t.pumpAndSettle();
+    expect(assignments.cashierFor(six.id), 'sara');
+
+    // Back to the floor with nothing rung: the table is free, and so is the name.
+    await t.tap(find.byKey(const Key('new-order')));
+    await t.pumpAndSettle();
+    expect(find.byType(TableFloorScreen), findsOneWidget);
+    expect(assignments.cashierFor(six.id), isNull);
+  });
+
+  testWidgets('the waiter\'s name comes off the table once its bill is paid',
+      (t) async {
+    final six = tables.byName('6')!;
+    await t.pumpWidget(app());
+    await signIn(t, 'sara', '1234');
+    await t.tap(find.byKey(Key('table-tile-${six.id}')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('product-10')));
+    await t.pumpAndSettle();
+    expect(assignments.cashierFor(six.id), 'sara');
+
+    await t.tap(findPay());
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('method-1')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+
+    expect(find.byType(TableFloorScreen), findsOneWidget);
+    expect(assignments.cashierFor(six.id), isNull);
   });
 
   testWidgets('a manager walks onto any table with no dialog at all', (t) async {
@@ -291,9 +334,8 @@ void main() {
 
     expect(find.byKey(Key('table-locked-$tableFive')), findsNothing);
     await tapFive(t);
-    // No foreign-table dialog for a manager; opener PIN still confirms authorship.
-    await pickOpener(t, 'mo', '9999');
 
+    expect(find.text('Who is opening this table?'), findsNothing);
     expect(find.byKey(const Key('foreign-table-dialog')), findsNothing);
     expect(find.byType(SellScreen), findsOneWidget);
   });
@@ -417,7 +459,6 @@ void main() {
     // Sara opens her own table, then tries to pull table 5 onto it.
     await t.tap(find.byKey(Key('table-tile-${six.id}')));
     await t.pumpAndSettle();
-    await pickOpener(t, 'sara', '1234');
     expect(find.byType(SellScreen), findsOneWidget);
     // A bill needs a line before it can absorb another one.
     await t.tap(find.byKey(const Key('product-10')));

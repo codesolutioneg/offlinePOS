@@ -506,6 +506,12 @@ class PosSession {
     }
     // Covers belong to a bill eaten at the table.
     if (type != OrderType.dineIn) current.guestCount = null;
+    // A sale that does not sit at a table gives its table back: a dine-in turned
+    // into a delivery would otherwise keep the tile busy under the new type.
+    if (!type.seatsAtTable && current.tableLabel != null) {
+      _detachFromSiblings(current);
+      current.tableLabel = null;
+    }
     if (!type.isDelivery) {
       // The customer survives the switch: every order type can name one, and the
       // till shows and clears it on all of them. Only what is delivery's alone goes,

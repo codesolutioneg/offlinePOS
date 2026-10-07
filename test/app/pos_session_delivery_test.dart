@@ -50,6 +50,25 @@ void main() {
     expect(session.current.driverName, isNull);
   });
 
+  test('a table bill turned into a delivery gives the table back', () {
+    session.setOrderType(OrderType.dineIn);
+    session.setTable('T1');
+
+    session.setOrderType(OrderType.carDelivery);
+
+    expect(session.current.tableLabel, isNull);
+    expect(orders.byUuid(session.current.uuid)!.tableLabel, isNull);
+  });
+
+  test('a table bill turned to go keeps its table', () {
+    session.setOrderType(OrderType.dineIn);
+    session.setTable('T1');
+
+    session.setOrderType(OrderType.toGo);
+
+    expect(session.current.tableLabel, 'T1');
+  });
+
   test('a blank company number is stored as nothing', () {
     session.setDeliveryChannel(talabat, companyOrderNo: '   ');
     expect(session.current.companyOrderNo, isNull);

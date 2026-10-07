@@ -284,22 +284,25 @@ void main() {
     final order = tableOnTheTill();
     await signIn(t);
 
-    for (var share = 0; share < 2; share++) {
-      await t.tap(findPay());
-      await t.pumpAndSettle();
-      if (share == 0) {
-        await t.tap(find.byKey(const Key('pay-mode-evenly')));
-        await t.pumpAndSettle();
-        await t.enterText(find.byKey(const Key('split-ways')), '2');
-        await t.tap(find.byKey(const Key('split-ways-ok')));
-        await t.pumpAndSettle();
-      }
+    await t.tap(findPay());
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pay-mode-evenly')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('split-ways')), '2');
+    await t.tap(find.byKey(const Key('split-ways-ok')));
+    await t.pumpAndSettle();
+    // Every share is taken in one go: the next guest's sheet opens on its own,
+    // without asking how many ways again.
+    for (var share = 1; share <= 2; share++) {
+      expect(t.widget<Text>(find.byKey(const Key('pay-step'))).data,
+          'Share $share of 2');
       await t.tap(find.byKey(const Key('method-1')));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('confirm-payment')));
       await t.pumpAndSettle();
     }
 
+    expect(find.byKey(const Key('pay-step')), findsNothing);
     expect(orders.byUuid(order.uuid)!.state, OrderState.paid);
     // One detail slip for the share that left money owing, and the sale receipt for
     // the one that settled it. The settling payment is not slipped twice.
@@ -325,16 +328,39 @@ void main() {
     await t.tap(find.byKey(const Key('confirm-payment')));
     await t.pumpAndSettle();
 
-    await t.tap(findPay());
-    await t.pumpAndSettle();
-
-    // The running balance is on the sheet, so the cashier can see the tab is half
+    // The running balance is on the next share's sheet, so the cashier can see the tab is half
     // settled instead of taking the figure on trust.
     final running = t.widget<Text>(find.byKey(const Key('running-balance')));
     expect(running.data, contains('300.00')); // the whole bill
     expect(running.data, contains('150.00')); // taken off it so far
     // And the figure being charged is the balance, not the bill all over again.
     expect(t.widget<Text>(find.byKey(const Key('pay-total'))).data, '150.00');
+  });
+
+  testWidgets('closing the sheet between shares leaves the table open on the rest',
+      (t) async {
+    final order = tableOnTheTill();
+    await signIn(t);
+
+    await t.tap(findPay());
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pay-mode-evenly')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('split-ways')), '3');
+    await t.tap(find.byKey(const Key('split-ways-ok')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('method-1')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+    expect(t.widget<Text>(find.byKey(const Key('pay-step'))).data, 'Share 2 of 3');
+
+    Navigator.of(t.element(find.byKey(const Key('pay-step')))).pop();
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('pay-step')), findsNothing);
+    final tab = orders.byUuid(order.uuid)!;
+    expect(tab.amountPaid, closeTo(100, 0.01));
+    expect(tab.state, OrderState.held);
   });
 
   testWidgets('a cash share opens the drawer, since no sale receipt prints for it',

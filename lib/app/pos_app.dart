@@ -42,6 +42,7 @@ import '../core/onboarding/wizard_id.dart';
 import '../core/onboarding/wizard_store.dart';
 import '../core/printing/escpos.dart';
 import '../core/widgets/feedback.dart';
+import '../core/widgets/print_alert_bar.dart';
 import '../core/widgets/icon_pad.dart';
 import '../core/widgets/numeric_keypad.dart';
 import '../core/widgets/passing_note.dart';
@@ -395,6 +396,9 @@ class _PosAppState extends State<PosApp> {
 
   /// Cancel slips the kitchen never got, on screen until each is dealt with.
   final ValueNotifier<List<LostKitchenVoid>> _lostVoids = ValueNotifier(const []);
+
+  /// Slips no printer took, one per kind, on the red strip above every screen.
+  final ValueNotifier<List<PrintAlert>> _printAlerts = ValueNotifier(const []);
   int _lostVoidSeq = 0;
 
   /// The bill that was just parked, for the line the floor says about it, or null
@@ -503,6 +507,7 @@ class _PosAppState extends State<PosApp> {
   @override
   void dispose() {
     _lostVoids.dispose();
+    _printAlerts.dispose();
     _background?.cancel();
     _primaryWatch?.cancel();
     _stopStoreOrderWatch();
@@ -554,6 +559,10 @@ class _PosAppState extends State<PosApp> {
     _lockIfIdle();
     _fireDueTimedLines();
     if (_receiptPrinter.hasSpooled) await _receiptPrinter.flush();
+    // The printer is back and the backlog is out, so nothing is left to chase.
+    if (!_receiptPrinter.hasSpooled && _printAlerts.value.isNotEmpty) {
+      _printAlerts.value = const [];
+    }
     // A Z report queued while the line was down goes out on its own, rather than
     // waiting for someone to open a settings screen and press something.
     final emailer = widget.emailer;
@@ -796,6 +805,7 @@ class _PosAppState extends State<PosApp> {
     } else {
       session?.hold();
     }
+    _releaseIfFree(table);
     _publishActivity();
     if (!mounted) return;
     // Cleared on every way onto the floor, so a line about one service's parked tab
@@ -810,6 +820,18 @@ class _PosAppState extends State<PosApp> {
       });
     }
     setState(() => _onCounter = false);
+  }
+
+  /// Take the waiter's name off [label] once no bill sits there any more, so a
+  /// table that was paid or cancelled reads free on every till.
+  void _releaseIfFree(String? label) {
+    final store = widget.assignments;
+    if (store == null || label == null || label.isEmpty) return;
+    final table = widget.tables.byName(label);
+    if (table == null || store.cashierFor(table.id) == null) return;
+    final occupied =
+        widget.orders.occupyingAnywhere().any((o) => o.tableLabel == label);
+    if (!occupied) store.clear(table.id);
   }
 
   /// Start a fresh order of [type] and open the counter on it. The takeaway, to-go
@@ -1347,11 +1369,48 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
+  /// Put a slip no printer took on the red strip, where it stays until it is
+  /// retried through or ignored. Not a dialog: the sale is done and the slip is
+  /// held, so the cashier is told without being stopped. Silent on a till with no
+  /// printer set up at all, which would otherwise hear this after every sale.
+  ///
+  /// [retry] is for a slip the spool does not hold; left out, retrying means
+  /// flushing the spool.
+  void _raisePrintAlert(String kind, String title, Order order,
+      {Future<bool> Function()? retry, String? detail}) {
+    if (widget.printers.printers.isEmpty) return;
+    final before = _printAlerts.value;
+    final old = before.where((a) => a.kind == kind).firstOrNull;
+    _printAlerts.value = [
+      for (final a in before)
+        if (a.kind != kind) a,
+      PrintAlert(
+        kind: kind,
+        title: title,
+        where: order.tableLabel ?? '#${order.displayNo}',
+        count: (old?.count ?? 0) + 1,
+        retry: retry ?? _flushSpoolNow,
+        detail: detail ?? PrintAlert.heldDetail,
+      ),
+    ];
+  }
+
+  Future<bool> _flushSpoolNow() async {
+    await _receiptPrinter.flush();
+    return !_receiptPrinter.hasSpooled;
+  }
+
+  void _dismissPrintAlert(String kind) => _printAlerts.value = [
+        for (final a in _printAlerts.value)
+          if (a.kind != kind) a,
+      ];
+
   /// Print the check for a table that asked for the bill before paying. Spooled like
   /// any other slip, so a printer that is off holds the bill instead of failing the
   /// waiter's tap, and the order is never touched: this produces paper and an audit
   /// entry, nothing else. Works with no shift open, hence the cashier fallback.
-  Future<void> _printBill(Order order) async {
+  /// False when the bill is held rather than at the printer.
+  Future<bool> _printBill(Order order) async {
     widget.audit.record(_session?.cashierId ?? order.cashierId, 'bill.printed',
         detail: order.uuid);
     _session?.markBillPrinted(order);
@@ -1361,13 +1420,17 @@ class _PosAppState extends State<PosApp> {
       // spool's dedupe rather than folding a second request into the first.
       await _receiptPrinter.send(bytes,
           reference: 'bill-${order.uuid}-${DateTime.now().microsecondsSinceEpoch}');
+      return true;
     } on PrinterUnavailable {
       // Held in the spool; the background flush prints it when the printer is back.
+      _raisePrintAlert('bill', 'Bill did not print', order);
+      return false;
     } catch (e) {
       // Building the slip is inside the try for the same reason as the sale receipt:
       // a character the printer cannot carry must leave a record, not an unhandled
       // error on a waiter's tap.
       widget.audit.record(order.cashierId, 'receipt.failed', detail: '${order.uuid}: $e');
+      return false;
     }
   }
 
@@ -1534,6 +1597,7 @@ class _PosAppState extends State<PosApp> {
       final base = reprint ? 'reprint-${order.uuid}' : order.uuid;
       final wantDrawer = isCash && !reprint && s.openDrawerOnSale;
       final printerName = _customerSlipPrinterName(order);
+      var held = false;
       for (var i = 0; i < s.receiptCopies; i++) {
         final ref = i == 0 ? base : '$base-c$i';
         try {
@@ -1548,14 +1612,16 @@ class _PosAppState extends State<PosApp> {
           // so keep queuing the rest rather than losing the remaining copies when the
           // printer is down.
           _probe(PrintChannel.receipt, PrintOutcome.spooled, order, ref);
+          held = true;
         }
       }
+      if (held) _raisePrintAlert('receipt', 'Receipt did not print', order);
       // After the customer's copies, so the slip a cashier is waiting for is never
       // behind the pass's copy on the same roll.
       if (!reprint) await _printSubReceipt(order);
     } on PrinterUnavailable {
-      // Already held in the spool by [SpooledPrinter]. Surfacing it here would put a
-      // dialog between the cashier and the next customer.
+      // Already held in the spool by [SpooledPrinter]. A dialog here would stand
+      // between the cashier and the next customer.
     } catch (e) {
       // Building the receipt is inside the try for a reason: an unprintable
       // character used to throw before the spool had anything to hold, so the sale
@@ -1636,6 +1702,7 @@ class _PosAppState extends State<PosApp> {
       valueListenable: _locale,
       builder: (context, locale, _) => MaterialApp(
         title: 'Dishflow',
+        debugShowCheckedModeBanner: false,
         // Held because this shell sits ABOVE the navigator it builds, so its own
         // context cannot reach one. The shift nudge and the tab recalled from a
         // list that has already closed itself both run from up here.
@@ -1656,6 +1723,12 @@ class _PosAppState extends State<PosApp> {
           final mirrorHint = _storeMirrorHint;
           final pollError = _storePollError;
           Widget content = navigator ?? const SizedBox.shrink();
+          // Its own strip like the bars below, and on every screen: the send or
+          // the sale it is about may be three screens behind the cashier by now.
+          content = Column(children: [
+            PrintAlertBar(alerts: _printAlerts, onDismiss: _dismissPrintAlert),
+            Expanded(child: content),
+          ]);
           if (nudge != null ||
               storeAlert ||
               mirrorHint ||
@@ -1666,7 +1739,7 @@ class _PosAppState extends State<PosApp> {
               if (!storeAlert && mirrorHint) _storeMirrorHintBar(context),
               if (!storeAlert && !mirrorHint && pollError != null)
                 _storePollErrorBar(context, pollError),
-              Expanded(child: navigator ?? const SizedBox.shrink()),
+              Expanded(child: content),
             ]);
           }
           // Above the navigator so every touch on any screen, dialog or sheet
@@ -2167,7 +2240,10 @@ class _PosAppState extends State<PosApp> {
   /// The counter, opened onto one order. Reached from the floor home by seating a
   /// table, by the table-less buttons, by recalling a parked tab, or by reopening a
   /// paid sale to correct it. Never the resting screen.
-  Widget _selling(PosSession session) => Builder(
+  Widget _selling(PosSession session) {
+    // The table this bill sat on as the counter was last drawn.
+    final seatedAt = session.current.tableLabel;
+    return Builder(
         // Builder, so navigation targets the Navigator inside this MaterialApp.
         builder: (context) => SellScreen(
           startAction: _takePendingSellAction(),
@@ -2271,7 +2347,15 @@ class _PosAppState extends State<PosApp> {
           // screen and coming straight back lifts the block with no restart.
           shiftOpen: () => widget.shifts.currentOpenShift() != null,
           onOpenShift: () => _openShift(context, session),
-          onChanged: _publishActivity,
+          onChanged: () {
+            _publishActivity();
+            // The bill left the table it was drawn on (turned into a delivery,
+            // say), so the waiter's name leaves that table with it.
+            if (seatedAt != null && session.current.tableLabel != seatedAt) {
+              _releaseIfFree(seatedAt);
+              if (mounted) setState(() {});
+            }
+          },
           onSignOut: _signOut,
           drawer: _buildDrawer(context, session),
           onOpenOrders: () => _openOrders(context, session),
@@ -2322,27 +2406,32 @@ class _PosAppState extends State<PosApp> {
           // already-printed flag.
           onResendToKitchen: () =>
               _fireKitchen(session.current, only: session.current.lines, resend: true),
-          onLineVoided: (line, reason, {approvedBy}) {
-            // The deletion slip is the till's own record that an item was taken
+          onLinesVoided: (lines, reason, {approvedBy}) {
+            // The deletion slip is the till's own record that items were taken
             // off, printed for every void. The kitchen cancel slip only fires
             // when the kitchen already has a copy, or it would send a cancel for
             // food that was never ordered to the pass.
-            if (line.printedToKitchen || line.firedStations.isNotEmpty) {
-              unawaited(_voidToKitchen(session.current, line, reason));
+            for (final line in lines) {
+              if (line.printedToKitchen || line.firedStations.isNotEmpty) {
+                unawaited(_voidToKitchen(session.current, line, reason));
+              }
+              // Only while this order is being corrected, so the set stays the
+              // size of one amendment rather than a shift's worth of voids.
+              if (_amending.containsKey(session.current.uuid)) {
+                _slipped.add(line.uuid);
+              }
             }
-            // Only while this order is being corrected, so the set stays the
-            // size of one amendment rather than a shift's worth of voids.
-            if (_amending.containsKey(session.current.uuid)) {
-              _slipped.add(line.uuid);
-            }
-            unawaited(_printDeletion(session.current, [line],
-                title: 'ITEM VOIDED',
+            unawaited(_printDeletion(session.current, lines,
+                title: lines.length == 1 ? 'ITEM VOIDED' : 'ITEMS VOIDED',
                 reason: reason,
                 approvedBy: approvedBy));
           },
           onPaid: (order) {
             _publishActivity();
             final sale = order as Order;
+            // Paying starts a fresh blank order, so the way back to the floor no
+            // longer knows which table this was: release it by the sale's own.
+            _releaseIfFree(sale.tableLabel);
             // The money is booked, so the cashier goes back to the floor now,
             // ahead of the paper: the kitchen fire and the receipt below are
             // unawaited and own their own failures, and a till that waited on a
@@ -2361,6 +2450,7 @@ class _PosAppState extends State<PosApp> {
           },
         ),
       );
+  }
 
   /// The app shell's navigation, carried by the floor home and by the counter
   /// alike; everything a cashier or manager reaches occasionally lives here so
@@ -3411,11 +3501,13 @@ class _PosAppState extends State<PosApp> {
                 type = cfg.defaultOrderType!;
               }
               String? openedBy;
-              if (widget.settings.askCashierOnOpen ||
-                  widget.users.active().length > 1) {
+              if (widget.settings.askCashierOnOpen) {
                 if (!floorContext.mounted) return;
                 openedBy = await _pickOpenerWithPin(floorContext);
                 if (openedBy == null) return;
+              } else {
+                final me = widget.auth.signedIn?.id;
+                if (me != null && me != BootstrapCashier.id) openedBy = me;
               }
               final dineIn = type == OrderType.dineIn;
               final askGuests =
@@ -4014,8 +4106,8 @@ class _PosAppState extends State<PosApp> {
     );
     if (picked == null || !context.mounted) return;
     if (picked.state == OrderState.held) {
-      await _printBill(picked);
-      if (context.mounted) {
+      final printed = await _printBill(picked);
+      if (printed && context.mounted) {
         showToast(context, tr(context, 'Bill sent to the printer'),
             kind: ToastKind.success);
       }
@@ -5825,6 +5917,16 @@ class _PosAppState extends State<PosApp> {
       }
     }
     widget.orders.save(order);
+    if (outcome == KitchenFireResult.spooled) {
+      _raisePrintAlert('kitchen', 'Kitchen ticket did not print', order);
+    } else if (outcome == KitchenFireResult.lost) {
+      // Not in the spool, so nothing prints it later: retrying is firing again.
+      _raisePrintAlert('kitchen', 'Kitchen ticket did not print', order,
+          detail: 'Ticket did not print. Tell the kitchen and try again.',
+          retry: () async =>
+              await _fireKitchen(order, only: lines, resend: resend) ==
+              KitchenFireResult.sent);
+    }
     return outcome;
   }
 

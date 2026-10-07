@@ -66,11 +66,13 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
   int _nextId = 0;
   int _openChecks = 1;
   bool _busy = false;
+  late final bool _startedWhole;
 
   @override
   void initState() {
     super.initState();
     _load(widget.checks, guests: widget.guests);
+    _startedWhole = _openChecks < 2;
   }
 
   void _load(List<Order> checks, {int? guests}) {
@@ -218,8 +220,9 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
   /// Slices of the same item on one guest read as one row ("3× Burger"): the
   /// same bill line, or shares of one item that became separate lines when the
   /// split was applied (four quarters make the burger again).
-  void _tidy(int col) {
-    final c = _cols[col];
+  void _tidy(int col) => _tidyPieces(_cols[col]);
+
+  void _tidyPieces(List<_Piece> c) {
     for (var i = 0; i < c.length; i++) {
       for (var j = c.length - 1; j > i; j--) {
         if (!_joinable(c[i], c[j])) continue;
@@ -525,9 +528,25 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
       Navigator.pop(context);
       return;
     }
-    _cols.insert(0, [for (final c in _cols) ...c]);
-    _tidy(0);
-    Navigator.pop<List<List<SplitShare>>>(context, [_shares(_cols.first)]);
+    // Gathered on copies: the columns are still drawn while the screen closes,
+    // and must stay in step with their checks until it has.
+    final all = [
+      for (final c in _cols)
+        for (final p in c) _Piece(p.id, p.line, p.quantity, [...p.absorbed]),
+    ];
+    _tidyPieces(all);
+    Navigator.pop<List<List<SplitShare>>>(context, [_shares(all)]);
+  }
+
+  /// Leave without splitting. Printing or paying a guest lays the table out as
+  /// checks on the spot, so a table that was one bill when the screen opened is
+  /// put back to one bill with whatever is still unpaid.
+  void _cancel() {
+    if (_startedWhole && _openChecks > 1) {
+      _unsplitAll();
+    } else {
+      Navigator.pop(context);
+    }
   }
 
   /// Gather every share of the selected item back onto the guest it was
@@ -928,7 +947,7 @@ class _SplitCheckScreenState extends State<SplitCheckScreen> {
           icon: Icons.format_list_numbered, iconColor: const Color(0xFF5D6D7E)),
       button('split-done', 'Split Check', _done,
           icon: Icons.check, iconColor: const Color(0xFF1E6FD9)),
-      button('split-cancel', 'Cancel', () => Navigator.pop(context),
+      button('split-cancel', 'Cancel', _cancel,
           icon: Icons.close, iconColor: const Color(0xFF1E6FD9)),
     ]);
   }

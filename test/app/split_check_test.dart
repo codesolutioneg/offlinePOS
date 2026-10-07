@@ -394,6 +394,42 @@ void main() {
       expect(find.byKey(const Key('split-check-screen')), findsOneWidget);
     });
 
+    testWidgets('Cancel after printing a guest puts the table back on one bill',
+        (t) async {
+      final lines = sample();
+      await open(t, lines, onAction: (layout, i, action) async => [
+            check([lines[0]]),
+            check([lines[1]])..billPrintedAt = DateTime.now(),
+          ]);
+      await moveCola(t);
+      await t.tap(find.byKey(const Key('split-print-1')));
+      await t.pumpAndSettle();
+      ScaffoldMessenger.of(t.element(find.byKey(const Key('split-check-screen'))))
+          .removeCurrentSnackBar();
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('split-cancel')));
+      await t.pumpAndSettle();
+      // The screen redraws while it closes; that must not trip over its columns.
+      expect(t.takeException(), isNull);
+      expect(find.byKey(const Key('split-check-screen')), findsNothing);
+      expect(result, hasLength(1));
+      expect(result!.single.map((s) => s.line).toSet(),
+          {lines[0].uuid, lines[1].uuid});
+    });
+
+    testWidgets('Cancel on a table that was already split leaves it split',
+        (t) async {
+      final a = sample();
+      final b = [
+        OrderLine(productId: 12, name: 'Cake', quantity: 1, unitPrice: 40),
+      ];
+      await open(t, const [], checks: [check(a), check(b)]);
+      await t.tap(find.byKey(const Key('split-cancel')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('split-check-screen')), findsNothing);
+      expect(result, isNull);
+    });
+
     testWidgets('Unsplit Check folds every guest into one and goes back',
         (t) async {
       final a = sample();

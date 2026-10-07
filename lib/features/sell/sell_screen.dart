@@ -51,7 +51,7 @@ class SellScreen extends StatefulWidget {
     this.onHold,
     this.onSendToKitchen,
     this.onOpenOrders,
-    this.onLineVoided,
+    this.onLinesVoided,
     this.online,
     this.pendingToSync,
     this.refusedToSync,
@@ -190,11 +190,11 @@ class SellScreen extends StatefulWidget {
   /// Opens the parked-orders list to recall a table.
   final VoidCallback? onOpenOrders;
 
-  /// A line was voided with a reason, so the shell can print a kitchen cancel slip
-  /// if the line had already been fired. [approvedBy] is the manager who entered
-  /// their PIN when the void was gated.
-  final void Function(OrderLine line, String reason, {String? approvedBy})?
-      onLineVoided;
+  /// Lines were voided together under one reason, so the shell can print one
+  /// deletion slip for them and a kitchen cancel for any already fired.
+  /// [approvedBy] is the manager who entered their PIN when the void was gated.
+  final void Function(List<OrderLine> lines, String reason, {String? approvedBy})?
+      onLinesVoided;
 
   /// Whether the server is reachable, for the status badge. Orders sell and queue
   /// the same either way; this only tells the cashier what will happen at close.
@@ -355,6 +355,7 @@ class _SellScreenState extends State<SellScreen> {
   /// its own, the way the till's cursor follows the last item.
   final Set<String> _picked = {};
   final Set<String> _linesSeen = {};
+  final Map<String, double> _qtySeen = {};
   String? _seenOrder;
   final ScrollController _cartScroll = ScrollController();
   final Map<String, GlobalKey> _lineKeys = {};
@@ -1286,18 +1287,23 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   /// Void [units] of [line], or ask how many when [units] is null and qty > 1.
-  Future<void> _voidLine(OrderLine line, {double? units}) async {
-    // Void always wants a manager PIN when the shell wires [authorizeVoidManager];
-    // otherwise it falls back to the role / manager gate for voidLine.
-    String? approvedBy;
-    if (widget.authorizeVoidManager != null) {
-      approvedBy = await widget.authorizeVoidManager!();
-      if (approvedBy == null) return;
-    } else if (widget.authorize != null &&
+  /// Void always wants a manager PIN when the shell wires [authorizeVoidManager];
+  /// otherwise it falls back to the role / manager gate for voidLine. Null when
+  /// refused, an empty string when allowed with nobody named as approver.
+  Future<String?> _approveVoid() async {
+    final manager = widget.authorizeVoidManager;
+    if (manager != null) return manager();
+    if (widget.authorize != null &&
         !await widget.authorize!(Permission.voidLine)) {
-      return;
+      return null;
     }
-    if (!mounted) return;
+    return '';
+  }
+
+  Future<void> _voidLine(OrderLine line, {double? units}) async {
+    final approval = await _approveVoid();
+    if (approval == null || !mounted) return;
+    final approvedBy = approval.isEmpty ? null : approval;
     // Multi-unit: either a fixed peel (inline minus → 1) or a picker. A
     // weighed/fractional line has no "one unit", so it still voids in full.
     var qty = units ?? line.quantity;
@@ -1324,7 +1330,39 @@ class _SellScreenState extends State<SellScreen> {
     // shell decides separately whether the line also needs a kitchen cancel slip
     // (only when the kitchen already has a copy). Pass the voided snapshot so a
     // partial void prints qty 1 of 8, not the whole consolidated line.
-    widget.onLineVoided?.call(voided!, reason, approvedBy: approvedBy);
+    widget.onLinesVoided?.call([voided!], reason, approvedBy: approvedBy);
+  }
+
+  /// Delete several picked lines in one go: one confirmation, and for the ones
+  /// the kitchen already has, one approval, one reason and one deletion slip.
+  Future<void> _deleteMany(List<OrderLine> lines) async {
+    if (!await _confirmDeleteMany(lines.length) || !mounted) return;
+    String? reason;
+    String? approvedBy;
+    final fired = lines.where(_isFired).toList();
+    if (fired.isNotEmpty) {
+      final approval = await _approveVoid();
+      if (approval == null || !mounted) return;
+      approvedBy = approval.isEmpty ? null : approval;
+      reason = await _askReason(
+          '${tr(context, 'Void the selected items')} (${fired.length})');
+      if (reason == null || !mounted) return;
+    }
+    final voided = <OrderLine>[];
+    _changed(() {
+      for (final l in lines) {
+        if (!_isFired(l)) {
+          s.removeLine(l.uuid);
+          continue;
+        }
+        final v = s.voidQuantity(l.uuid, l.quantity, reason ?? '',
+            approvedBy: approvedBy);
+        if (v != null) voided.add(v);
+      }
+    });
+    if (voided.isNotEmpty && reason != null) {
+      widget.onLinesVoided?.call(voided, reason, approvedBy: approvedBy);
+    }
   }
 
   /// How many units to take off a consolidated line. Returns null on cancel.
@@ -2350,7 +2388,8 @@ class _SellScreenState extends State<SellScreen> {
       if (widget.onToggleAvailable != null)
         IconPadItem('stock', 'misc-stock', Icons.inventory_2_outlined,
             'In Stock Quantity', const Color(0xFFE91E63), true),
-      if (widget.allowedOrderTypes.length > 1)
+      if (widget.allowedOrderTypes.length > 1 &&
+          (widget.settings?.showRevenueCenter ?? true))
         IconPadItem('revenue-center', 'misc-revenue-center', Icons.storefront,
             'Revenue Center', const Color(0xFF212121), true),
       IconPadItem('customer', 'misc-customer', Icons.person_outline, 'Customer',
@@ -2639,16 +2678,29 @@ class _SellScreenState extends State<SellScreen> {
     );
   }
 
-  /// Even split: ask how many ways, then take one equal share now. The table stays
-  /// open on a running balance until every share is paid, so shares can be settled
-  /// one at a time. The last share is whatever balance remains, so rounding never
-  /// leaves a stray cent.
+  /// Even split: ask how many ways once, then take every share one after another
+  /// without asking again, each with its own tender. Closing the sheet stops there
+  /// and leaves the table open on the running balance. The last share is whatever
+  /// balance remains, so rounding never leaves a stray cent.
   Future<void> _splitEvenly() async {
     final ways = await _askShareCount();
     if (ways == null || ways < 2 || !mounted) return;
-    final share = s.current.total / ways;
-    final due = share < s.current.balance ? share : s.current.balance;
-    _payShareSheet(due);
+    final order = s.current;
+    final share = order.total / ways;
+    final firstShare = (order.amountPaid / share + 1e-6).floor() + 1;
+    for (var n = firstShare.clamp(1, ways); n <= ways; n++) {
+      if (!mounted || s.current.uuid != order.uuid) return;
+      final balance = s.current.balance;
+      if (balance <= 0.001) return;
+      final due = n == ways || share > balance ? balance : share;
+      final step = '${tr(context, 'Share')} $n ${tr(context, 'of')} $ways';
+      if (!await _payShareSheet(due, step: step)) return;
+      // A share the session refused leaves the balance where it was; asking the
+      // next guest for theirs would skip this one.
+      if (s.current.uuid == order.uuid && s.current.balance >= balance - 0.001) {
+        return;
+      }
+    }
   }
 
   Future<int?> _askShareCount() {
@@ -2678,8 +2730,10 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   /// Take one share/part payment against the open balance via the payment sheet.
-  void _payShareSheet(double amount) {
-    showModalBottomSheet<void>(
+  /// True once the share is paid, false when the sheet was closed without paying.
+  Future<bool> _payShareSheet(double amount, {String? step}) async {
+    var paid = false;
+    await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
@@ -2689,12 +2743,15 @@ class _SellScreenState extends State<SellScreen> {
         alreadyPaid: s.current.amountPaid,
         format: widget.formatAmount,
         methods: _offeredMethods(),
+        step: step,
         onConfirm: (payments, label, tip, cashReceived) {
           Navigator.pop(ctx);
+          paid = true;
           _completeShare(payments, label, tip, cashReceived);
         },
       ),
     );
+    return paid;
   }
 
   /// One row per guest with its subtotal and a Pay button; unassigned lines are a
@@ -3285,8 +3342,14 @@ class _SellScreenState extends State<SellScreen> {
   String _qty(double q) =>
       q == q.roundToDouble() ? q.toInt().toString() : q.toString();
 
+  /// The bar's Delete works on what is picked in the cart, all of it at once;
+  /// with nothing picked it asks which item.
   Future<void> _deleteFromBar() async {
-    final line = await _pickLine(tr(context, 'Delete which item?'));
+    final picked = _pickedLines;
+    if (picked.length > 1) return _deleteMany(picked);
+    final line = picked.isNotEmpty
+        ? picked.single
+        : await _pickLine(tr(context, 'Delete which item?'));
     if (line == null || !mounted) return;
     if (_isFired(line)) {
       await _voidLine(line);
@@ -3787,7 +3850,8 @@ class _SellScreenState extends State<SellScreen> {
               borderRadius: BorderRadius.circular(14),
               child: Column(
                 children: [
-                  _orderTypeStrip(),
+                  if (widget.settings?.showOrderTypeStrip ?? true)
+                    _orderTypeStrip(),
                   _orderMetaHeader(),
                   if (s.current.type.needsDeliveryCustomer) _deliveryHeader(),
                   if (s.current.type == OrderType.dineIn &&
@@ -3816,6 +3880,7 @@ class _SellScreenState extends State<SellScreen> {
                           )
                         : !_actionBarShown
                             ? ListView(
+                                controller: _cartScroll,
                                 padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
                                 children: [
                                   for (final line in s.current.lines)
@@ -3890,8 +3955,12 @@ class _SellScreenState extends State<SellScreen> {
       for (final l in lines)
         if (!_linesSeen.contains(l.uuid)) l.uuid,
     ];
+    final grown = [
+      for (final l in lines)
+        if ((_qtySeen[l.uuid] ?? l.quantity) < l.quantity) l.uuid,
+    ];
     // Another bill coming up (a tab recalled) picks nothing; a line rung on this
-    // bill picks that line.
+    // bill picks that line, and so does a product tap that bumped a line's count.
     if (s.current.uuid != _seenOrder) {
       _seenOrder = s.current.uuid;
       _picked.clear();
@@ -3899,10 +3968,44 @@ class _SellScreenState extends State<SellScreen> {
       _picked
         ..clear()
         ..add(fresh.last);
+      _reveal(fresh.last);
+    } else if (grown.length == 1) {
+      _picked
+        ..clear()
+        ..add(grown.single);
+      _reveal(grown.single);
     }
     _linesSeen
       ..clear()
       ..addAll(ids);
+    _qtySeen
+      ..clear()
+      ..addAll({for (final l in lines) l.uuid: l.quantity});
+  }
+
+  /// Scroll the cart to [uuid] once it is laid out, so the item just rung is in
+  /// view even when the order is longer than the list.
+  void _reveal(String uuid) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_cartScroll.hasClients) return;
+      final lines = s.current.lines;
+      final at = lines.indexWhere((l) => l.uuid == uuid);
+      if (at < 0) return;
+      // A row scrolled well out of view is not built yet, so it has nothing to
+      // scroll to: jump near it first by its place in the list.
+      if (_lineKeys[uuid]?.currentContext == null) {
+        final max = _cartScroll.position.maxScrollExtent;
+        _cartScroll.jumpTo(
+            lines.length < 2 ? 0.0 : max * at / (lines.length - 1));
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final ctx = _lineKeys[uuid]?.currentContext;
+        if (!mounted || ctx == null) return;
+        Scrollable.ensureVisible(ctx,
+            duration: const Duration(milliseconds: 150),
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+      });
+    });
   }
 
   Widget _pickableLine(OrderLine line) {
@@ -3994,20 +4097,14 @@ class _SellScreenState extends State<SellScreen> {
       return;
     }
     if (picked.length == 1) return _deleteLine(picked.single);
-    if (!await _confirmDeleteMany(picked.length) || !mounted) return;
-    for (final l in picked) {
-      if (!mounted) return;
-      await _deleteLine(l, whole: true);
-    }
+    return _deleteMany(picked);
   }
 
-  Future<void> _deleteLine(OrderLine line, {bool whole = false}) async {
-    if (_isFired(line)) {
-      return _voidLine(line, units: whole ? line.quantity : null);
-    }
+  Future<void> _deleteLine(OrderLine line) async {
+    if (_isFired(line)) return _voidLine(line);
     var qty = line.quantity;
     final countable = line.quantity > 1 && qty == qty.roundToDouble();
-    if (!whole && countable) {
+    if (countable) {
       final n = await _askVoidQuantity(line,
           title: 'How many to delete?', all: 'Delete all');
       if (n == null || !mounted) return;
@@ -5254,9 +5351,14 @@ class _PaymentSheet extends StatefulWidget {
     this.billTotal,
     this.alreadyPaid = 0,
     this.onBack,
+    this.step,
   });
 
   final double total;
+
+  /// Which share of an even split this is (e.g. "Share 2 of 4"), shown beside the
+  /// title so the cashier knows how many guests are still to pay.
+  final String? step;
   final String Function(double) format;
   final List<PaymentMethod> methods;
   final void Function(
@@ -5655,6 +5757,15 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               ),
             Text(tr(context, 'Payment'),
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            if (widget.step case final step?) ...[
+              const SizedBox(width: 10),
+              Text(step,
+                  key: const Key('pay-step'),
+                  style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary)),
+            ],
             const Spacer(),
             // One bill paid part cash, part card. Named for the methods, not for
             // splitting the bill: that is what the mode row answers.

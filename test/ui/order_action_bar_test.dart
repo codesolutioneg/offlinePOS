@@ -49,7 +49,10 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Future<void> open(WidgetTester t, {VoidCallback? onNewOrder}) async {
+  Future<void> open(WidgetTester t,
+      {VoidCallback? onNewOrder,
+      void Function(List<OrderLine>, String, {String? approvedBy})?
+          onLinesVoided}) async {
     t.view.physicalSize = const Size(1366, 768);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.reset);
@@ -60,6 +63,7 @@ void main() {
         formatAmount: (v) => v.toStringAsFixed(2),
         onPrintBill: printed.add,
         onNewOrder: onNewOrder,
+        onLinesVoided: onLinesVoided,
         onEmployeeTransfer: () async {},
         onOpenRefunds: () {},
       ),
@@ -98,6 +102,57 @@ void main() {
     await t.pumpAndSettle();
 
     expect(session.current.lines.map((l) => l.name), ['Pizza']);
+  });
+
+  testWidgets('Delete takes every picked line at once', (t) async {
+    session.addProduct(pizza);
+    session.addProduct(salad);
+    await open(t);
+    await t.tap(find.byKey(const Key('cart-all')));
+    await t.pump();
+
+    await t.tap(tile('delete'));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('confirm-delete-many')), findsOneWidget);
+    await t.tap(find.byKey(const Key('confirm-delete-many-ok')));
+    await t.pumpAndSettle();
+
+    expect(session.current.lines, isEmpty);
+  });
+
+  testWidgets('Delete on sent lines asks one reason and voids them together',
+      (t) async {
+    session.addProduct(pizza);
+    session.addProduct(salad);
+    for (final l in session.current.lines) {
+      l.printedToKitchen = true;
+    }
+    session.orders.save(session.current);
+    final voided = <List<OrderLine>>[];
+    String? why;
+    await open(t, onLinesVoided: (lines, reason, {approvedBy}) {
+      voided.add(lines);
+      why = reason;
+    });
+    await t.tap(find.byKey(const Key('cart-all')));
+    await t.pump();
+
+    await t.tap(tile('delete'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-delete-many-ok')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('void-reason')), findsOneWidget);
+    await t.enterText(find.byKey(const Key('void-reason')), 'Wrong table');
+    await t.pump();
+    await t.tap(find.byKey(const Key('confirm-reason')));
+    await t.pumpAndSettle();
+
+    // One reason, one hand-off for both lines, so one deletion slip prints.
+    expect(find.byKey(const Key('void-reason')), findsNothing);
+    expect(voided, hasLength(1));
+    expect(voided.single.map((l) => l.name).toSet(), {'Pizza', 'Salad'});
+    expect(why, 'Wrong table');
+    expect(session.current.lines, isEmpty);
   });
 
   testWidgets('Quantity on the only line sets it from the keypad', (t) async {

@@ -619,9 +619,9 @@ class SettingsStore {
   set askGuestCount(bool v) => setBool('ask_guest_count', v);
 
   /// Whether opening a fresh table asks which cashier is opening it, and assigns the
-  /// table to them. Off by default: a single-operator till has nobody to choose
-  /// between. A shop that shares one screen between waiters turns it on.
-  bool get askCashierOnOpen => getBool('ask_cashier_on_open', fallback: true);
+  /// table to them. Off by default: whoever signed in is the one opening it, so the
+  /// table goes to them. A shop that shares one screen between waiters turns it on.
+  bool get askCashierOnOpen => getBool('ask_cashier_on_open', fallback: false);
   set askCashierOnOpen(bool v) => setBool('ask_cashier_on_open', v);
 
   /// After choosing who opens a table, require their PIN or fingerprint.
@@ -672,6 +672,18 @@ class SettingsStore {
   /// A shop that wants the other till's rule turns it on.
   bool get moveRequiresKitchen => getBool('move_requires_kitchen');
   set moveRequiresKitchen(bool v) => setBool('move_requires_kitchen', v);
+
+  /// Whether the order screen shows the order-type pills above the bill. On by
+  /// default. Off, nobody sees them, a manager included: the type an order was
+  /// opened with stays unless the Misc pad's Revenue Center changes it.
+  bool get showOrderTypeStrip => getBool('show_order_type_strip', fallback: true);
+  set showOrderTypeStrip(bool v) => setBool('show_order_type_strip', v);
+
+  /// Whether the Misc pad carries Revenue Center, the other way to change an open
+  /// order's type. On by default. Off, it is offered to nobody, whatever their
+  /// level allows.
+  bool get showRevenueCenter => getBool('show_revenue_center', fallback: true);
+  set showRevenueCenter(bool v) => setBool('show_revenue_center', v);
 
   /// Whether opening a shift asks who is working this session and clocks them in.
   /// Off by default: a single-operator till has only the person who opened it.
@@ -1510,6 +1522,8 @@ class SettingsStore {
         'ask_cashier_on_open': askCashierOnOpen,
         'table_open_require_auth': tableOpenRequireAuth,
         'move_requires_kitchen': moveRequiresKitchen,
+        'show_order_type_strip': showOrderTypeStrip,
+        'show_revenue_center': showRevenueCenter,
         'floor_sections_side': floorSectionsSide,
         'category_stations': {
           for (final e in categoryStations.entries) '${e.key}': e.value,
@@ -1641,6 +1655,12 @@ class SettingsStore {
     }
     if (bundle['move_requires_kitchen'] is bool) {
       moveRequiresKitchen = bundle['move_requires_kitchen'] as bool;
+    }
+    if (bundle['show_order_type_strip'] is bool) {
+      showOrderTypeStrip = bundle['show_order_type_strip'] as bool;
+    }
+    if (bundle['show_revenue_center'] is bool) {
+      showRevenueCenter = bundle['show_revenue_center'] as bool;
     }
     if (bundle['floor_sections_side'] is bool) {
       floorSectionsSide = bundle['floor_sections_side'] as bool;

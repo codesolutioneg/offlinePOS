@@ -141,6 +141,9 @@ const Map<String, String> _ar = {
   'Delete the selected items?': 'مسح المنتجات المحددة؟',
   'Items selected': 'عدد المنتجات المحددة',
   'Pick an item first': 'اختر منتجاً أولاً',
+  'Void the selected items': 'إلغاء المنتجات المحددة',
+  'Share': 'حصة',
+  'of': 'من',
   'Pick how many': 'اختَر العدد',
   'on the order': 'في الطلب',
   'Void all': 'إلغاء الكل',
@@ -1152,6 +1155,12 @@ const Map<String, String> _ar = {
   'Add new': 'إضافة جديد',
   'Ticket held, printer offline. It will print automatically.':
       'التذكرة محتجزة، الطابعة غير متصلة. ستُطبع تلقائيًا.',
+  'Kitchen ticket did not print': 'فشل الإرسال للمطبخ',
+  'Receipt did not print': 'فشل طباعة الإيصال',
+  'Bill did not print': 'فشل طباعة الحساب',
+  'Printer offline. Held, and will print when it is back.':
+      'الطابعة غير متصلة. محفوظ وسيُطبع عند رجوعها.',
+  'Ignore': 'تجاهل',
   'Ticket did not print. Tell the kitchen and try again.':
       'لم تُطبع التذكرة. أبلغ المطبخ ثم أعد المحاولة.',
   'to print': 'في انتظار الطباعة',
@@ -1698,6 +1707,12 @@ const Map<String, String> _ar = {
   'To go': 'تيك أواي داخلي',
   'Seat as': 'إجلاس كـ',
   'Order types this shop offers': 'أنواع الطلبات التي يقدمها المحل',
+  'Show the order types above the bill': 'إظهار أنواع الطلب أعلى الفاتورة',
+  'Off hides them from everyone, managers included':
+      'عند الإيقاف تختفي عن الجميع، حتى المديرين',
+  'Show Revenue Center in Misc': 'إظهار مركز الإيراد في المتنوع',
+  'Changes an open order between dine-in, takeaway and delivery':
+      'يغيّر الطلب المفتوح بين صالة وسفري ودليفري',
   'A type that is off is offered to nobody, whatever their role allows':
       'النوع المغلق لا يظهر لأحد مهما سمح به دوره',
   'Table sections': 'أقسام الطاولات',

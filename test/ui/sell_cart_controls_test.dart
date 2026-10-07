@@ -223,6 +223,44 @@ void main() {
     expect(find.byKey(const Key('line-split-units')), findsOneWidget);
   });
 
+  group('a long bill keeps the line just rung in view', () {
+    bool inView(WidgetTester t, String uuid) {
+      final list = t.getRect(find.byKey(const Key('cart-list')));
+      final row = find.byKey(Key('line-$uuid'));
+      return row.evaluate().isNotEmpty && list.contains(t.getRect(row).center);
+    }
+
+    setUp(() {
+      session.addProduct(
+          const Product(id: 10, name: 'Burger', price: 100, categoryId: 1));
+      for (var i = 0; i < 30; i++) {
+        session.current.lines.add(
+            OrderLine(productId: 100 + i, name: 'Dish $i', quantity: 1, unitPrice: 5));
+      }
+      session.orders.save(session.current);
+    });
+
+    testWidgets('a new line at the bottom scrolls down to it', (t) async {
+      await open(t);
+      await t.tap(find.byKey(const Key('product-11')));
+      await t.pumpAndSettle();
+      expect(inView(t, line(11).uuid), isTrue);
+    });
+
+    testWidgets('another tap on a product higher up scrolls back to it',
+        (t) async {
+      await open(t);
+      await t.tap(find.byKey(const Key('product-11')));
+      await t.pumpAndSettle();
+      expect(inView(t, line(10).uuid), isFalse);
+
+      await t.tap(find.byKey(const Key('product-10')));
+      await t.pumpAndSettle();
+      expect(line(10).quantity, 2);
+      expect(inView(t, line(10).uuid), isTrue);
+    });
+  });
+
   testWidgets('the page counter reads 1 / 1 on a short bill', (t) async {
     await open(t);
     await t.tap(find.byKey(const Key('product-10')));

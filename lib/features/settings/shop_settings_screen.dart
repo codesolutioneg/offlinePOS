@@ -33,6 +33,8 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late bool _tableOpenRequireAuth;
   late bool _moveRequiresKitchen;
   late bool _askSessionStaff;
+  late bool _showOrderTypeStrip;
+  late bool _showRevenueCenter;
   late int _cutoverHour;
   late Set<OrderType> _offered;
   late bool _sectionsSide;
@@ -51,6 +53,8 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _tableOpenRequireAuth = widget.settings.tableOpenRequireAuth;
     _moveRequiresKitchen = widget.settings.moveRequiresKitchen;
     _askSessionStaff = widget.settings.askSessionStaff;
+    _showOrderTypeStrip = widget.settings.showOrderTypeStrip;
+    _showRevenueCenter = widget.settings.showRevenueCenter;
     _cutoverHour = widget.settings.businessDayCutoverHour;
     _offered = widget.settings.shopOrderTypes;
     _sectionsSide = widget.settings.floorSectionsSide;
@@ -89,6 +93,8 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.tableOpenRequireAuth = _tableOpenRequireAuth;
     widget.settings.moveRequiresKitchen = _moveRequiresKitchen;
     widget.settings.askSessionStaff = _askSessionStaff;
+    widget.settings.showOrderTypeStrip = _showOrderTypeStrip;
+    widget.settings.showRevenueCenter = _showRevenueCenter;
     widget.settings.businessDayCutoverHour = _cutoverHour;
     widget.settings.shopOrderTypes = _offered;
     widget.settings.floorSectionsSide = _sectionsSide;
@@ -234,6 +240,23 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
                   onSelected: (v) => _toggleOffered(t, v),
                 ),
             ],
+          ),
+          // The two ways to change an open order's type. Each is shop-wide and
+          // sits above the levels: off, a manager does not see it either.
+          SwitchListTile(
+            key: const Key('show-order-type-strip'),
+            title: Text(tr(context, 'Show the order types above the bill')),
+            subtitle: Text(tr(context, 'Off hides them from everyone, managers included')),
+            value: _showOrderTypeStrip,
+            onChanged: (v) => setState(() => _showOrderTypeStrip = v),
+          ),
+          SwitchListTile(
+            key: const Key('show-revenue-center'),
+            title: Text(tr(context, 'Show Revenue Center in Misc')),
+            subtitle: Text(tr(context,
+                'Changes an open order between dine-in, takeaway and delivery')),
+            value: _showRevenueCenter,
+            onChanged: (v) => setState(() => _showRevenueCenter = v),
           ),
           const SizedBox(height: 12),
           ListTile(
