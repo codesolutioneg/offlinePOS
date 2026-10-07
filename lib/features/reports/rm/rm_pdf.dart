@@ -38,7 +38,7 @@ pw.Widget _placed(RmPlaced item, bool unicode) {
     left: item.x,
     top: item.y,
     child: pw.SizedBox(
-      width: item.width,
+      width: item.clip ? item.width : null,
       child: pw.Text(
         item.text,
         maxLines: 1,

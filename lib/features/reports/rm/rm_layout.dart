@@ -237,6 +237,7 @@ class RmPlaced {
     required this.cell,
     required this.text,
     this.placeholder = false,
+    this.clip = true,
   });
 
   final int page;
@@ -248,6 +249,12 @@ class RmPlaced {
 
   /// A field with no data behind it yet, shown by its name.
   final bool placeholder;
+
+  /// Whether text longer than [width] is cut there. A value is, so it never
+  /// runs into the column beside it; a layout's own wording set from the left
+  /// is not, because its designer gave it the room it has on the page, not
+  /// the room its cell says.
+  final bool clip;
 }
 
 /// A report laid out on pages.
@@ -346,6 +353,7 @@ RmDocument layOutRmReport(
         cell: c,
         text: text,
         placeholder: placeholder,
+        clip: !(c.kind == RmKind.text && c.justify == 0),
       ));
     }
     y += height;

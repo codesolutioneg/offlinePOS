@@ -101,6 +101,15 @@ void main() {
       'ItemSalesNoPrice',
       'SalesByCategory',
       'SalesByCategoryDetails',
+      'PaymentTransactionDetails',
+      'PaymentTransactionDetails40',
+      'MenuEngineering',
+      'groupSalesByEmployee',
+      'ItemSalesByCustomerSummary',
+      'ItemSalesByCustomerDetail',
+      'RefundsSummary',
+      'refundDetails',
+      'DiscReport',
     ]) {
       expect(page(id).items.where((i) => i.placeholder), isEmpty, reason: id);
     }
@@ -112,6 +121,42 @@ void main() {
     // The untendered take-away is cash for its total.
     expect(line(doc, 'Cash'), ['Cash', '1', '90.00']);
     expect(line(doc, 'Total'), ['Total', '2', '310.00']);
+  });
+
+  test('session summary: a refund is not a negative sale, as in the Flash', () {
+    final refund = sale(OrderType.dineIn, lines: [burger(quantity: -1)])
+      ..refundOfUuid = orders.first.uuid;
+    final binding = bindRmReport('SessionSummary',
+        orders: [...orders, refund], categories: categories, costs: costs)!;
+    final report = named('SessionSummary');
+    final doc = layOutRmReport(
+      report,
+      const RmSystem(
+          shop: '', report: '', period: '', ranAt: '', filter: ''),
+      rows: binding.rows,
+      headless: binding.headless,
+    );
+    // The takings are what they were without it; the refund is in its own block.
+    expect(line(doc, 'Total'), ['Total', '2', '310.00']);
+    expect(line(doc, 'Total refunded'), ['Total refunded', '-100.00']);
+  });
+
+  test('session summary: a check paid in parts on one tender is one check', () {
+    final parts = sale(OrderType.dineIn, lines: [
+      burger()
+    ], payments: const [
+      OrderPayment(methodId: 2, amount: 60, label: 'Visa'),
+      OrderPayment(methodId: 2, amount: 40, label: 'Visa'),
+    ]);
+    final binding = bindRmReport('SessionSummary',
+        orders: [parts], categories: categories, costs: costs)!;
+    final doc = layOutRmReport(
+      named('SessionSummary'),
+      const RmSystem(shop: '', report: '', period: '', ranAt: '', filter: ''),
+      rows: binding.rows,
+      headless: binding.headless,
+    );
+    expect(line(doc, 'Visa'), ['Visa', '1', '100.00']);
   });
 
   test('session summary: groups are credits, with discounts and gross', () {
@@ -150,9 +195,57 @@ void main() {
         ['1', 'Burgers', '3', '290.00', '120.00', '41.38']);
   });
 
+  test('session summary: costs, discounts by reason and tenders by tip', () {
+    final doc = page('SessionSummary');
+    expect(line(doc, 'Cost of goods'), ['Cost of goods', '125.00']);
+    expect(line(doc, 'Item discounts'), ['Item discounts', '1', '10.00']);
+    // Neither check carried a tip, so both tenders are under "without".
+    expect(doc.items.map((i) => i.text), contains('Payments Without Tips'));
+    expect(line(doc, 'Average check').last, '155.00');
+  });
+
+  test('payment transactions: a line per payment, with the check beside it',
+      () {
+    final doc = page('PaymentTransactionDetails');
+    final visa = line(doc, 'Visa');
+    expect(visa, containsAll(['220.00', 'Visa', 'sara']));
+    expect(line(doc, 'Totals'), containsAll(['310.00']));
+  });
+
+  test('menu engineering ranks each dish by the two rules it prints', () {
+    final doc = page('MenuEngineering');
+    // Three of the four sold and the better earner: kept.
+    expect(line(doc, 'Classic Burger').last, 'STAR');
+    // A quarter of the mix and under the profit rule: dropped.
+    expect(line(doc, 'Cola').last, 'DOG');
+  });
+
+  test('group sales by employee: who sold how much of each group', () {
+    final doc = page('groupSalesByEmployee');
+    expect(line(doc, 'sara'), ['1', 'sara', '3', '290.00', '120.00', '41.38']);
+  });
+
+  test('discounts: the item given one, and what was given away in all', () {
+    final doc = page('DiscReport');
+    expect(line(doc, 'Classic Burger'), contains('10.00'));
+    expect(line(doc, 'Total Discounts'), ['Total Discounts', '10.00']);
+  });
+
+  test('item sales by customer: a sale with nobody named is a walk-in', () {
+    final doc = page('ItemSalesByCustomerSummary');
+    expect(line(doc, 'Walk-in'), ['1', 'Walk-in', '4', '310.00']);
+  });
+
   test('the connected layouts save as PDFs', () async {
     final keep = Directory('build/rm-layouts')..createSync(recursive: true);
-    for (final id in ['SessionSummary', 'ItemSales', 'SalesByCategoryDetails']) {
+    for (final id in [
+      'SessionSummary',
+      'ItemSales',
+      'SalesByCategoryDetails',
+      'MenuEngineering',
+      'PaymentTransactionDetails',
+      'DiscReport',
+    ]) {
       final bytes = await buildRmPdf(page(id));
       expect(String.fromCharCodes(bytes.take(4)), '%PDF');
       File('${keep.path}/bound-$id.pdf').writeAsBytesSync(bytes);

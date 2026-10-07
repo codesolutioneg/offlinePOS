@@ -25,7 +25,7 @@ import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/reports/cost_sales_report_screen.dart';
-import 'package:offline_pos/features/reports/menu_engineering_report_screen.dart';
+import 'package:offline_pos/features/reports/rm/rm_report_viewer.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -191,9 +191,13 @@ void main() {
     await signIn(t);
     await openReport(t, 'rep-menu-eng');
 
-    expect(find.byType(MenuEngineeringReportScreen, skipOffstage: false), findsOneWidget);
-    expect(find.byKey(const Key('menu-empty-state'), skipOffstage: false), findsNothing);
-    expect(find.byKey(const Key('menu-item-1'), skipOffstage: false), findsOneWidget);
+    // It opens as the back office's Menu Engineering page, over the till's
+    // sales and the costs the menu brought down: the dish is on it, ranked.
+    expect(find.byType(RmReportViewer), findsOneWidget);
+    expect(find.byKey(const Key('rm-unwired')), findsNothing);
+    final dish = pageLine(t, 'Pizza');
+    expect(dish, contains('500.00'));
+    expect(dish.last, isIn(['STAR', 'WORKHORSE', 'CHALLENGE', 'DOG']));
   });
 
   testWidgets('a till whose Odoo states no costs says so instead of guessing',

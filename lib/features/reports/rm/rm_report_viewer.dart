@@ -345,7 +345,7 @@ class RmPageView extends StatelessWidget {
     return Positioned(
       left: item.x,
       top: item.y,
-      width: item.width,
+      width: item.clip ? item.width : null,
       child: Text(
         item.text,
         maxLines: 1,

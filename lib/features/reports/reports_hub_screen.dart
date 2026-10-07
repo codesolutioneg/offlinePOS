@@ -238,12 +238,15 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       session: tr(context, 'Session #'),
       filterSettings: tr(context, 'Filter Settings'),
     );
+    // Every till on the network, as the Flash reports read it: a back-office
+    // report is the shop's, and the two have to agree on what the shop sold.
     final binding = bindRmReport(
       report.id,
-      orders: _filteredFor(period),
+      orders: _shopFilteredFor(period),
       categories: widget.categories,
       costs: widget.costs,
       cashTenderIds: widget.cashTenderIds,
+      staffNames: widget.staffNames,
     );
     final document = layOutRmReport(
       report,

@@ -182,10 +182,10 @@ void main() {
     await t.pumpAndSettle();
 
     // Folded shut until asked for.
-    expect(find.byKey(const Key('rm-MenuEngineering')), findsNothing);
+    expect(find.byKey(const Key('rm-noSales')), findsNothing);
     await t.tap(find.byKey(const Key('rm-group-Sales Reports')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('rm-MenuEngineering')));
+    await t.tap(find.byKey(const Key('rm-noSales')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('report-run')));
     await t.pumpAndSettle();
