@@ -42,6 +42,7 @@ pw.Widget _placed(RmPlaced item, bool unicode) {
       child: pw.Text(
         item.text,
         maxLines: 1,
+        overflow: pw.TextOverflow.clip,
         textAlign: switch (c.justify) {
           1 => pw.TextAlign.center,
           2 => pw.TextAlign.right,

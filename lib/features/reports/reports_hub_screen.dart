@@ -36,8 +36,10 @@ import 'refunds_voids_report_screen.dart';
 import 'report_period_dialog.dart';
 import 'revenue_center_report_screen.dart';
 import 'rm/report_window.dart';
+import 'rm/rm_bindings.dart';
 import 'rm/rm_layout.dart';
 import 'rm/rm_report_viewer.dart';
+import 'rm/rm_table_page.dart';
 import 'rm/thermal_report.dart';
 import 'sales_by_time_report_screen.dart';
 import 'sales_report_screen.dart';
@@ -223,9 +225,26 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     return parts.isEmpty ? tr(context, 'None') : parts.join(', ');
   }
 
-  /// Open one of the bundled layouts in the page viewer.
+  /// Open one of the bundled layouts in the page viewer, over the till's
+  /// sales where the layout is connected to them.
   Future<void> _openRm(RmReport report) {
     final period = _period(context);
+    final filter = _filterWords(context);
+    final ranAt = DateTime.now();
+    final labels = RmPageLabels(
+      date: tr(context, 'Date'),
+      time: tr(context, 'Time'),
+      page: tr(context, 'Page'),
+      session: tr(context, 'Session #'),
+      filterSettings: tr(context, 'Filter Settings'),
+    );
+    final binding = bindRmReport(
+      report.id,
+      orders: _filteredFor(period),
+      categories: widget.categories,
+      costs: widget.costs,
+      cashTenderIds: widget.cashTenderIds,
+    );
     final document = layOutRmReport(
       report,
       RmSystem(
@@ -235,6 +254,23 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
         ranAt: _stamp(DateTime.now()),
         filter: _filterWords(context),
       ),
+      rows: binding?.rows,
+      headless: binding?.headless ?? const {},
+      // Over the till's data it opens with the heading every report page
+      // has; as a bare layout it keeps the one it was designed with.
+      pageHeading: binding == null
+          ? null
+          : (items, page, pageWidth) => putRmPageHeading(
+                items,
+                page: page,
+                pageWidth: pageWidth,
+                shop: widget.shopName,
+                title: report.name,
+                period: period.label,
+                filter: filter,
+                ranAt: ranAt,
+                labels: labels,
+              ),
     );
     return showReportWindow(
         context, RmReportViewer(title: report.name, document: document));
@@ -759,7 +795,12 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     final key = _selected;
     if (key == null) return;
     if (key == _flashKey) return _openFlashMenu();
-    final layout = _rm.where((r) => 'rm-${r.id}' == key).firstOrNull;
+    // A till report the back office has a connected layout for opens as that
+    // layout, so its columns and sections are the back office's.
+    final layout = _rm
+        .where((r) =>
+            'rm-${r.id}' == key || r.id == rmLayoutForReport[key])
+        .firstOrNull;
     if (layout != null) return _openRm(layout);
     final report = _reports(context).where((r) => r.key == key).firstOrNull;
     final build = report?.build;

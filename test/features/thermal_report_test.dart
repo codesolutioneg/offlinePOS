@@ -57,4 +57,27 @@ void main() {
     expect(lines.where((l) => l.text == '-' * 40), hasLength(2));
     expect(texts(lines), contains('VAT                               141.98'));
   });
+
+  test('a table too wide for the roll prints a record at a time', () {
+    final lines = thermalTableLines(
+      const ['Order', 'Bill time', 'Revenue centre', 'Table', 'Cashier', 'Total'],
+      const [
+        ['953', '2026-10-07 11:47', 'Car delivery', 'T1', 'yasser', '313.49'],
+        ['962', '2026-10-07 12:01', 'Dine-in', '', 'yasser', '280.88'],
+      ],
+      40,
+    );
+
+    for (final l in lines) {
+      expect(l.text.length, lessThanOrEqualTo(40), reason: l.text);
+    }
+    final all = texts(lines);
+    // What the row is, then each column as a label with its value at the edge.
+    expect(all.first, 'Order${' ' * 32}953');
+    expect(lines.first.bold, isTrue);
+    expect(all, contains('Total${' ' * 29}313.49'));
+    // A column with nothing in it is not printed as an empty label.
+    expect(all.where((t) => t.startsWith('Table')), hasLength(1));
+    expect(all.where((t) => t == '-' * 40), hasLength(2));
+  });
 }

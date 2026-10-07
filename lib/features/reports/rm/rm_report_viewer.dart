@@ -350,7 +350,7 @@ class RmPageView extends StatelessWidget {
         item.text,
         maxLines: 1,
         softWrap: false,
-        overflow: TextOverflow.visible,
+        overflow: TextOverflow.clip,
         textAlign: switch (c.justify) {
           1 => TextAlign.center,
           2 => TextAlign.right,

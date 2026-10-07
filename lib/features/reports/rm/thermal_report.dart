@@ -122,7 +122,36 @@ List<ThermalLine> thermalTableLines(
       ].join(' ').trimRight();
 
   final out = <ThermalLine>[];
+
+  // A table with more columns than a roll can set side by side is printed a
+  // record at a time instead: what the row is on a line of its own, then each
+  // of its other columns as a label with its value at the far edge.
+  final stacked = columns.length > 4 && total > room;
+  String pair(String label, String value) {
+    final l = label.trim();
+    final v = value.trim();
+    final space = width - l.length - v.length;
+    if (space >= 1) return '$l${' ' * space}$v';
+    final cut = '$l $v';
+    return cut.length > width ? cut.substring(0, width) : cut;
+  }
+
+  void records(List<List<String>> lines) {
+    for (final row in lines) {
+      final cells = cellsOf(row);
+      out.add(ThermalLine(
+          pair(columns.first, cells.isEmpty ? '' : cells.first),
+          bold: true));
+      for (var i = 1; i < columns.length && i < cells.length; i++) {
+        if (cells[i].trim().isEmpty) continue;
+        out.add(ThermalLine(pair(columns[i], cells[i])));
+      }
+      out.add(ThermalLine('-' * width));
+    }
+  }
+
   void table(List<List<String>> lines) {
+    if (stacked) return records(lines);
     out
       ..add(ThermalLine(line(columns)))
       ..add(ThermalLine('-' * width));

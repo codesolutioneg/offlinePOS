@@ -61,7 +61,7 @@ void main() {
     'rep-summary': 'Sales report',
     'rep-tax': 'Tax report',
     'rep-top': 'Top products',
-    'rep-category': 'Category performance',
+    'rep-category': 'Sales By Category',
     'rep-payment': 'Payment analysis',
     'rep-discounts': 'Discounts',
     'rep-cashier': 'Cashier performance',
@@ -182,16 +182,36 @@ void main() {
     await t.pumpAndSettle();
 
     // Folded shut until asked for.
-    expect(find.byKey(const Key('rm-ItemSales')), findsNothing);
+    expect(find.byKey(const Key('rm-MenuEngineering')), findsNothing);
     await t.tap(find.byKey(const Key('rm-group-Sales Reports')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('rm-ItemSales')));
+    await t.tap(find.byKey(const Key('rm-MenuEngineering')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('report-run')));
     await t.pumpAndSettle();
 
     expect(find.byType(RmReportViewer), findsOneWidget);
+    // Nobody has connected this one to the till's sales yet, and it says so.
     expect(find.byKey(const Key('rm-unwired')), findsOneWidget);
+  });
+
+  testWidgets('a till report with a connected layout opens as that layout',
+      (t) async {
+    tallWindow(t);
+    await t.pumpWidget(hubWith([
+      Order(deviceId: 'd', cashierId: 'sara', type: OrderType.dineIn, lines: [
+        OrderLine(productId: 1, name: 'Pizza', quantity: 2, unitPrice: 100),
+      ]),
+    ]));
+    await t.pumpAndSettle();
+
+    await openReport(t, 'rep-session-summary');
+
+    expect(find.byType(RmReportViewer), findsOneWidget);
+    expect(find.byKey(const Key('rm-unwired')), findsNothing);
+    // The back office's own sections and columns, over the till's figures.
+    expect(find.text('Payment Types'), findsOneWidget);
+    expect(pageLine(t, 'Report Totals:'), ['200.00', '200.00']);
   });
 
   testWidgets('the thermal button prints the report page on the receipt roll',

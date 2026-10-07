@@ -273,14 +273,25 @@ class RmDocument {
 /// of the page's text area shared between the widest band's columns, never fewer
 /// than forty, which is what a heading spanning the page is set to.
 ///
-/// [rows] is the data for each block, by the first part of its levels' path.
-/// A level with no data draws once with its fields shown by name, so a report
-/// nobody has wired yet still shows its whole shape.
+/// [rows] is the data, by the full path of each outermost level drawn. With
+/// none ([rows] null) every level draws once with its fields shown by name,
+/// so a report nobody has wired yet still shows its whole shape. With data, a
+/// level the data does not mention is left out altogether, the way the back
+/// office leaves out a block it was not asked for; one it mentions with no
+/// rows still draws its titles and totals. A level in [headless] draws
+/// without its own titles.
+///
+/// [pageHeading] puts a heading on each page and answers where the content
+/// starts under it; given one, the layout's own heading block is left out.
 RmDocument layOutRmReport(
   RmReport report,
   RmSystem system, {
-  Map<String, List<RmRow>> rows = const {},
+  Map<String, List<RmRow>>? rows,
+  Set<String> headless = const {},
+  double Function(List<RmPlaced> items, int page, double pageWidth)?
+      pageHeading,
 }) {
+  final bound = rows != null;
   const margin = 36.0;
   const rowHeight = 13.0;
   final landscape = report.landscape;
@@ -301,15 +312,16 @@ RmDocument layOutRmReport(
 
   final items = <RmPlaced>[];
   var page = 0;
-  var y = margin;
+  var y = pageHeading?.call(items, 0, pageWidth) ?? margin;
+  final top = y;
 
   void band(List<RmCell> cells, RmRow? row) {
     if (cells.isEmpty) return;
     final height =
         (cells.map((c) => c.row).reduce((a, b) => a > b ? a : b) + 1) * rowHeight;
-    if (y + height > pageHeight - margin && y > margin) {
+    if (y + height > pageHeight - margin && y > top) {
       page++;
-      y = margin;
+      y = pageHeading?.call(items, page, pageWidth) ?? margin;
     }
     for (final c in cells) {
       final String text;
@@ -321,8 +333,8 @@ RmDocument layOutRmReport(
           text = system[c.value];
         case RmKind.field:
           final value = row?.fields[c.value];
-          placeholder = value == null;
-          text = value ?? c.value;
+          placeholder = value == null && !bound;
+          text = value ?? (bound ? '' : c.value);
         case RmKind.rule:
           text = '';
       }
@@ -340,6 +352,8 @@ RmDocument layOutRmReport(
   }
 
   for (final block in report.blocks) {
+    // The layout's own heading gives way to the one the caller puts.
+    if (pageHeading != null && block.type == 'Empty') continue;
     // Levels nest by their path: `A.B` is drawn inside each row of `A`.
     List<RmBandSet> under(String parent) => [
           for (final l in block.layouts)
@@ -355,6 +369,7 @@ RmDocument layOutRmReport(
         ];
 
     void level(RmBandSet set, List<RmRow>? data, RmRow? parent) {
+      if (bound && data == null) return;
       final kids = under(set.what);
       // With no data the level draws once, as its own sample row.
       final own = data ?? const <RmRow?>[null];
@@ -366,7 +381,7 @@ RmDocument layOutRmReport(
 
       if (set.details.isNotEmpty) {
         // A list: its column titles once, a line per row, its totals once.
-        band(set.header, parent);
+        if (!headless.contains(set.what)) band(set.header, parent);
         for (final row in own) {
           band(set.details, row);
           inside(row);
@@ -382,10 +397,11 @@ RmDocument layOutRmReport(
       }
     }
 
+    final before = items.length;
     for (final top in under('')) {
-      level(top, rows[top.what], null);
+      level(top, rows?[top.what], null);
     }
-    y += rowHeight;
+    if (items.length > before) y += rowHeight;
   }
 
   return RmDocument(
