@@ -14,6 +14,7 @@ class RmReportViewer extends StatefulWidget {
     required this.title,
     required this.document,
     this.export,
+    this.onPrint,
   });
 
   final String title;
@@ -22,6 +23,9 @@ class RmReportViewer extends StatefulWidget {
   /// What stands where the PDF button would: a report with a workbook and a CSV
   /// of its own puts its download menu here.
   final Widget? export;
+
+  /// Sends the report to the receipt printer. Null leaves the button off.
+  final VoidCallback? onPrint;
 
   @override
   State<RmReportViewer> createState() => _RmReportViewerState();
@@ -172,6 +176,10 @@ class _RmReportViewerState extends State<RmReportViewer> {
                       key: const Key('rm-page-count'),
                       style: _text),
                 ),
+                if (widget.onPrint != null)
+                  _button(const Key('rm-print'), widget.onPrint,
+                      label: wide ? tr(context, 'Thermal printer') : null,
+                      icon: Icons.print),
                 if (widget.export case final export?)
                   Padding(
                     padding: const EdgeInsets.only(right: 4),

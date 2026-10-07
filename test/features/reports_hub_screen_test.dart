@@ -194,6 +194,47 @@ void main() {
     expect(find.byKey(const Key('rm-unwired')), findsOneWidget);
   });
 
+  testWidgets('the thermal button prints the report page on the receipt roll',
+      (t) async {
+    tallWindow(t);
+    ThermalReport? printed;
+    await t.pumpWidget(MaterialApp(
+      home: ReportsHubScreen(
+        allOrders: [
+          order('sara', OrderType.dineIn),
+          order('sara', OrderType.takeaway),
+        ],
+        categories: const [],
+        formatAmount: (v) => v.toStringAsFixed(2),
+        audit: audit,
+        onPrintReport: (report) async => printed = report,
+      ),
+    ));
+
+    await openReport(t, 'rep-summary');
+    await t.tap(find.byKey(const Key('rm-print')));
+    await t.pumpAndSettle();
+
+    expect(printed!.title, 'Sales summary');
+    // The session and the filter head it, as they head the page.
+    expect(printed!.period, 'Today');
+    expect(printed!.filter, 'None');
+    expect(
+        printed!.rows.any((r) => r.length > 2 && r[1] == 'Orders' && r[2] == '2'),
+        isTrue,
+        reason: '${printed!.rows}');
+  });
+
+  testWidgets('without a printer hook the window has no thermal button',
+      (t) async {
+    tallWindow(t);
+    await t.pumpWidget(app());
+
+    await openReport(t, 'rep-summary');
+    expect(find.byKey(const Key('rm-page')), findsOneWidget);
+    expect(find.byKey(const Key('rm-print')), findsNothing);
+  });
+
   testWidgets('nothing runs until a report is picked in the tree', (t) async {
     tallWindow(t);
     await t.pumpWidget(app());

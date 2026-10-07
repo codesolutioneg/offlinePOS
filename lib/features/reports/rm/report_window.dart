@@ -7,6 +7,7 @@ import 'rm_layout.dart';
 import 'rm_pdf.dart';
 import 'rm_report_viewer.dart';
 import 'rm_table_page.dart';
+import 'thermal_report.dart';
 
 /// Opens [child] in a window over the screen behind it, the way the back office
 /// opens a report over its report list.
@@ -38,7 +39,12 @@ class ReportWindow extends StatefulWidget {
     required this.ranBy,
     required this.filter,
     required this.report,
+    this.onPrint,
   });
+
+  /// Prints the report on the receipt printer. Null leaves the window without
+  /// its thermal button.
+  final Future<void> Function(ThermalReport report)? onPrint;
 
   final String shopName;
   final String periodLabel;
@@ -101,6 +107,36 @@ class _ReportWindowState extends State<ReportWindow> {
     });
   }
 
+  Future<void> _print(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final sent = tr(context, 'Sent to the receipt printer');
+    final held = tr(context, 'Printer offline — job held');
+    final none = tr(context, 'No receipt printer configured');
+    final table = _table!;
+    final report = ThermalReport(
+      title: _title!,
+      period: widget.periodLabel,
+      filter: widget.filter,
+      header: table.header,
+      rows: table.rows,
+      dateLabel: tr(context, 'Date/time'),
+      filterLabel: tr(context, 'Report filter'),
+    );
+    try {
+      await widget.onPrint!(report);
+      messenger.showSnackBar(SnackBar(content: Text(sent)));
+    } catch (e) {
+      final raw = '$e';
+      messenger.showSnackBar(SnackBar(
+        content: Text(raw.contains('Printer offline')
+            ? held
+            : raw.contains('No receipt printer')
+                ? none
+                : raw),
+      ));
+    }
+  }
+
   /// Excel and CSV are the table as it always exported; the PDF is the page.
   Future<void> _download(BuildContext context, String format) async {
     final name = _name!;
@@ -139,6 +175,7 @@ class _ReportWindowState extends State<ReportWindow> {
               builder: (context) => RmReportViewer(
                 title: _title ?? '',
                 document: document,
+                onPrint: widget.onPrint == null ? null : () => _print(context),
                 export: Builder(
                   // Under the viewer's own scaffold, which is where the
                   // message saying where the file went has to show.

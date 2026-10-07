@@ -106,6 +106,7 @@ import '../features/orders/open_orders_screen.dart';
 import '../features/orders/order_history_screen.dart';
 import '../features/orders/refund_screen.dart';
 import '../features/reports/reports_hub_screen.dart';
+import '../features/reports/rm/thermal_report.dart' show thermalTableLines;
 import '../features/reports/revenue_center_report_screen.dart';
 import '../features/reports/flash/flash_flow.dart';
 import '../features/reports/flash/flash_report_data.dart';import '../features/reports/flash/flash_thermal_escpos.dart';
@@ -2992,6 +2993,7 @@ class _PosAppState extends State<PosApp> {
             .where((o) => o.tableLabel != null)
             .length,
         onPrint: _printShiftReport,
+        onPrintReport: _printReportPage,
         onPrintFlash: _printFlashReport,
         // What every exported report is headed with, so a downloaded file says
         // which shop it came from and who ran it.
@@ -6615,6 +6617,55 @@ class _PosAppState extends State<PosApp> {
     final t = utc.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(t.hour)}:${two(t.minute)}';
+  }
+
+  /// Print a report from the reports hub on the receipt printer, set the way
+  /// the back office sets its forty-column reports: the shop, the report and
+  /// its period centred, when it was run and what it was narrowed to, then the
+  /// table with a rule under its column titles. Spooled if the printer is down.
+  Future<void> _printReportPage(ThermalReport report) async {
+    if (widget.printers[PosApp.receiptPrinter] == null) {
+      throw StateError('No receipt printer configured');
+    }
+    final shop = widget.settings.shopName ?? widget.config.shopName;
+    final now = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    final p = EscPos()..reset();
+    p.align(EscPosAlign.center)
+      ..size(doubleWidth: true, doubleHeight: true)
+      ..bold(true)
+      ..line(shop)
+      ..size(doubleHeight: true)
+      ..line(report.title)
+      ..size()
+      ..line(report.period)
+      ..bold(false)
+      ..align(EscPosAlign.left)
+      ..feed()
+      ..line('${report.dateLabel}: ${now.year}-${two(now.month)}-'
+          '${two(now.day)} ${two(now.hour)}:${two(now.minute)}')
+      ..line('${report.filterLabel}: ${report.filter}')
+      ..feed();
+    for (final l
+        in thermalTableLines(report.header, report.rows, p.columns)) {
+      p
+        ..align(l.center ? EscPosAlign.center : EscPosAlign.left)
+        ..bold(l.bold)
+        ..line(l.text);
+    }
+    final bytes = (p
+          ..bold(false)
+          ..align(EscPosAlign.left)
+          ..feed(2)
+          ..cut())
+        .build();
+    try {
+      await _receiptPrinter.send(bytes,
+          reference:
+              'report-${report.title}-${now.millisecondsSinceEpoch}');
+    } on PrinterUnavailable {
+      throw StateError('Printer offline — job held');
+    }
   }
 
   /// Print an X, Z, or generic report to the receipt printer (spooled if down).

@@ -38,6 +38,7 @@ import 'revenue_center_report_screen.dart';
 import 'rm/report_window.dart';
 import 'rm/rm_layout.dart';
 import 'rm/rm_report_viewer.dart';
+import 'rm/thermal_report.dart';
 import 'sales_by_time_report_screen.dart';
 import 'sales_report_screen.dart';
 import 'session_detail_report_screen.dart';
@@ -50,6 +51,7 @@ import 'top_products_report_screen.dart';
 /// as a tree of folders, the period and filters as a form beside it, the shifts
 /// down the far side, and one button that opens the picked report over all of it.
 export 'report_period_dialog.dart' show ReportRange;
+export 'rm/thermal_report.dart' show ThermalReport;
 
 class ReportsHubScreen extends StatefulWidget {
   const ReportsHubScreen({
@@ -68,6 +70,7 @@ class ReportsHubScreen extends StatefulWidget {
     this.staffNames = const {},
     this.openTables,
     this.onPrint,
+    this.onPrintReport,
     this.onPrintFlash,
     this.shopName = '',
     this.ranBy = '',
@@ -134,6 +137,11 @@ class ReportsHubScreen extends StatefulWidget {
 
   /// Prints a report to the receipt printer. Null hides the print action.
   final Future<void> Function(String title, List<(String, String)> rows)? onPrint;
+
+  /// Prints an opened report on the receipt printer, set the way the back
+  /// office sets its forty-column reports. Null hides the report window's
+  /// thermal button.
+  final Future<void> Function(ThermalReport report)? onPrintReport;
 
   /// Dishflow-layout Flash thermal print. Null falls back to [onPrint] rows.
   final Future<void> Function(FlashReportData data, FlashKind kind)? onPrintFlash;
@@ -766,6 +774,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
         ranBy: widget.ranBy,
         filter: _filterWords(context),
         report: build(orders, period),
+        onPrint: widget.onPrintReport,
       ),
     );
   }
@@ -1148,7 +1157,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       rows.add(Container(
         color: const Color(0xFFE1E1E1),
         padding: EdgeInsets.symmetric(horizontal: 6, vertical: _pad),
-        child: Text(tr(context, 'Back-office layouts'),
+        child: Text(tr(context, 'Other reports'),
             style: _text.copyWith(fontSize: 12)),
       ));
     }
