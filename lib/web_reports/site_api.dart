@@ -218,6 +218,9 @@ class SiteApi {
   Future<void> renameBranch(String id, String name) =>
       _call('PATCH', '/api/branches/$id', {'name': name});
 
+  /// The branch and everything its tills sent; the tills stop syncing.
+  Future<void> deleteBranch(String id) => _call('DELETE', '/api/branches/$id');
+
   /// A fresh pairing code for a branch; the old one stops working.
   Future<String> newPairCode(String id) async =>
       (await _call('POST', '/api/branches/$id/pair-code'))['pair_code'] as String;

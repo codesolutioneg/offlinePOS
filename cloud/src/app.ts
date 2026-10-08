@@ -339,6 +339,6 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     },
   );
 
-  await registerWeb(app, { repo, now, webDir: opts.webDir });
+  await registerWeb(app, { repo, storage, now, webDir: opts.webDir });
   return app;
 }

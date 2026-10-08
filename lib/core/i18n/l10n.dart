@@ -2133,6 +2133,12 @@ const Map<String, String> _ar = {
   'Capture': 'التقاط',
   'Sign in': 'تسجيل الدخول',
   'Pick who is signing in': 'اختر من يسجّل الدخول',
+  // Reports site: deleting a branch.
+  'Delete branch': 'حذف الفرع',
+  'Its tills are unpaired and every sale, shift and backup they sent is deleted from the server. This cannot be undone.':
+      'ستُفصل أجهزته، وتُحذف من السيرفر كل المبيعات والورديات والنسخ الاحتياطية التي أرسلتها. لا يمكن التراجع عن ذلك.',
+  'Type the branch name to confirm': 'اكتب اسم الفرع للتأكيد',
+  'The name does not match; nothing was deleted.': 'الاسم غير مطابق، ولم يُحذف شيء.',
   // Reports: report names and folders.
   'Session summary': 'ملخص الوردية',
   'Session Summary': 'ملخص الوردية',

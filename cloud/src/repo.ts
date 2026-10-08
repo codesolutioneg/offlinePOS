@@ -107,6 +107,10 @@ export interface Repo {
   branchById(id: string): Promise<Branch | null>;
   listBranches(shopId: string): Promise<Branch[]>;
   renameBranch(id: string, name: string): Promise<void>;
+  /// The branch and everything its tills sent: devices, backups and records, and
+  /// its place in any user's branch list. Answers the backups it took, whose
+  /// files are the caller's to remove.
+  deleteBranch(id: string): Promise<Backup[]>;
 
   /// One row per till per shop: pairing again replaces the token and the branch.
   upsertDevice(d: {
@@ -235,6 +239,17 @@ export class MemoryRepo implements Repo {
   async renameBranch(id: string, name: string): Promise<void> {
     const branch = this.branches.find((b) => b.id === id);
     if (branch) branch.name = name;
+  }
+
+  async deleteBranch(id: string): Promise<Backup[]> {
+    const devices = new Set(this.devices.filter((d) => d.branchId === id).map((d) => d.id));
+    const gone = this.backups.filter((b) => devices.has(b.deviceRowId));
+    this.backups = this.backups.filter((b) => !devices.has(b.deviceRowId));
+    this.records = this.records.filter((r) => r.branchId !== id);
+    this.devices = this.devices.filter((d) => d.branchId !== id);
+    this.branches = this.branches.filter((b) => b.id !== id);
+    for (const u of this.users) u.branchIds = u.branchIds.filter((b) => b !== id);
+    return gone;
   }
 
   async upsertDevice(d: {

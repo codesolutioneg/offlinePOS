@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -344,6 +344,39 @@ describe('who sees what', () => {
     ).toBe(400);
   });
 
+  it('the owner deletes a branch with its tills, records and backups', async () => {
+    const m = await addUser({ username: 'mgr5', role: 'manager', branch_ids: [shop.branch.id, otherBranch.id] });
+    const maadi = repo.devices.find((d) => d.branchId === otherBranch.id)!;
+    mkdirSync(join(dir, 'backups', 'maadi'), { recursive: true });
+    writeFileSync(join(dir, 'backups', 'maadi', 'b1.bin'), 'x');
+    await repo.addBackup({
+      shopId: shop.id,
+      deviceRowId: maadi.id,
+      createdAt: clock,
+      size: 1,
+      sha256: 'a'.repeat(64),
+      reason: 'test',
+      keyId: 'k',
+      path: 'maadi/b1.bin',
+    });
+
+    const mgr = await session('mgr5', m.password);
+    expect((await send('DELETE', `/api/branches/${otherBranch.id}`, mgr)).statusCode).toBe(403);
+    expect((await send('DELETE', `/api/branches/${otherBranch.id}`, owner)).statusCode).toBe(204);
+
+    expect((await get('/api/branches', owner)).json().branches.map((b: { name: string }) => b.name)).toEqual([
+      'Dokki',
+    ]);
+    expect(await keys(owner, 'kinds=order')).toEqual(['d1']);
+    expect(repo.devices.map((d) => d.deviceId)).toEqual(['till-dokki']);
+    expect(repo.backups).toHaveLength(0);
+    expect(existsSync(join(dir, 'backups', 'maadi', 'b1.bin'))).toBe(false);
+    expect(repo.users.find((u) => u.username === 'mgr5')!.branchIds).toEqual([shop.branch.id]);
+    expect((await send('DELETE', `/api/branches/${otherBranch.id}`, owner)).statusCode).toBe(404);
+    // The shop keeps somewhere to pair a till.
+    expect((await send('DELETE', `/api/branches/${shop.branch.id}`, owner)).statusCode).toBe(409);
+  });
+
   it('one shop\'s owner cannot touch another shop', async () => {
     const other = await createShop('owner9', 'Other shop');
     const cookie = await session('owner9', other.owner.password);
@@ -352,6 +385,7 @@ describe('who sees what', () => {
     const me = (await get('/api/me', owner)).json().user;
     expect((await send('PATCH', `/api/users/${me.id}`, cookie, { active: false })).statusCode).toBe(404);
     expect((await send('POST', `/api/branches/${shop.branch.id}/pair-code`, cookie)).statusCode).toBe(404);
+    expect((await send('DELETE', `/api/branches/${shop.branch.id}`, cookie)).statusCode).toBe(404);
   });
 });
 

@@ -73,7 +73,8 @@ Future<void> showSecretDialog(
 }
 
 /// Asks for one line of text, e.g. a branch's name.
-Future<String?> askText(BuildContext context, String title, String label, {String initial = ''}) {
+Future<String?> askText(BuildContext context, String title, String label,
+    {String initial = '', String action = 'Save'}) {
   final field = TextEditingController(text: initial);
   return showDialog<String>(
     context: context,
@@ -88,7 +89,7 @@ Future<String?> askText(BuildContext context, String title, String label, {Strin
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
         FilledButton(
-            onPressed: () => Navigator.pop(ctx, field.text.trim()), child: Text(tr(ctx, 'Save'))),
+            onPressed: () => Navigator.pop(ctx, field.text.trim()), child: Text(tr(ctx, action))),
       ],
     ),
   );

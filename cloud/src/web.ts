@@ -22,6 +22,7 @@ import {
   ROLES,
 } from './permissions.js';
 import { UsernameTaken, type Repo, type Role, type User, type UserPatch } from './repo.js';
+import type { Storage } from './storage.js';
 
 export const SESSION_COOKIE = 'pos_session';
 const SESSION_DAYS = 30;
@@ -85,9 +86,9 @@ const userJson = (u: User) => ({
 
 export async function registerWeb(
   app: FastifyInstance,
-  opts: { repo: Repo; now: () => Date; webDir?: string },
+  opts: { repo: Repo; storage: Storage; now: () => Date; webDir?: string },
 ) {
-  const { repo, now } = opts;
+  const { repo, storage, now } = opts;
   const throttle = new LoginThrottle(now);
   const extended = new Map<string, number>();
 
@@ -251,6 +252,16 @@ export async function registerWeb(
     if (!name) return fail(reply, 400, 'name is required');
     await repo.renameBranch(req.params.id, name);
     return { id: req.params.id, name };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/branches/:id', owner, async (req, reply) => {
+    if (!(await ownBranch(req, reply))) return;
+    if ((await repo.listBranches(req.user!.shopId)).length <= 1) {
+      return fail(reply, 409, 'the shop needs at least one branch');
+    }
+    const backups = await repo.deleteBranch(req.params.id);
+    for (const b of backups) await storage.discard(b.path);
+    return reply.code(204).send();
   });
 
   app.post<{ Params: { id: string } }>('/api/branches/:id/pair-code', owner, async (req, reply) => {

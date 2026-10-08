@@ -131,6 +131,26 @@ export class PrismaRepo implements Repo {
     await this.db.branch.updateMany({ where: { id }, data: { name } });
   }
 
+  async deleteBranch(id: string): Promise<Backup[]> {
+    return this.db.$transaction(async (tx) => {
+      const gone = await tx.backup.findMany({ where: { device: { branchId: id } } });
+      await tx.record.deleteMany({ where: { branchId: id } });
+      // Devices go with the branch, and their backups with them.
+      await tx.branch.deleteMany({ where: { id } });
+      const holders = await tx.user.findMany({
+        where: { branchIds: { has: id } },
+        select: { id: true, branchIds: true },
+      });
+      for (const u of holders) {
+        await tx.user.update({
+          where: { id: u.id },
+          data: { branchIds: u.branchIds.filter((b) => b !== id) },
+        });
+      }
+      return gone.map(backup);
+    });
+  }
+
   upsertDevice(d: {
     shopId: string;
     branchId: string;

@@ -80,6 +80,29 @@ class _BranchesPageState extends State<BranchesPage> {
     }
   }
 
+  /// Deletes [b] once the owner has read what goes with it and typed its name.
+  Future<void> _delete(SiteBranch b) async {
+    if (!await confirm(context,
+        '${tr(context, 'Delete branch')} ${b.name}? ${tr(context, 'Its tills are unpaired and every sale, shift and backup they sent is deleted from the server. This cannot be undone.')}')) {
+      return;
+    }
+    if (!mounted) return;
+    final typed = await askText(
+        context, '${tr(context, 'Delete branch')} ${b.name}', tr(context, 'Type the branch name to confirm'),
+        action: 'Delete');
+    if (typed == null || !mounted) return;
+    if (typed.trim() != b.name.trim()) {
+      showSiteError(context, tr(context, 'The name does not match; nothing was deleted.'));
+      return;
+    }
+    try {
+      await widget.api.deleteBranch(b.id);
+      await _load();
+    } catch (e) {
+      if (mounted) showSiteError(context, e);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final branches = _branches;
@@ -120,6 +143,14 @@ class _BranchesPageState extends State<BranchesPage> {
                               icon: const Icon(Icons.qr_code),
                               label: Text(tr(context, 'New pairing code')),
                             ),
+                            if (branches.length > 1)
+                              TextButton.icon(
+                                key: Key('branch-delete-${b.id}'),
+                                onPressed: () => _delete(b),
+                                style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+                                icon: const Icon(Icons.delete_outline),
+                                label: Text(tr(context, 'Delete')),
+                              ),
                           ],
                         ]),
                         const Divider(),
