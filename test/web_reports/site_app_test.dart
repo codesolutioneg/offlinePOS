@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/reports/sales_report_screen.dart';
+import 'package:offline_pos/web_reports/login_art.dart';
 import 'package:offline_pos/web_reports/site_api.dart';
 import 'package:offline_pos/web_reports/site_app.dart';
 
@@ -148,6 +149,17 @@ void main() {
     await t.tap(find.byKey(const Key('home-reports')));
     await t.pumpAndSettle();
   }
+
+  testWidgets('the sign-in picture shows beside the form, and gives way on a phone',
+      (t) async {
+    await start(t);
+    expect(find.byType(LoginArt), findsOneWidget);
+
+    t.view.physicalSize = const Size(400, 800);
+    await t.pumpAndSettle();
+    expect(find.byType(LoginArt), findsNothing);
+    expect(find.byKey(const Key('login-submit')), findsOneWidget);
+  });
 
   testWidgets('a wrong password is refused, the right one opens the shop', (t) async {
     await start(t);

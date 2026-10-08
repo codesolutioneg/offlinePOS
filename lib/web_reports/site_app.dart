@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../core/i18n/l10n.dart';
+import '../core/theme/app_colors.dart';
 import '../core/theme/app_theme.dart';
 import '../domain/order.dart';
 import 'branches_page.dart';
+import 'login_art.dart';
 import 'reports_page.dart';
 import 'site_api.dart';
 import 'site_widgets.dart';
@@ -104,6 +106,7 @@ class _LoginPageState extends State<LoginPage> {
   final _username = TextEditingController();
   final _password = TextEditingController();
   bool _busy = false;
+  bool _hidden = true;
   String? _error;
 
   @override
@@ -130,58 +133,139 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(actions: [_languageButton(context, widget.locale)]),
-        body: Center(
-          child: SizedBox(
-            width: 380,
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: AutofillGroup(
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    const Icon(Icons.insights, size: 48),
-                    const SizedBox(height: 8),
-                    Text(tr(context, 'Reports site'),
-                        style: Theme.of(context).textTheme.headlineSmall),
+        body: LayoutBuilder(
+          builder: (context, box) {
+            final form = _form(context);
+            if (box.maxWidth < 900) return form;
+            // The picture stays on the left in either language.
+            return Row(textDirection: TextDirection.ltr, children: [
+              const Expanded(flex: 5, child: LoginArt()),
+              Expanded(flex: 4, child: form),
+            ]);
+          },
+        ),
+      );
+
+  Widget _form(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: Stack(children: [
+        Align(
+          alignment: AlignmentDirectional.topEnd,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: _languageButton(context, widget.locale),
+          ),
+        ),
+        Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
+              child: AutofillGroup(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [AppColors.primaryLight, AppColors.primaryDark],
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Icon(Icons.insights, color: Colors.white, size: 30),
+                      ),
+                    ),
                     const SizedBox(height: 24),
+                    Text(tr(context, 'Reports site'),
+                        style: theme.textTheme.headlineMedium
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 6),
+                    Text(tr(context, 'Sign in to your account'),
+                        style: theme.textTheme.bodyLarge
+                            ?.copyWith(color: AppColors.textSecondaryLight)),
+                    const SizedBox(height: 32),
                     TextField(
                       key: const Key('login-username'),
                       controller: _username,
                       autofillHints: const [AutofillHints.username],
                       textDirection: TextDirection.ltr,
-                      decoration: InputDecoration(labelText: tr(context, 'Username')),
+                      textInputAction: TextInputAction.next,
+                      decoration: InputDecoration(
+                        labelText: tr(context, 'Username'),
+                        prefixIcon: const Icon(Icons.person_outline),
+                      ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 14),
                     TextField(
                       key: const Key('login-password'),
                       controller: _password,
-                      obscureText: true,
+                      obscureText: _hidden,
                       autofillHints: const [AutofillHints.password],
-                      decoration: InputDecoration(labelText: tr(context, 'Password')),
+                      decoration: InputDecoration(
+                        labelText: tr(context, 'Password'),
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        suffixIcon: IconButton(
+                          icon: Icon(_hidden
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined),
+                          onPressed: () => setState(() => _hidden = !_hidden),
+                        ),
+                      ),
                       onSubmitted: (_) => _busy ? null : _submit(),
                     ),
                     if (_error != null) ...[
-                      const SizedBox(height: 12),
-                      Text(_error!,
-                          key: const Key('login-error'),
-                          style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                      const SizedBox(height: 14),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.error.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(children: [
+                          Icon(Icons.error_outline, color: theme.colorScheme.error, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(_error!,
+                                key: const Key('login-error'),
+                                style: TextStyle(color: theme.colorScheme.error)),
+                          ),
+                        ]),
+                      ),
                     ],
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 24),
                     SizedBox(
-                      width: double.infinity,
+                      height: 50,
                       child: FilledButton(
                         key: const Key('login-submit'),
                         onPressed: _busy ? null : _submit,
-                        child: Text(tr(context, 'Sign in')),
+                        child: _busy
+                            ? const SizedBox.square(
+                                dimension: 22,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2.5, color: Colors.white))
+                            : Text(tr(context, 'Sign in')),
                       ),
                     ),
-                  ]),
+                    const SizedBox(height: 40),
+                    Text('© Dishflow',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textMutedLight)),
+                  ],
                 ),
               ),
             ),
           ),
         ),
-      );
+      ]),
+    );
+  }
 }
 
 class HomePage extends StatefulWidget {

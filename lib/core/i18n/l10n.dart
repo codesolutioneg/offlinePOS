@@ -829,6 +829,11 @@ const Map<String, String> _ar = {
   '{n} waiting': '{n} في الانتظار',
   // reports site
   'Reports site': 'موقع التقارير',
+  'Sign in to your account': 'سجّل الدخول إلى حسابك',
+  "Every branch's figures, as they happen": 'أرقام كل فروعك أولًا بأول',
+  'Sales from every till arrive on their own': 'مبيعات كل الكاشيرات تصل تلقائيًا',
+  'The same reports as the till': 'نفس تقارير الكاشير بنفس التصميم',
+  'Each account sees only what it is allowed to': 'كل حساب يرى فقط ما يُسمح له به',
   'Sign out': 'تسجيل الخروج',
   'Change password': 'تغيير كلمة المرور',
   'Current password': 'كلمة المرور الحالية',
