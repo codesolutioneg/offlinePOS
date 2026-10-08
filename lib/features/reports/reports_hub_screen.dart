@@ -33,6 +33,7 @@ import 'refunds_summary_report_screen.dart';
 import 'receivables_report_screen.dart';
 import 'refunds_voids_report_screen.dart';
 import 'report_period_dialog.dart';
+import 'restaurant_analytics.dart';
 import 'revenue_center_report_screen.dart';
 import 'rm/report_window.dart';
 import 'rm/rm_bindings.dart';
@@ -459,8 +460,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     final o = _filteredFor(period);
     final f = widget.formatAmount;
     final gross = o.fold(0.0, (s, x) => s + x.total);
-    final discounts =
-        o.fold(0.0, (s, x) => s + x.subtotal * x.discountPercent / 100);
+    final discounts = o.fold(
+        0.0, (s, x) => s + orderCheckDiscount(x) + orderLineDiscount(x));
     final delivery = o.fold(0.0, (s, x) => s + x.deliveryCost);
     final tips = o.fold(0.0, (s, x) => s + x.tip);
     final tax = o.fold(0.0, (s, x) => s + x.taxTotal);

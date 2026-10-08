@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/i18n/l10n.dart';
 import '../../domain/order.dart';
 import 'report_export.dart';
+import 'restaurant_analytics.dart';
 
 /// One row in the item-sales table: a product's aggregated quantity and
 /// revenue across every order passed to the screen.
@@ -29,10 +30,10 @@ class SalesReportScreen extends StatelessWidget {
 
   double get _grossSales => orders.fold(0.0, (s, o) => s + o.total);
 
-  /// The whole-order discount is a percentage of the line subtotal, not of
-  /// the final total, because delivery and tip are never discounted.
-  double get _totalDiscounts =>
-      orders.fold(0.0, (s, o) => s + o.subtotal * o.discountPercent / 100);
+  /// Every discount given: the whole-order ones and each line's own, as the
+  /// discounts report totals them.
+  double get _totalDiscounts => orders.fold(
+      0.0, (s, o) => s + orderCheckDiscount(o) + orderLineDiscount(o));
 
   double get _deliveryIncome => orders.fold(0.0, (s, o) => s + o.deliveryCost);
 
@@ -53,19 +54,10 @@ class SalesReportScreen extends StatelessWidget {
     };
   }
 
-  /// Groups every payment by its label, falling back to 'Cash' when a
-  /// payment carries no label. A null label means the server would book it
-  /// to cash, so the report shows the same thing the drawer will.
-  Map<String, double> _paymentMix(BuildContext context) {
-    final mix = <String, double>{};
-    for (final o in orders) {
-      for (final p in o.payments) {
-        final label = p.label ?? tr(context, 'Cash');
-        mix[label] = (mix[label] ?? 0) + p.amount;
-      }
-    }
-    return mix;
-  }
+  /// Groups every payment by its label, as the payment reports and the drawer
+  /// do: a payment with no label, and a sale with no payment at all, are cash.
+  Map<String, double> _paymentMix(BuildContext context) =>
+      paymentTypes(orders, cashLabel: tr(context, 'Cash'));
 
   /// Aggregates every line across every order by product name, since two
   /// lines for the same product across different orders are still one row

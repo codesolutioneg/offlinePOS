@@ -51,12 +51,15 @@ class _FlashTypeDialog extends StatelessWidget {
                   const Spacer(),
                   const Icon(Icons.bolt, color: Color(0xFFFBBF24), size: 22),
                   const SizedBox(width: 6),
-                  Text(
-                    tr(context, 'Which Flash do you need?'),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 17,
+                  Flexible(
+                    child: Text(
+                      tr(context, 'Which Flash do you need?'),
+                      textAlign: TextAlign.end,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 17,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),

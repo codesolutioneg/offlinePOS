@@ -4,6 +4,7 @@ import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/order.dart';
 import 'report_export.dart';
+import 'restaurant_analytics.dart';
 
 /// One line of the comparison: the same measure on both periods.
 class _Kpi {
@@ -44,8 +45,8 @@ class PeriodComparisonReportScreen extends StatelessWidget {
 
   static double _gross(List<Order> o) => o.fold(0.0, (s, x) => s + x.total);
 
-  static double _discounts(List<Order> o) =>
-      o.fold(0.0, (s, x) => s + x.subtotal * x.discountPercent / 100);
+  static double _discounts(List<Order> o) => o.fold(
+      0.0, (s, x) => s + orderCheckDiscount(x) + orderLineDiscount(x));
 
   static double _tips(List<Order> o) => o.fold(0.0, (s, x) => s + x.tip);
 
@@ -70,9 +71,9 @@ class PeriodComparisonReportScreen extends StatelessWidget {
           for (final k in _kpis)
             [
               k.label,
-              k.current.toStringAsFixed(2),
-              k.previous.toStringAsFixed(2),
-              k.delta.toStringAsFixed(2),
+              k.current.toStringAsFixed(k.money ? 2 : 0),
+              k.previous.toStringAsFixed(k.money ? 2 : 0),
+              k.delta.toStringAsFixed(k.money ? 2 : 0),
               k.percent == null ? '' : k.percent!.toStringAsFixed(1),
             ],
         ],
