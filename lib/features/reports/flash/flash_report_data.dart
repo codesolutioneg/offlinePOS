@@ -102,8 +102,9 @@ class FlashReportBuilder {
     var delivery = 0.0;
     var tips = 0.0;
 
+    // A refund nets out of every figure, as the drawer and the other reports
+    // count it.
     for (final o in orders) {
-      if (o.isRefund) continue;
       final total = o.total;
       gross += total;
       net += orderNet(o);

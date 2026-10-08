@@ -76,10 +76,10 @@ RmBinding _sessionSummary(List<Order> all, List<Category> categories,
     Map<int, double> costs, Set<int> cashTenderIds) {
   const root = 'Session Summary';
 
-  // Sales are the checks that were sold. A refund is not a negative sale here:
-  // it has a block of its own, and the Flash reports count the same way, so the
-  // two agree on what the session took.
-  final orders = all.where((o) => !o.isRefund).toList();
+  // A refund nets out of the takings, the sales and the taxes, as every other
+  // report and the Flash count it, so the session's cash is the drawer's. Its
+  // own block still says how much was handed back.
+  final orders = all;
 
   // Payments: money in, so a debit. An untendered sale is cash for its total.
   final payments = <String, ({int count, double amount})>{};

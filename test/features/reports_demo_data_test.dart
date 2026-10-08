@@ -12,6 +12,7 @@ import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/delivery.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/domain/report_sources.dart';
+import 'package:offline_pos/features/reports/flash/flash_report_data.dart';
 import 'package:offline_pos/features/reports/reports_hub_screen.dart';
 import 'package:offline_pos/features/reports/restaurant_analytics.dart';
 import 'package:offline_pos/features/reports/rm/rm_bindings.dart';
@@ -544,12 +545,27 @@ void main() {
     expect(money(byCashier.fold(0.0, (s, v) => s + v)), money(totals.total));
     await close(t);
 
-    // The session summary balances: its debits equal its credits.
+    // The session summary balances, and with the refund netted out its takings
+    // are the payment report's and the drawer's.
     await tapReport(t, 'rep-session-summary');
     final balance = pageLine(t, 'Report Totals:');
     expect(balance.length, 2);
     expect(balance.first, balance.last);
+    expect(pageLine(t, 'Cash'), contains(money(pay['Cash']!)));
+    expect(pageTexts(t), contains(money(totals.total)));
     await close(t);
+
+    // A dish reads the same revenue in cost vs sales as in item sales.
+    await tapReport(t, 'rep-cost-sales');
+    expect(pageLine(t, 'Koshary')[1], '750.00');
+    await close(t);
+
+    // The Flash counts the refund the same way.
+    final flash = FlashReportBuilder.build(
+        title: 'Flash', periodLabel: 'All', orders: orders);
+    expect(money(flash.grossTotal), money(totals.total));
+    expect(money(flash.netSales), money(totals.net));
+    expect(money(flash.byPaymentMethod['Cash']!), money(pay['Cash']!));
 
     // A count reads as a count.
     await tapReport(t, 'rep-period-compare');

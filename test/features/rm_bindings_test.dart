@@ -123,7 +123,7 @@ void main() {
     expect(line(doc, 'Total'), ['Total', '2', '310.00']);
   });
 
-  test('session summary: a refund is not a negative sale, as in the Flash', () {
+  test('session summary: a refund nets out of the takings, as in the Flash', () {
     final refund = sale(OrderType.dineIn, lines: [burger(quantity: -1)])
       ..refundOfUuid = orders.first.uuid;
     final binding = bindRmReport('SessionSummary',
@@ -136,8 +136,8 @@ void main() {
       rows: binding.rows,
       headless: binding.headless,
     );
-    // The takings are what they were without it; the refund is in its own block.
-    expect(line(doc, 'Total'), ['Total', '2', '310.00']);
+    // The untendered refund hands 100 back in cash; its own block says so too.
+    expect(line(doc, 'Total'), ['Total', '3', '210.00']);
     expect(line(doc, 'Total refunded'), ['Total refunded', '-100.00']);
   });
 
