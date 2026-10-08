@@ -35,6 +35,10 @@ class OdooWiring {
 
   bool get isConfigured => _endpoint != null;
 
+  /// The transport every Odoo call here goes through, pins and all, so a wiring
+  /// built beside this one talks to the server the same way.
+  HttpPostFn get post => _post;
+
   /// The Odoo user the till is authenticated as, or null before the first login.
   /// The catalogue pull reads it to narrow the tenders to what that user may take.
   int? get uid => _sender?.uid;

@@ -1468,6 +1468,32 @@ const Map<String, String> _ar = {
   'Delete {n} Stress Lab orders from this till, the other tills and Dishflow?':
       'مسح {n} طلب اختبار من الجهاز ده والأجهزة التانية وDishflow؟',
   'Cashiers at once': 'عدد الكاشيرات مع بعض',
+  'Multi-till stress': 'اختبار كذا جهاز',
+  'Points of sale': 'عدد نقاط البيع',
+  'Cashiers per point': 'كاشيرات لكل نقطة',
+  'Orders per session': 'طلبات لكل جلسة',
+  'Close each session into Odoo': 'اقفل كل جلسة على أودو',
+  'No Odoo server on this till': 'مفيش سيرفر أودو على الجهاز ده',
+  'Reports server': 'سيرفر التقارير',
+  'Branch pairing code': 'كود ربط الفرع',
+  'Leave empty to skip the reports site': 'سيبه فاضي لو مش عايز ترفع على موقع التقارير',
+  'These are real orders: every closed session is booked in Odoo and '
+          'every sale shows on the reports site. The tills run in memory, so '
+          'this till\'s own data is not touched.':
+      'دي طلبات حقيقية: كل جلسة بتتقفل بتتسجل في أودو، وكل بيعة بتظهر في موقع التقارير. '
+          'الأجهزة شغالة في الذاكرة، فبيانات الجهاز ده نفسه مش بتتلمس.',
+  '{a} points of sale, {b} cashiers each': '{a} نقطة بيع، {b} كاشير في كل واحدة',
+  'No problems found': 'مفيش أي مشاكل',
+  '{n} problems found': 'لقينا {n} مشكلة',
+  'Booked in Odoo': 'اتسجلت في أودو',
+  'On the reports site': 'على موقع التقارير',
+  'Duplicates': 'متكرر',
+  'Took': 'المدة',
+  'Problems': 'المشاكل',
+  'Sales each till holds over the LAN': 'المبيعات اللي وصلت كل جهاز على الشبكة',
+  'from other tills': 'من الأجهزة التانية',
+  'Till': 'الجهاز',
+  'Uploaded': 'اترفع',
   'Problems only': 'المشاكل بس',
   'steps': 'خطوة',
   'Stopped': 'وقف',
