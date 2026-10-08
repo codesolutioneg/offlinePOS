@@ -101,4 +101,58 @@ void main() {
     expect(report.duplicateUploads, 0);
     expect(report.missingUploads, 0);
   });
+
+  test('tills run with the network down catch up once it is back, once each', () async {
+    var online = false;
+    final stored = <String, Set<String>>{};
+    final server = MockClient((r) async {
+      if (!online) throw http.ClientException('Failed host lookup: reports.test');
+      final body = jsonDecode(r.body) as Map<String, dynamic>;
+      if (r.url.path == '/v1/devices/pair') {
+        return http.Response(
+            jsonEncode({'token': 'tok-${body['device_id']}', 'shop': {'name': 'Test'}}), 200,
+            headers: {'content-type': 'application/json'});
+      }
+      final device = r.headers['authorization']!.split('tok-').last;
+      final records = (body['records'] as List).cast<Map<String, dynamic>>();
+      for (final rec in records.where((x) => x['kind'] == 'order')) {
+        stored.putIfAbsent(rec['key'] as String, () => {}).add(device);
+      }
+      return http.Response(jsonEncode({'stored': records.length}), 200,
+          headers: {'content-type': 'application/json'});
+    });
+
+    final run = await MultiTillRunner(deps: deps(cloud: server), pace: Duration.zero).start(
+      const MultiTillConfig(
+        tills: 3,
+        cashiers: 2,
+        sessions: 2,
+        ordersPerSession: 5,
+        sendToOdoo: false,
+        cloudUrl: 'https://reports.test',
+        pairCode: 'BRANCH-CODE',
+      ),
+    );
+    addTearDown(run.close);
+
+    expect(run.settled, isFalse);
+    expect(run.report.problems, isNotEmpty);
+    expect(stored, isEmpty);
+
+    // Still down: a retry changes nothing and loses nothing.
+    await run.retry();
+    expect(run.settled, isFalse);
+    expect(run.report.missingUploads, 30);
+
+    online = true;
+    await run.retry();
+
+    expect(run.settled, isTrue);
+    expect(run.report.problems, isEmpty);
+    expect(run.caughtUpAt, isNotNull);
+    expect(stored.keys.toSet(), run.report.rung.keys.toSet());
+    for (final e in stored.entries) {
+      expect(e.value, {run.report.rung[e.key]}, reason: 'sale ${e.key} came from its own till only');
+    }
+  });
 }

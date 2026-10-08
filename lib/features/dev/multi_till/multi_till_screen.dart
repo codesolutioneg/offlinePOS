@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/i18n/l10n.dart';
@@ -16,11 +18,16 @@ class MultiTillScreen extends StatefulWidget {
 }
 
 class _MultiTillScreenState extends State<MultiTillScreen> {
+  static const _retryEvery = Duration(seconds: 15);
+
   String _step = '';
   int _done = 0;
   int _total = 1;
-  MultiTillReport? _report;
+  MultiTillRun? _run;
   Object? _error;
+  Timer? _timer;
+  bool _retrying = false;
+  DateTime? _lastTry;
 
   @override
   void initState() {
@@ -28,9 +35,16 @@ class _MultiTillScreenState extends State<MultiTillScreen> {
     _start();
   }
 
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _run?.close();
+    super.dispose();
+  }
+
   Future<void> _start() async {
     try {
-      final report = await widget.runner.run(
+      final run = await widget.runner.start(
         widget.config,
         onProgress: (step, done, total) {
           if (!mounted) return;
@@ -41,18 +55,68 @@ class _MultiTillScreenState extends State<MultiTillScreen> {
           });
         },
       );
-      if (mounted) setState(() => _report = report);
+      if (!mounted) {
+        run.close();
+        return;
+      }
+      setState(() => _run = run);
+      if (!run.settled) {
+        _timer = Timer.periodic(_retryEvery, (_) => _retry());
+      }
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
   }
 
+  Future<void> _retry() async {
+    final run = _run;
+    if (run == null || _retrying || run.settled) return;
+    setState(() => _retrying = true);
+    try {
+      await run.retry();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _retrying = false;
+          _lastTry = DateTime.now();
+        });
+        if (run.settled) _timer?.cancel();
+      }
+    }
+  }
+
+  Future<void> _leave() async {
+    final run = _run;
+    if (run != null && !run.settled) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(tr(ctx, 'Leave the run?')),
+          content: Text(tr(
+            ctx,
+            'The test tills still hold sales Odoo or the reports site has not had. '
+            'They live only on this screen, so leaving drops them.',
+          )),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr(ctx, 'Stay'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr(ctx, 'Leave'))),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    if (mounted) Navigator.of(context).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final report = _report;
+    final report = _run?.report;
     final running = report == null && _error == null;
     return PopScope(
-      canPop: !running,
+      canPop: _error != null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && !running) _leave();
+      },
       child: Scaffold(
         appBar: AppBar(
           title: Text(tr(context, 'Multi-till stress')),
@@ -116,6 +180,10 @@ class _MultiTillScreenState extends State<MultiTillScreen> {
             ),
           ]),
         ),
+        if (_run != null && (_run!.waitingSince != null || !_run!.settled)) ...[
+          const SizedBox(height: 12),
+          _network(context, _run!),
+        ],
         const SizedBox(height: 12),
         Wrap(spacing: 12, runSpacing: 12, children: [
           _stat(context, 'Orders', '${r.rung.length}', 'multi-till-orders-total'),
@@ -188,6 +256,68 @@ class _MultiTillScreenState extends State<MultiTillScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  /// Where the tills stand with the network: still owing and retrying, or caught
+  /// up and how long that took once the line came back.
+  Widget _network(BuildContext context, MultiTillRun run) {
+    final r = run.report;
+    final c = r.config;
+    final settled = run.settled;
+    final owed = [
+      if (c.sendToOdoo && r.owedToOdoo > 0)
+        tr(context, '{n} sessions not in Odoo').replaceAll('{n}', '${r.owedToOdoo}'),
+      if (c.uploads && r.missingUploads > 0)
+        tr(context, '{n} sales not on the reports site').replaceAll('{n}', '${r.missingUploads}'),
+    ];
+    final last = _lastTry;
+    return Container(
+      key: const Key('multi-till-network'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: settled ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        Icon(settled ? Icons.cloud_done : Icons.cloud_off,
+            color: settled ? const Color(0xFF15803D) : const Color(0xFFB45309)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              settled
+                  ? tr(context, 'Everything caught up')
+                  : tr(context, 'Waiting for the network'),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 2),
+            Text(settled
+                ? tr(context, 'After {n} retries, {s} seconds after the first one')
+                    .replaceAll('{n}', '${run.retries}')
+                    .replaceAll('{s}',
+                        '${run.caughtUpAt!.difference(run.waitingSince!).inSeconds}')
+                : [
+                    ...owed,
+                    tr(context, 'Trying again every {s} seconds')
+                        .replaceAll('{s}', '${_retryEvery.inSeconds}'),
+                    if (last != null)
+                      tr(context, 'Last try {t}').replaceAll('{t}',
+                          '${last.hour.toString().padLeft(2, '0')}:${last.minute.toString().padLeft(2, '0')}:${last.second.toString().padLeft(2, '0')}'),
+                  ].join(' · ')),
+          ]),
+        ),
+        if (!settled)
+          FilledButton.icon(
+            key: const Key('multi-till-retry'),
+            onPressed: _retrying ? null : _retry,
+            icon: _retrying
+                ? const SizedBox(
+                    width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.refresh),
+            label: Text(tr(context, 'Try now')),
+          ),
+      ]),
     );
   }
 

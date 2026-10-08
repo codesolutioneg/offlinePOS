@@ -28,6 +28,7 @@ import '../../../core/sync/odoo_wiring.dart';
 import '../../../core/sync/outbox.dart';
 import '../../../domain/catalogue.dart';
 import '../../../domain/order.dart';
+import '../../../domain/shift.dart';
 
 /// How big a multi-till run is, and where its sessions go.
 class MultiTillConfig {
@@ -39,7 +40,12 @@ class MultiTillConfig {
     this.sendToOdoo = true,
     this.cloudUrl,
     this.pairCode,
+    this.pause = Duration.zero,
   });
+
+  /// How long each cashier waits between two orders, so a run can be made long
+  /// enough to pull the network out halfway through it.
+  final Duration pause;
 
   /// Points of sale, each a till of its own.
   final int tills;
@@ -112,6 +118,15 @@ class MultiTillSession {
   int uploaded = 0;
   String? cloudProblem;
   Duration took = Duration.zero;
+
+  /// The shift this session closed, kept so a close that could not reach Odoo
+  /// can be sent again under the same key once the line is back.
+  Shift? closed;
+
+  /// Odoo attempts this session took, the first close included.
+  int odooTries = 0;
+
+  bool get owesOdoo => closed != null && odooRef == null && odooProblem != null;
 }
 
 /// What a whole run did, and what it found wrong.
@@ -144,25 +159,131 @@ class MultiTillReport {
       .where((e) => rung[e.key] != null && e.value.any((d) => d != rung[e.key]))
       .length;
   int get missingUploads => rung.keys.where((u) => !uploadedOrders.containsKey(u)).length;
+
+  /// Sessions closed on the till that Odoo has not booked yet.
+  int get owedToOdoo => sessions.where((s) => s.owesOdoo).length;
 }
 
 typedef MultiTillProgress = void Function(String step, int done, int total);
+
+/// A finished run whose tills are still standing, so whatever the network kept
+/// from Odoo or the reports site can be sent again the way a real till does once
+/// the line comes back. Close it to let the tills go.
+class MultiTillRun {
+  MultiTillRun._(this.report, this._tills, this._lan);
+
+  final MultiTillReport report;
+  final List<_VirtualTill> _tills;
+  final _VirtualLan? _lan;
+  bool _retrying = false;
+  bool _closed = false;
+
+  /// When the first retry found something still owed, and when nothing was.
+  DateTime? waitingSince;
+  DateTime? caughtUpAt;
+  int retries = 0;
+
+  /// Nothing is owed to Odoo or the reports site.
+  bool get settled {
+    final c = report.config;
+    if (c.sendToOdoo && report.owedToOdoo > 0) return false;
+    if (!c.uploads) return true;
+    return _tills.every((t) => t.cloud != null) && report.missingUploads == 0;
+  }
+
+  /// One pass of what a real till does when the line comes back: pair the tills
+  /// that never could, send every close Odoo did not book under its own key, and
+  /// hand the reports site whatever it is still missing.
+  Future<void> retry() async {
+    if (_retrying || _closed || settled) return;
+    _retrying = true;
+    waitingSince ??= DateTime.now();
+    try {
+      retries++;
+      await Future.wait([for (final t in _tills) t.retry(report.config)]);
+      await _lan?.settled();
+      if (_closed) return;
+      _check(report, _tills);
+      if (settled) caughtUpAt = DateTime.now();
+    } finally {
+      _retrying = false;
+    }
+  }
+
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    for (final t in _tills) {
+      t.close();
+    }
+  }
+}
+
+/// Rebuilds the run's problems from where the tills stand now, so a retry that
+/// got through takes its problems off the list.
+void _check(MultiTillReport report, List<_VirtualTill> tills) {
+  final problems = report.problems..clear();
+  final c = report.config;
+  for (final t in tills) {
+    if (c.uploads && t.cloud == null) {
+      problems.add('${t.name} could not pair with the reports site: ${t.pairProblem ?? 'not tried'}');
+    }
+  }
+  for (final s in report.sessions) {
+    if (s.odooRef == null && s.odooProblem != null) problems.add('POS ${s.till} session ${s.session} did not reach Odoo: ${s.odooProblem}');
+  }
+  final all = report.rung.length;
+  for (final t in tills) {
+    final held = t.paidCount();
+    report.replicated[t.index] = held - t.paidCount(own: true);
+    if (held != all) {
+      problems.add('${t.name} holds $held of the $all sales: the LAN did not deliver them all.');
+    }
+  }
+  if (!c.uploads) return;
+  for (final t in tills) {
+    if (t.cloud != null && t.cloudProblem != null) {
+      problems.add('${t.name} could not reach the reports site: ${t.cloudProblem}');
+    }
+  }
+  if (report.duplicateUploads > 0) {
+    problems.add('${report.duplicateUploads} sales were sent by more than one till.');
+  }
+  if (report.uploadedByStranger > 0) {
+    problems.add('${report.uploadedByStranger} sales were sent by a till that did not ring them.');
+  }
+  final strangers = report.uploadedOrders.keys.where((u) => !report.rung.containsKey(u)).length;
+  if (strangers > 0) problems.add('$strangers uploads were not sales of this run.');
+  if (report.missingUploads > 0) {
+    problems.add('${report.missingUploads} sales have not reached the reports site.');
+  }
+}
 
 /// Runs several tills side by side the way a shop with that many points of sale
 /// works: each on a database of its own, sharing sales over a LAN, every cashier
 /// ringing real menu items, every session closed into Odoo and every sale sent to
 /// the reports site by the till that took it.
 ///
-/// The tills live in memory and go when the run ends, so the live till is never
-/// touched. Their sales are not lab orders: they are booked in Odoo and shown on
-/// the reports site like any other, which is the point of the run.
+/// The tills live in memory, so the live till is never touched, and they stay
+/// up after the run for as long as its [MultiTillRun] is open: cut the network,
+/// run, bring it back, and the run shows whether every till catches up. Their
+/// sales are not lab orders: they are booked in Odoo and shown on the reports
+/// site like any other, which is the point of the run.
 class MultiTillRunner {
   MultiTillRunner({required this.deps, this.pace = const Duration(milliseconds: 25)});
 
   final MultiTillDeps deps;
   final Duration pace;
 
+  /// A run whose tills are let go as soon as it ends.
   Future<MultiTillReport> run(MultiTillConfig config, {MultiTillProgress? onProgress}) async {
+    final run = await start(config, onProgress: onProgress);
+    run.close();
+    return run.report;
+  }
+
+  /// A run whose tills stay up until the caller closes it, so it can retry.
+  Future<MultiTillRun> start(MultiTillConfig config, {MultiTillProgress? onProgress}) async {
     final report = MultiTillReport(config: config, started: DateTime.now());
     final menu = deps.catalogue
         .products(limit: 1000)
@@ -170,7 +291,8 @@ class MultiTillRunner {
         .toList();
     if (menu.isEmpty) {
       report.problems.add('The menu on this till has nothing to sell.');
-      return report..finished = DateTime.now();
+      report.finished = DateTime.now();
+      return MultiTillRun._(report, const [], null);
     }
     final snapshot = deps.catalogue.exportLanSnapshot();
     final numbers = _NumberDesk();
@@ -189,15 +311,12 @@ class MultiTillRunner {
     ];
     final steps = config.sessions * config.tills + (config.uploads ? config.tills : 0);
     var done = 0;
+    final run = MultiTillRun._(report, tills, lan);
     try {
       if (config.uploads) {
         for (final t in tills) {
           onProgress?.call('Pairing ${t.name}', done, steps);
-          try {
-            await t.pair(config.cloudUrl!.trim(), config.pairCode!.trim());
-          } catch (e) {
-            report.problems.add('${t.name} could not pair with the reports site: $e');
-          }
+          await t.tryPair(config);
           done++;
         }
       }
@@ -206,46 +325,21 @@ class MultiTillRunner {
         await Future.wait([
           for (final t in tills)
             t
-                .session(s, config, menu, pace)
+                .session(s, config, menu, config.pause > Duration.zero ? config.pause : pace)
                 .then((r) => report.sessions.add(r))
                 .whenComplete(() => onProgress?.call('Session $s of ${config.sessions}', ++done, steps)),
         ]);
       }
       await lan.settled();
       _check(report, tills);
-    } finally {
-      for (final t in tills) {
-        t.close();
-      }
+    } catch (_) {
+      run.close();
+      rethrow;
     }
     report.sessions.sort((a, b) =>
         a.session != b.session ? a.session.compareTo(b.session) : a.till.compareTo(b.till));
-    return report..finished = DateTime.now();
-  }
-
-  void _check(MultiTillReport report, List<_VirtualTill> tills) {
-    final all = report.rung.length;
-    for (final t in tills) {
-      final held = t.paidCount();
-      report.replicated[t.index] = held - t.paidCount(own: true);
-      if (held != all) {
-        report.problems.add('${t.name} holds $held of the $all sales: the LAN did not deliver them all.');
-      }
-    }
-    if (!report.config.uploads) return;
-    if (report.duplicateUploads > 0) {
-      report.problems.add('${report.duplicateUploads} sales were sent by more than one till.');
-    }
-    if (report.uploadedByStranger > 0) {
-      report.problems
-          .add('${report.uploadedByStranger} sales were sent by a till that did not ring them.');
-    }
-    final strangers =
-        report.uploadedOrders.keys.where((u) => !report.rung.containsKey(u)).length;
-    if (strangers > 0) report.problems.add('$strangers uploads were not sales of this run.');
-    if (report.missingUploads > 0) {
-      report.problems.add('${report.missingUploads} sales never reached the reports site.');
-    }
+    report.finished = DateTime.now();
+    return run;
   }
 }
 
@@ -371,6 +465,34 @@ class _VirtualTill {
         [if (own) deviceId],
       ).first['c'] as int;
 
+  /// Why pairing failed last time, and why the last upload did.
+  String? pairProblem;
+  String? cloudProblem;
+
+  /// Pairs with the run's branch, noting why when it cannot.
+  Future<void> tryPair(MultiTillConfig config) async {
+    try {
+      await pair(config.cloudUrl!.trim(), config.pairCode!.trim());
+      pairProblem = null;
+    } catch (e) {
+      pairProblem = '$e';
+    }
+  }
+
+  /// What a real till does when the line comes back: pair if it never could,
+  /// send each close Odoo did not book under that close's own key, and upload
+  /// whatever the reports site has not had yet.
+  Future<void> retry(MultiTillConfig config) async {
+    if (closed) return;
+    if (config.uploads && cloud == null) await tryPair(config);
+    for (final s in report.sessions.where((s) => s.till == index && s.owesOdoo)) {
+      if (closed) return;
+      await pushToOdoo(s);
+    }
+    if (closed) return;
+    await upload();
+  }
+
   Future<void> pair(String url, String code) async {
     final client = CloudClient(url, client: deps.cloudHttp);
     final paired = await client.pair(
@@ -449,43 +571,59 @@ class _VirtualTill {
         cashMethodIds: {for (final m in methods) if (m.isCash) m.id});
 
     if (config.sendToOdoo && closedShift != null) {
-      final push = batch;
-      if (push == null) {
+      if (batch == null) {
         result.odooProblem = 'no Odoo server on this till';
       } else {
-        final mine = orders.awaitingSyncInShift(closedShift);
-        for (final o in mine) {
-          await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
-        }
-        try {
-          final ok = await push.run(onlyUuids: {for (final o in mine) o.uuid}, batchKey: closedShift.uuid);
-          if (ok) {
-            result.odooRef = push.lastAck?['name']?.toString() ?? '#${push.lastAck?['id'] ?? '?'}';
-          } else {
-            result.odooProblem = push.lastSkipReason ?? 'not booked';
-          }
-        } catch (e) {
-          result.odooProblem = '$e';
-        }
-      }
-      if (result.odooProblem != null) {
-        report.problems.add('$name session $number did not reach Odoo: ${result.odooProblem}');
+        result.closed = closedShift;
+        await pushToOdoo(result);
       }
     }
 
-    final sync = cloud;
-    if (sync != null) {
-      await lan.settled();
-      final before = sentOrders;
-      final outcome = await sync.runNow();
-      result.uploaded = sentOrders - before;
-      if (outcome == CloudSyncOutcome.failed) {
-        result.cloudProblem = sync.status().lastError ?? 'failed';
-        report.problems.add('$name session $number did not reach the reports site: ${result.cloudProblem}');
-      }
-    }
+    final before = sentOrders;
+    if (await upload() == false) result.cloudProblem = cloudProblem;
+    result.uploaded = sentOrders - before;
     result.took = watch.elapsed;
     return result;
+  }
+
+  /// Sends one closed session to Odoo as one sale order, keyed on its shift, so
+  /// a second attempt after a lost answer books nothing twice.
+  Future<void> pushToOdoo(MultiTillSession result) async {
+    final push = batch;
+    final shift = result.closed;
+    if (push == null || shift == null) return;
+    result.odooTries++;
+    final mine = orders.awaitingSyncInShift(shift);
+    if (mine.isEmpty && result.odooRef == null && result.odooTries > 1) {
+      result.odooProblem = 'nothing left to send, yet Odoo never named the order';
+      return;
+    }
+    for (final o in mine) {
+      await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
+    }
+    try {
+      final ok = await push.run(onlyUuids: {for (final o in mine) o.uuid}, batchKey: shift.uuid);
+      if (ok) {
+        result
+          ..odooRef = push.lastAck?['name']?.toString() ?? '#${push.lastAck?['id'] ?? '?'}'
+          ..odooProblem = null;
+      } else {
+        result.odooProblem = push.lastSkipReason ?? 'not booked';
+      }
+    } catch (e) {
+      result.odooProblem = '$e';
+    }
+  }
+
+  /// Hands the reports site everything it has not had. Null when unpaired.
+  Future<bool?> upload() async {
+    final sync = cloud;
+    if (sync == null) return null;
+    await lan.settled();
+    final outcome = await sync.runNow();
+    final ok = outcome != CloudSyncOutcome.failed;
+    cloudProblem = ok ? null : (sync.status().lastError ?? 'failed');
+    return ok;
   }
 
   void close() {

@@ -1494,6 +1494,22 @@ const Map<String, String> _ar = {
   'from other tills': 'من الأجهزة التانية',
   'Till': 'الجهاز',
   'Uploaded': 'اترفع',
+  'Leave the run?': 'تخرج من الاختبار؟',
+  'The test tills still hold sales Odoo or the reports site has not had. '
+          'They live only on this screen, so leaving drops them.':
+      'أجهزة الاختبار لسه عليها مبيعات ما وصلتش أودو أو موقع التقارير. '
+          'الأجهزة دي موجودة في الشاشة دي بس، فلو خرجت المبيعات دي هتضيع.',
+  'Stay': 'خليك',
+  'Leave': 'اخرج',
+  '{n} sessions not in Odoo': '{n} جلسة لسه ما وصلتش أودو',
+  '{n} sales not on the reports site': '{n} بيعة لسه ما وصلتش موقع التقارير',
+  'Everything caught up': 'كل حاجة اتظبطت',
+  'Waiting for the network': 'مستني النت',
+  'After {n} retries, {s} seconds after the first one': 'بعد {n} محاولة، {s} ثانية من أول محاولة',
+  'Trying again every {s} seconds': 'بيحاول تاني كل {s} ثانية',
+  'Last try {t}': 'آخر محاولة {t}',
+  'Try now': 'حاول دلوقتي',
+  'Seconds between orders': 'ثواني بين كل طلب والتاني',
   'Problems only': 'المشاكل بس',
   'steps': 'خطوة',
   'Stopped': 'وقف',

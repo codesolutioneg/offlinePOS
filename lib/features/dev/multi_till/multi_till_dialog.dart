@@ -31,13 +31,14 @@ class _MultiTillDialogState extends State<_MultiTillDialog> {
   final _cashiers = TextEditingController(text: '2');
   final _sessions = TextEditingController(text: '3');
   final _orders = TextEditingController(text: '10');
+  final _pause = TextEditingController(text: '0');
   late final _url = TextEditingController(text: widget.cloudUrl);
   final _code = TextEditingController();
   late bool _odoo = widget.odooUrl != null;
 
   @override
   void dispose() {
-    for (final c in [_tills, _cashiers, _sessions, _orders, _url, _code]) {
+    for (final c in [_tills, _cashiers, _sessions, _orders, _pause, _url, _code]) {
       c.dispose();
     }
     super.dispose();
@@ -94,6 +95,7 @@ class _MultiTillDialogState extends State<_MultiTillDialog> {
                 Expanded(
                     child: _number('Orders per session', _orders, 'multi-till-orders')),
               ]),
+              _number('Seconds between orders', _pause, 'multi-till-pause'),
               const SizedBox(height: 8),
               SwitchListTile(
                 key: const Key('multi-till-odoo'),
@@ -137,6 +139,7 @@ class _MultiTillDialogState extends State<_MultiTillDialog> {
               sendToOdoo: _odoo,
               cloudUrl: _url.text.trim(),
               pairCode: _code.text.trim(),
+              pause: Duration(seconds: (int.tryParse(_pause.text.trim()) ?? 0).clamp(0, 120)),
             ),
           ),
           child: Text(tr(context, 'Start')),
