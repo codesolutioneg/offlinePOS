@@ -9,6 +9,7 @@ import '../core/i18n/l10n.dart';
 
 import '../core/audit/audit_log.dart';
 import '../core/cloud/cloud_backup_service.dart';
+import '../core/cloud/cloud_sync_service.dart';
 import '../core/cloud/pending_restore.dart';
 import '../core/auth/auth_service.dart';
 import '../core/auth/bootstrap_cashier.dart';
@@ -176,6 +177,7 @@ class PosApp extends StatefulWidget {
     this.checkServer,
     this.backup,
     this.cloudBackup,
+    this.cloudSync,
     this.restoreStaging,
     this.activity,
     this.provisioningPin,
@@ -235,6 +237,9 @@ class PosApp extends StatefulWidget {
 
   /// The off-site copy of the till. Null in the suites and on a build without one.
   final CloudBackupService? cloudBackup;
+
+  /// The feed to the shop's reports site, on the same pairing as [cloudBackup].
+  final CloudSyncService? cloudSync;
 
   /// Where a database restored from the cloud waits for the next launch.
   final PendingRestore? restoreStaging;
@@ -5283,6 +5288,7 @@ class _PosAppState extends State<PosApp> {
               CloudBackupScreen(
                 service: widget.cloudBackup!,
                 restore: widget.restoreStaging,
+                sync: widget.cloudSync,
               )),
         ),
       // Only offered on a build that has a sender: a setting whose switch does
@@ -6355,6 +6361,7 @@ class _PosAppState extends State<PosApp> {
                 _clearAssignments(session);
                 _emailZReport(closed, rows);
                 widget.cloudBackup?.request('shift-close');
+                widget.cloudSync?.request();
               },
               // Closing the shift is when the day's orders are pushed to Odoo in one
               // batch. Returns a message for the cashier: how it went, or that the

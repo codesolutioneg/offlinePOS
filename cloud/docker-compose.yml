@@ -27,8 +27,12 @@ services:
       ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
       MAX_BACKUP_MB: ${MAX_BACKUP_MB:-1024}
       STORAGE_DIR: /data/backups
+      WEB_DIR: /app/web
     volumes:
       - backups:/data/backups
+      # The reports site (flutter build web -t lib/web_reports/main.dart), copied
+      # here on deploy; a new build is live without rebuilding the image.
+      - ./web:/app/web:ro
     # Not published to the internet: the reverse proxy in front reaches it here.
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${API_PORT:-4555}:8080"

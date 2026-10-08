@@ -4,7 +4,7 @@
 /// updates, so a destructive migration is only acceptable one release after the
 /// replacement column is proven to be populated.
 class Schema {
-  static const int version = 28;
+  static const int version = 29;
 
   /// Applied in order. Index i upgrades the database from version i to i+1.
   static const List<List<String>> migrations = [
@@ -645,6 +645,86 @@ class Schema {
           'WHERE EXISTS (SELECT 1 FROM pos_tables o '
           'WHERE o.name = pos_tables.name AND o.id < pos_tables.id)',
       'CREATE UNIQUE INDEX idx_pos_tables_name ON pos_tables(name)',
+    ],
+    // v28 -> v29: what the reports site has not been sent yet.
+    //
+    // One row per thing that changed, written by the database itself so no
+    // code path that sells, refunds, reopens or pays out can forget to say so.
+    // CloudSyncService drains it; an order counts while it is, or has just
+    // stopped being, a completed sale, because a reopened one has to leave the
+    // site's figures too. A change deletes the row and adds it back, and
+    // AUTOINCREMENT never hands a seq out twice, so a row changed while its
+    // batch was on the wire no longer matches the seq the sender deletes by.
+    //
+    // Delete-then-insert rather than INSERT OR REPLACE: a trigger fired by an
+    // upsert (which is how an order is saved) runs under the upsert's conflict
+    // rule, not its own, and the sale itself would fail on the duplicate.
+    [
+      '''
+      CREATE TABLE cloud_pending (
+        seq  INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        key  TEXT NOT NULL,
+        UNIQUE (kind, key)
+      )
+      ''',
+      '''
+      CREATE TRIGGER cloud_order_insert AFTER INSERT ON orders
+      WHEN NEW.state IN ('paid', 'synced')
+      BEGIN
+        DELETE FROM cloud_pending WHERE kind = 'order' AND key = NEW.uuid;
+        INSERT INTO cloud_pending (kind, key) VALUES ('order', NEW.uuid);
+      END
+      ''',
+      '''
+      CREATE TRIGGER cloud_order_update AFTER UPDATE ON orders
+      WHEN NEW.state IN ('paid', 'synced') OR OLD.state IN ('paid', 'synced')
+      BEGIN
+        DELETE FROM cloud_pending WHERE kind = 'order' AND key = NEW.uuid;
+        INSERT INTO cloud_pending (kind, key) VALUES ('order', NEW.uuid);
+      END
+      ''',
+      '''
+      CREATE TRIGGER cloud_shift_insert AFTER INSERT ON shifts
+      BEGIN
+        DELETE FROM cloud_pending WHERE kind = 'shift' AND key = NEW.id;
+        INSERT INTO cloud_pending (kind, key) VALUES ('shift', NEW.id);
+      END
+      ''',
+      '''
+      CREATE TRIGGER cloud_shift_update AFTER UPDATE ON shifts
+      BEGIN
+        DELETE FROM cloud_pending WHERE kind = 'shift' AND key = NEW.id;
+        INSERT INTO cloud_pending (kind, key) VALUES ('shift', NEW.id);
+      END
+      ''',
+      '''
+      CREATE TRIGGER cloud_attendance_insert AFTER INSERT ON attendance
+      BEGIN
+        DELETE FROM cloud_pending
+          WHERE kind = 'attendance' AND key = CAST(NEW.id AS TEXT);
+        INSERT INTO cloud_pending (kind, key)
+          VALUES ('attendance', CAST(NEW.id AS TEXT));
+      END
+      ''',
+      '''
+      CREATE TRIGGER cloud_attendance_update AFTER UPDATE ON attendance
+      BEGIN
+        DELETE FROM cloud_pending
+          WHERE kind = 'attendance' AND key = CAST(NEW.id AS TEXT);
+        INSERT INTO cloud_pending (kind, key)
+          VALUES ('attendance', CAST(NEW.id AS TEXT));
+      END
+      ''',
+      '''
+      CREATE TRIGGER cloud_audit_insert AFTER INSERT ON audit_log
+      BEGIN
+        DELETE FROM cloud_pending
+          WHERE kind = 'audit' AND key = CAST(NEW.id AS TEXT);
+        INSERT INTO cloud_pending (kind, key)
+          VALUES ('audit', CAST(NEW.id AS TEXT));
+      END
+      ''',
     ],
   ];
 }

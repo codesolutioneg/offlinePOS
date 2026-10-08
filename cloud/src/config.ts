@@ -11,4 +11,5 @@ export const config = () => ({
   storageDir: process.env.STORAGE_DIR ?? '/data/backups',
   adminToken: process.env.ADMIN_TOKEN ?? '',
   maxBackupBytes: Number(process.env.MAX_BACKUP_MB ?? 1024) * 1024 * 1024,
+  webDir: process.env.WEB_DIR ?? '/app/web',
 });

@@ -1,47 +1,16 @@
+import '../../domain/attendance_entry.dart';
+import '../../domain/report_sources.dart';
 import '../lan/lan_event.dart';
 import 'database.dart';
 
-/// One clock-in (and later clock-out) for a member of staff.
-class AttendanceEntry {
-  const AttendanceEntry({
-    required this.id,
-    required this.staffId,
-    required this.clockIn,
-    this.clockOut,
-  });
-
-  final int id;
-  final String staffId;
-  final DateTime clockIn;
-  final DateTime? clockOut;
-
-  bool get isOpen => clockOut == null;
-
-  /// Worked time so far (to now if still open), for the day's timesheet.
-  Duration worked(DateTime now) => (clockOut ?? now).difference(clockIn);
-
-  Map<String, dynamic> toMap() => {
-        'staff_id': staffId,
-        'clock_in': clockIn.toUtc().toIso8601String(),
-        'clock_out': clockOut?.toUtc().toIso8601String(),
-      };
-
-  factory AttendanceEntry.fromMap(Map<String, dynamic> m) => AttendanceEntry(
-        id: 0,
-        staffId: '${m['staff_id']}',
-        clockIn: DateTime.parse('${m['clock_in']}').toUtc(),
-        clockOut: m['clock_out'] == null
-            ? null
-            : DateTime.parse('${m['clock_out']}').toUtc(),
-      );
-}
+export '../../domain/attendance_entry.dart';
 
 /// Staff attendance on this till: who is clocked in, and the day's timesheet.
 ///
 /// Deliberately separate from the cash-drawer [Shift]: several cashiers can be on
 /// the clock at once against a single till, which the single-open-shift drawer
 /// model cannot express.
-class AttendanceStore {
+class AttendanceStore implements ReportAttendance {
   AttendanceStore(
     this._db, {
     DateTime Function()? now,
@@ -174,6 +143,7 @@ class AttendanceStore {
   /// midnight belongs to the day the person clocked on, which is how a shop reads
   /// its own rota and how the report adds up to what it paid for that shift.
   /// A row still open is included, and counted up to [now] by the caller.
+  @override
   List<AttendanceEntry> between({DateTime? from, DateTime? to, String? staffId}) {
     final where = <String>[];
     final args = <Object?>[];
@@ -196,11 +166,5 @@ class AttendanceStore {
         .toList();
   }
 
-  AttendanceEntry _fromRow(Map<String, Object?> r) => AttendanceEntry(
-        id: r['id'] as int,
-        staffId: r['staff_id'] as String,
-        clockIn: DateTime.parse(r['clock_in'] as String),
-        clockOut:
-            r['clock_out'] == null ? null : DateTime.parse(r['clock_out'] as String),
-      );
+  AttendanceEntry _fromRow(Map<String, Object?> r) => AttendanceEntry.fromRow(r);
 }

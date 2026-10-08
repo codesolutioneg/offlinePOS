@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../core/db/shift_store.dart';
+import '../../domain/shift_movement.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/widgets/feedback.dart';
 import 'report_export.dart';

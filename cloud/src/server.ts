@@ -7,11 +7,12 @@ import { Storage } from './storage.js';
 
 const cfg = config();
 const prisma = new PrismaClient();
-const app = buildApp({
+const app = await buildApp({
   repo: new PrismaRepo(prisma),
   storage: new Storage(cfg.storageDir),
   adminToken: cfg.adminToken,
   maxBackupBytes: cfg.maxBackupBytes,
+  webDir: cfg.webDir,
   logger: true,
   ping: async () => {
     await prisma.$queryRaw`SELECT 1`;

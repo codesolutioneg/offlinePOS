@@ -2,14 +2,13 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
-import '../../core/audit/audit_log.dart';
-import '../../core/db/attendance_store.dart';
-import '../../core/db/shift_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../domain/attendance_entry.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/delivery.dart';
 import '../../domain/order.dart';
+import '../../domain/report_sources.dart';
 import '../../domain/shift.dart';
 import 'activity_report_screen.dart';
 import 'attendance_report_screen.dart';
@@ -79,7 +78,21 @@ class ReportsHubScreen extends StatefulWidget {
     this.drivers = const [],
     this.favoriteFilters,
     this.onFavoriteFiltersChanged,
+    this.prepare,
+    this.canOpen,
+    this.actions,
   });
+
+  /// Extra controls for the title bar, such as the reports site's branch picker.
+  final List<Widget>? actions;
+
+  /// Fetches what reports over a window read, for a caller whose data is not
+  /// all at hand: awaited before any report opens. Null on the till, which
+  /// reads its own database as the report asks.
+  final Future<void> Function(DateTime? from, DateTime? to)? prepare;
+
+  /// Whether the person looking may open a report, by its key. Null opens all.
+  final bool Function(String reportKey)? canOpen;
 
   /// The saved filter sets as the shell keeps them (JSON), and where a change to
   /// them goes. Without the second they last only as long as the screen.
@@ -116,7 +129,7 @@ class ReportsHubScreen extends StatefulWidget {
   final String Function(double) formatAmount;
 
   /// The audit trail, for the cancelled/voided/refunded activity report.
-  final AuditLog audit;
+  final ReportAudit audit;
 
   /// Product id to unit cost, from the catalogue. Empty until an Odoo that states
   /// costs has been synced, which is what the margin reports say on their face
@@ -125,11 +138,11 @@ class ReportsHubScreen extends StatefulWidget {
 
   /// The shifts, read across the chosen range for the expenses report. Null hides
   /// that tile, for a caller that has no drawer to report on.
-  final ShiftStore? shifts;
+  final ReportShifts? shifts;
 
   /// Staff clock-ins, read across the chosen range for the hours report. Null
   /// hides that tile, the way a missing shift store hides expenses.
-  final AttendanceStore? attendance;
+  final ReportAttendance? attendance;
 
   /// Staff id to name, so the hours report reads as people rather than as ids.
   final Map<String, String> staffNames;
@@ -394,8 +407,31 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     return store.between(from: from, to: to, staffId: _cashier);
   }
 
+  bool _may(String key) => widget.canOpen?.call(key) ?? true;
+
+  /// The reports the person looking may open.
+  List<_Report> _visible(BuildContext context) =>
+      [for (final r in _reports(context)) if (_may(r.key)) r];
+
+  Iterable<RmReport> get _rmShown => _rm.where((r) => _may('rm-${r.id}'));
+
+  /// Have the caller fetch [period] before a report reads it, with the window
+  /// before it as well when the report compares the two.
+  Future<void> _prepareFor(ReportPeriodChoice period,
+      {bool comparing = false}) async {
+    final prepare = widget.prepare;
+    if (prepare == null) return;
+    var (from, to) = _windowOf(period);
+    if (comparing && from != null) {
+      final end = to ?? DateTime.now().add(const Duration(days: 1));
+      from = from.subtract(end.difference(from));
+    }
+    await prepare(from, to);
+  }
+
   Future<void> _openFlashMenu() => runFlashFlow(
         context,
+        prepare: widget.prepare == null ? null : _prepareFor,
         ordersFor: _shopFilteredFor,
         formatAmount: widget.formatAmount,
         shiftOpenedAt: _shiftOpenedAt,
@@ -410,6 +446,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   /// Print the summary of the period and filters the form is set to.
   Future<void> _printSummary() async {
     final period = _period(context);
+    await _prepareFor(period);
+    if (!mounted) return;
     final o = _filteredFor(period);
     final f = widget.formatAmount;
     final gross = o.fold(0.0, (s, x) => s + x.total);
@@ -796,8 +834,11 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   /// Open the report picked in the tree over the period and filters in the form.
   Future<void> _run() async {
     final key = _selected;
-    if (key == null) return;
+    if (key == null || !_may(key)) return;
     if (key == _flashKey) return _openFlashMenu();
+    await _prepareFor(_period(context),
+        comparing: key == 'rep-period-compare');
+    if (!mounted) return;
     // A till report the back office has a connected layout for opens as that
     // layout, so its columns and sections are the back office's.
     final layout = _rm
@@ -805,7 +846,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
             'rm-${r.id}' == key || r.id == rmLayoutForReport[key])
         .firstOrNull;
     if (layout != null) return _openRm(layout);
-    final report = _reports(context).where((r) => r.key == key).firstOrNull;
+    final report = _visible(context).where((r) => r.key == key).firstOrNull;
     final build = report?.build;
     if (build == null) return;
     final period = _period(context);
@@ -827,7 +868,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   /// opens when the one before it is closed.
   Future<void> _runGroup() async {
     final keys = _groupOf(_selected)?.$2 ?? const <String>[];
-    final known = {for (final r in _reports(context)) r.key};
+    final known = {for (final r in _visible(context)) r.key};
     for (final key in keys) {
       if (!mounted) return;
       if (!known.contains(key)) continue;
@@ -1001,8 +1042,12 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final reports = [_flash(context), ..._reports(context)];
-    final layout = _rm.where((r) => 'rm-${r.id}' == _selected).firstOrNull;
+    final reports = [
+      if (_may(_flashKey)) _flash(context),
+      ..._visible(context),
+    ];
+    final layout =
+        _rmShown.where((r) => 'rm-${r.id}' == _selected).firstOrNull;
     final selected = reports.where((r) => r.key == _selected).firstOrNull ??
         (layout == null
             ? null
@@ -1014,7 +1059,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
               ));
     return Scaffold(
       backgroundColor: _face,
-      appBar: AppBar(title: Text(tr(context, 'Reports'))),
+      appBar: AppBar(
+          title: Text(tr(context, 'Reports')), actions: widget.actions),
       // Laid out left to right whatever the language: the tree on the left and
       // the sessions on the right is the screen this one is modelled on.
       body: Directionality(
@@ -1194,7 +1240,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
 
     // The bundled back-office layouts, in their own folders under the till's.
     final rmGroups = {
-      for (final r in _rm)
+      for (final r in _rmShown)
         if (query.isEmpty || r.name.toLowerCase().contains(query)) r.group,
     }.toList();
     if (rmGroups.isNotEmpty) {
@@ -1226,7 +1272,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
         ),
       ));
       if (!open) continue;
-      for (final r in _rm) {
+      for (final r in _rmShown) {
         if (r.group != name) continue;
         if (query.isNotEmpty && !r.name.toLowerCase().contains(query)) continue;
         final picked = 'rm-${r.id}' == _selected;

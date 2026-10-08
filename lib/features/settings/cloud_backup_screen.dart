@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../core/cloud/backup_envelope.dart';
 import '../../core/cloud/cloud_backup_service.dart';
 import '../../core/cloud/cloud_client.dart';
+import '../../core/cloud/cloud_sync_service.dart';
 import '../../core/cloud/pending_restore.dart';
 import '../../core/cloud/recovery_key.dart';
 import '../../core/i18n/l10n.dart';
@@ -14,10 +15,14 @@ import '../../core/i18n/l10n.dart';
 /// A restore never touches the running database: the chosen backup is staged
 /// beside it and swapped in on the next launch (see [PendingRestore]).
 class CloudBackupScreen extends StatefulWidget {
-  const CloudBackupScreen({super.key, required this.service, this.restore});
+  const CloudBackupScreen(
+      {super.key, required this.service, this.restore, this.sync});
 
   final CloudBackupService service;
   final PendingRestore? restore;
+
+  /// The reports-site sync riding on the same pairing, for its status line.
+  final CloudSyncService? sync;
 
   /// What a fresh till's server field starts with; set per build.
   static const String defaultUrl = String.fromEnvironment(
@@ -45,12 +50,14 @@ class _CloudBackupScreenState extends State<CloudBackupScreen> {
   void initState() {
     super.initState();
     _service.changes.addListener(_reload);
+    widget.sync?.changes.addListener(_reload);
     _reload();
   }
 
   @override
   void dispose() {
     _service.changes.removeListener(_reload);
+    widget.sync?.changes.removeListener(_reload);
     _url.dispose();
     _pairCode.dispose();
     _recoveryKey.dispose();
@@ -380,6 +387,26 @@ class _CloudBackupScreenState extends State<CloudBackupScreen> {
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
           ),
+        if (widget.sync?.status() case final sync?) ...[
+          const SizedBox(height: 8),
+          Text(
+            [
+              sync.lastSuccessAt == null
+                  ? tr(context, 'Reports site: nothing sent yet')
+                  : tr(context, 'Reports site: last sent {t}')
+                      .replaceAll('{t}', _when(sync.lastSuccessAt!)),
+              if (sync.pending > 0)
+                tr(context, '{n} waiting').replaceAll('{n}', '${sync.pending}'),
+            ].join(' · '),
+            key: const Key('cloud-sync-status'),
+          ),
+          if (sync.lastError != null)
+            Text(
+              tr(context, 'Last attempt failed: {e}')
+                  .replaceAll('{e}', sync.lastError!),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+        ],
         const SizedBox(height: 16),
         Wrap(
           spacing: 8,

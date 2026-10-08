@@ -17,6 +17,7 @@ Future<void> runFlashFlow(
   BuildContext context, {
   required List<Order> Function(ReportPeriodChoice period) ordersFor,
   required String Function(double) formatAmount,
+  Future<void> Function(ReportPeriodChoice period)? prepare,
   DateTime? shiftOpenedAt,
   Map<String, String> staffNames = const {},
   String shopName = '',
@@ -34,6 +35,10 @@ Future<void> runFlashFlow(
     shiftOpenedAt: shiftOpenedAt,
   );
   if (!context.mounted || period == null) return;
+  if (prepare != null) {
+    await prepare(period);
+    if (!context.mounted) return;
+  }
   final shop = ordersFor(period);
 
   void noSales() => ScaffoldMessenger.of(context).showSnackBar(

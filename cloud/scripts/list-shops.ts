@@ -9,6 +9,8 @@ console.table(
   shops.map((s) => ({
     id: s.id,
     name: s.name,
+    branches: s.branches,
+    users: s.users,
     devices: s.devices,
     backups: s.backups,
     MB: (s.bytes / 1024 / 1024).toFixed(1),

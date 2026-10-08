@@ -18,11 +18,11 @@ let repo: MemoryRepo;
 let app: FastifyInstance;
 let clock: Date;
 
-beforeEach(() => {
+beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'backup-server-'));
   repo = new MemoryRepo();
   clock = new Date('2026-10-08T12:00:00Z');
-  app = buildApp({
+  app = await buildApp({
     repo,
     storage: new Storage(dir),
     adminToken: ADMIN,
@@ -44,7 +44,8 @@ async function createShop(name = 'Cairo branch') {
     payload: { name },
   });
   expect(res.statusCode).toBe(201);
-  return res.json() as { id: string; name: string; pair_code: string };
+  const body = res.json() as { id: string; name: string; branch: { id: string; pair_code: string } };
+  return { id: body.id, name: body.name, branchId: body.branch.id, pair_code: body.branch.pair_code };
 }
 
 async function pair(code: string, deviceId = 'till-1') {
@@ -95,7 +96,7 @@ describe('admin', () => {
   });
 
   it('is switched off when no admin token is configured', async () => {
-    const closed = buildApp({ repo, storage: new Storage(dir), adminToken: '', maxBackupBytes: 1 });
+    const closed = await buildApp({ repo, storage: new Storage(dir), adminToken: '', maxBackupBytes: 1 });
     const res = await closed.inject({
       method: 'GET',
       url: '/v1/admin/shops',
@@ -108,14 +109,14 @@ describe('admin', () => {
   it('makes a shop with a pairing code that is not stored as typed', async () => {
     const shop = await createShop();
     expect(shop.pair_code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-    expect(JSON.stringify(repo.shops)).not.toContain(shop.pair_code);
+    expect(JSON.stringify(repo.branches)).not.toContain(shop.pair_code);
   });
 
   it('a new pairing code retires the old one', async () => {
     const shop = await createShop();
     const res = await app.inject({
       method: 'POST',
-      url: `/v1/admin/shops/${shop.id}/pair-code`,
+      url: `/v1/admin/branches/${shop.branchId}/pair-code`,
       headers: { 'x-admin-token': ADMIN },
     });
     const fresh = res.json().pair_code as string;

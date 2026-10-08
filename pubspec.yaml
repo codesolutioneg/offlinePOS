@@ -60,6 +60,8 @@ dependencies:
   # Excel. Pure Dart, so it costs the till nothing at runtime until one is asked
   # for.
   excel: ^4.0.4
+  # The reports site hands exports to the browser as downloads.
+  web: ^1.1.1
 
 dev_dependencies:
   flutter_test:

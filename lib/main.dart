@@ -11,7 +11,10 @@ import 'core/audit/audit_log.dart';
 import 'core/cloud/cloud_backup_service.dart';
 import 'core/cloud/cloud_backup_state.dart';
 import 'core/cloud/cloud_secrets.dart';
+import 'core/cloud/cloud_sync_service.dart';
+import 'core/cloud/cloud_sync_state.dart';
 import 'core/cloud/pending_restore.dart';
+import 'core/cloud/report_lookups.dart';
 import 'core/auth/auth_service.dart';
 import 'core/auth/bootstrap_cashier.dart';
 import 'core/auth/fingerprint_agent_launcher.dart';
@@ -519,6 +522,29 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   )..start();
   unwind.add(cloudBackup.stop);
 
+  // The same pairing feeds the shop's reports site: every sale, shift, clock-in
+  // and audit entry, as it happens, readable there under the owner's login.
+  final cloudSync = CloudSyncService(
+    db: db,
+    state: FileCloudSyncStateStore(
+        '${dir.path}${Platform.pathSeparator}cloud_sync.json'),
+    deviceId: deviceId,
+    connection: cloudBackup.connectionDetails,
+    lookups: () => ReportLookups(
+      categories: catalogue.categories(),
+      costs: catalogue.costsById(),
+      staffNames: {for (final u in users.all()) u.id: u.name},
+      cashTenderIds: {
+        for (final m in catalogue.paymentMethods())
+          if (m.isCash) m.id,
+      },
+      drivers: DeliveryStore(db).drivers(),
+      shopName: settings.shopName ?? config.shopName,
+    ),
+    audit: audit,
+  )..start();
+  unwind.add(cloudSync.stop);
+
   // Start the ZK agent if Windows and nothing is on :9201, then load templates.
   unawaited(() async {
     await FingerprintAgentLauncher().ensureRunning();
@@ -554,6 +580,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     // does not come back on.
     backup: () => backupDatabase(db),
     cloudBackup: cloudBackup,
+    cloudSync: cloudSync,
     restoreStaging: PendingRestore(dbPath, cloudSecrets),
     odoo: odoo,
     tables: tables,

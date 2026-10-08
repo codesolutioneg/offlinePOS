@@ -102,6 +102,17 @@ class CloudClient {
     return ((body['shop'] as Map?)?['name'] as String?) ?? '';
   }
 
+  /// Hand the server a batch of changed records for the reports site. Each is
+  /// `{kind, key, at, payload}`; sending one again only overwrites it.
+  Future<int> sync(String token, List<Map<String, Object?>> records) async {
+    final body = await _json(() => _http.post(
+          _url('/v1/sync'),
+          headers: {..._auth(token), 'Content-Type': 'application/json'},
+          body: jsonEncode({'records': records}),
+        ));
+    return (body['stored'] as num?)?.toInt() ?? 0;
+  }
+
   Future<String> upload(
     String token,
     Uint8List sealed, {
