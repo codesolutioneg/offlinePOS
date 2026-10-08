@@ -123,7 +123,26 @@ void main() {
       // And the server's multiplication indeed reproduces the till's food+tax.
       final unit = line['unit_price'] as double;
       expect(unit * 2 * 1.14,
-          closeTo(o.subtotal * 0.9 * 1.12 + o.taxTotal, 0.0001));
+          closeTo(o.subtotal * 0.9 * 1.12 + o.exactTaxTotal, 0.0001));
+      // To the piastre, as Odoo books it: the price to two decimals, the line,
+      // then its tax rounded on its own. The till charges that very figure.
+      final base = roundMoney(roundMoney(unit) * 2);
+      expect(o.total, closeTo(base + roundMoney(base * 0.14) + 30 + 5, 0.0001));
+    });
+
+    test('a night of sales merged into one order still adds up to the piastre', () {
+      // 14% on 22.25 is 3.115: a double holds it as 3.11499…, and Odoo still
+      // rounds it up. Fifty of them is where an unrounded till used to drift
+      // past the module's 0.05 tolerance.
+      var night = 0.0;
+      for (var i = 0; i < 50; i++) {
+        final o = Order(deviceId: 'till-1', cashierId: 'sara');
+        o.lines.add(OrderLine(
+            productId: 1, name: 'Shawarma', quantity: 1, unitPrice: 22.25, taxRate: 14));
+        expect(o.total, closeTo(25.37, 0.0001));
+        night += o.total;
+      }
+      expect(night, closeTo(50 * 25.37, 0.0001));
     });
 
     test('a balance is what is still owed on the taxed total', () {

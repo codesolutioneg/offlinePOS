@@ -1,6 +1,20 @@
+import 'dart:math' as math;
+
 import 'business_day.dart';
 import 'delivery.dart';
 import 'identity.dart';
+
+/// [value] to the piastre, half away from zero, the way Odoo's float_round does
+/// it: nudged by one unit in the last place first, so 1.715, which a double
+/// holds as 1.71499999…, still rounds up to 1.72.
+double roundMoney(double value) {
+  final n = value * 100;
+  if (n == 0) return 0;
+  final sign = n < 0 ? -1.0 : 1.0;
+  final magnitude = n.abs();
+  final epsilon = math.pow(2, math.log(magnitude) / math.ln2 - 52).toDouble();
+  return sign * (magnitude + epsilon + 0.5).floorToDouble() / 100;
+}
 
 /// Where the sale is served. Drives the sell screen, the kitchen ticket header,
 /// and whether delivery details and a delivery charge are collected.
@@ -657,19 +671,20 @@ class Order {
   /// per-unit value, so a discounted line stays discounted.
   double chargeFor(Iterable<OrderLine> subset,
       {double Function(OrderLine line)? quantityOf}) {
-    final f = discountFactor * serviceChargeFactor;
     final s = serviceChargeFactor;
+    final separateDiscount = DiscountBooking.productId != null;
     var charge = 0.0;
     for (final l in subset) {
-      var value = l.total;
+      // Each line at what Odoo books it for, so the parts of a split bill add up
+      // to [total] to the piastre. The money owed is after the order discount;
+      // the tax is not, exactly as [taxTotal] charges the whole bill, so a guest
+      // paying their share pays their share of the undiscounted tax too.
+      var value = _bookedLine(l);
+      if (separateDiscount) value -= l.total * s * (1 - discountFactor);
       if (quantityOf != null) {
-        final perUnit = l.total / (l.quantity == 0 ? 1 : l.quantity);
-        value = perUnit * quantityOf(l);
+        value = value / (l.quantity == 0 ? 1 : l.quantity) * quantityOf(l);
       }
-      // The money owed is after the order discount; the tax is not, exactly as
-      // [taxTotal] charges the whole bill, so a guest paying their share pays
-      // their share of the undiscounted tax too.
-      charge += value * f + value * s * l.taxRate / 100;
+      charge += value;
     }
     return charge;
   }
@@ -695,7 +710,17 @@ class Order {
   /// are shaped so the server books this same figure. Delivery and tip stay
   /// outside it: delivery is exempt on the shop's other till, and a tip is not a
   /// supply.
-  double get taxTotal {
+  ///
+  /// Charged to the piastre the way Odoo books it: every line the sale is sent
+  /// as is priced to two decimals and has its own tax rounded, half away from
+  /// zero. Whatever that rounding moves lands here, so [total] is the figure the
+  /// sale order comes to and a night of tickets merged into one order still
+  /// matches the till.
+  double get taxTotal => bookedLinesTotal - (subtotal * discountFactor + serviceCharge);
+
+  /// The tax at full precision, before Odoo's per-line rounding: what [taxTotal]
+  /// would be if money had no smallest coin.
+  double get exactTaxTotal {
     var t = 0.0;
     final s = serviceChargeFactor;
     for (final l in lines) {
@@ -703,6 +728,43 @@ class Order {
       t += l.total * s * l.taxRate / 100;
     }
     return t;
+  }
+
+  /// What the lines of [toServerPayload] come to in Odoo, tax included: each
+  /// line and each product-backed modifier priced to two decimals, totalled, and
+  /// taxed at its rate rounded to the piastre, plus the discount line when the
+  /// discount travels as one.
+  double get bookedLinesTotal {
+    var sum = 0.0;
+    for (final l in lines) {
+      sum += _bookedLine(l);
+    }
+    if (DiscountBooking.productId != null && discountMoney.abs() > 0.005) {
+      sum -= roundMoney(discountMoney);
+    }
+    return sum;
+  }
+
+  /// One line as Odoo books it, tax included: the line itself and each modifier
+  /// that is a product of its own, at the price [toServerPayload] sends.
+  double _bookedLine(OrderLine l) {
+    final f = discountFactor;
+    final s = serviceChargeFactor;
+    final r = l.taxRate > 0 ? l.taxRate / 100 : 0.0;
+    final lf = DiscountBooking.productId != null
+        ? l.lineDiscountFactor * s
+        : l.lineDiscountFactor * s * ((f + r) / (1 + r));
+    double book(double price, double qty) {
+      final base = roundMoney(roundMoney(price) * qty);
+      return base + roundMoney(base * r);
+    }
+
+    var sum = book(l.wireUnitPrice * lf, l.quantity);
+    for (final mod in l.modifiers) {
+      if (mod.productId == null) continue;
+      sum += book(mod.unitPrice * lf, mod.quantity * l.quantity);
+    }
+    return sum;
   }
 
   /// The hour the trading day this bill belongs to rolls over, stamped from the
