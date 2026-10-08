@@ -169,8 +169,15 @@ void main() {
     await signIn(t, 'owner', 'owner-pass-1');
     expect(find.text('Demo shop'), findsOneWidget);
     expect(find.text('Main'), findsOneWidget);
-    // Today's takings on the branch card: 90 + 10 + 40.
-    expect(find.text('140.00'), findsOneWidget);
+    // Today's takings on the branch card and the headline figure: 90 + 10 + 40.
+    expect(
+        t.widget<Text>(find.byKey(const Key('branch-sales-b1'))).data, '140.00');
+    expect(
+        find.descendant(of: find.byKey(const Key('kpi-sales')), matching: find.text('140.00')),
+        findsOneWidget);
+    expect(
+        find.descendant(of: find.byKey(const Key('kpi-orders')), matching: find.text('3')),
+        findsOneWidget);
     expect(find.byKey(const Key('home-users')), findsOneWidget);
   });
 
@@ -185,6 +192,36 @@ void main() {
     await tapReport(t, 'rep-summary');
     expect(find.byType(SalesReportScreen, skipOffstage: false), findsOneWidget);
     expect(find.textContaining('140.00', skipOffstage: false), findsWidgets);
+  });
+
+  testWidgets('the front page fits a phone, changes period and opens a branch\'s reports',
+      (t) async {
+    await start(t);
+    await signIn(t, 'owner', 'owner-pass-1');
+    t.view.physicalSize = const Size(420, 2400);
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('kpi-sales')), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('period-yesterday')));
+    await t.pumpAndSettle();
+    expect(
+        find.descendant(of: find.byKey(const Key('kpi-orders')), matching: find.text('0')),
+        findsOneWidget);
+
+    await t.tap(find.byKey(const Key('period-week')));
+    await t.pumpAndSettle();
+    expect(
+        find.descendant(of: find.byKey(const Key('kpi-orders')), matching: find.text('3')),
+        findsOneWidget);
+
+    // The reports screen is the till's, laid out for a desk screen.
+    t.view.physicalSize = const Size(1500, 1000);
+    await t.pumpAndSettle();
+    await t.ensureVisible(find.byKey(const Key('branch-reports-b1')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('branch-reports-b1')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('rep-summary')), findsOneWidget);
   });
 
   testWidgets('an accountant sees only the reports the owner allowed', (t) async {

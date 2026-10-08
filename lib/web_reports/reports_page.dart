@@ -12,10 +12,13 @@ import 'site_widgets.dart';
 /// The till's reports screen, over the uploaded rows of one branch or all of
 /// them, showing only the reports the signed-in account may open.
 class ReportsPage extends StatefulWidget {
-  const ReportsPage({super.key, required this.api, required this.session});
+  const ReportsPage({super.key, required this.api, required this.session, this.initialBranch});
 
   final SiteApi api;
   final SiteSession session;
+
+  /// The branch to open on; null picks for the account.
+  final String? initialBranch;
 
   @override
   State<ReportsPage> createState() => _ReportsPageState();
@@ -32,7 +35,12 @@ class _ReportsPageState extends State<ReportsPage> {
     super.initState();
     // One branch is the usual question; all of them is one pick away.
     final branches = widget.session.branches;
-    _branch = branches.length == 1 ? branches.single.id : null;
+    final asked = widget.initialBranch;
+    _branch = asked != null && branches.any((b) => b.id == asked)
+        ? asked
+        : branches.length == 1
+            ? branches.single.id
+            : null;
     _load();
   }
 

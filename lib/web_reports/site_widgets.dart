@@ -4,6 +4,12 @@ import 'package:flutter/services.dart';
 import '../core/i18n/l10n.dart';
 import 'site_api.dart';
 
+Widget siteLanguageButton(BuildContext context, LocaleController locale) => TextButton(
+      key: const Key('site-language'),
+      onPressed: locale.toggle,
+      child: Text(locale.isArabic ? 'English' : 'العربية'),
+    );
+
 /// Amounts as the till prints them, so the site and the slip read the same.
 String siteMoney(double v) => v.toStringAsFixed(2);
 
