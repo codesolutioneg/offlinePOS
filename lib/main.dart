@@ -8,6 +8,10 @@ import 'package:path_provider/path_provider.dart';
 import 'app/pos_app.dart';
 import 'app/till_activity.dart';
 import 'core/audit/audit_log.dart';
+import 'core/cloud/cloud_backup_service.dart';
+import 'core/cloud/cloud_backup_state.dart';
+import 'core/cloud/cloud_secrets.dart';
+import 'core/cloud/pending_restore.dart';
 import 'core/auth/auth_service.dart';
 import 'core/auth/bootstrap_cashier.dart';
 import 'core/auth/fingerprint_agent_launcher.dart';
@@ -147,6 +151,13 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   // questions support would otherwise have to ask the operator to go and look up.
   log.facts(StartupProbe.facts(version: appVersion, databasePath: dbPath));
 
+  // A database restored from the cloud is swapped in here, before anything opens
+  // the file. The one it replaces is renamed beside it, never deleted.
+  log.step('apply a staged cloud restore, if any');
+  final cloudSecrets = SecureCloudSecrets();
+  final restoredOver =
+      await PendingRestore(dbPath, cloudSecrets).apply(SecureKeyStore());
+
   log.step('read the database key from the platform keychain');
   // Told whether there is anything to lose: with a database already on disk a
   // missing key is retried and then refused, never replaced. See DbKey.
@@ -167,6 +178,9 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   final users = UserStore(db);
   final audit = AuditLog(db);
   _auditUncaught(audit);
+  if (restoredOver != null) {
+    audit.record('system', 'cloud.restore.applied', detail: restoredOver);
+  }
   final outboxStore = SqliteOutboxStore(db);
   final retired = outboxStore.retireRefundPushes();
   if (retired > 0) {
@@ -490,6 +504,21 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     );
   }
 
+  // The whole till, sealed under the shop's recovery key, to the shop's own backup
+  // server whenever there is a line. Does nothing until it is paired.
+  final cloudBackup = CloudBackupService(
+    db: db,
+    state: FileCloudBackupStateStore(
+        '${dir.path}${Platform.pathSeparator}cloud_backup.json'),
+    secrets: cloudSecrets,
+    deviceId: deviceId,
+    appVersion: appVersion,
+    deviceName: () => settings.lanDeviceName ?? deviceId,
+    databaseKey: () async => dbKey,
+    audit: audit,
+  )..start();
+  unwind.add(cloudBackup.stop);
+
   // Start the ZK agent if Windows and nothing is on :9201, then load templates.
   unawaited(() async {
     await FingerprintAgentLauncher().ensureRunning();
@@ -524,6 +553,8 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     // One copy of the whole till, encrypted as it sits, for the day the machine
     // does not come back on.
     backup: () => backupDatabase(db),
+    cloudBackup: cloudBackup,
+    restoreStaging: PendingRestore(dbPath, cloudSecrets),
     odoo: odoo,
     tables: tables,
     settings: settings,

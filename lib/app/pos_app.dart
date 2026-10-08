@@ -8,6 +8,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import '../core/i18n/l10n.dart';
 
 import '../core/audit/audit_log.dart';
+import '../core/cloud/cloud_backup_service.dart';
+import '../core/cloud/pending_restore.dart';
 import '../core/auth/auth_service.dart';
 import '../core/auth/bootstrap_cashier.dart';
 import '../core/auth/fingerprint_agent_launcher.dart';
@@ -116,6 +118,7 @@ import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/bulletin_settings_screen.dart';
 import '../features/settings/delivery_settings_screen.dart';
+import '../features/settings/cloud_backup_screen.dart';
 import '../features/settings/dishflow_mirror_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
 import '../features/settings/email_settings_screen.dart';
@@ -172,6 +175,8 @@ class PosApp extends StatefulWidget {
     this.receiptSpool,
     this.checkServer,
     this.backup,
+    this.cloudBackup,
+    this.restoreStaging,
     this.activity,
     this.provisioningPin,
     this.updates,
@@ -227,6 +232,12 @@ class PosApp extends StatefulWidget {
   /// answers with where it landed. Held here rather than built here because this
   /// shell is given stores, not the database they sit in.
   final Future<String> Function()? backup;
+
+  /// The off-site copy of the till. Null in the suites and on a build without one.
+  final CloudBackupService? cloudBackup;
+
+  /// Where a database restored from the cloud waits for the next launch.
+  final PendingRestore? restoreStaging;
 
   /// The floor plan and the on-device settings a manager edits on the device.
   final TableStore tables;
@@ -5259,6 +5270,21 @@ class _PosAppState extends State<PosApp> {
               },
             )),
       ),
+      if (widget.cloudBackup != null)
+        SettingsEntry(
+          title: 'Cloud backup',
+          subtitle: 'Copy the whole till, encrypted, to the shop server',
+          icon: Icons.backup_outlined,
+          keyValue: 'set-cloud-backup',
+          group: 'Server',
+          // The recovery key it shows opens every backup the shop has.
+          onTap: () => pushGated(
+              Permission.openSettings,
+              CloudBackupScreen(
+                service: widget.cloudBackup!,
+                restore: widget.restoreStaging,
+              )),
+        ),
       // Only offered on a build that has a sender: a setting whose switch does
       // nothing is worse than no setting.
       if (widget.emailer != null)
@@ -6328,6 +6354,7 @@ class _PosAppState extends State<PosApp> {
                 // so a mail server that misbehaves cannot leave the room shared out.
                 _clearAssignments(session);
                 _emailZReport(closed, rows);
+                widget.cloudBackup?.request('shift-close');
               },
               // Closing the shift is when the day's orders are pushed to Odoo in one
               // batch. Returns a message for the cashier: how it went, or that the

@@ -795,6 +795,56 @@ const Map<String, String> _ar = {
   'Server': 'الخادم',
   'Language': 'اللغة',
   'Dishflow owner mirror': 'مرآة الأونر في ديش فلو',
+  // cloud backup
+  'Cloud backup': 'النسخ الاحتياطي السحابي',
+  'Copy the whole till, encrypted, to the shop server':
+      'نسخة مشفرة من كل بيانات الجهاز على سيرفر المحل',
+  'A copy of everything on this till is encrypted here and sent to the shop server every hour and at every shift close, whenever there is internet. Selling never waits on it.':
+      'بيتعمل نسخة من كل بيانات الجهاز، تتشفر هنا وتترفع على سيرفر المحل كل ساعة ومع كل قفلة وردية، طول ما فيه نت. البيع عمره ما يستنى عليها.',
+  'Server address': 'عنوان السيرفر',
+  'Pairing code': 'كود الربط',
+  'From the server, one per shop.': 'من السيرفر، كود واحد لكل محل.',
+  'Pair': 'ربط',
+  'Pairing…': 'جاري الربط…',
+  'Paired with {shop}.': 'تم الربط مع {shop}.',
+  'Unpair': 'فك الربط',
+  'Unpair this till?': 'فك ربط الجهاز ده؟',
+  'Backups stop until it is paired again. Backups already on the server stay there.':
+      'النسخ هتقف لحد ما يتربط تاني. النسخ اللي على السيرفر هتفضل موجودة.',
+  'This shop already has backups. Enter its recovery key from the first till.':
+      'المحل ده عنده نسخ قبل كده. اكتب مفتاح الاسترجاع بتاعه من أول جهاز.',
+  'That is not this shop\'s recovery key.': 'ده مش مفتاح الاسترجاع بتاع المحل ده.',
+  'That recovery key is not complete. Check it and try again.':
+      'مفتاح الاسترجاع ناقص. راجعه وجرب تاني.',
+  'Recovery key': 'مفتاح الاسترجاع',
+  'Show recovery key': 'عرض مفتاح الاسترجاع',
+  'Enter the shop\'s recovery key': 'اكتب مفتاح الاسترجاع بتاع المحل',
+  'Every backup is locked with this key. The server cannot open them without it. Write it down and keep it away from the till: lose it and the backups are lost too.':
+      'كل النسخ مقفولة بالمفتاح ده، والسيرفر نفسه ميقدرش يفتحها من غيره. اكتبه واحفظه بعيد عن الجهاز: لو ضاع، النسخ كلها تضيع معاه.',
+  'No backup yet': 'لسه مفيش نسخة',
+  'Last backup: {t}': 'آخر نسخة: {t}',
+  'Last attempt failed: {e}': 'آخر محاولة فشلت: {e}',
+  'Uploading…': 'جاري الرفع…',
+  'Backup uploaded.': 'النسخة اترفعت.',
+  'Nothing changed since the last backup.': 'مفيش أي تغيير من آخر نسخة.',
+  'A backup is already running.': 'فيه نسخة شغالة دلوقتي.',
+  'Stress Lab orders are on this till. Remove them before backing up.':
+      'فيه طلبات Stress Lab على الجهاز. امسحها الأول قبل النسخ.',
+  'Pair this till first.': 'اربط الجهاز الأول.',
+  'Backup failed.': 'النسخ فشل.',
+  'Restore from cloud': 'استرجاع من السحابة',
+  'The server has no backups for this shop yet.': 'السيرفر لسه مفيهوش نسخ للمحل ده.',
+  'Choose a backup': 'اختار نسخة',
+  'That recovery key does not open this backup.': 'المفتاح ده مبيفتحش النسخة دي.',
+  'Replace this till\'s data?': 'استبدال بيانات الجهاز ده؟',
+  'Everything on this till will be replaced by the backup from {device} taken {when}. The current data is kept in a file beside it. This till takes over that device\'s identity: do not run both at once.':
+      'كل بيانات الجهاز ده هتتبدل بنسخة {device} المعمولة {when}. البيانات الحالية هتتحفظ في ملف جنبها. الجهاز ده هياخد هوية الجهاز التاني: متشغلش الاتنين مع بعض.',
+  'Restore is ready. Close the app and open it again to finish.':
+      'الاسترجاع جاهز. اقفل البرنامج وافتحه تاني علشان يكمل.',
+  'A restore is waiting. It is applied the next time the app opens.':
+      'فيه استرجاع مستني، هيتطبق أول ما البرنامج يتفتح.',
+  'The staged restore was cancelled.': 'الاسترجاع المستني اتلغى.',
+  'Continue': 'متابعة',
   'Show paid sales in owner Flash when online':
       'عرض المبيعات المدفوعة في فلاش الأونر عند توفر النت',
   'Mirror paid sales to Dishflow': 'رفع المبيعات المدفوعة إلى ديش فلو',

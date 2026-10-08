@@ -1,0 +1,65 @@
+// What the server knows about each shop's backups. The backups themselves are
+// files under STORAGE_DIR, sealed on the till; nothing here can open them.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Shop {
+  id           String   @id @default(cuid())
+  name         String
+  /// sha256 of the pairing code. The code itself is shown once, when it is made.
+  pairCodeHash String   @unique @map("pair_code_hash")
+  /// The recovery key the shop's backups are sealed under, set by the first upload.
+  keyId        String?  @map("key_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  devices      Device[]
+  backups      Backup[]
+
+  @@map("shops")
+}
+
+model Device {
+  id         String   @id @default(cuid())
+  shopId     String   @map("shop_id")
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// The till's own id (devices table on the till).
+  deviceId   String   @map("device_id")
+  name       String
+  appVersion String   @map("app_version")
+  /// sha256 of the bearer token. A new pairing replaces it.
+  tokenHash  String   @unique @map("token_hash")
+  createdAt  DateTime @default(now()) @map("created_at")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+  backups    Backup[]
+
+  @@unique([shopId, deviceId])
+  @@map("devices")
+}
+
+model Backup {
+  id         String   @id @default(cuid())
+  shopId     String   @map("shop_id")
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  deviceId   String   @map("device_row_id")
+  device     Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// When the till took it, by the till's clock.
+  createdAt  DateTime @map("created_at")
+  receivedAt DateTime @default(now()) @map("received_at")
+  size       Int
+  sha256     String
+  reason     String
+  keyId      String   @map("key_id")
+  /// Relative to STORAGE_DIR.
+  path       String
+
+  @@unique([shopId, sha256])
+  @@index([shopId, createdAt])
+  @@index([deviceId, createdAt])
+  @@map("backups")
+}
