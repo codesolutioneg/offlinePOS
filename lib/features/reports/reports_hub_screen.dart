@@ -250,6 +250,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       page: tr(context, 'Page'),
       session: tr(context, 'Session #'),
       filterSettings: tr(context, 'Filter Settings'),
+      am: tr(context, 'AM'),
+      pm: tr(context, 'PM'),
     );
     // Every till on the network, as the Flash reports read it: a back-office
     // report is the shop's, and the two have to agree on what the shop sold.
@@ -265,13 +267,14 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       report,
       RmSystem(
         shop: widget.shopName,
-        report: report.name,
+        report: tr(context, report.name),
         period: period.label,
         ranAt: _stamp(DateTime.now()),
         filter: _filterWords(context),
       ),
       rows: binding?.rows,
       headless: binding?.headless ?? const {},
+      translate: (s) => tr(context, s),
       // Over the till's data it opens with the heading every report page
       // has; as a bare layout it keeps the one it was designed with.
       pageHeading: binding == null
@@ -281,7 +284,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                 page: page,
                 pageWidth: pageWidth,
                 shop: widget.shopName,
-                title: report.name,
+                title: tr(context, report.name),
                 period: period.label,
                 filter: filter,
                 ranAt: ranAt,
@@ -289,7 +292,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
               ),
     );
     return showReportWindow(
-        context, RmReportViewer(title: report.name, document: document));
+        context, RmReportViewer(title: tr(context, report.name), document: document));
   }
 
   /// The filter sets saved under a name, as the shell last stored them.
@@ -415,6 +418,11 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
 
   Iterable<RmReport> get _rmShown => _rm.where((r) => _may('rm-${r.id}'));
 
+  /// A search finds a layout by the name it shows as well as its own.
+  bool _rmMatches(BuildContext context, RmReport r, String query) =>
+      r.name.toLowerCase().contains(query) ||
+      tr(context, r.name).toLowerCase().contains(query);
+
   /// Have the caller fetch [period] before a report reads it, with the window
   /// before it as well when the report compares the two.
   Future<void> _prepareFor(ReportPeriodChoice period,
@@ -521,7 +529,9 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                     'rep-session-detail',
                     const Color(0xFF2563EB),
                     (o, _) => SessionDetailReportScreen(
-                        orders: o, formatAmount: widget.formatAmount)),
+                        orders: o,
+                        cashLabel: tr(context, 'Cash'),
+                        formatAmount: widget.formatAmount)),
                 _tile(
                     tr(context, 'Sales by revenue center'),
                     Icons.storefront,
@@ -557,6 +567,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                     const Color(0xFF9333EA),
                     (o, p) => SessionSummaryReportScreen(
                         orders: o,
+                        cashLabel: tr(context, 'Cash'),
                         categories: widget.categories,
                         costs: widget.costs,
                         formatAmount: widget.formatAmount,
@@ -1053,7 +1064,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
             ? null
             : _Report(
                 key: 'rm-${layout.id}',
-                title: layout.name,
+                title: tr(context, layout.name),
                 icon: Icons.description_outlined,
                 color: Colors.black54,
               ));
@@ -1241,7 +1252,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     // The bundled back-office layouts, in their own folders under the till's.
     final rmGroups = {
       for (final r in _rmShown)
-        if (query.isEmpty || r.name.toLowerCase().contains(query)) r.group,
+        if (query.isEmpty || _rmMatches(context, r, query)) r.group,
     }.toList();
     if (rmGroups.isNotEmpty) {
       rows.add(Container(
@@ -1265,7 +1276,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                 size: 16, color: const Color(0xFFE0A800)),
             const SizedBox(width: 6),
             Expanded(
-              child: Text(name,
+              child: Text(tr(context, name),
                   style: _text, maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
           ]),
@@ -1274,7 +1285,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       if (!open) continue;
       for (final r in _rmShown) {
         if (r.group != name) continue;
-        if (query.isNotEmpty && !r.name.toLowerCase().contains(query)) continue;
+        if (query.isNotEmpty && !_rmMatches(context, r, query)) continue;
         final picked = 'rm-${r.id}' == _selected;
         rows.add(Material(
           color: picked ? _blue : Colors.white,
@@ -1288,7 +1299,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                     size: 15, color: picked ? Colors.white : Colors.black54),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text(r.name,
+                  child: Text(tr(context, r.name),
                       style: _text.copyWith(
                           color: picked ? Colors.white : Colors.black),
                       maxLines: 1,

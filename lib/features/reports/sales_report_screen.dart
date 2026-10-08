@@ -160,7 +160,7 @@ class SalesReportScreen extends StatelessWidget {
                 ? [Text(tr(context, 'No orders'))]
                 : byType.entries
                     .map((e) => _row(
-                          '${e.key.label} (${e.value.count})',
+                          '${tr(context, e.key.label)} (${e.value.count})',
                           formatAmount(e.value.total),
                         ))
                     .toList(),

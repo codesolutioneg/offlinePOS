@@ -148,7 +148,7 @@ class PaymentAnalysisReportScreen extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  method.label,
+                  tr(context, method.label),
                   style: TextStyle(fontWeight: isTop ? FontWeight.bold : FontWeight.normal),
                   overflow: TextOverflow.ellipsis,
                 ),

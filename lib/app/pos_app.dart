@@ -90,10 +90,6 @@ import '../features/dev/stress_lab_screen.dart';
 import '../features/dev/stress_lab_store.dart';
 import '../features/dev/stress_printer.dart';
 import '../features/dev/stress_report_log.dart';
-import '../core/cloud/report_lookups.dart';
-import '../features/dev/multi_till/multi_till_dialog.dart';
-import '../features/dev/multi_till/multi_till_runner.dart';
-import '../features/dev/multi_till/multi_till_screen.dart';
 import '../features/dev/scenario/stress_day_dialog.dart';
 import '../features/dev/scenario/stress_day_log.dart';
 import '../features/dev/scenario/stress_day_runner.dart';
@@ -3773,13 +3769,6 @@ class _PosAppState extends State<PosApp> {
         newWork: true,
         onTap: () => _openStressDay(context, StressDayMode.deliveryOnly),
       ),
-      FloorAction(
-        id: 'stress-multi-till',
-        label: tr(context, 'Multi-till stress'),
-        icon: Icons.point_of_sale,
-        color: const Color(0xFF0E7490),
-        onTap: () => unawaited(_openMultiTill(context)),
-      ),
       if (stressOrderCount(widget.outboxStore.db) > 0)
         FloorAction(
           id: 'stress-cleanup',
@@ -6938,57 +6927,6 @@ class _PosAppState extends State<PosApp> {
             if (mounted) setState(() {});
           },
           log: StressDayLog(),
-        ),
-      ),
-    );
-  }
-
-  /// Several tills side by side on this till's menu, each session closed into
-  /// Odoo and sent to the reports site. The tills live in memory; this one's
-  /// database is only read.
-  Future<void> _openMultiTill(BuildContext context) async {
-    if (!await _authorize(Permission.openSettings, context) || !context.mounted) {
-      return;
-    }
-    final endpoint = widget.endpoints.load();
-    final hasOdoo = endpoint != null && endpoint.isComplete;
-    final config = await showMultiTillDialog(
-      context,
-      odooUrl: hasOdoo ? endpoint.baseUrl : null,
-      cloudUrl: CloudBackupScreen.defaultUrl,
-    );
-    if (config == null || !context.mounted) return;
-    if (config.sendToOdoo && hasOdoo) await _ensureSessionPartnerFromBranch();
-    if (!context.mounted) return;
-    final settings = widget.settings;
-    final deps = MultiTillDeps(
-      catalogue: widget.catalogue,
-      staff: [for (final u in widget.users.active()) u.id],
-      lookups: () => ReportLookups(
-        categories: widget.catalogue.categories(),
-        costs: widget.catalogue.costsById(),
-        staffNames: {for (final u in widget.users.all()) u.id: u.name},
-        cashTenderIds: {
-          for (final m in widget.catalogue.paymentMethods())
-            if (m.isCash) m.id,
-        },
-        drivers: widget.delivery?.drivers() ?? const [],
-        shopName: settings.shopName ?? 'Dishflow',
-      ),
-      appVersion: 'stress',
-      taxRateFor: (categoryId, type) =>
-          categoryId == null ? null : settings.categoryTaxRate(categoryId, type),
-      serviceChargeFor: settings.serviceChargePercentFor,
-      odooEndpoint: hasOdoo ? endpoint : null,
-      odooPost: widget.odoo.post,
-      sessionPartnerId: () => settings.odooSessionPartnerId,
-      sessionPartnerName: () => settings.odooSessionPartnerName,
-    );
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => MultiTillScreen(
-          runner: MultiTillRunner(deps: deps),
-          config: config,
         ),
       ),
     );

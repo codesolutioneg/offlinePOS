@@ -8,6 +8,8 @@ class RmPageLabels {
     this.page = 'Page',
     this.session = 'Session #',
     this.filterSettings = 'Filter Settings',
+    this.am = 'AM',
+    this.pm = 'PM',
   });
 
   final String date;
@@ -15,6 +17,8 @@ class RmPageLabels {
   final String page;
   final String session;
   final String filterSettings;
+  final String am;
+  final String pm;
 }
 
 /// Puts the heading a report page opens with on [items] and answers where the
@@ -66,7 +70,7 @@ double putRmPageHeading(
   final at = ranAt.toLocal();
   final date = '${at.year}-${two(at.month)}-${two(at.day)}';
   final hour = at.hour % 12 == 0 ? 12 : at.hour % 12;
-  final time = '$hour:${two(at.minute)} ${at.hour < 12 ? 'AM' : 'PM'}';
+  final time = '$hour:${two(at.minute)} ${at.hour < 12 ? labels.am : labels.pm}';
 
   put('${labels.date}:', margin, 50, bold: true);
   put(date, margin + 54, 90);
@@ -111,9 +115,13 @@ RmDocument layOutReportTable({
   required List<String> header,
   required List<List<String>> rows,
   RmPageLabels labels = const RmPageLabels(),
+  String Function(String text)? translate,
 }) {
   const margin = 36.0;
   const line = 14.0;
+  // The table keeps its English words, which the export writes; only what is
+  // drawn on the page is put into the reader's language.
+  final tx = translate ?? (String s) => s;
 
   final sectioned = header.isNotEmpty && header.first == 'Section';
   final columns = sectioned ? header.sublist(1) : header;
@@ -274,7 +282,7 @@ RmDocument layOutReportTable({
 
   void titles() {
     for (var i = 0; i < columns.length; i++) {
-      put(columns[i], left[i] + 3, wide[i] - 6, justify: justify[i]);
+      put(tx(columns[i]), left[i] + 3, wide[i] - 6, justify: justify[i]);
     }
     y += line + 3;
     rule(margin, tableWidth);
@@ -289,7 +297,7 @@ RmDocument layOutReportTable({
       }
       final cells = cellsOf(row);
       for (var i = 0; i < columns.length && i < cells.length; i++) {
-        put(cells[i], left[i] + 3, wide[i] - 6, justify: justify[i]);
+        put(tx(cells[i]), left[i] + 3, wide[i] - 6, justify: justify[i]);
       }
       y += line;
     }
@@ -308,7 +316,7 @@ RmDocument layOutReportTable({
       ];
       // A section starts where its title and first lines can stay together.
       if (y + 3 * line + 30 > pageHeight - margin) newPage();
-      put(section, margin, tableWidth, bold: true, size: 12, justify: 1);
+      put(tx(section), margin, tableWidth, bold: true, size: 12, justify: 1);
       y += 18;
       titles();
       body(lines);

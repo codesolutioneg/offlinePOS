@@ -101,7 +101,10 @@ class _ReportWindowState extends State<ReportWindow> {
             page: tr(context, 'Page'),
             session: tr(context, 'Session #'),
             filterSettings: tr(context, 'Filter Settings'),
+            am: tr(context, 'AM'),
+            pm: tr(context, 'PM'),
           ),
+          translate: (s) => tr(context, s),
         );
       });
     });

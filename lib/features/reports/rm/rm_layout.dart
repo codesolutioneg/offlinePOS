@@ -297,8 +297,10 @@ RmDocument layOutRmReport(
   Set<String> headless = const {},
   double Function(List<RmPlaced> items, int page, double pageWidth)?
       pageHeading,
+  String Function(String text)? translate,
 }) {
   final bound = rows != null;
+  final tx = translate ?? (String s) => s;
   const margin = 36.0;
   const rowHeight = 13.0;
   final landscape = report.landscape;
@@ -335,13 +337,13 @@ RmDocument layOutRmReport(
       var placeholder = false;
       switch (c.kind) {
         case RmKind.text:
-          text = c.value;
+          text = tx(c.value);
         case RmKind.system:
           text = system[c.value];
         case RmKind.field:
           final value = row?.fields[c.value];
           placeholder = value == null && !bound;
-          text = value ?? (bound ? '' : c.value);
+          text = value != null ? tx(value) : (bound ? '' : c.value);
         case RmKind.rule:
           text = '';
       }

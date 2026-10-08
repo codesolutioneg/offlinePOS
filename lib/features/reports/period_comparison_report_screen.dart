@@ -97,7 +97,7 @@ class PeriodComparisonReportScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('$currentLabel  vs  $previousLabel',
+                Text('$currentLabel  ${tr(context, 'vs')}  $previousLabel',
                     key: const Key('comparison-periods'),
                     style: const TextStyle(
                         fontWeight: FontWeight.bold, fontSize: 16)),
