@@ -81,7 +81,9 @@ class CloudClient {
           _url('/v1/devices/pair'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            'pair_code': pairCode.trim(),
+            // A code copied out of right-to-left text carries invisible direction
+            // marks the server would read as part of it.
+            'pair_code': pairCode.replaceAll(RegExp(r'[^A-Za-z0-9-]'), ''),
             'device_id': deviceId,
             'device_name': deviceName,
             'app_version': appVersion,
