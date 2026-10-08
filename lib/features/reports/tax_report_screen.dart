@@ -21,13 +21,18 @@ class TaxReportScreen extends StatelessWidget {
       // The service charge travels inside the line prices, so the server taxes it at
       // each item's own rate. The report has to include it or it understates the tax
       // that was actually booked.
-      final f = o.discountFactor * o.serviceChargeFactor;
+      final s = o.serviceChargeFactor;
+      // The tax is owed on what was sold, before the order discount (see
+      // [Order.taxTotal]); each line's share is scaled so the sale's taxes come to
+      // the piastre it charged.
+      final exact = o.exactTaxTotal;
+      final scale = exact == 0 ? 1.0 : o.taxTotal / exact;
       for (final l in o.lines) {
         if (l.taxRate <= 0) continue;
         // The line's net, then the tax charged on top of it. Gross is the sum of the
         // two, which is what the customer handed over for this line.
-        final net = l.total * f;
-        final tax = net * l.taxRate / 100;
+        final net = l.total * o.discountFactor * s;
+        final tax = l.total * s * l.taxRate / 100 * scale;
         final acc = byRate.putIfAbsent(l.taxRate, () => [0, 0]);
         acc[0] += net + tax;
         acc[1] += tax;

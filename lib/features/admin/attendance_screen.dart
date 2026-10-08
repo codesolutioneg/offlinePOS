@@ -2,17 +2,64 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/auth/auth_service.dart';
 import '../../core/auth/user_store.dart';
 import '../../core/db/attendance_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/widgets/feedback.dart';
+import '../../core/widgets/numeric_keypad.dart';
+
+/// Clock [cashier] in when they are off the clock and out when they are on it,
+/// after their own PIN. Returns whether they are now on the clock, or null when
+/// nothing changed (backed out, or a wrong PIN).
+Future<bool?> toggleClockWithPin(
+  BuildContext context, {
+  required Cashier cashier,
+  required AttendanceStore attendance,
+  required AuthService auth,
+}) async {
+  final clockIn = !attendance.isClockedIn(cashier.id);
+  final pin = await promptTouchPin(
+    context,
+    title: cashier.name,
+    message: clockIn
+        ? tr(context, 'Enter PIN to clock in')
+        : tr(context, 'Enter PIN to clock out'),
+    confirmLabel: clockIn ? tr(context, 'Clock in') : tr(context, 'Clock out'),
+    displayKey: const Key('attend-pin'),
+    confirmKey: const Key('attend-pin-ok'),
+  );
+  if (pin == null || pin.isEmpty || !context.mounted) return null;
+  if (!await auth.authorizeCashier(cashier.id, pin)) {
+    if (context.mounted) {
+      showToast(context, tr(context, 'Incorrect PIN'), kind: ToastKind.error);
+    }
+    return null;
+  }
+  if (clockIn) {
+    attendance.clockIn(cashier.id);
+  } else {
+    attendance.clockOut(cashier.id);
+  }
+  return clockIn;
+}
 
 /// Staff clock in / clock out for the till. Several cashiers can be on the clock at
 /// once, which is why this is separate from the single cash-drawer shift.
+///
+/// Both clock-in and clock-out ask for that person's PIN (touch pad), so a manager
+/// standing at the till cannot stamp attendance for someone who is not there.
 class AttendanceScreen extends StatefulWidget {
-  const AttendanceScreen({super.key, required this.users, required this.attendance});
+  const AttendanceScreen({
+    super.key,
+    required this.users,
+    required this.attendance,
+    required this.auth,
+  });
 
   final UserStore users;
   final AttendanceStore attendance;
+  final AuthService auth;
 
   @override
   State<AttendanceScreen> createState() => _AttendanceScreenState();
@@ -46,6 +93,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final h = d.inHours;
     final m = d.inMinutes % 60;
     return h > 0 ? '${h}h ${m}m' : '${m}m';
+  }
+
+  Future<void> _confirmAndToggle(Cashier c, {required bool clockIn}) async {
+    await toggleClockWithPin(context,
+        cashier: c, attendance: widget.attendance, auth: widget.auth);
+    if (mounted) setState(() {});
   }
 
   @override
@@ -93,13 +146,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             ? OutlinedButton(
                                 key: Key('clock-out-${c.id}'),
                                 onPressed: () =>
-                                    setState(() => widget.attendance.clockOut(c.id)),
+                                    unawaited(_confirmAndToggle(c, clockIn: false)),
                                 child: Text(tr(context, 'Clock out')),
                               )
                             : FilledButton(
                                 key: Key('clock-in-${c.id}'),
                                 onPressed: () =>
-                                    setState(() => widget.attendance.clockIn(c.id)),
+                                    unawaited(_confirmAndToggle(c, clockIn: true)),
                                 child: Text(tr(context, 'Clock in')),
                               ),
                       );

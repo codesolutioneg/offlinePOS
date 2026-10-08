@@ -56,6 +56,8 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     TableStore(db).add(name: '5');
     final auth =
@@ -137,12 +139,16 @@ void main() {
   }
 
   Future<void> enterPin(WidgetTester t, String pin) async {
-    await t.enterText(find.byKey(const Key('tab-pin')), pin);
+    for (final d in pin.split('')) {
+      await t.tap(find.byKey(Key('key-$d')).last);
+      await t.pump();
+    }
     await t.tap(find.byKey(const Key('tab-pin-ok')));
     await t.pumpAndSettle();
   }
 
   testWidgets('with the setting off anyone picks up any tab', (t) async {
+    settings.tableSecurity = false;
     final tab = anasTab();
 
     await t.pumpWidget(app());
@@ -245,6 +251,10 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('transfer-ana')));
     await t.pumpAndSettle();
+    // Every tab Ana holds starts ticked; Next carries them all.
+    expect(find.byKey(Key('transfer-tab-${tab.uuid}')), findsOneWidget);
+    await t.tap(find.byKey(const Key('transfer-tabs-next')));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('transfer-mo')));
     await t.pumpAndSettle();
 
@@ -264,7 +274,7 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t, 'sara', '1234');
     // Off the floor and onto the counter, then into the list of parked tabs.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('open-orders')));
     await t.pumpAndSettle();

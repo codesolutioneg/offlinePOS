@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../core/auth/access.dart';
 import '../../core/auth/permissions.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/order.dart' show OrderType, OrderTypeLabel;
+import 'access_catalog.dart';
+import 'access_rules_screen.dart';
 
 /// Configure what each role may do on its own.
 ///
@@ -87,74 +90,56 @@ class _RolesPermissionsScreenState extends State<RolesPermissionsScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          _roleHeader(context, tr(context, 'Cashier')),
-          _orderTypesCard('cashier'),
-          const SizedBox(height: 12),
-          _permissionCard('cashier'),
-          for (final role in custom) ...[
-            const SizedBox(height: 16),
-            _roleHeader(context, role, editable: role),
-            _orderTypesCard(role),
-            const SizedBox(height: 12),
-            _permissionCard(role),
-          ],
+          _roleHeader(context, tr(context, 'Levels')),
+          _levelCard('cashier', tr(context, 'Cashier')),
+          for (final role in custom) _levelCard(role, role, editable: true),
         ],
       ),
     );
   }
 
 
-  /// Which sales a role may open. Not a permission: there is no manager PIN that
-  /// makes a delivery desk into a dining room, so a type that is off is simply not
-  /// offered rather than asked for. Per role, because a shop that invented a runner
-  /// wants to answer this for the runner too.
-  Widget _orderTypesCard(String role) {
-    final held = widget.settings.orderTypesFor(role);
+  /// One level on the list: what it holds at a glance, and the door to its page.
+  Widget _levelCard(String role, String label, {bool editable = false}) {
+    final s = widget.settings;
+    final ids = [for (final g in accessGroups) ...g.items.map((i) => i.id)];
+    final gated =
+        ids.where((id) => s.accessFor(role, id) == AccessRule.manager).length;
+    final hidden =
+        ids.where((id) => s.accessFor(role, id) == AccessRule.hidden).length;
     return Card(
-      child: Column(children: [
-        ListTile(
-          dense: true,
-          title: Text(tr(context, 'Order types this role may open')),
-          subtitle: Text(
-              tr(context, 'A tab already open on a table can always be settled.')),
+      child: ListTile(
+        key: Key('level-$role'),
+        leading: CircleAvatar(
+          backgroundColor: const Color(0xFF1565C0).withValues(alpha: 0.12),
+          child: const Icon(Icons.admin_panel_settings, color: Color(0xFF1565C0)),
         ),
-        for (final t in OrderType.values)
-          SwitchListTile(
-            key: Key(role == 'cashier'
-                ? 'order-type-allowed-${t.name}'
-                : 'order-type-allowed-$role-${t.name}'),
-            value: held.contains(t),
-            title: Text(tr(context, t.label)),
-            onChanged: (v) {
-              widget.settings.setRoleOrderType(role, t, v);
-              widget.onChanged();
-              setState(() {});
-            },
-          ),
-      ]),
+        title: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(
+          '${tr(context, 'Permissions')}: ${s.permissionsFor(role).length}/${Permission.values.length}'
+          '  ·  ${tr(context, 'Order types')}: ${s.orderTypesFor(role).length}'
+          '  ·  ${tr(context, 'Manager')}: $gated'
+          '  ·  ${tr(context, 'Hidden')}: $hidden',
+        ),
+        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (editable) _roleMenu(role),
+          const Icon(Icons.chevron_right),
+        ]),
+        onTap: () => _openLevel(role, label),
+      ),
     );
   }
 
-  /// The switches for one role. Keys carry the role so two roles on the same
-  /// screen never share a widget key.
-  Widget _permissionCard(String role) {
-    final held = widget.settings.permissionsFor(role);
-    return Card(
-      child: Column(children: [
-        for (final p in Permission.values)
-          SwitchListTile(
-            key: Key(role == 'cashier' ? 'perm-${p.key}' : 'perm-$role-${p.key}'),
-            value: held.contains(p),
-            title: Text(tr(context, p.label)),
-            subtitle: Text(tr(context, p.description)),
-            onChanged: (v) {
-              widget.settings.setRolePermission(role, p, v);
-              widget.onChanged();
-              setState(() {});
-            },
-          ),
-      ]),
-    );
+  Future<void> _openLevel(String role, String label) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => _LevelScreen(
+        settings: widget.settings,
+        role: role,
+        label: label,
+        onChanged: widget.onChanged,
+      ),
+    ));
+    if (mounted) setState(() {});
   }
 
   Future<void> _addRole() async {
@@ -166,6 +151,8 @@ class _RolesPermissionsScreenState extends State<RolesPermissionsScreen> {
     }
     widget.onChanged();
     setState(() {});
+    final role = SettingsStore.normaliseRole(name);
+    await _openLevel(role, role);
   }
 
   Future<void> _renameRole(String role) async {
@@ -254,42 +241,178 @@ class _RolesPermissionsScreenState extends State<RolesPermissionsScreen> {
     ));
   }
 
-  Widget _roleHeader(BuildContext context, String label, {String? editable}) =>
-      Padding(
+  Widget _roleHeader(BuildContext context, String label) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-        child: Row(children: [
-          Expanded(
-            child: Text(
-              label,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-                color: Theme.of(context).colorScheme.primary,
+        child: Text(
+          label,
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+      );
+
+  /// Only a level the shop added can be renamed or removed. Manager and cashier
+  /// are what the app itself falls back on.
+  Widget _roleMenu(String role) => PopupMenuButton<String>(
+        key: Key('role-menu-$role'),
+        onSelected: (v) {
+          if (v == 'rename') _renameRole(role);
+          if (v == 'delete') _deleteRole(role);
+        },
+        itemBuilder: (_) => [
+          PopupMenuItem(
+            key: Key('rename-$role'),
+            value: 'rename',
+            child: Text(tr(context, 'Rename')),
+          ),
+          PopupMenuItem(
+            key: Key('delete-$role'),
+            value: 'delete',
+            child: Text(tr(context, 'Delete')),
+          ),
+        ],
+      );
+}
+
+/// One level's page: what it sees (screens and buttons), what sales it may open,
+/// and what it may do without a manager.
+class _LevelScreen extends StatefulWidget {
+  const _LevelScreen({
+    required this.settings,
+    required this.role,
+    required this.label,
+    required this.onChanged,
+  });
+
+  final SettingsStore settings;
+  final String role;
+  final String label;
+  final VoidCallback onChanged;
+
+  @override
+  State<_LevelScreen> createState() => _LevelScreenState();
+}
+
+class _LevelScreenState extends State<_LevelScreen> {
+  @override
+  Widget build(BuildContext context) {
+    final role = widget.role;
+    return Scaffold(
+      key: Key('level-page-$role'),
+      appBar: AppBar(title: Text(widget.label)),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+        children: [
+          _accessCard(role, widget.label),
+          const SizedBox(height: 12),
+          _orderTypesCard(role),
+          const SizedBox(height: 12),
+          Card(
+            color: AppColors.info.withValues(alpha: 0.08),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                tr(context, 'Unchecked actions still work, but ask for a manager PIN first.'),
+                style: const TextStyle(fontSize: 13),
               ),
             ),
           ),
-          // Only a role the shop added can be renamed or removed. Manager and
-          // cashier are what the app itself falls back on.
-          if (editable != null)
-            PopupMenuButton<String>(
-              key: Key('role-menu-$editable'),
-              onSelected: (v) {
-                if (v == 'rename') _renameRole(editable);
-                if (v == 'delete') _deleteRole(editable);
-              },
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                  key: Key('rename-$editable'),
-                  value: 'rename',
-                  child: Text(tr(context, 'Rename')),
-                ),
-                PopupMenuItem(
-                  key: Key('delete-$editable'),
-                  value: 'delete',
-                  child: Text(tr(context, 'Delete')),
-                ),
-              ],
+          _permissionCard(role),
+        ],
+      ),
+    );
+  }
+
+  /// The door to what this level sees: every screen and button, allowed, behind
+  /// a manager, or hidden.
+  Widget _accessCard(String role, String label) {
+    final ids = [
+      for (final g in accessGroups) ...g.items.map((i) => i.id),
+    ];
+    final gated = ids
+        .where((id) => widget.settings.accessFor(role, id) == AccessRule.manager)
+        .length;
+    final hidden = ids
+        .where((id) => widget.settings.accessFor(role, id) == AccessRule.hidden)
+        .length;
+    return Card(
+      color: const Color(0xFF1565C0).withValues(alpha: 0.06),
+      child: ListTile(
+        key: Key('access-open-$role'),
+        leading: const Icon(Icons.admin_panel_settings, color: Color(0xFF1565C0)),
+        title: Text(tr(context, 'Screens & buttons'),
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text('${tr(context, 'Manager')}: $gated'
+            '  ·  ${tr(context, 'Hidden')}: $hidden'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () async {
+          await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => AccessRulesScreen(
+              settings: widget.settings,
+              role: role,
+              roleLabel: label,
+              onChanged: widget.onChanged,
             ),
-        ]),
-      );
+          ));
+          if (mounted) setState(() {});
+        },
+      ),
+    );
+  }
+
+  /// Which sales a role may open. Not a permission: there is no manager PIN that
+  /// makes a delivery desk into a dining room, so a type that is off is simply not
+  /// offered rather than asked for. Per role, because a shop that invented a runner
+  /// wants to answer this for the runner too.
+  Widget _orderTypesCard(String role) {
+    final held = widget.settings.orderTypesFor(role);
+    return Card(
+      child: Column(children: [
+        ListTile(
+          dense: true,
+          title: Text(tr(context, 'Order types this role may open')),
+          subtitle: Text(
+              tr(context, 'A tab already open on a table can always be settled.')),
+        ),
+        for (final t in OrderType.values)
+          SwitchListTile(
+            key: Key(role == 'cashier'
+                ? 'order-type-allowed-${t.name}'
+                : 'order-type-allowed-$role-${t.name}'),
+            value: held.contains(t),
+            title: Text(tr(context, t.label)),
+            onChanged: (v) {
+              widget.settings.setRoleOrderType(role, t, v);
+              widget.onChanged();
+              setState(() {});
+            },
+          ),
+      ]),
+    );
+  }
+
+  /// The switches for one role. Keys carry the role so two roles on the same
+  /// screen never share a widget key.
+  Widget _permissionCard(String role) {
+    final held = widget.settings.permissionsFor(role);
+    return Card(
+      child: Column(children: [
+        for (final p in Permission.values)
+          SwitchListTile(
+            key: Key(role == 'cashier' ? 'perm-${p.key}' : 'perm-$role-${p.key}'),
+            value: held.contains(p),
+            title: Text(tr(context, p.label)),
+            subtitle: Text(tr(context, p.description)),
+            onChanged: (v) {
+              widget.settings.setRolePermission(role, p, v);
+              widget.onChanged();
+              setState(() {});
+            },
+          ),
+      ]),
+    );
+  }
+
 }

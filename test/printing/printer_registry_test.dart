@@ -79,6 +79,51 @@ void main() {
     expect(registry['kitchen']!.host, '192.168.8.77');
   });
 
+  test('a lone printer on another range is not taken for a busy one', () async {
+    final subnet = StillSubnet({'192.168.10.36'});
+    final registry = PrinterRegistry(discovery: subnet, identify: anonymous)
+      ..remember('receipt', host: '192.168.0.200');
+
+    expect(await registry.resolve('receipt'), isNull);
+    expect(registry['receipt']!.host, '192.168.0.200');
+  });
+
+  group('an address typed in by hand', () {
+    test('is never swapped for another printer on the range', () async {
+      final subnet = StillSubnet({'192.168.10.36'});
+      final registry = PrinterRegistry(discovery: subnet, identify: anonymous)
+        ..remember('receipt', host: '192.168.10.150', pinned: true);
+
+      expect(await registry.resolve('receipt'), isNull);
+      expect(await registry.refresh('receipt'), isNull);
+      expect(registry['receipt']!.host, '192.168.10.150');
+      expect(subnet.sweeps, 0);
+    });
+
+    test('is used as soon as the printer there answers', () async {
+      final subnet = StillSubnet({'192.168.10.150', '192.168.10.36'});
+      final registry = PrinterRegistry(discovery: subnet, identify: anonymous)
+        ..remember('receipt', host: '192.168.10.150', pinned: true);
+
+      expect(await registry.refresh('receipt'), '192.168.10.150');
+    });
+
+    test('stays locked across a restart and a new spare', () {
+      final registry = PrinterRegistry(discovery: StillSubnet(), identify: anonymous)
+        ..remember('receipt', host: '192.168.10.150', pinned: true)
+        ..remember('bar', host: '192.168.10.158')
+        ..setBackup('receipt', 'bar');
+      final restored = PrinterRegistry.fromMap(
+        registry.toMap(),
+        discovery: StillSubnet(),
+        identify: anonymous,
+      );
+
+      expect(restored['receipt']!.pinned, isTrue);
+      expect(restored['bar']!.pinned, isFalse);
+    });
+  });
+
   test('refresh sweeps without waiting for the old address to fail', () async {
     final subnet = StillSubnet({'192.168.8.77'});
     final registry = PrinterRegistry(discovery: subnet, identify: anonymous)
@@ -308,6 +353,48 @@ void main() {
       expect(restored.printers.map((p) => p.name), ['kitchen', 'bar']);
       expect(restored['bar']!.host, '192.168.8.41');
       expect(restored['bar']!.port, 9101);
+    });
+
+    test('applyFromMap replaces local printers with a primary join snapshot', () {
+      var changed = 0;
+      final secondary = PrinterRegistry(
+        discovery: StillSubnet(),
+        onChanged: () => changed++,
+      )..remember('old-local', host: '10.0.0.1');
+      changed = 0;
+
+      secondary.applyFromMap({
+        'printers': [
+          {'name': 'kitchen', 'host': '192.168.1.50', 'port': 9100},
+          {'name': 'receipt', 'host': '192.168.1.51'},
+        ],
+      });
+
+      expect(secondary['old-local'], isNull);
+      expect(secondary['kitchen']!.host, '192.168.1.50');
+      expect(secondary['receipt']!.host, '192.168.1.51');
+      expect(changed, 1);
+    });
+
+    test('applySharedStationsFromMap keeps this till receipt, takes kitchen', () {
+      final secondary = PrinterRegistry(discovery: StillSubnet())
+        ..remember('receipt', host: '10.0.0.9')
+        ..remember('delivery', host: '10.0.0.9')
+        ..remember('old-kitchen', host: '10.0.0.2');
+
+      secondary.applySharedStationsFromMap({
+        'printers': [
+          {'name': 'kitchen', 'host': '192.168.1.50', 'port': 9100},
+          {'name': 'receipt', 'host': '192.168.1.51'},
+          {'name': 'delivery', 'host': '192.168.1.52'},
+        ],
+      });
+
+      expect(secondary['kitchen']!.host, '192.168.1.50');
+      expect(secondary['receipt']!.host, '10.0.0.9',
+          reason: 'this till must keep its own receipt after join');
+      expect(secondary['delivery']!.host, '10.0.0.9');
+      expect(secondary['old-kitchen'], isNull);
     });
 
     test('a saved blob that got mangled does not stop the till printing', () async {

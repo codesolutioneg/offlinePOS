@@ -60,6 +60,8 @@ dependencies:
   # Excel. Pure Dart, so it costs the till nothing at runtime until one is asked
   # for.
   excel: ^4.0.4
+  # The reports site hands exports to the browser as downloads.
+  web: ^1.1.1
 
 dev_dependencies:
   flutter_test:
@@ -88,6 +90,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # The back-office report layouts the reports hub draws (see
+  # tool/arf_to_layouts.py for where they come from).
+  assets:
+    - assets/report_layouts/
 
   # The receipt renderer names this family explicitly (see LineRasteriser). A till
   # is a locked-down Windows box whose system font fallback for Arabic cannot be

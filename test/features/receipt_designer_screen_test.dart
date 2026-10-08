@@ -72,7 +72,7 @@ void main() {
   testWidgets('the divider style is an exclusive choice and persists', (t) async {
     tallWindow(t);
     await t.pumpWidget(app());
-    expect(settings.receiptDividerStyle, 'line');
+    expect(settings.receiptDividerStyle, 'equals');
 
     // The segment's ink well takes the tap, not the label the key is on.
     await t.tap(find.byKey(const Key('t-divider-stars')), warnIfMissed: false);
@@ -126,10 +126,10 @@ void main() {
 
     // The cashier line only prints on the receipt (and shows in the preview)
     // while the toggle is on.
-    expect(find.textContaining('Cashier:'), findsOneWidget);
+    expect(find.textContaining('Server:'), findsOneWidget);
     await t.tap(find.byKey(const Key('t-cashier')));
     await t.pump();
-    expect(find.textContaining('Cashier:'), findsNothing);
+    expect(find.textContaining('Server:'), findsNothing);
   });
 
   testWidgets('the preview narrows when 58 mm paper is selected', (t) async {

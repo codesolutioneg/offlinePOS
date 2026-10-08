@@ -142,7 +142,7 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
     // Sign-in with no draft lands on the floor, so come back to the till first.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
 
     await t.sendKeyEvent(LogicalKeyboardKey.f12);

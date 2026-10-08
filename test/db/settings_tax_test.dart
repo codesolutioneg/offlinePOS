@@ -22,7 +22,7 @@ void main() {
     expect(settings.categoryTaxRate(1, OrderType.dineIn), 14);
     expect(settings.categoryTaxRate(1, OrderType.takeaway), 0);
     // Delivery was never set for this category, so it has no override.
-    expect(settings.categoryTaxRate(1, OrderType.delivery), isNull);
+    expect(settings.categoryTaxRate(1, OrderType.storeDelivery), isNull);
     // A different, unconfigured category has no override at all.
     expect(settings.categoryTaxRate(2, OrderType.dineIn), isNull);
   });

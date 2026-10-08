@@ -46,7 +46,7 @@ void main() {
     final o = table();
     final s = bill(o);
     expect(s, contains('Pizza'));
-    expect(s, contains('+ Extra Cheese'));
+    expect(s, contains('=> Extra Cheese'));
     expect(s, contains('Water'));
     expect(s, contains('T4'));
     expect(s, contains('sara'));

@@ -24,7 +24,9 @@ void main() {
       'company_id': [4, 'Branch B']},
   ];
 
-  OdooPuller puller({Object? config}) => OdooPuller(
+  OdooPuller puller({Object? config, Object? branchSimple}) => OdooPuller(
+        branchId: () => 5,
+        companyId: () => 3,
         call: (model, method, args, kwargs) async {
           asked.add(model);
           switch (model) {
@@ -42,6 +44,9 @@ void main() {
               ];
             case 'account.journal':
               return allJournals;
+            case 'branch.simple':
+              if (branchSimple is Exception) throw branchSimple;
+              return branchSimple ?? const [];
             case 'branch.pos.config':
               if (config is Exception) throw config;
               return config ?? const [];
@@ -53,14 +58,13 @@ void main() {
 
   setUp(() {
     asked.clear();
-    // The till sells for Branch A, whose company id is 3.
     OdooSite.shared = const OdooSite(branchId: 3);
   });
   tearDown(() => OdooSite.shared = const OdooSite());
 
   test('the branch names its tenders and only those show', () async {
-    final pull = await puller(config: [
-      {'id': 1, 'payment_journal_ids': [11]},
+    final pull = await puller(branchSimple: [
+      {'id': 5, 'payment_journal_ids': [11]},
     ]).pull();
 
     expect(pull.paymentMethods.map((m) => m.name), ['Cash drawer'],
@@ -79,8 +83,8 @@ void main() {
 
   test('a configuration that names nothing this till can see is dropped',
       () async {
-    final pull = await puller(config: [
-      {'id': 1, 'payment_journal_ids': [99]},
+    final pull = await puller(branchSimple: [
+      {'id': 5, 'payment_journal_ids': [99]},
     ]).pull();
 
     expect(pull.paymentMethods, isNotEmpty,
@@ -110,8 +114,8 @@ void main() {
         reason: 'the company narrowing already keeps other branches out, so a '
             'bad moment on this read must not stop the till taking money');
     await p.pull();
-    expect(asked.where((m) => m == 'branch.pos.config').length, 2,
-        reason: 'a timeout says nothing about the addon, so the next refresh '
-            'asks again');
+    expect(asked.where((m) => m == 'branch.pos.config').length, 4,
+        reason: 'a timeout says nothing about the addon, so each refresh asks '
+            'by branch_id then by company_id again');
   });
 }

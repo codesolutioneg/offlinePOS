@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../../core/audit/audit_log.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart';
+import '../../domain/report_sources.dart';
 import 'report_export.dart';
 
 /// A parsed 'line.voided' audit row. The raw detail is
@@ -44,7 +44,7 @@ class ActivityReportScreen extends StatelessWidget {
   });
 
   final List<Order> orders;
-  final AuditLog audit;
+  final ReportAudit audit;
   final String Function(double) formatAmount;
   final DateTime? from;
   final DateTime? to;

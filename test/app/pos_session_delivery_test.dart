@@ -34,20 +34,39 @@ void main() {
       deviceId: 'till-1',
       cashierId: 'sara',
     );
-    session.setOrderType(OrderType.delivery);
+    session.setOrderType(OrderType.storeDelivery);
     session.addProduct(pizza);
   });
   tearDown(() => db.close());
 
   test('emptying the bill takes the channel and the driver with it', () {
     session.setDeliveryChannel(talabat, companyOrderNo: 'TLB-1');
-    session.setDriver('Hany');
+    session.setDriver(const Driver(id: 'd1', name: 'Hany'));
 
     session.clear();
 
     expect(session.current.deliveryChannel, isNull);
     expect(session.current.companyOrderNo, isNull);
     expect(session.current.driverName, isNull);
+  });
+
+  test('a table bill turned into a delivery gives the table back', () {
+    session.setOrderType(OrderType.dineIn);
+    session.setTable('T1');
+
+    session.setOrderType(OrderType.carDelivery);
+
+    expect(session.current.tableLabel, isNull);
+    expect(orders.byUuid(session.current.uuid)!.tableLabel, isNull);
+  });
+
+  test('a table bill turned to go keeps its table', () {
+    session.setOrderType(OrderType.dineIn);
+    session.setTable('T1');
+
+    session.setOrderType(OrderType.toGo);
+
+    expect(session.current.tableLabel, 'T1');
   });
 
   test('a blank company number is stored as nothing', () {
@@ -74,9 +93,31 @@ void main() {
   });
 
   test('a driver is trimmed and clearable', () {
-    session.setDriver('  Hany  ');
+    session.setDriver(const Driver(id: 'd1', name: '  Hany  '));
     expect(session.current.driverName, 'Hany');
     session.setDriver(null);
     expect(session.current.driverName, isNull);
+  });
+
+  test('switching delivery subtypes drops what only the previous kind used', () {
+    session.setDeliveryChannel(talabat, companyOrderNo: 'TLB-9');
+    session.setDeliveryCost(25);
+    session.setDriver(const Driver(id: 'd1', name: 'Hany'));
+    session.setDeliveryCustomer(name: 'Ali', phone: '010', address: 'Nasr City');
+
+    session.setOrderType(OrderType.carDelivery);
+    expect(session.current.companyOrderNo, isNull);
+    expect(session.current.deliveryChannel, isNull);
+    expect(session.current.deliveryCost, 0);
+    expect(session.current.driverName, isNull);
+    expect(session.current.customerAddress, isNull);
+    // Name/phone can stay — car is still a sale that may name a guest.
+    expect(session.current.customerName, 'Ali');
+
+    session.setOrderType(OrderType.deliveryFromCompany);
+    session.setDeliveryChannel(talabat, companyOrderNo: 'TLB-2');
+    session.setOrderType(OrderType.storeDelivery);
+    expect(session.current.companyOrderNo, isNull);
+    expect(session.current.deliveryChannel, isNull);
   });
 }

@@ -7,6 +7,7 @@ import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/i18n/l10n.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
 import 'package:offline_pos/core/lan/lan_wiring.dart';
+import 'package:offline_pos/domain/table_section_config.dart';
 import 'package:offline_pos/features/settings/lan_settings_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -68,6 +69,7 @@ void main() {
     await open(t,
       facts: () => (
         servingAt: '10.0.0.5:45333',
+        hostError: null,
         peers: [peer()],
         refused: const [],
         cursors: const {'till-b': 42},
@@ -102,6 +104,7 @@ void main() {
     await open(t,
       facts: () => (
         servingAt: null,
+        hostError: 'cannot serve on port 45333: errno = 10049',
         peers: const [],
         refused: [peer(deviceId: 'till-c', schema: Schema.version + 1)],
         cursors: const {},
@@ -111,6 +114,8 @@ void main() {
     );
 
     expect(find.byKey(const Key('lan-last-error')), findsOneWidget);
+    // A server that could not bind says why, next to "not serving".
+    expect(find.byKey(const Key('lan-host-error')), findsOneWidget);
     // Down past the peer list: an unfinished rollout is visible on the device
     // rather than only in the audit trail.
     await t.dragUntilVisible(find.byKey(const Key('lan-refused-till-c')),
@@ -229,5 +234,23 @@ void main() {
 
     expect(settings.lanShopKey, isNot('the-old-key'));
     expect(find.text(settings.lanShopKey!), findsOneWidget);
+  });
+
+  testWidgets('Unlink clears role and shop key and leaves them cleared',
+      (t) async {
+    settings.deviceRole = DeviceRole.secondary;
+    settings.lanShopKey = 'paired-shop-key';
+    settings.lanRolePromptDismissed = true;
+    await open(t);
+
+    await t.tap(find.byKey(const Key('lan-unlink')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('lan-unlink-confirm-yes')));
+    await t.pumpAndSettle();
+
+    expect(settings.deviceRole, DeviceRole.unset);
+    expect(settings.lanShopKey, isNull);
+    expect(settings.lanRolePromptDismissed, isFalse);
+    expect(find.textContaining('Unlinked'), findsOneWidget);
   });
 }

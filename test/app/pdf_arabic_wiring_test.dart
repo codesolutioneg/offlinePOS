@@ -31,6 +31,7 @@ import 'package:offline_pos/features/sell/sell_screen.dart';
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
 import 'pdf_bytes.dart';
+import '../ui/report_period.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -65,7 +66,9 @@ void main() {
   setUp(() async {
     db = Db.open(':memory:');
     orders = OrderStore(db);
-    settings = SettingsStore(db)..shopName = 'Nour Grill';
+    settings = SettingsStore(db)
+      ..shopName = 'Nour Grill'
+      ..lanRolePromptDismissed = true;
     audit = AuditLog(db);
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234');
@@ -202,8 +205,7 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
     await openReports(t);
-    await t.tap(find.byKey(const Key('rep-top')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-top');
     await download(t, 'pdf');
 
     // The file itself rather than the confirmation on screen: the message is

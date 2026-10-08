@@ -19,7 +19,7 @@ void main() {
   test('every role rings everything until a manager says otherwise', () {
     expect(settings.orderTypesFor('cashier'), OrderType.values.toSet());
     expect(settings.orderTypesFor('waiter'), OrderType.values.toSet());
-    expect(settings.roleCanRing('cashier', OrderType.delivery), isTrue);
+    expect(settings.roleCanRing('cashier', OrderType.storeDelivery), isTrue);
   });
 
   test('a manager is never restricted', () {
@@ -31,8 +31,10 @@ void main() {
     settings.setRoleOrderType('cashier', OrderType.dineIn, false);
     settings.setRoleOrderType('cashier', OrderType.takeaway, false);
     settings.setRoleOrderType('cashier', OrderType.toGo, false);
+    settings.setRoleOrderType('cashier', OrderType.deliveryFromCompany, false);
+    settings.setRoleOrderType('cashier', OrderType.carDelivery, false);
 
-    expect(settings.orderTypesFor('cashier'), {OrderType.delivery});
+    expect(settings.orderTypesFor('cashier'), {OrderType.storeDelivery});
     expect(settings.roleCanRing('cashier', OrderType.dineIn), isFalse);
     // One role's rule is not another's.
     expect(settings.orderTypesFor('runner'), OrderType.values.toSet());
@@ -47,10 +49,10 @@ void main() {
   });
 
   test('a type handed back is offered again', () {
-    settings.setRoleOrderType('cashier', OrderType.delivery, false);
-    expect(settings.roleCanRing('cashier', OrderType.delivery), isFalse);
-    settings.setRoleOrderType('cashier', OrderType.delivery, true);
-    expect(settings.roleCanRing('cashier', OrderType.delivery), isTrue);
+    settings.setRoleOrderType('cashier', OrderType.storeDelivery, false);
+    expect(settings.roleCanRing('cashier', OrderType.storeDelivery), isFalse);
+    settings.setRoleOrderType('cashier', OrderType.storeDelivery, true);
+    expect(settings.roleCanRing('cashier', OrderType.storeDelivery), isTrue);
   });
 
   test('an unreadable saved value reads as unrestricted, never as locked out', () {

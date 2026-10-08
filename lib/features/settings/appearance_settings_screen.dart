@@ -124,7 +124,7 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
                     icon: const Icon(Icons.dark_mode_outlined),
                     label: Text(tr(context, 'Dark'), key: const Key('theme-dark'))),
               ],
-              selected: {AppTheme.modeKeys.contains(s.themeMode) ? s.themeMode : 'system'},
+              selected: {AppTheme.modeKeys.contains(s.themeMode) ? s.themeMode : 'dark'},
               onSelectionChanged: (picked) {
                 setState(() => s.themeMode = picked.first);
                 widget.onChanged();

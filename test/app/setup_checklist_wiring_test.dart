@@ -25,6 +25,7 @@ import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/order.dart';
+import 'package:offline_pos/domain/table_section_config.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -58,6 +59,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     users = UserStore(db);
     audit = AuditLog(db);
     printers = PrinterRegistry(discovery: _NoPrinters());
@@ -79,9 +81,11 @@ void main() {
     wizards.dismiss(WizardId.firstSale, 'sara');
   }
 
-  Widget app() {
+  Widget app({String? setupPin}) {
     final outbox = Outbox(store: SqliteOutboxStore(db), senders: {});
     return PosApp(
+      // Handed over the way boot hands it; without it the app mints a fresh one.
+      provisioningPin: setupPin,
       auth: authService(),
       users: users,
       catalogue: CatalogueStore(db),
@@ -160,6 +164,7 @@ void main() {
       refreshedAt: DateTime.now().toUtc(),
     );
     printers.remember(PosApp.receiptPrinter, host: '10.0.0.9');
+    SettingsStore(db).deviceRole = DeviceRole.primary;
   }
 
   testWidgets('the provisioning account is walked through what is left to do',
@@ -167,7 +172,9 @@ void main() {
     await onlyTheSetupAccount();
     draftOnTheTill(BootstrapCashier.id);
 
-    await t.pumpWidget(app());
+    // The setup notice above the keypad pushes it past a short window.
+    tallWindow(t);
+    await t.pumpWidget(app(setupPin: '1234'));
     await signIn(t, BootstrapCashier.id);
 
     expect(find.byKey(const Key('wizard-progress')), findsOneWidget,
@@ -206,6 +213,7 @@ void main() {
     expect(find.byKey(const Key('setup-step-menu')), findsOneWidget);
     expect(find.byKey(const Key('setup-step-printer')), findsOneWidget);
     expect(find.byKey(const Key('setup-step-staff')), findsOneWidget);
+    expect(find.byKey(const Key('setup-step-lan_role')), findsOneWidget);
   });
 
   testWidgets('a till that is set up shows no checklist, and never will again',

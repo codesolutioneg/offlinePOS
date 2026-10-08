@@ -57,11 +57,31 @@ enum LanEventKind {
   /// find out from a customer.
   tablePreorders('table.preorders'),
 
-  /// A till saying its trading day is over. Carried so the other devices can be
-  /// told rather than each closing whenever somebody remembers, and deliberately
-  /// only ever advisory: a device that hears nothing sells exactly as it always
-  /// did, because a shop must not stop trading when a switch dies.
+  /// Per-section category / payment / staff rules. Authored by the primary till;
+  /// secondaries apply and do not invent conflicting writes.
+  sectionConfig('settings.section_config'),
+
+  /// Shop-wide prefs (Dishflow mirror, roles, payment rules, …) from the primary.
+  /// Secondaries apply without echoing; the join snapshot carries the same map.
+  shopBundle('settings.shop_bundle'),
+
+  /// A till saying the shop shift opened or the trading day closed. [action] in
+  /// the payload is `open` | `close` (legacy notices without action are close).
+  /// Advisory for warn/block UI; quiet open/close of the local drawer still runs.
   shiftLifecycle('shift.lifecycle'),
+
+  /// Staff clock-in / clock-out. Shared so the floor strip and attendance board
+  /// agree across tills: who is on duty is a shop fact, not a per-device one.
+  attendanceUpsert('attendance.upsert'),
+
+  /// Fingerprint templates for a staff member (enrol / clear). Shared so every
+  /// till with a ZK reader can identify the same people; PIN stays the fallback.
+  fingerprintUpsert('fingerprint.upsert'),
+
+  /// A staff account added or changed: name, PIN hash, level, active. Shared so a
+  /// person set up (or moved to another level) on one till signs in the same way
+  /// on every till. The provisioning account never travels.
+  userUpsert('user.upsert'),
 
   /// What one till has on its counter right now, for a customer-facing display.
   ///
@@ -69,7 +89,12 @@ enum LanEventKind {
   /// is being rung, so it is opt-in per till and superseding: the log keeps the
   /// latest one per device and drops the rest, because a cart from a minute ago is
   /// of no use to anybody and a shift's worth of taps is not something to keep.
-  cartDisplay('cart.display', snapshot: true);
+  cartDisplay('cart.display', snapshot: true),
+
+  /// A manager cleared the Stress Lab's test orders on one till. Every till drops
+  /// its copies too, because a till only ever removes rows it holds itself and the
+  /// lab's paid sales would otherwise sit on the others until the next Z.
+  stressCleanup('dev.stress_cleanup');
 
   const LanEventKind(this.wire, {this.snapshot = false});
 

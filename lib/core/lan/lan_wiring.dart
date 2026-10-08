@@ -3,12 +3,23 @@ import 'dart:io';
 
 import '../../domain/order.dart';
 import '../audit/audit_log.dart';
+import '../auth/bootstrap_cashier.dart';
+import '../auth/fingerprint_store.dart';
+import '../auth/user_store.dart';
+import '../db/attendance_store.dart';
+import '../db/catalogue_store.dart';
 import '../db/database.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
+import '../db/shift_store.dart';
+import '../db/stress_purge.dart';
 import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
+import '../printing/printer_registry.dart';
+import '../sync/odoo_endpoint.dart';
+import '../sync/stress_firebase_purge.dart';
+import '../../domain/table_section_config.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
 import 'lan_claim.dart';
@@ -16,7 +27,9 @@ import 'lan_event.dart';
 import 'lan_credential.dart';
 import 'lan_event_log.dart';
 import 'lan_fabric.dart';
+import 'lan_number_desk.dart';
 import 'lan_peer.dart';
+import 'lan_seat_desk.dart';
 import 'lan_shift_board.dart';
 import 'lan_transport.dart';
 
@@ -28,6 +41,7 @@ import 'lan_transport.dart';
 /// lies, which is worse than no screen at all.
 typedef LanFacts = ({
   String? servingAt,
+  String? hostError,
   List<LanPeer> peers,
   List<LanPeer> refused,
   Map<String, int> cursors,
@@ -52,13 +66,26 @@ class LanNode {
     required LanBeacon beacon,
     required LanHttpClient client,
     required LanClaimDesk claims,
+    required LanSeatDesk seats,
     required this.peers,
+    /// The primary answers table reservations and order numbers; everyone else
+    /// asks it.
+    required bool Function() isPrimary,
+    required bool Function() isSecondary,
+    required String? Function() primaryDeviceId,
+    required LanLog report,
+    this.hostRetry = const Duration(seconds: 30),
   })  : _log = log,
+        _isSecondary = isSecondary,
+        _report = report,
         _fabric = fabric,
         _host = host,
         _beacon = beacon,
         _client = client,
-        _claims = claims;
+        _claims = claims,
+        _seats = seats,
+        _isPrimary = isPrimary,
+        _primaryDeviceId = primaryDeviceId;
 
   /// Builds every part and joins them up. Nothing binds or announces until
   /// [start] is called.
@@ -76,6 +103,13 @@ class LanNode {
     required OrderStore orders,
     required TableStore tables,
     required SettingsStore settings,
+    required UserStore users,
+    required PrinterRegistry printers,
+    required OdooEndpointStore endpoints,
+    AttendanceStore? attendance,
+    FingerprintStore? fingerprints,
+    CatalogueStore? catalogue,
+    ShiftStore? shifts,
     required ReservationStore reservations,
     required TableAssignmentStore assignments,
     required AuditLog audit,
@@ -87,10 +121,14 @@ class LanNode {
     Future<List<String>> Function()? localAddresses,
     Future<RawDatagramSocket> Function(InternetAddress address, int port)?
         beaconBind,
+    Future<HttpServer> Function(InternetAddress address, int port)? hostBind,
     /// The same kind of seam: a suite can stand two assembled tills next to each
     /// other and prove a tab really changes hands, without a shop network. Null on
     /// a till, which is the whole point.
     LanHttpClient? client,
+    /// After a peer shop bundle lands (Dishflow mirror, …), re-wire senders.
+    void Function()? onShopBundleApplied,
+    Duration hostRetry = const Duration(seconds: 30),
   }) {
     // Every fabric refusal, dead peer and failed announce lands in the audit trail
     // under 'system', which is where support already looks. A shop that quietly
@@ -107,7 +145,13 @@ class LanNode {
       settings: settings,
       reservations: reservations,
       assignments: assignments,
+      attendance: attendance,
+      fingerprints: fingerprints,
+      shifts: shifts,
+      users: users,
       log: eventLog,
+      onShopBundleApplied: onShopBundleApplied,
+      onStressCleanup: () => unawaited(StressFirebasePurge().purgeEverywhere(db)),
       onRefused: log,
     );
     final credential = LanCredential.rotating(shopKey);
@@ -115,11 +159,16 @@ class LanNode {
     final claims = LanClaimDesk(
       deviceId: deviceId,
       orders: orders,
-      // Read at the moment of the ask, so a manager who switches takeovers off has
-      // switched them off for the request that arrives a second later.
-      allowed: () => settings.lanAllowTakeover,
+      // Shop-wide switch, or the waiter who opened the tab / a manager.
+      mayGrant: ({required order, requesterId, asManager = false}) =>
+          settings.lanAllowTakeover ||
+          asManager ||
+          (requesterId != null && requesterId == order.cashierId),
       audit: log,
     );
+    final seats = LanSeatDesk(orders: orders);
+    final numbers =
+        LanNumberDesk(deviceId: deviceId, settings: settings, orders: orders);
     final fabric = LanFabric(
       deviceId: deviceId,
       log: eventLog,
@@ -129,6 +178,61 @@ class LanNode {
       notify: (peer, events) => http.notify(peer, events, deviceId),
       onError: log,
     );
+    Map<String, dynamic>? joinGate({
+      required String pin,
+      required String peerDeviceId,
+    }) {
+      if (!settings.isLanPrimary) return null;
+      if (!settings.consumeJoinPin(pin)) return null;
+      final key = settings.lanShopKey;
+      if (key == null || key.isEmpty) return null;
+      log('lan.device.joined', peerDeviceId);
+      return {
+        'shop_key': key,
+        'section_configs': {
+          for (final e in settings.allSectionConfigs().entries)
+            e.key: e.value.toMap(),
+        },
+        'shop_bundle': settings.exportShopBundle(),
+        // Real roster only — Setup is a local bootstrap account, never shared.
+        'users': [
+          for (final u in users.all())
+            if (u.id != BootstrapCashier.id) u.toMap(),
+        ],
+        // Same shop LAN → same ESC/POS hosts (receipt / kitchen / stations).
+        'printers': printers.toMap(),
+        // Endpoint so the secondary can refresh later; catalogue so it can sell
+        // immediately even offline / before the first Odoo pull finishes.
+        'odoo_endpoint': endpoints.load()?.toMap(),
+        'attendance_open': attendance?.exportOpen() ?? const [],
+        'fingerprints': fingerprints?.agentPayload() ?? const [],
+        if (catalogue != null) 'catalogue': catalogue.exportLanSnapshot(),
+        'tables': [for (final t in tables.all()) t.toMap()],
+        // Full open floor — every till's held/seated tabs — so a rejoining
+        // secondary matches the shop, not only what this primary owns.
+        'open_orders': [
+          for (final o in orders.occupyingAnywhere()) o.toMap(),
+        ],
+      };
+    }
+
+    final host = LanHost(
+      protocol: LanProtocol(
+        deviceId: deviceId,
+        log: eventLog,
+        applier: applier,
+        credential: credential,
+        claims: claims,
+        seats: () => settings.isLanPrimary ? seats : null,
+        numbers: () => settings.isLanPrimary ? numbers : null,
+        onJoin: joinGate,
+        onRefused: log,
+      ),
+      port: port,
+      log: log,
+      bind: hostBind,
+      localAddresses: localAddresses,
+    );
     return LanNode(
       deviceId: deviceId,
       deviceName: deviceName,
@@ -137,25 +241,21 @@ class LanNode {
       peers: peers,
       client: http,
       claims: claims,
-      host: LanHost(
-        protocol: LanProtocol(
-          deviceId: deviceId,
-          log: eventLog,
-          applier: applier,
-          credential: credential,
-          claims: claims,
-          onRefused: log,
-        ),
-        port: port,
-        log: log,
-        localAddresses: localAddresses,
-      ),
+      seats: seats,
+      isPrimary: () => settings.isLanPrimary,
+      isSecondary: () => settings.deviceRole == DeviceRole.secondary,
+      primaryDeviceId: () => settings.lanPrimaryDeviceId,
+      report: log,
+      hostRetry: hostRetry,
+      host: host,
       beacon: LanBeacon(
         deviceId: deviceId,
         name: deviceName,
         httpPort: port,
         port: beaconPort,
         onPeer: peers.seen,
+        role: () => settings.deviceRole,
+        serving: () => host.isServing,
         log: log,
         bind: beaconBind,
         localAddresses: localAddresses,
@@ -177,11 +277,30 @@ class LanNode {
   final LanBeacon _beacon;
   final LanHttpClient _client;
   final LanClaimDesk _claims;
+  final LanSeatDesk _seats;
+  final bool Function() _isPrimary;
+  final bool Function() _isSecondary;
+  final String? Function() _primaryDeviceId;
+  final LanLog _report;
 
   /// The start in flight, or the one that finished. Held so two callers cannot each
   /// bind the same port: the app shell starts the node, and the LAN switch can ask
   /// for it again in the same second.
   Future<void>? _starting;
+
+  /// How often a server that could not bind tries again. Without it a till that
+  /// started before its network was up served nobody until the app restarted.
+  final Duration hostRetry;
+  Timer? _hostRetryTimer;
+
+  /// Whether the shop primary is currently visible on the LAN.
+  ///
+  /// Prefers the device id recorded at join; falls back to any peer advertising
+  /// [DeviceRole.primary] (newer builds). Empty peer list = primary not online.
+  bool primaryIsReachable(SettingsStore settings) => primaryReached(
+        activePeers: peers.active,
+        primaryDeviceId: settings.lanPrimaryDeviceId,
+      );
 
   /// Handed to the stores so a committed change is announced from inside their own
   /// write transaction.
@@ -192,7 +311,10 @@ class LanNode {
   /// socket. Shown on the settings screen, because "the fabric is on" and "the
   /// fabric is reachable" are different facts and support needs both.
   String? get servingAt =>
-      _host.isServing ? '${_host.host}:${_host.boundPort}' : null;
+      _host.isServing ? '${_host.hosts.join(' / ')}:${_host.boundPort}' : null;
+
+  /// Why the server could not bind, while it is retrying.
+  String? get hostError => _host.isServing ? null : _host.lastError;
 
   DateTime? get lastPassAt => _fabric.lastPassAt;
   String? get lastError => _fabric.lastError;
@@ -203,6 +325,7 @@ class LanNode {
   /// This device's whole LAN state as the settings screen shows it.
   LanFacts get facts => (
         servingAt: servingAt,
+        hostError: hostError,
         peers: peers.all,
         refused: peers.refused,
         cursors: cursors,
@@ -210,8 +333,13 @@ class LanNode {
         lastError: lastError,
       );
 
-  /// Whether this device is on the LAN right now.
+  /// Whether this device is on the LAN right now. True with the beacon alone: a
+  /// secondary whose own server is down can still ask the primary.
   bool get isRunning => _host.isServing || _beacon.isRunning;
+
+  /// Whether the other devices can reach this one. Announced on the beacon, so a
+  /// primary that cannot serve is not mistaken for one that is up.
+  bool get isServing => _host.isServing;
 
   /// Bind, announce, and start catching up. Never throws: a fabric that cannot
   /// start leaves a till that sells exactly as it did before.
@@ -222,9 +350,20 @@ class LanNode {
   Future<void> start() => _starting ??= _start();
 
   Future<void> _start() async {
-    await _host.start();
+    if (!await _host.start()) _retryHost();
     await _beacon.start();
     _fabric.start();
+    _warmUpNumbers();
+  }
+
+  void _retryHost() {
+    _hostRetryTimer?.cancel();
+    _hostRetryTimer = Timer.periodic(hostRetry, (timer) async {
+      if (!await _host.start()) return;
+      // Switched off while this bind was in flight: let the socket go again.
+      if (!timer.isActive) return _host.stop();
+      timer.cancel();
+    });
   }
 
   /// Come off the LAN: the socket closes and the announcements stop with the
@@ -235,6 +374,10 @@ class LanNode {
   /// reach its peers; letting it go is [dispose]'s job.
   Future<void> stop() async {
     _starting = null;
+    _hostRetryTimer?.cancel();
+    _hostRetryTimer = null;
+    _numberWarmUpTimer?.cancel();
+    _numberWarmUpTimer = null;
     _fabric.stop();
     await _beacon.stop();
     await _host.stop();
@@ -249,6 +392,10 @@ class LanNode {
   /// One catch-up pass now, for the Sync now button on the settings screen.
   Future<void> pass() => _fabric.pass();
 
+  /// Present a join PIN to [primary] and return shop_key + section_configs.
+  Future<Map<String, dynamic>> joinWithPrimary(LanPeer primary, String pin) =>
+      _client.join(primary, pin: pin, deviceId: deviceId);
+
   /// Tell the shop this till has closed its trading day.
   ///
   /// Advisory and one-way: nothing waits for an answer, nothing is retried beyond
@@ -259,6 +406,9 @@ class LanNode {
   /// on is "that till is done for today", one fact per device: a second close
   /// replaces the first instead of leaving two notices to disagree.
   String get dayCloseRecord => 'day-close-$deviceId';
+
+  /// Shared record for shop-shift open so the latest open wins across tills.
+  static const shopShiftRecord = 'shop-shift';
 
   void announceDayClose({
     required String businessDate,
@@ -273,53 +423,155 @@ class LanNode {
           businessDate: businessDate,
           at: DateTime.now().toUtc(),
           cashierId: cashierId,
+          action: LanShiftAction.close,
         ).toMap(),
       );
 
+  /// Tell peers a shop shift opened here so they quiet-open a local drawer.
+  void announceShiftOpen({
+    required String businessDate,
+    String? cashierId,
+  }) =>
+      publish(
+        LanEventKind.shiftLifecycle,
+        shopShiftRecord,
+        LanShiftNotice(
+          deviceId: deviceId,
+          deviceName: deviceName,
+          businessDate: businessDate,
+          at: DateTime.now().toUtc(),
+          cashierId: cashierId,
+          action: LanShiftAction.open,
+        ).toMap(),
+      );
+
+  /// Tell the other tills the Stress Lab was cleared here, so they drop their
+  /// copies of its orders too.
+  void announceStressCleanup() => publish(LanEventKind.stressCleanup,
+      'stress-cleanup', {'note': kStressNote});
+
   /// Take a tab another till has parked, with that till's agreement.
   ///
-  /// The owner has to answer: it is the one that gives the tab up, and it does so
-  /// in the same breath as agreeing, so there is never an instant where two tills
-  /// could each settle it. An owner that is off, asleep or on the wrong side of a
-  /// dead switch is therefore a refusal and not a delay, because the alternative is
-  /// a bill paid twice.
+  /// The owner is asked, and asked again when it stays silent. Only after every
+  /// retry, and only with [asManager], does this till seize its local replica and
+  /// announce the claim so the silent peer drops ownership when it rejoins.
+  /// Without a manager the answer is [LanClaimRefusal.needsManager].
   ///
-  /// Never on a selling path: this is a deliberate action behind a manager gate,
+  /// Never on a selling path: this is a deliberate action behind a confirmation,
   /// and the till it runs on is not mid-sale.
-  Future<LanClaimResult> claim(Order order, {String? cashier}) async {
+  Future<LanClaimResult> claim(
+    Order order, {
+    String? cashier,
+    bool asManager = false,
+  }) {
     final owner = _peerFor(order.deviceId);
-    if (owner == null) {
-      return (
-        order: null,
-        refusal: LanClaimRefusal.ownerUnreachable,
-        detail: order.deviceId,
-      );
-    }
+    return _claims.take(
+      order,
+      ask: owner == null
+          ? null
+          : () => _client.claim(
+                owner,
+                orderUuid: order.uuid,
+                deviceId: deviceId,
+                cashier: cashier,
+                asManager: asManager,
+              ),
+      cashier: cashier,
+      asManager: asManager,
+    );
+  }
+
+  /// Reserve [table] with the shop's primary before seating a new tab on it.
+  ///
+  /// The primary answers from its own replica and its recent grants, so two tills
+  /// tapping one empty table inside the replication window cannot both seat it. A
+  /// primary that cannot be asked answers [LanSeatAnswer.unasked] and the till
+  /// seats anyway: selling does not stop because the switch did.
+  Future<LanSeatAnswer> reserveTable(String table) async {
+    if (_isPrimary()) return _seats.reserve(table, deviceId);
+    final primary = _primaryPeer();
+    if (primary == null) return LanSeatAnswer.unasked;
     try {
-      final payload = await _client.claim(owner,
-          orderUuid: order.uuid, deviceId: deviceId, cashier: cashier);
-      final taken = _claims.accept(payload, cashier: cashier);
-      if (taken == null) {
-        return (
-          order: null,
-          refusal: LanClaimRefusal.refused,
-          detail: 'the answer was not this tab',
-        );
-      }
-      return (order: taken, refusal: null, detail: null);
-    } on LanTabRefused catch (e) {
-      return (order: null, refusal: LanClaimRefusal.refused, detail: e.reason);
+      return await _client.seat(primary, table: table, deviceId: deviceId);
     } catch (e) {
-      // Anything that is not an answer is an unreachable till, which is the case
-      // where the tab has to stay exactly where it is: the owner could not let go
-      // of it, so nobody else may pick it up.
-      return (
-        order: null,
-        refusal: LanClaimRefusal.ownerUnreachable,
-        detail: '$e',
-      );
+      _report('lan.seat.unasked', '$table: $e');
+      return LanSeatAnswer.unasked;
     }
   }
+
+  late final LanNumberSupply _numbers = LanNumberSupply(ask: _askNumbers);
+
+  Future<List<String>> _askNumbers(int count) async {
+    if (_isPrimary()) return const [];
+    final primary = _primaryPeer();
+    if (primary == null) return const [];
+    try {
+      return await _client.numbers(primary, deviceId: deviceId, count: count);
+    } catch (e) {
+      _report('lan.number.unasked', '$e');
+      return const [];
+    }
+  }
+
+  /// Reserve the next order number from the primary before the sale needs it.
+  /// Called as an order starts being rung; free when one is already held.
+  void prepareOrderNumber() {
+    if (_isPrimary() || !isRunning) return;
+    _numbers.prepare();
+  }
+
+  /// The number reserved from the primary, or null for the till to number
+  /// locally: on the primary itself, or with nothing reserved. Asks for the next
+  /// one straight away, so a queue of sales does not fall back to local numbers.
+  String? takeOrderNumber() {
+    if (_isPrimary()) return null;
+    final n = _numbers.take();
+    prepareOrderNumber();
+    return n;
+  }
+
+  /// Reserve numbers now and settle once the primary has answered (or could not
+  /// be asked), so a run that pays within milliseconds of starting has them.
+  Future<void> readyToNumber() {
+    prepareOrderNumber();
+    return _numbers.settled;
+  }
+
+  /// How often a secondary that has not had numbers yet asks again. The first
+  /// sale after start-up would otherwise come before the first reserve.
+  static const Duration numberWarmUp = Duration(seconds: 10);
+  Timer? _numberWarmUpTimer;
+
+  void _warmUpNumbers() {
+    _numberWarmUpTimer?.cancel();
+    if (!_isSecondary()) return;
+    prepareOrderNumber();
+    _numberWarmUpTimer = Timer.periodic(numberWarmUp, (timer) {
+      if (_numbers.everFilled) return timer.cancel();
+      prepareOrderNumber();
+    });
+  }
+
+  /// Whether the shared counter belongs to another till. Such a till must not
+  /// number from its own copy of it when nothing is reserved: the primary is
+  /// handing those same numbers out.
+  bool get numbersBelongToPrimary => _isSecondary();
+
+  LanPeer? _primaryPeer() {
+    final id = _primaryDeviceId()?.trim();
+    for (final peer in peers.active) {
+      if (!peer.serving) continue;
+      if (id != null && id.isNotEmpty ? peer.deviceId == id : peer.role == DeviceRole.primary) {
+        return peer;
+      }
+    }
+    return null;
+  }
+
+  /// Which tab is open on this till's screen, so it is never handed away while
+  /// being rung up. Set by the app shell once it has a session.
+  set tabOnScreen(bool Function(String orderUuid)? check) =>
+      _claims.isOnScreen = check;
 
   /// The peer that owns [deviceId], or null when this device has not seen it
   /// recently enough to ask it anything.

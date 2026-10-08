@@ -56,12 +56,14 @@ class RegistryPrinter implements PrinterTransport {
       throw PrinterUnavailable('no $printerName printer configured');
     }
     final host = await registry.resolve(printerName);
-    // Nothing on the subnet answered, or several unidentified printers did and the
-    // registry refused to guess between them.
-    if (host == null) {
+    // Resolve can come back empty when the short LAN probe fails (another
+    // subnet, a slow wake) even though the manager typed a host. Prefer that
+    // address for the real TCP send — its timeout is longer than a probe.
+    final target = host ?? printer.host;
+    if (target == null) {
       throw PrinterUnavailable('$printerName printer not found on the LAN');
     }
-    await registry.transportTo(host, printer.port).send(job);
+    await registry.transportTo(target, printer.port).send(job);
   }
 
   /// The same job with a banner saying where it should have gone.

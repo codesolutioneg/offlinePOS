@@ -105,6 +105,9 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db, ownDeviceId: 'till-1');
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
+    settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     shifts = ShiftStore(db);
     audit = AuditLog(db);
     TableStore(db)
@@ -134,6 +137,9 @@ void main() {
         orders: orders,
         tables: TableStore(db),
         settings: settings,
+        users: UserStore(db),
+        printers: PrinterRegistry(discovery: _NoPrinters()),
+        endpoints: OdooEndpointStore(db),
         reservations: ReservationStore(db),
         assignments: TableAssignmentStore(db),
         audit: audit,
@@ -202,7 +208,7 @@ void main() {
     expect(find.byKey(const Key('floor-day-notice')), findsOneWidget);
     expect(find.textContaining('Bar'), findsOneWidget);
     // A warning is a warning: the till carries on trading.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
     await lan.dispose();
@@ -229,7 +235,7 @@ void main() {
     expect(find.byKey(const Key('floor-day-notice')), findsOneWidget);
 
     // A new takeaway is held.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsNothing);
     expect(find.textContaining('New orders are held'), findsWidgets);
@@ -270,7 +276,7 @@ void main() {
     await signIn(t);
 
     expect(find.byKey(const Key('floor-day-notice')), findsNothing);
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsOneWidget);
   });
@@ -293,12 +299,13 @@ void main() {
 
     // The cash-up, as a cashier does it: off the floor, into the shift screen, count
     // the drawer, confirm.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     await t.tap(find.byTooltip('Open navigation menu'));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-shift')));
     await t.pumpAndSettle();
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
     await t.tap(find.byKey(const Key('close-shift')));
     await t.pumpAndSettle();
     for (final d in ['1', '0', '0']) {

@@ -56,6 +56,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     users = UserStore(db);
     audit = AuditLog(db);
     await AuthService(users: users, hasher: FakePinHasher(), audit: audit)
@@ -135,6 +136,8 @@ void main() {
 
   Future<void> openRoles(WidgetTester t) async {
     await openSettingsHub(t);
+    await t.scrollUntilVisible(find.byKey(const Key('set-roles')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-roles')));
     await t.pumpAndSettle();
   }
@@ -156,7 +159,8 @@ void main() {
     await t.pumpAndSettle();
     await typeRoleName(t, 'Supervisor');
 
-    // The new role gets its own block of switches, separate from the cashier's.
+    // The new role opens on its own page of switches, separate from the cashier's.
+    expect(find.byKey(const Key('level-page-Supervisor')), findsOneWidget);
     await t.tap(find.byKey(const Key('perm-Supervisor-void_line')));
     await t.pumpAndSettle();
 
@@ -174,6 +178,8 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
     await openSettingsHub(t);
+    await t.scrollUntilVisible(find.byKey(const Key('set-staff')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-staff')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('add-staff')));

@@ -59,8 +59,10 @@ void main() {
     final choices = await puller().siteChoices();
     expect(choices.pointsOfSale.first.companyId, 1);
     expect(choices.warehouses.single.companyId, 1);
-    // A company does not belong to a company, so nothing is claimed about one.
-    expect(choices.branches.first.companyId, isNull);
+    // With no branch addon the branch picker lists companies, each its own
+    // company, so picking one names the company the sales are booked to.
+    expect(choices.branches.first.isCompany, isTrue);
+    expect(choices.branches.first.companyId, choices.branches.first.id);
   });
 
   test('a model this login cannot read costs only its own picker', () async {

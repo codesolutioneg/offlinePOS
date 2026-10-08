@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -6,10 +8,21 @@ import 'package:path_provider/path_provider.dart';
 import 'app/pos_app.dart';
 import 'app/till_activity.dart';
 import 'core/audit/audit_log.dart';
+import 'core/cloud/cloud_backup_service.dart';
+import 'core/cloud/cloud_backup_state.dart';
+import 'core/cloud/cloud_secrets.dart';
+import 'core/cloud/cloud_sync_service.dart';
+import 'core/cloud/cloud_sync_state.dart';
+import 'core/cloud/pending_restore.dart';
+import 'core/cloud/report_lookups.dart';
 import 'core/auth/auth_service.dart';
 import 'core/auth/bootstrap_cashier.dart';
+import 'core/auth/fingerprint_agent_launcher.dart';
+import 'core/auth/fingerprint_service.dart';
+import 'core/auth/fingerprint_store.dart';
 import 'core/auth/pin_hasher.dart';
 import 'core/auth/user_store.dart';
+import 'core/config/test_instance.dart';
 import 'core/config/till_config.dart';
 import 'core/db/attempt_store.dart';
 import 'core/db/catalogue_store.dart';
@@ -43,12 +56,15 @@ import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
 import 'core/printing/printer_registry.dart';
 import 'core/sync/batch_push.dart';
+import 'core/sync/closed_shift_backlog.dart';
+import 'core/sync/dishflow_wiring.dart';
 import 'core/sync/http_post.dart';
 import 'core/sync/outbox.dart';
 import 'core/sync/odoo_endpoint.dart';
 import 'core/sync/odoo_puller.dart';
 import 'core/sync/odoo_wiring.dart';
 import 'core/sync/retry_arming.dart';
+import 'core/sync/server_change_guard.dart';
 import 'core/sync/server_probe.dart';
 import 'core/sync/sync_service.dart';
 import 'core/updates/update_gate.dart';
@@ -95,6 +111,29 @@ Future<void> main() async {
   }
 }
 
+/// Errors nothing caught go to the audit log, which support reads, rather than
+/// only to the console of a till nobody is watching. The default handling runs too.
+void _auditUncaught(AuditLog audit) {
+  final previous = FlutterError.onError;
+  FlutterError.onError = (details) {
+    _recordUncaught(audit, details.exception);
+    previous?.call(details);
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    _recordUncaught(audit, error);
+    return false;
+  };
+}
+
+void _recordUncaught(AuditLog audit, Object error) {
+  try {
+    audit.record('system', 'app.error', detail: '$error');
+  } catch (e) {
+    // The database itself may be what failed; the console is all that is left.
+    debugPrint('app.error not audited: $e (original: $error)');
+  }
+}
+
 /// Everything the till needs before it can show its first screen.
 ///
 /// Anything started here that outlives a throw is registered on [unwind], so a
@@ -104,7 +143,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   final config = TillConfig.fromEnvironment();
 
   log.step('resolve the application support directory');
-  final dir = await getApplicationSupportDirectory();
+  final dir = TestInstance.dataDirectory(await getApplicationSupportDirectory());
   // Encrypted at rest with SQLCipher. The key is generated once and kept in the
   // platform keychain via SecureKeyStore, never in a file beside the data. If the
   // keychain is ever wiped, an existing database becomes unreadable rather than
@@ -114,6 +153,13 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   // Written before the first thing that can fail, so the report answers the
   // questions support would otherwise have to ask the operator to go and look up.
   log.facts(StartupProbe.facts(version: appVersion, databasePath: dbPath));
+
+  // A database restored from the cloud is swapped in here, before anything opens
+  // the file. The one it replaces is renamed beside it, never deleted.
+  log.step('apply a staged cloud restore, if any');
+  final cloudSecrets = SecureCloudSecrets();
+  final restoredOver =
+      await PendingRestore(dbPath, cloudSecrets).apply(SecureKeyStore());
 
   log.step('read the database key from the platform keychain');
   // Told whether there is anything to lose: with a database already on disk a
@@ -134,7 +180,15 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   final catalogue = CatalogueStore(db);
   final users = UserStore(db);
   final audit = AuditLog(db);
+  _auditUncaught(audit);
+  if (restoredOver != null) {
+    audit.record('system', 'cloud.restore.applied', detail: restoredOver);
+  }
   final outboxStore = SqliteOutboxStore(db);
+  final retired = outboxStore.retireRefundPushes();
+  if (retired > 0) {
+    audit.record('system', 'outbox.refunds.retired', detail: '$retired');
+  }
   final devices = DeviceStore(db);
 
   // Generated on this device on first launch. A constant would make every till in
@@ -143,6 +197,12 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   final deviceId = devices.deviceId();
 
   final settings = SettingsStore(db);
+
+  // ZKTeco USB reader via local agent (tools/zk_fingerprint_agent.py :9201).
+  // Soft-fail everywhere: missing agent / reader → PIN only.
+  final fingerprintService = FingerprintService();
+  FingerprintStore? fingerprintStore;
+  // Assembled with publish after LAN is known; wired below.
 
   // Whether this device shares state with the others in the shop. Off unless it was
   // asked for: the device's own switch decides, and the build's dart-define is only
@@ -190,9 +250,23 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     db,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
   );
+  // Staff clock-in across tills: who is on duty is a shop fact.
+  final attendance = AttendanceStore(
+    db,
+    publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+  );
+  fingerprintStore = FingerprintStore(
+    db,
+    publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
+    service: fingerprintService,
+  );
+  final shifts = ShiftStore(db);
   // What the kitchen shouted, told to every device: an item off the menu is a fact
   // about the shop, so the 86 board is shared the same way a parked tab is.
   settings.publish =
+      lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null;
+  // Staff and their levels, so an account set up on one till signs in on all.
+  users.publish =
       lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null;
 
   // Senders are registered once the device is enrolled and authenticated. Until
@@ -223,11 +297,17 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   // The catalogue pull rides the same authenticated Odoo session as the order
   // push. Built here, before any endpoint is configured, but it reads the live
   // sender at call time, so a server entered later still refreshes the menu.
+  // SyncService is late so End-of-Day can stamp the SO number from every ack.
+  late final SyncService sync;
   final odoo = OdooWiring(
     outbox: outbox,
     post: post,
-    // Once the server books a sale, mark it synced so the history badge is honest.
-    onOrderBooked: orders.markSynced,
+    // Once the server books a sale, mark it synced so the history badge is honest
+    // and stamp the SO name for End of Day when this was a per-sale push.
+    onOrderBooked: (uuid, [id, name]) {
+      orders.markSynced(uuid, id);
+      sync.noteOdooAck(name: name, id: id);
+    },
     // A server-rejected sale is money taken but never booked; record it so it is
     // not visible only as a diagnostics count.
     onOrderRejected: (uuid, reason) =>
@@ -248,24 +328,37 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   Future<ServerCheckResult> checkTheServer(OdooEndpoint e) => checkServer(e, post);
 
   log.step('start the sync service');
-  final sync = SyncService(
+  final batchPush = BatchPush(
+    outboxStore: outboxStore,
+    send: odoo.pushPayload,
+    enabled: () =>
+        settings.mergeBatchIntoOneSaleOrder ||
+        settings.odooSessionPartnerId != null,
+    // The shift is the batch, and it already carries a uuid of its own. Read
+    // after the close, so it is the shift that was just counted.
+    batchUuid: () => ShiftStore(db).latestShift()?.uuid,
+    partnerId: () => settings.odooSessionPartnerId,
+    partnerName: () => settings.odooSessionPartnerName,
+    onOrderBooked: (uuid, [id, name]) {
+      orders.markSynced(uuid, id);
+      sync.noteOdooAck(name: name, id: id);
+    },
+  );
+  sync = SyncService(
     outbox: outbox,
     catalogue: catalogue,
     outboxStore: outboxStore,
     audit: audit,
     deviceId: deviceId,
     appVersion: appVersion,
-    // The branch is read at the moment of each pull, so a till moved to another
-    // branch has the right menu on its next refresh rather than its next restart.
-    //
-    // The warehouse, not the company. A branch here is an outlet, and an outlet is
-    // a warehouse: that is what a sale already carries, what a requisition calls
-    // the branch warehouse, and what this shop's twenty of them are named after.
-    // The company is one row, so filtering a menu on it selected everything and
-    // looked like the feature working.
+    // The branch.simple id is read at the moment of each pull, so a till moved
+    // to another outlet has the right menu on its next refresh rather than its
+    // next restart. One company can hold many branches; the company itself is
+    // what sales book into (see [SettingsStore.odooCompanyId]).
     puller: OdooPuller(
       call: odoo.catalogueCall,
-      branchId: () => settings.odooWarehouseId,
+      branchId: () => settings.odooBranchId,
+      companyId: () => settings.odooCompanyId,
       // Read at the moment of each pull too: the till authenticates lazily, so the
       // user is often not known yet when this is built.
       userId: () => odoo.uid,
@@ -279,17 +372,43 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       }
     },
     // The shop's option to have its night arrive as one sales order. Answers
-    // false and costs nothing while the switch is off, which is where it stays
-    // until jouma can take a batch: see docs/ODOO_SYNC.md.
-    mergeBatch: BatchPush(
-      outboxStore: outboxStore,
-      send: odoo.pushPayload,
-      enabled: () => settings.mergeBatchIntoOneSaleOrder,
-      // The shift is the batch, and it already carries a uuid of its own. Read
-      // after the close, so it is the shift that was just counted.
-      batchUuid: () => ShiftStore(db).latestShift()?.uuid,
-      onOrderBooked: orders.markSynced,
-    ).run,
+    // false and costs nothing while the switch is off. Close always passes the
+    // shift's ticket uuids so a backlog from another shift cannot ride along.
+    mergeBatch: ({Set<String>? onlyUuids, String? batchKey}) async {
+      final ok = await batchPush.run(onlyUuids: onlyUuids, batchKey: batchKey);
+      sync.lastMergeSkipReason = batchPush.lastSkipReason;
+      if (ok) {
+        final ack = batchPush.lastAck;
+        sync.noteOdooAck(
+          name: ack?['name']?.toString(),
+          id: (ack?['id'] as num?)?.toInt(),
+        );
+      }
+      return ok;
+    },
+    // Same path Close session uses, so a failed close finishes as one SO rather
+    // than a pile of per-sale bookings without delivery lines.
+    // Each closed shift still owed is booked under its own key, oldest first, and
+    // the open shift's sales are left for its own close.
+    closedShiftRetry: () async {
+      ShiftFlushResult result = const ShiftFlushResult(merged: true, orderCount: 0);
+      final tried = <String>{};
+      for (var i = 0; i < kBacklogShiftLookback; i++) {
+        final backlog = nextClosedShiftBacklog(ShiftStore(db), orders);
+        if (backlog == null || !tried.add(backlog.batchKey)) return result;
+        result = await sync.flushClosedShift(
+          orderUuids: {for (final o in backlog.orders) o.uuid},
+          batchKey: backlog.batchKey,
+          enqueueOrders: () async {
+            for (final o in backlog.orders) {
+              await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
+            }
+          },
+        );
+        if (!result.merged) return result;
+      }
+      return result;
+    },
     // So a close that failed at midnight is still owed in the morning. start()
     // reads it back before the first tick.
     arming: SettingsRetryArming(settings),
@@ -332,26 +451,39 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   final savedEndpoint = endpoints.load();
   if (savedEndpoint != null && savedEndpoint.isComplete) {
     odoo.configure(savedEndpoint);
+    // A till set up before server changes were guarded has no fingerprint, and
+    // without one its first change of server would not be caught.
+    settings.odooServerFingerprint ??= odooServerFingerprint(savedEndpoint,
+        companyId: settings.odooCompanyId, branchId: settings.odooBranchId);
   }
+
+  // Owner mirror into Dishflow Firestore. Separate from Odoo: drains on the
+  // 20s loop when online, never blocks a sale. Apply now so a till that was
+  // already configured starts draining without opening settings again.
+  final dishflow = DishflowWiring(outbox: outbox)..apply(settings);
 
   // Nothing is bound or announced here. The node is only assembled; PosApp starts it
   // behind the first frame, so no part of opening the till waits on a socket, a LAN
   // address or a peer.
   if (lanOn) {
     log.step('assemble the LAN node');
-    // The first till to share invents the shop's key; the others are paired by
-    // copying it across on the shop network screen. Until a device holds the same
-    // key it is turned away, so switching sharing on does not open this till's tabs
-    // to whatever else is on the subnet.
-    settings.lanShopKey ??= LanCredential.newKey();
+    // Pairing secret is owned by settings (Primary mint / Join / paste). Do not
+    // invent-and-persist here: Unlink clears the key, and rewriting it would make
+    // "Unlink" look like a no-op while the till quietly re-pairs on a new secret.
+    // An unpaired till still needs *some* HMAC material so an empty key is not a
+    // shared secret every stranger also has — that throwaway stays in memory only.
+    var unpairedKey = '';
     lan = LanNode.build(
       db: db,
       deviceId: deviceId,
       // Read at the moment of the request, so a manager who rotates the key has
-      // rotated it for the next one instead of at the next restart. Inventing one
-      // again if it is ever cleared keeps the fabric refusing strangers: an empty
-      // key is a key everybody knows.
-      shopKey: () => settings.lanShopKey ??= LanCredential.newKey(),
+      // rotated it for the next one instead of at the next restart.
+      shopKey: () {
+        final held = settings.lanShopKey;
+        if (held != null && held.isNotEmpty) return held;
+        if (unpairedKey.isEmpty) unpairedKey = LanCredential.newKey();
+        return unpairedKey;
+      },
       // Unnamed until a manager names it on the shop network screen. The id is what
       // the other devices show until then, which is honest: two devices that both
       // call themselves "Till" are worse than two ids.
@@ -359,13 +491,66 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       orders: orders,
       tables: tables,
       settings: settings,
+      users: users,
+      printers: printers,
+      endpoints: endpoints,
+      attendance: attendance,
+      fingerprints: fingerprintStore,
+      catalogue: catalogue,
+      shifts: shifts,
       reservations: reservations,
       assignments: assignments,
       audit: audit,
-      port: config.lanPort,
+      port: TestInstance.lanPort(config.lanPort),
       beaconPort: config.lanBeaconPort,
+      onShopBundleApplied: () => dishflow.apply(settings),
     );
   }
+
+  // The whole till, sealed under the shop's recovery key, to the shop's own backup
+  // server whenever there is a line. Does nothing until it is paired.
+  final cloudBackup = CloudBackupService(
+    db: db,
+    state: FileCloudBackupStateStore(
+        '${dir.path}${Platform.pathSeparator}cloud_backup.json'),
+    secrets: cloudSecrets,
+    deviceId: deviceId,
+    appVersion: appVersion,
+    deviceName: () => settings.lanDeviceName ?? deviceId,
+    databaseKey: () async => dbKey,
+    audit: audit,
+  )..start();
+  unwind.add(cloudBackup.stop);
+
+  // The same pairing feeds the shop's reports site: every sale, shift, clock-in
+  // and audit entry, as it happens, readable there under the owner's login.
+  final cloudSync = CloudSyncService(
+    db: db,
+    state: FileCloudSyncStateStore(
+        '${dir.path}${Platform.pathSeparator}cloud_sync.json'),
+    deviceId: deviceId,
+    connection: cloudBackup.connectionDetails,
+    lookups: () => ReportLookups(
+      categories: catalogue.categories(),
+      costs: catalogue.costsById(),
+      staffNames: {for (final u in users.all()) u.id: u.name},
+      cashTenderIds: {
+        for (final m in catalogue.paymentMethods())
+          if (m.isCash) m.id,
+      },
+      drivers: DeliveryStore(db).drivers(),
+      shopName: settings.shopName ?? config.shopName,
+    ),
+    audit: audit,
+  )..start();
+  unwind.add(cloudSync.stop);
+
+  // Start the ZK agent if Windows and nothing is on :9201, then load templates.
+  unawaited(() async {
+    await FingerprintAgentLauncher().ensureRunning();
+    await fingerprintStore!.pushToAgent();
+    await fingerprintService.warmUp();
+  }());
 
   // The last line of a launch that got everything it needed. If the log ends here
   // and there is still no window, the till started and the window is the problem,
@@ -383,7 +568,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     printers: printers,
     receiptSpool: SqlitePrintJobStore(db, printer: PosApp.receiptPrinter),
     wizards: WizardStore(db),
-    shifts: ShiftStore(db),
+    shifts: shifts,
     deviceId: deviceId,
     config: config,
     activity: activity,
@@ -394,15 +579,22 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     // One copy of the whole till, encrypted as it sits, for the day the machine
     // does not come back on.
     backup: () => backupDatabase(db),
+    cloudBackup: cloudBackup,
+    cloudSync: cloudSync,
+    restoreStaging: PendingRestore(dbPath, cloudSecrets),
     odoo: odoo,
     tables: tables,
     settings: settings,
     customers: CustomerStore(db),
     delivery: DeliveryStore(db),
-    attendance: AttendanceStore(db),
+    attendance: attendance,
+    fingerprints: fingerprintService,
+    fingerprintStore: fingerprintStore,
+    lockedFloorHome: true,
     reservations: reservations,
     assignments: assignments,
     lan: lan,
+    dishflow: dishflow,
     // The Z report by mail. Reads the settings on every attempt, so a password
     // corrected mid-evening is used by the next retry without a restart.
     emailer: EmailService(

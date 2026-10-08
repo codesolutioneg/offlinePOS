@@ -14,7 +14,6 @@ class PartialPayment {
     required this.order,
     required this.paidNow,
     required this.stillOwed,
-    this.title,
     this.tenders = const [],
     this.covered = const [],
     this.cashReceived,
@@ -30,9 +29,6 @@ class PartialPayment {
   /// What the bill still owes after it, so the next guest (or the waiter) knows
   /// what is left to collect.
   final double stillOwed;
-
-  /// What this payment is called on paper: a guest, a share, a check.
-  final String? title;
 
   /// The tenders that made up this payment, so a share paid part cash part card
   /// reads on the slip the way the sale receipt would show it.
@@ -74,11 +70,12 @@ class ReceiptBuilder {
     this.showPayment = true,
     this.showItemPrice = true,
     this.showTotals = true,
-    this.dividerStyle = 'line',
+    this.dividerStyle = 'equals',
     this.openDrawer = false,
     this.logo,
     this.paymentLabels = const {},
     this.sectionOf,
+    this.serverNameOf,
   });
 
   final String shopName;
@@ -130,6 +127,9 @@ class ReceiptBuilder {
   /// where it stands now, which is the answer a waiter holding the slip wants.
   final String? Function(String tableLabel)? sectionOf;
 
+  /// Cashier id → display name for the Dishflow "Server:" row.
+  final String? Function(String cashierId)? serverNameOf;
+
   /// The printer command that puts the shop's mark above the name, or null for the
   /// text-only slip this always printed. Composed by the caller (see PrinterLogo)
   /// because which of the two logo routes a shop is on depends on its hardware, and
@@ -148,9 +148,16 @@ class ReceiptBuilder {
   /// be printed as often as the table asks for it.
   Uint8List buildBill(Order order) => _slip(order, bill: true);
 
-  Uint8List _slip(Order order, {bool reprint = false, bool bill = false}) {
+  Uint8List _slip(Order order,
+      {bool reprint = false, bool bill = false, PartialPayment? share}) {
+    final itemised = share != null && share.covered.isNotEmpty;
+    final lines = itemised ? share.covered : order.lines;
     final p = EscPos(columns: columns)..reset();
-    final divider = _dividerChars[dividerStyle] ?? '-';
+    // Dishflow classic: major rules are '=', minor (before totals) are '-'.
+    // Other designer styles keep one character for every rule.
+    // Unknown styles fall back to a dashed rule rather than printing nothing.
+    final major = _dividerChars[dividerStyle] ?? '-';
+    final minor = dividerStyle == 'equals' ? '-' : major;
 
     p.align(EscPosAlign.center);
     // Above the name, where a customer looks first, and while the printer is still
@@ -175,43 +182,59 @@ class ReceiptBuilder {
     // A sale corrected after it was first tendered says so, so a customer holding
     // the slip from before the correction can see which of the two stands.
     if (order.amended) p.centred('*** AMENDED ***');
-    p.align(EscPosAlign.left).rule(divider);
 
-    // Where the sale was served, so a delivery or table sale reads differently
-    // from a counter one on the same roll.
-    if (showOrderType) p.line(order.type.label);
-    // Section, table and covers, only for a dine-in that actually carries them: a
-    // counter sale must never print "Table null". The section leads because a floor
-    // with a terrace and a first floor can have a "5" on each, and the runner
-    // reading the slip needs to know which building he is walking to.
-    if (showTable && order.type == OrderType.dineIn) {
-      final seating = [
-        if (order.tableLabel != null) ..._seating(order.tableLabel!),
-        if (order.guestCount != null) '${order.guestCount} guests',
-      ].join(' - ');
-      if (seating.isNotEmpty) p.line(seating);
+    // Where the sale was served — Dishflow English labels.
+    if (showOrderType) {
+      p.line(order.type.printBanner);
     }
-    // Time of sale and the order's own reference, each on its own toggle but sharing
-    // a line when both print.
-    final stamped = [
-      if (showDateTime) _stamp(order.createdAt),
-      if (showNumber) '#${order.displayNo}',
-    ].join('  ');
-    if (stamped.isNotEmpty) p.line(stamped);
-    if (showCashier) p.line('Cashier: ${order.cashierId}');
+
+    p.align(EscPosAlign.left).rule(major);
+
+    // Dishflow classic table banner: * Table N * between equals rules.
+    if (showTable && order.type == OrderType.dineIn && order.tableLabel != null) {
+      final seating = _seating(order.tableLabel!).join(' - ');
+      if (seating.isNotEmpty) {
+        p.align(EscPosAlign.center)
+            .size(doubleWidth: true, doubleHeight: true)
+            .bold(true)
+            .centred('* $seating *')
+            .bold(false)
+            .size();
+        p.align(EscPosAlign.left).rule(major);
+      }
+    }
+
+    // Date/time left (Dishflow MM/DD/YY h:mm AM/PM), ORDER:ref right.
+    if (showDateTime || showNumber) {
+      p.bold(true).row(
+            showDateTime ? _stamp(order.createdAt) : '',
+            showNumber ? 'ORDER:${order.displayNo}' : '',
+          ).bold(false);
+    }
+
+    // Server / covers on one row — Dishflow classic uses Server:, not Cashier:.
+    final name = serverNameOf?.call(order.cashierId)?.trim();
+    final serverTx = showCashier
+        ? 'Server: ${(name != null && name.isNotEmpty) ? name : order.cashierId}'
+        : '';
+    final custTx =
+        order.guestCount != null ? 'Cust: (${order.guestCount})' : '';
+    if (serverTx.isNotEmpty || custTx.isNotEmpty) {
+      p.bold(true).row(serverTx, custTx).bold(false);
+    }
     if (order.customerName != null) p.line('Customer: ${order.customerName}');
     // A delivery slip goes out with the bag, so it has to be enough for the driver
     // to find the door and ring ahead. Name alone is a slip nobody can deliver.
     // Everything here is captured on the till, and prints with the line down.
-    if (order.type == OrderType.delivery) {
+    if (order.type.isDelivery) {
       if (order.customerPhone != null && order.customerPhone!.isNotEmpty) {
-        p.line('Phone: ${order.customerPhone}');
+        p.bold(true).line('Phone: ${order.customerPhone}').bold(false);
       }
       if (order.customerAddress != null && order.customerAddress!.isNotEmpty) {
         // Wrapped here rather than left to the printer: half an address is no
         // address, and a roll that wraps mid-word is hard to read at a door.
         for (final part in _wrap('Address: ${order.customerAddress}')) {
-          p.line(part);
+          p.bold(true).line(part).bold(false);
         }
       }
       // The aggregator's own reference is what the rider and the call centre quote,
@@ -223,9 +246,9 @@ class ReceiptBuilder {
       if (channel.isNotEmpty) p.line('Channel: $channel');
       if (order.driverName != null) p.line('Driver: ${order.driverName}');
     }
-    p.rule(divider);
+    p.rule(major).feed();
 
-    for (final l in order.lines) {
+    for (final l in lines) {
       // The base price is printed on the header and each modifier's amount below it,
       // so the printed parts add up to the line total rather than counting the
       // modifiers twice. A per-line discount prints as its own negative line, so
@@ -244,12 +267,20 @@ class ReceiptBuilder {
       // to a price is ever negative.
       final replaced =
           l.modifiers.where((m) => m.total < 0).fold(0.0, (s, m) => s + m.total);
-      p.row('${_qty(l.quantity)} x ${l.name}',
+      // Dishflow classic: "2 Pizza" (no "x"), modifiers "  => Nx name".
+      p.row('${_qty(l.quantity)} ${l.name}',
           showItemPrice ? formatAmount(l.quantity * (l.unitPrice + replaced)) : '');
       for (final m in l.modifiers) {
+        final qtyPrefix =
+            m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
+        final label = '  => $qtyPrefix${m.name}';
         final amount =
             (!showItemPrice || m.total <= 0) ? '' : formatAmount(l.quantity * m.total);
-        p.row('   + ${m.name}${m.quantity > 1 ? ' x${_qty(m.quantity)}' : ''}', amount);
+        if (amount.isEmpty) {
+          p.line(label);
+        } else {
+          p.row(label, amount);
+        }
       }
       if (l.discountPercent > 0) {
         p.row(_discountLabel('   line discount', l.discountPercent),
@@ -258,14 +289,17 @@ class ReceiptBuilder {
       if (l.note != null && l.note!.isNotEmpty) p.line('   ${l.note}');
     }
 
-    p.rule(divider);
+    p.rule(minor);
     // Show the breakdown only when there is one, so a plain sale stays a plain
     // receipt but a discounted delivery with a tip is fully itemised.
     // A taxed sale always gets the breakdown: with the tax added on top, a slip that
     // jumped from the items straight to a VAT row and a total would give the guest no
     // net figure to add it to.
     final tax = order.taxTotal;
+    // A guest's own items are charged as the till worked them out, so the
+    // whole bill's breakdown would not add up to them and is left off.
     final hasBreakdown = showTotals &&
+        !itemised &&
         (order.discountPercent > 0 ||
             order.serviceChargePercent > 0 ||
             order.deliveryCost > 0 ||
@@ -297,22 +331,29 @@ class ReceiptBuilder {
             formatAmount(tax));
       }
       if (order.deliveryCost > 0) p.row('Delivery', formatAmount(order.deliveryCost));
+      if (order.serviceFee > 0) p.row('Service fee', formatAmount(order.serviceFee));
       if (order.tip > 0) p.row('Tip', formatAmount(order.tip));
     }
+    // On a share the due figure is this guest's part; an even share also states
+    // the whole bill above it, since the items printed are the whole table's.
+    final due = share?.paidNow ?? order.total;
     if (showTotals) {
-      p.size(doubleHeight: true).bold(true)
-        ..row('TOTAL', formatAmount(order.total))
-        ..bold(false)
-        ..size();
+      if (share != null && !itemised) {
+        p.row('Bill total', formatAmount(order.total));
+      }
+      // Full-width reverse bar so the black ribbon spans the paper.
+      p.feed().reverseBand('TOTAL DUE: ${formatAmount(due)}',
+          doubleHeight: true);
     }
 
     // Tender breakdown and change. A split payment prints one line per tender.
     // Payments store the settled amount, so a cash overpayment prints the cash
     // received and the change owed from [cashReceived] rather than from the tender.
-    if (showTotals && !bill && order.payments.isNotEmpty) {
+    final tenders = share?.tenders ?? order.payments;
+    if (showTotals && !bill && tenders.isNotEmpty) {
       p.feed();
       if (showPayment) {
-        for (final pay in order.payments) {
+        for (final pay in tenders) {
           p.row(paymentLabels[pay.methodId] ?? pay.label ?? 'Payment',
               formatAmount(pay.amount));
         }
@@ -320,12 +361,20 @@ class ReceiptBuilder {
       // Orders stored before cash_received existed kept the tender in the payment
       // amount, so fall back to the payment sum for their reprints. New orders
       // settle to exactly the total, so this prints nothing unless there is change.
-      final received = order.cashReceived ??
-          order.payments.fold<double>(0.0, (s, pay) => s + pay.amount);
-      if (received - order.total > 0.001) {
+      final received = (share == null ? order.cashReceived : share.cashReceived) ??
+          tenders.fold<double>(0.0, (s, pay) => s + pay.amount);
+      if (received - due > 0.001) {
         p.row('Received', formatAmount(received));
-        p.row('Change', formatAmount(received - order.total));
+        p.row('Change', formatAmount(received - due));
       }
+      p.rule(minor);
+    }
+    // What the table still owes after this guest, so the waiter knows what is
+    // left to collect.
+    if (share != null && share.stillOwed > 0.001) {
+      p.bold(true)
+          .row('Balance remaining', formatAmount(share.stillOwed))
+          .bold(false);
     }
 
     // A part-paid tab (an even or per-guest split settled one share at a time) still
@@ -335,10 +384,8 @@ class ReceiptBuilder {
     // nothing left to collect.
     if (bill && order.amountPaid > 0.001 && order.balance > 0.001) {
       p.row('Already paid', '-${formatAmount(order.amountPaid)}');
-      p.size(doubleHeight: true).bold(true)
-        ..row('BALANCE DUE', formatAmount(order.balance))
-        ..bold(false)
-        ..size();
+      p.feed().reverseBand('BALANCE DUE: ${formatAmount(order.balance)}',
+          doubleHeight: true);
     }
 
     if (footer != null) {
@@ -347,7 +394,7 @@ class ReceiptBuilder {
     p.feed(2);
     // Kick the drawer before the cut on a cash sale, so the till opens as the
     // receipt prints rather than needing a separate command. A bill is not a sale,
-    // so it never opens the till.
+    // so it never opens the till. Cash taken as a share goes in the drawer too.
     if (openDrawer && !bill) p.openDrawer();
     return (p..cut()).build();
   }
@@ -364,6 +411,7 @@ class ReceiptBuilder {
     required DateTime at,
     String? reason,
     String? actor,
+    String? approvedBy,
   }) {
     final p = EscPos(columns: columns)..reset();
     final divider = _dividerChars[dividerStyle] ?? '-';
@@ -377,6 +425,9 @@ class ReceiptBuilder {
 
     p.line('${_stamp(at)}  #${order.displayNo}');
     if (actor != null) p.line('Cashier: $actor');
+    if (approvedBy != null && approvedBy.isNotEmpty) {
+      p.line('Approved: $approvedBy');
+    }
     if (order.type == OrderType.dineIn && order.tableLabel != null) {
       p.line('Table ${order.tableLabel}');
     }
@@ -438,79 +489,12 @@ class ReceiptBuilder {
   /// The detail slip for a payment that leaves the bill part paid: what this
   /// payment covered, how it was tendered, and what is still owed.
   ///
-  /// Its own layout rather than the sale slip's, because the two say different
-  /// things: a sale receipt closes a bill, this one documents a payment against a
-  /// bill that stays open. It is marked as not a tax receipt for the same reason
-  /// the pre-bill is: the tax receipt is the one that prints when the tab settles.
-  /// [at] is the moment of payment (the caller's clock), [actor] who took it.
-  Uint8List buildPartialPayment(
-    PartialPayment payment, {
-    required DateTime at,
-    String? actor,
-  }) {
-    final order = payment.order;
-    final p = EscPos(columns: columns)..reset();
-    final divider = _dividerChars[dividerStyle] ?? '-';
-
-    p.align(EscPosAlign.center)
-      ..bold(true)
-      ..line(shopName)
-      ..bold(false);
-    p.size(doubleHeight: true).centred('*** PAYMENT ***').size();
-    p.centred('NOT A TAX RECEIPT');
-    p.align(EscPosAlign.left).rule(divider);
-
-    p.line('${_stamp(at)}  #${order.displayNo}');
-    if (showTable && order.type == OrderType.dineIn && order.tableLabel != null) {
-      p.line('Table ${order.tableLabel}');
-    }
-    if (showCashier && actor != null) p.line('Cashier: $actor');
-    // Whose share this was, so a table settling guest by guest can tell the slips
-    // apart on the spike at the end of the night.
-    if (payment.title != null && payment.title!.isNotEmpty) {
-      p.bold(true).line(payment.title!).bold(false);
-    }
-
-    // What the money bought, when it bought items. An even split buys a share of
-    // everything, so there is nothing to itemise and the section is skipped.
-    if (payment.covered.isNotEmpty) {
-      p.rule(divider);
-      for (final l in payment.covered) {
-        p.row('${_qty(l.quantity)} x ${l.name}',
-            showItemPrice ? formatAmount(l.total) : '');
-      }
-    }
-
-    p.rule(divider);
-    if (showPayment) {
-      for (final t in payment.tenders) {
-        p.row(paymentLabels[t.methodId] ?? t.label ?? 'Payment', formatAmount(t.amount));
-      }
-    }
-    final received = payment.cashReceived;
-    if (received != null && received - payment.paidNow > 0.001) {
-      p.row('Received', formatAmount(received));
-      p.row('Change', formatAmount(received - payment.paidNow));
-    }
-    p.size(doubleHeight: true).bold(true)
-      ..row('PAID NOW', formatAmount(payment.paidNow))
-      ..bold(false)
-      ..size();
-
-    // The point of the slip. Big, because the next guest reads this number and the
-    // waiter collects it.
-    p.rule(divider);
-    p.size(doubleHeight: true).bold(true)
-      ..row('STILL OWED', formatAmount(payment.stillOwed))
-      ..bold(false)
-      ..size();
-
-    p.feed(2);
-    // Cash taken as a part payment goes in the drawer like any other cash, so the
-    // drawer opens on this slip too when the shop has it wired that way.
-    if (openDrawer) p.openDrawer();
-    return (p..cut()).build();
-  }
+  /// Printed in the sale receipt's own layout, so every guest at a split table
+  /// walks away with the same paper the shop hands out for a whole bill. An even
+  /// share lists the whole table and dues its share; a check lists only the items
+  /// it covered.
+  Uint8List buildPartialPayment(PartialPayment payment) =>
+      _slip(payment.order, share: payment);
 
   /// [text] broken onto lines that fit the roll, at spaces where there is one. A
   /// single word longer than the paper is left alone for the printer to deal with,
@@ -553,9 +537,14 @@ class ReceiptBuilder {
     return double.parse(shown) == percent ? '$head $shown%' : head;
   }
 
+  /// Dishflow classic stamp: `MM/DD/YY h:mm AM/PM` in local time.
   String _stamp(DateTime utc) {
     final d = utc.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
-    return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+    final h24 = d.hour;
+    final ap = h24 >= 12 ? 'PM' : 'AM';
+    final h12 = h24 % 12 == 0 ? 12 : h24 % 12;
+    final yy = (d.year % 100).toString().padLeft(2, '0');
+    return '${two(d.month)}/${two(d.day)}/$yy $h12:${two(d.minute)} $ap';
   }
 }

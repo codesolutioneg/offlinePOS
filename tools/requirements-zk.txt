@@ -1,0 +1,4 @@
+flask>=2.3
+flask-cors>=4.0
+pythonnet>=3.0
+pyzkfp>=0.1

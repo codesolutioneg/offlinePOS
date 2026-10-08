@@ -52,6 +52,11 @@ class Win32Window {
   // If true, closing this window will quit the application.
   void SetQuitOnClose(bool quit_on_close);
 
+  // If true (set before Create), the window has no title bar or frame, fills
+  // its monitor, and ignores Alt+F4 and the taskbar's Close: the app's own
+  // Quit button is the only way out.
+  void SetKiosk(bool kiosk);
+
   // Return a RECT representing the bounds of the current client area.
   RECT GetClientArea();
 
@@ -91,6 +96,11 @@ class Win32Window {
   static void UpdateTheme(HWND const window);
 
   bool quit_on_close_ = false;
+
+  bool kiosk_ = false;
+
+  // Size a kiosk window to the whole of the monitor it is on.
+  void FitToMonitor(HWND const window);
 
   // window handle for top level window.
   HWND window_handle_ = nullptr;

@@ -215,7 +215,10 @@ class _TicketCard extends StatelessWidget {
         OrderType.dineIn => Icons.table_restaurant,
         OrderType.takeaway => Icons.shopping_bag,
         OrderType.toGo => Icons.shopping_bag_outlined,
-        OrderType.delivery => Icons.delivery_dining,
+        OrderType.deliveryFromCompany ||
+        OrderType.storeDelivery ||
+        OrderType.carDelivery =>
+          Icons.delivery_dining,
       };
 
   String _title(BuildContext context) {

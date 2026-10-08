@@ -147,6 +147,8 @@ void main() {
     await store.append('order.push', 'u1', {});
     await store.markSent((await store.pending()).single.id);
     expect(store.pruneSent(olderThan: const Duration(days: 7)), 0);
+    // The cutoff is exclusive: sent and pruned in the same millisecond keeps the row.
+    await Future<void>.delayed(const Duration(milliseconds: 5));
     expect(store.pruneSent(olderThan: Duration.zero), 1);
   });
 }

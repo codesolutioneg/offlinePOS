@@ -57,6 +57,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     tendersReadable = true;
     pointedAtAServer = true;
@@ -168,7 +169,7 @@ void main() {
   }
 
   Future<void> openPayment(WidgetTester t) async {
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(find.byKey(const Key('order-action-settle')));
     await t.pumpAndSettle();
   }
 

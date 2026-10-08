@@ -1,31 +1,17 @@
 import 'dart:convert';
 
+import '../../domain/report_sources.dart';
 import '../../domain/shift.dart';
+import '../../domain/shift_movement.dart';
 import 'database.dart';
 
-/// One cash movement together with the shift it happened in.
-///
-/// A [CashMovement] carries no actor of its own, so a report that spans several
-/// shifts would otherwise not be able to say who paid the money out.
-class ShiftMovement {
-  const ShiftMovement({
-    required this.movement,
-    required this.shiftId,
-    required this.cashierId,
-  });
-
-  final CashMovement movement;
-  final String shiftId;
-
-  /// The cashier the shift was opened by.
-  final String cashierId;
-}
+export '../../domain/shift_movement.dart';
 
 /// Shifts and their cash movements, plus the X/Z totals for a shift.
 ///
 /// Entirely local: a shift is the cashier's own accounting of the drawer and does
 /// not depend on the server, so it works through an outage like everything else.
-class ShiftStore {
+class ShiftStore implements ReportShifts {
   ShiftStore(this._db);
 
   final Db _db;
@@ -33,6 +19,7 @@ class ShiftStore {
   /// The tender an untendered sale is booked to, matching the payment-mix report.
   static const String _cashLabel = 'Cash';
 
+  @override
   Shift? currentOpenShift() {
     final rows = _db.raw.select(
         'SELECT * FROM shifts WHERE closed_at IS NULL ORDER BY opened_at DESC LIMIT 1');
@@ -48,6 +35,18 @@ class ShiftStore {
     final rows = _db.raw
         .select('SELECT * FROM shifts ORDER BY opened_at DESC, id DESC LIMIT 1');
     return rows.isEmpty ? null : _row(rows.first);
+  }
+
+  /// Recently closed shifts, newest first — Dishflow's "previous sessions" strip
+  /// so a cashier can re-open a Z without digging through the database.
+  @override
+  List<Shift> recentClosed({int limit = 10}) {
+    final rows = _db.raw.select(
+      'SELECT * FROM shifts WHERE closed_at IS NOT NULL '
+      'ORDER BY closed_at DESC, id DESC LIMIT ?',
+      [limit],
+    );
+    return [for (final r in rows) _row(r)];
   }
 
   /// Open a shift. Refuses if one is already open, because two open drawers make
@@ -96,6 +95,7 @@ class ShiftStore {
   /// them without this. The bounds are inclusive of [from] and exclusive of [to],
   /// matching how the reports window orders, and a null bound means unbounded on
   /// that side. Oldest first, so a report reads in the order the money left.
+  @override
   List<ShiftMovement> movements({DateTime? from, DateTime? to, String? cashierId}) {
     final where = <String>[];
     final args = <Object?>[];
@@ -116,19 +116,7 @@ class ShiftStore {
     final clause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')} ';
     final rows = _db.raw
         .select('SELECT * FROM shifts ${clause}ORDER BY opened_at ASC', args);
-    final out = <ShiftMovement>[];
-    for (final r in rows) {
-      final shift = _row(r);
-      for (final m in shift.movements) {
-        final at = m.at.toUtc();
-        if (from != null && at.isBefore(from.toUtc())) continue;
-        if (to != null && !at.isBefore(to.toUtc())) continue;
-        out.add(ShiftMovement(
-            movement: m, shiftId: shift.id, cashierId: shift.cashierId));
-      }
-    }
-    out.sort((a, b) => a.movement.at.compareTo(b.movement.at));
-    return out;
+    return movementsOf([for (final r in rows) _row(r)], from: from, to: to);
   }
 
   Shift closeShift({required double countedCash, DateTime? at}) {
@@ -139,6 +127,26 @@ class ShiftStore {
     _db.raw.execute('UPDATE shifts SET closed_at = ?, closing_counted = ? WHERE id = ?',
         [s.closedAt!.toIso8601String(), countedCash, s.id]);
     return s;
+  }
+
+  /// Close the open shift using expected drawer cash (peer day-close). No-op when
+  /// none is open.
+  Shift? closeOpenQuietly({Set<int> cashMethodIds = const {}}) {
+    final open = currentOpenShift();
+    if (open == null) return null;
+    final expected = summary(open, cashMethodIds: cashMethodIds).expectedCash;
+    return closeShift(countedCash: expected);
+  }
+
+  /// Open a local drawer when a peer announced shop-shift open. No-op when one
+  /// is already open — cash float stays local and is never copied from the peer.
+  Shift? openQuietly({
+    required String cashierId,
+    double openingFloat = 0,
+  }) {
+    final open = currentOpenShift();
+    if (open != null) return open;
+    return openShift(openingFloat: openingFloat, cashierId: cashierId);
   }
 
   /// The X/Z figures for [shift], with sales read from the orders taken in its
@@ -281,20 +289,7 @@ class ShiftStore {
     _addTenders(payments, total, cashMethodIds, into.byTender);
   }
 
-  Shift _row(Map<String, dynamic> r) => Shift(
-        id: r['id'] as String,
-        uuid: r['uuid'] as String?,
-        openedAt: DateTime.parse(r['opened_at'] as String),
-        closedAt: r['closed_at'] == null
-            ? null
-            : DateTime.parse(r['closed_at'] as String),
-        openingFloat: (r['opening_float'] as num).toDouble(),
-        cashierId: r['cashier_id'] as String,
-        closingCounted: (r['closing_counted'] as num?)?.toDouble(),
-        movements: ((jsonDecode((r['movements'] ?? '[]') as String)) as List)
-            .map((e) => CashMovement.fromMap((e as Map).cast<String, dynamic>()))
-            .toList(),
-      );
+  Shift _row(Map<String, dynamic> r) => shiftFromRow(r);
 }
 
 /// A running total while a shift's sales are read, before it becomes a

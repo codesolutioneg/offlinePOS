@@ -29,6 +29,7 @@ import 'package:offline_pos/features/sell/sell_screen.dart';
 import '../db/sqlite_loader.dart';
 import '../printing/strip_escpos.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 /// Nothing answers on the LAN, so every slip lands in the spool instead of on
 /// paper. That is both how a test reads what would have printed and the case that
@@ -106,7 +107,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
     );
@@ -181,40 +182,34 @@ void main() {
     tableOnTheTill();
     await signIn(t);
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
 
     // The first step of the payment sheet, which is where a cashier looks for it.
     expect(find.byKey(const Key('pay-mode-all')), findsOneWidget);
     expect(find.byKey(const Key('pay-mode-evenly')), findsOneWidget);
     expect(find.byKey(const Key('pay-mode-guest')), findsOneWidget);
-    expect(find.byKey(const Key('pay-mode-item')), findsOneWidget);
+    // Items are moved between guests on the Split Check screen instead.
+    expect(find.byKey(const Key('pay-mode-item')), findsNothing);
     // And what is owed is on the sheet the whole time.
     expect(find.byKey(const Key('pay-total')), findsOneWidget);
   });
 
-  testWidgets('a guest tender can step back to the guest list without paying',
+  testWidgets('splitting by guest opens Split Check, and backing out pays nothing',
       (t) async {
     final order = tableOnTheTill();
     await signIn(t);
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pay-mode-guest')));
     await t.pumpAndSettle();
-    // The guest list, then into one guest's tender step.
-    expect(find.byKey(const Key('guest-shared')), findsOneWidget);
-    await t.tap(find.descendant(
-        of: find.byKey(const Key('guest-shared')),
-        matching: find.byType(FilledButton)));
+    expect(find.byKey(const Key('split-check-screen')), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('split-cancel')));
     await t.pumpAndSettle();
 
-    // The tender step offers Back, which returns to the guest list unpaid.
-    expect(find.byKey(const Key('payment-back')), findsOneWidget);
-    await t.tap(find.byKey(const Key('payment-back')));
-    await t.pumpAndSettle();
-
-    expect(find.byKey(const Key('guest-shared')), findsOneWidget);
+    expect(find.byKey(const Key('split-check-screen')), findsNothing);
     expect(orders.byUuid(order.uuid)!.amountPaid, 0);
   });
 
@@ -223,7 +218,7 @@ void main() {
     tableOnTheTill(type: OrderType.takeaway);
     await signIn(t);
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
 
     expect(find.byKey(const Key('pay-mode-evenly')), findsNothing);
@@ -235,7 +230,7 @@ void main() {
     tableOnTheTill(type: OrderType.takeaway);
     await signIn(t);
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     // No method picked yet: Charge does nothing, the sheet stays open.
     await t.tap(find.byKey(const Key('confirm-payment')));
@@ -255,7 +250,7 @@ void main() {
     final order = tableOnTheTill();
     await signIn(t);
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pay-mode-evenly')));
     await t.pumpAndSettle();
@@ -273,16 +268,14 @@ void main() {
     expect(tab.balance, closeTo(150, 0.01));
     expect(tab.state, OrderState.held);
 
-    // The share put its own detail slip on the roll: what was paid, and what the
-    // table still owes. No sale receipt yet, because the tab is not settled.
+    // The share printed in the sale receipt's own layout: its share as the due
+    // figure and what the table still owes. The tab itself is not settled yet.
     final paper = await slip('part-${order.uuid}-');
-    expect(paper, contains('PAYMENT'));
-    expect(paper, contains('PAID NOW'));
-    expect(paper, contains('STILL OWED'));
-    expect(paper, contains('150.00'));
+    expect(paper, isNot(contains('Share of')));
+    expect(paper, contains('TOTAL DUE: 150.00'));
+    expect(paper, contains('Balance remaining'));
     expect(paper, contains('Table 5'));
-    // Not a tax receipt: that one prints when the tab settles.
-    expect(paper, contains('NOT A TAX RECEIPT'));
+    expect(paper, isNot(contains('PAID NOW')));
     expect(await slipCount(order.uuid), 0);
   });
 
@@ -291,22 +284,25 @@ void main() {
     final order = tableOnTheTill();
     await signIn(t);
 
-    for (var share = 0; share < 2; share++) {
-      await t.tap(find.byKey(const Key('pay')));
-      await t.pumpAndSettle();
-      if (share == 0) {
-        await t.tap(find.byKey(const Key('pay-mode-evenly')));
-        await t.pumpAndSettle();
-        await t.enterText(find.byKey(const Key('split-ways')), '2');
-        await t.tap(find.byKey(const Key('split-ways-ok')));
-        await t.pumpAndSettle();
-      }
+    await t.tap(findPay());
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pay-mode-evenly')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('split-ways')), '2');
+    await t.tap(find.byKey(const Key('split-ways-ok')));
+    await t.pumpAndSettle();
+    // Every share is taken in one go: the next guest's sheet opens on its own,
+    // without asking how many ways again.
+    for (var share = 1; share <= 2; share++) {
+      expect(t.widget<Text>(find.byKey(const Key('pay-step'))).data,
+          'Share $share of 2');
       await t.tap(find.byKey(const Key('method-1')));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('confirm-payment')));
       await t.pumpAndSettle();
     }
 
+    expect(find.byKey(const Key('pay-step')), findsNothing);
     expect(orders.byUuid(order.uuid)!.state, OrderState.paid);
     // One detail slip for the share that left money owing, and the sale receipt for
     // the one that settled it. The settling payment is not slipped twice.
@@ -320,7 +316,7 @@ void main() {
     tableOnTheTill();
     await signIn(t);
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pay-mode-evenly')));
     await t.pumpAndSettle();
@@ -332,10 +328,7 @@ void main() {
     await t.tap(find.byKey(const Key('confirm-payment')));
     await t.pumpAndSettle();
 
-    await t.tap(find.byKey(const Key('pay')));
-    await t.pumpAndSettle();
-
-    // The running balance is on the sheet, so the cashier can see the tab is half
+    // The running balance is on the next share's sheet, so the cashier can see the tab is half
     // settled instead of taking the figure on trust.
     final running = t.widget<Text>(find.byKey(const Key('running-balance')));
     expect(running.data, contains('300.00')); // the whole bill
@@ -344,45 +337,40 @@ void main() {
     expect(t.widget<Text>(find.byKey(const Key('pay-total'))).data, '150.00');
   });
 
-  testWidgets('paying by item is reached from the payment sheet and slips the rest',
+  testWidgets('closing the sheet between shares leaves the table open on the rest',
       (t) async {
     final order = tableOnTheTill();
     await signIn(t);
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay-mode-item')));
+    await t.tap(find.byKey(const Key('pay-mode-evenly')));
     await t.pumpAndSettle();
-
-    // Take the Cola off as its own check, leaving the Pizza on the table.
-    await t.tap(find.descendant(
-        of: find.widgetWithText(ListTile, 'Cola'), matching: find.byType(Checkbox)));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pick-confirm')));
+    await t.enterText(find.byKey(const Key('split-ways')), '3');
+    await t.tap(find.byKey(const Key('split-ways-ok')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-1')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('confirm-payment')));
     await t.pumpAndSettle();
+    expect(t.widget<Text>(find.byKey(const Key('pay-step'))).data, 'Share 2 of 3');
 
-    // The check is its own paid sale, and the table keeps the Pizza.
-    expect(orders.byUuid(order.uuid)!.lines.single.productId, 10);
-    // The check's own slip says what it covered and what the table still owes.
-    final paper = await slip('part-');
-    expect(paper, contains('Cola'));
-    expect(paper, contains('PAID NOW'));
-    expect(paper, contains('STILL OWED'));
-    expect(paper, contains('250.00'));
+    Navigator.of(t.element(find.byKey(const Key('pay-step')))).pop();
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('pay-step')), findsNothing);
+    final tab = orders.byUuid(order.uuid)!;
+    expect(tab.amountPaid, closeTo(100, 0.01));
+    expect(tab.state, OrderState.held);
   });
 
-  testWidgets('a cash share opens the drawer once, and a check leaves it to the receipt',
+  testWidgets('a cash share opens the drawer, since no sale receipt prints for it',
       (t) async {
     SettingsStore(db).openDrawerOnSale = true;
     final order = tableOnTheTill();
     await signIn(t);
 
     // A share: no sale receipt prints, so this slip is what opens the drawer.
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pay-mode-evenly')));
     await t.pumpAndSettle();
@@ -395,53 +383,6 @@ void main() {
     await t.pumpAndSettle();
     expect(kicksDrawer(await slipBytes('part-${order.uuid}-')), isTrue);
 
-    // A check: its own receipt kicks the drawer, so the detail slip must not do it
-    // again for the same money.
-    await t.tap(find.byKey(const Key('pay')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay-mode-item')));
-    await t.pumpAndSettle();
-    await t.tap(find.descendant(
-        of: find.widgetWithText(ListTile, 'Cola'), matching: find.byType(Checkbox)));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pick-confirm')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('method-1')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('confirm-payment')));
-    await t.pumpAndSettle();
-
-    final jobs = await spool.oldestFirst(limit: 100);
-    final checkSlip = jobs.lastWhere((j) => (j.reference ?? '').startsWith('part-'));
-    expect(kicksDrawer(checkSlip.bytes), isFalse);
-  });
-
-  testWidgets('a check asks for the service charge it is about to book', (t) async {
-    // Quoting the food alone left the table eating the service on every split guest.
-    tableOnTheTill(service: 10);
-    await signIn(t);
-
-    await t.tap(find.byKey(const Key('pay')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay-mode-item')));
-    await t.pumpAndSettle();
-    await t.tap(find.descendant(
-        of: find.widgetWithText(ListTile, 'Cola'), matching: find.byType(Checkbox)));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pick-confirm')));
-    await t.pumpAndSettle();
-
-    // Cola at 50 plus 10% service.
-    expect(t.widget<Text>(find.byKey(const Key('pay-total'))).data, '55.00');
-
-    await t.tap(find.byKey(const Key('method-1')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('confirm-payment')));
-    await t.pumpAndSettle();
-
-    final check = orders.recent(limit: 5).firstWhere((o) => o.state == OrderState.paid);
-    expect(check.total, closeTo(55, 0.01));
-    expect(check.amountPaid, closeTo(55, 0.01));
   });
 
   testWidgets('a dead printer never stands between the cashier and the money',
@@ -449,7 +390,7 @@ void main() {
     final order = tableOnTheTill();
     await signIn(t);
 
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pay-mode-evenly')));
     await t.pumpAndSettle();

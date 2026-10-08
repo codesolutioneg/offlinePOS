@@ -104,12 +104,12 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
     // how long they have been waiting, and who is carrying them. Not a dispatch
     // board, and it holds no state of its own; it is a view of the same tabs.
     final anyDelivery =
-        widget.orders.any((o) => o.type == OrderType.delivery);
+        widget.orders.any((o) => o.type.isDelivery);
     // The filter is dropped the moment the last delivery leaves the list: a cashier
     // must never be left staring at an empty screen whose only way back has just
     // disappeared with it.
     final shown = _deliveryOnly && anyDelivery
-        ? widget.orders.where((o) => o.type == OrderType.delivery).toList()
+        ? widget.orders.where((o) => o.type.isDelivery).toList()
         : widget.orders;
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Open orders'))),
@@ -213,7 +213,7 @@ class _OpenOrderCard extends StatelessWidget {
 
   String _label(BuildContext context) =>
       order.tableLabel ??
-      (order.type == OrderType.delivery && order.customerName != null
+      (order.type.isDelivery && order.customerName != null
           ? order.customerName!
           : '${tr(context, 'Tab')} ${order.displayNo}');
 
@@ -252,7 +252,7 @@ class _OpenOrderCard extends StatelessWidget {
     final label = _label(context);
     final (statusLabel, statusColor, statusIcon) = _status(context);
     final hasUnsent = order.lines.any((l) => !l.printedToKitchen);
-    final delivery = order.type == OrderType.delivery;
+    final delivery = order.type.isDelivery;
     final subtitleParts = <String>[
       tr(context, order.type.label),
       if (order.guestCount != null) '${order.guestCount} guests',
