@@ -154,13 +154,19 @@ class SqliteOutboxStore implements OutboxStore {
 
   /// Close out refund pushes queued before refunds stopped going to Odoo. Nothing
   /// sends them (the merge leaves credits out), so left alone they would sit in the
-  /// pending count forever. Returns how many were closed.
-  int retireRefundPushes() {
-    _db.raw.execute(
-        "UPDATE outbox SET sent_at = ? WHERE kind = '$_order' AND sent_at IS NULL "
-        r"AND json_extract(payload, '$.refund_of_uuid') IS NOT NULL",
+  /// pending count forever. Returns the refunds closed, so they can be booked by
+  /// hand.
+  List<String> retireRefundPushes() {
+    const where = "kind = '$_order' AND sent_at IS NULL "
+        r"AND json_extract(payload, '$.refund_of_uuid') IS NOT NULL";
+    final uuids = _db.raw
+        .select('SELECT payload_uuid FROM outbox WHERE $where ORDER BY id')
+        .map((r) => r['payload_uuid'] as String)
+        .toList();
+    if (uuids.isEmpty) return uuids;
+    _db.raw.execute('UPDATE outbox SET sent_at = ? WHERE $where',
         [DateTime.now().toUtc().toIso8601String()]);
-    return _db.raw.updatedRows;
+    return uuids;
   }
 
   /// Put a parked entry back in the queue, once whatever caused it is fixed.

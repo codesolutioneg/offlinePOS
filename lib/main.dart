@@ -186,8 +186,9 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   }
   final outboxStore = SqliteOutboxStore(db);
   final retired = outboxStore.retireRefundPushes();
-  if (retired > 0) {
-    audit.record('system', 'outbox.refunds.retired', detail: '$retired');
+  // Each refund named, so the ones Odoo never got can still be booked there.
+  for (final uuid in retired) {
+    audit.record('system', 'outbox.refunds.retired', detail: uuid);
   }
   final devices = DeviceStore(db);
 

@@ -175,7 +175,7 @@ void main() {
       await till.outboxStore.append('order.push', 'r-1', {'refund_of_uuid': 's-1'});
       await till.outboxStore.append('order.push', 's-2', {'uuid': 's-2'});
 
-      expect(till.outboxStore.retireRefundPushes(), 1);
+      expect(till.outboxStore.retireRefundPushes(), ['r-1']);
       expect(till.outboxStore.pendingSalesCount, 1,
           reason: 'only the real sale is still owed');
     });
