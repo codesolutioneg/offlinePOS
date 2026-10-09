@@ -80,8 +80,6 @@ class FingerprintAgentLauncher {
       if (parent.path == dir.path) break;
       dir = parent;
     }
-    const checkout = r'd:\offlinePOS\tools\start_zk_agent.bat';
-    if (File(checkout).existsSync()) return checkout;
     return null;
   }
 }

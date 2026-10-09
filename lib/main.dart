@@ -546,9 +546,11 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   unwind.add(cloudSync.stop);
 
   // Start the ZK agent if Windows and nothing is on :9201, then load templates.
+  // A till nobody has enrolled a finger on never needs the agent at boot.
   unawaited(() async {
+    if (fingerprintStore!.enrolledUserIds().isEmpty) return;
     await FingerprintAgentLauncher().ensureRunning();
-    await fingerprintStore!.pushToAgent();
+    await fingerprintStore.pushToAgent();
     await fingerprintService.warmUp();
   }());
 

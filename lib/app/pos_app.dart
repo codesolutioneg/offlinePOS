@@ -1930,7 +1930,9 @@ class _PosAppState extends State<PosApp> {
     bool live() => mounted && gen == _lockFpGen && _session == null;
     var bankPushed = false;
     try {
-      await FingerprintAgentLauncher().ensureRunning();
+      if (widget.fingerprintStore?.enrolledUserIds().isNotEmpty ?? false) {
+        await FingerprintAgentLauncher().ensureRunning();
+      }
       while (live()) {
         if (!await fp.warmUp()) {
           await Future<void>.delayed(const Duration(seconds: 10));
@@ -5618,7 +5620,11 @@ class _PosAppState extends State<PosApp> {
                           if (raw is Map) raw.cast<String, dynamic>(),
                     ];
                     store.replaceAllForJoin(entries);
-                    await FingerprintAgentLauncher().ensureRunning();
+                    // No fingers here: start nothing, but an agent already up
+                    // still drops the last shop's templates.
+                    if (entries.isNotEmpty) {
+                      await FingerprintAgentLauncher().ensureRunning();
+                    }
                     await store.pushToAgent();
                   });
                   if (err != null) return err;
