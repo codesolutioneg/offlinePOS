@@ -6945,7 +6945,11 @@ class _PosAppState extends State<PosApp> {
         printError: _printError,
         authorize: (p) => _authorize(p, context),
         onBackup: widget.backup,
-        onOpenSql: () {
+        // The same gate as the Settings entry: Support is open to every cashier,
+        // and this console can change money and users.
+        onOpenSql: () async {
+          if (!await _authorize(Permission.openSettings, context)) return;
+          if (!context.mounted) return;
           Navigator.of(context).push(MaterialPageRoute<void>(
             builder: (_) => SqlConsoleScreen(
               db: widget.outboxStore.db,

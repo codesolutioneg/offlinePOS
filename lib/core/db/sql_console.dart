@@ -5,8 +5,8 @@ import 'database.dart';
 /// One statement run against the till's SQLCipher file.
 ///
 /// Reads return [columns] and [rows]. Writes return [changes]. [blocked] is a
-/// statement that would reach the encryption key or attach another file, which
-/// this console never does.
+/// statement that would reach the encryption key, attach another file or rewrite
+/// the audit trail, which this console never does.
 class SqlRunResult {
   const SqlRunResult({
     this.columns = const [],
@@ -15,6 +15,7 @@ class SqlRunResult {
     this.error,
     this.blocked = false,
     this.truncated = false,
+    this.readOnly = false,
   });
 
   final List<String> columns;
@@ -23,6 +24,9 @@ class SqlRunResult {
   final String? error;
   final bool blocked;
   final bool truncated;
+
+  /// SQLite's own verdict that the statement changed nothing.
+  final bool readOnly;
 
   bool get ok => error == null && !blocked;
 }
@@ -60,15 +64,22 @@ class SqlConsole {
   String previewSql(String table) => 'SELECT * FROM "${table.trim()}" LIMIT $rowCap;';
 
   /// Whether [sql] only reads. Writes need a confirm in the window before they run.
+  ///
+  /// Asked of SQLite rather than guessed from the first keyword: a `WITH` can
+  /// front a DELETE, and only the compiled statement knows. Anything that does
+  /// not compile counts as a write, so it still meets the confirm.
   bool isRead(String sql) {
-    final t = _lead(sql);
-    if (t.startsWith('SELECT') || t.startsWith('WITH') || t.startsWith('EXPLAIN')) {
-      return true;
+    final trimmed = sql.trim();
+    if (trimmed.isEmpty) return false;
+    PreparedStatement? stmt;
+    try {
+      stmt = _db.raw.prepare(trimmed, checkNoTail: true);
+      return stmt.isReadOnly;
+    } catch (_) {
+      return false;
+    } finally {
+      stmt?.dispose();
     }
-    if (t.startsWith('PRAGMA')) {
-      return !t.contains('=');
-    }
-    return false;
   }
 
   SqlRunResult run(String sql) {
@@ -76,7 +87,7 @@ class SqlConsole {
     if (trimmed.isEmpty) {
       return const SqlRunResult(error: 'Type a statement first.');
     }
-    if (_blocked(trimmed)) {
+    if (_blocked(trimmed, isRead(trimmed))) {
       return const SqlRunResult(
         blocked: true,
         error: 'That statement is not allowed here.',
@@ -84,7 +95,8 @@ class SqlConsole {
     }
     PreparedStatement? stmt;
     try {
-      stmt = _db.raw.prepare(trimmed);
+      stmt = _db.raw.prepare(trimmed, checkNoTail: true);
+      final readOnly = stmt.isReadOnly;
       // select works for reads and for writes with RETURNING; a pure write comes
       // back with no column names and we report how many rows changed instead.
       final rs = stmt.select();
@@ -103,9 +115,10 @@ class SqlConsole {
           columns: cols,
           rows: rows,
           truncated: truncated,
+          readOnly: readOnly,
         );
       }
-      return SqlRunResult(changes: _db.raw.updatedRows);
+      return SqlRunResult(changes: _db.raw.updatedRows, readOnly: readOnly);
     } on SqliteException catch (e) {
       return SqlRunResult(error: e.message);
     } catch (e) {
@@ -137,11 +150,18 @@ class SqlConsole {
     return s.replaceAll(RegExp(r'\s+'), ' ').toUpperCase();
   }
 
-  static bool _blocked(String sql) {
+  static bool _blocked(String sql, bool readOnly) {
     final t = _lead(sql);
     if (RegExp(r'\bATTACH\b').hasMatch(t)) return true;
     if (t.contains('VACUUM INTO')) return true;
-    if (RegExp(r'\bPRAGMA\s+(KEY|REKEY|CIPHER)\b').hasMatch(t)) return true;
+    // With or without a schema prefix: `PRAGMA main.key` reaches the key too.
+    if (RegExp(r'\bPRAGMA\s+(\w+\s*\.\s*)?(KEY|REKEY|CIPHER\w*|WRITABLE_SCHEMA)\b')
+        .hasMatch(t)) {
+      return true;
+    }
+    // The audit trail is the record of what this console did, so nothing typed
+    // here may change it.
+    if (!readOnly && RegExp(r'\bAUDIT_LOG\b').hasMatch(t)) return true;
     return false;
   }
 

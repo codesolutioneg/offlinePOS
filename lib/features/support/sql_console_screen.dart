@@ -87,7 +87,7 @@ class _SqlConsoleScreenState extends State<SqlConsoleScreen> {
       result.blocked
           ? 'sql.blocked'
           : result.ok
-              ? (_sql.isRead(sql) ? 'sql.select' : 'sql.write')
+              ? (result.readOnly ? 'sql.select' : 'sql.write')
               : 'sql.error',
       detail: sql.length > 240 ? '${sql.substring(0, 240)}…' : sql,
     );

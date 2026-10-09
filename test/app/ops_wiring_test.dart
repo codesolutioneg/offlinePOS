@@ -25,6 +25,7 @@ import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/server_probe.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/features/support/diagnostics_screen.dart';
+import 'package:offline_pos/features/support/sql_console_screen.dart';
 import 'package:offline_pos/features/settings/server_settings_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
@@ -69,10 +70,10 @@ void main() {
     } catch (_) {}
   });
 
-  Future<AuthService> managerOnTheTill() async {
+  Future<AuthService> managerOnTheTill({String role = 'manager'}) async {
     final auth = AuthService(
         users: UserStore(db), hasher: FakePinHasher(), audit: AuditLog(db));
-    await auth.enrol(id: 'sara', name: 'Sara', pin: '1234', role: 'manager');
+    await auth.enrol(id: 'sara', name: 'Sara', pin: '1234', role: role);
     return auth;
   }
 
@@ -113,10 +114,10 @@ void main() {
     );
   }
 
-  Future<void> boot(WidgetTester t) async {
+  Future<void> boot(WidgetTester t, {String role = 'manager'}) async {
     await t.binding.setSurfaceSize(const Size(1280, 1600));
     addTearDown(() => t.binding.setSurfaceSize(null));
-    await t.pumpWidget(app(await managerOnTheTill()));
+    await t.pumpWidget(app(await managerOnTheTill(role: role)));
     await t.tap(find.byKey(const Key('user-sara')));
     await t.pump();
     for (final d in '1234'.split('')) {
@@ -186,5 +187,30 @@ void main() {
         reason: 'the shell must hand Diagnostics a backup, or the button is a label');
     // The till it was taken from is still the one being used.
     expect(db.raw.select('SELECT count(*) c FROM users').first['c'], greaterThan(0));
+  });
+
+  testWidgets('a cashier cannot open the SQL console from Support', (t) async {
+    await boot(t, role: 'cashier');
+    await openDrawerItem(t, 'nav-support');
+    expect(find.byType(DiagnosticsScreen), findsOneWidget);
+
+    await t.scrollUntilVisible(find.byKey(const Key('open-sql')), 200,
+        scrollable: find.byType(Scrollable).last);
+    await t.tap(find.byKey(const Key('open-sql')));
+    await t.pumpAndSettle();
+
+    expect(find.byType(SqlConsoleScreen), findsNothing,
+        reason: 'Support is open to every cashier; the console needs a manager');
+  });
+
+  testWidgets('a manager opens the SQL console from Support', (t) async {
+    await boot(t);
+    await openDrawerItem(t, 'nav-support');
+    await t.scrollUntilVisible(find.byKey(const Key('open-sql')), 200,
+        scrollable: find.byType(Scrollable).last);
+    await t.tap(find.byKey(const Key('open-sql')));
+    await t.pumpAndSettle();
+
+    expect(find.byType(SqlConsoleScreen), findsOneWidget);
   });
 }
