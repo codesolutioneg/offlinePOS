@@ -698,6 +698,11 @@ class _PosAppState extends State<PosApp> {
     if (!mounted) return;
     if (widget.settings.deviceRole != DeviceRole.unset) return;
     if (widget.settings.lanRolePromptDismissed) return;
+    // Choosing a role is a settings change; a cashier leaves it for a manager.
+    if (!widget.settings.roleCan(
+        widget.auth.signedIn?.role ?? 'cashier', Permission.openSettings)) {
+      return;
+    }
     // PosApp's State sits above MaterialApp; dialogs need the navigator below.
     await Future<void>.delayed(Duration.zero);
     if (!mounted) return;

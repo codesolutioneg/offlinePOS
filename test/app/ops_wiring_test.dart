@@ -77,7 +77,7 @@ void main() {
     return auth;
   }
 
-  Widget app(AuthService auth) {
+  Widget app(AuthService auth, {bool lanPromptDismissed = true}) {
     final outbox = Outbox(store: outboxStore, senders: {});
     return PosApp(
       auth: auth,
@@ -101,7 +101,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db)..lanRolePromptDismissed = true,
+      settings: SettingsStore(db)..lanRolePromptDismissed = lanPromptDismissed,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       // Exactly what main.dart hands down, with the network and the platform
@@ -114,10 +114,12 @@ void main() {
     );
   }
 
-  Future<void> boot(WidgetTester t, {String role = 'manager'}) async {
+  Future<void> signIn(WidgetTester t,
+      {String role = 'manager', bool lanPromptDismissed = true}) async {
     await t.binding.setSurfaceSize(const Size(1280, 1600));
     addTearDown(() => t.binding.setSurfaceSize(null));
-    await t.pumpWidget(app(await managerOnTheTill(role: role)));
+    await t.pumpWidget(app(await managerOnTheTill(role: role),
+        lanPromptDismissed: lanPromptDismissed));
     await t.tap(find.byKey(const Key('user-sara')));
     await t.pump();
     for (final d in '1234'.split('')) {
@@ -130,6 +132,10 @@ void main() {
       if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
+  }
+
+  Future<void> boot(WidgetTester t, {String role = 'manager'}) async {
+    await signIn(t, role: role);
     await t.tap(find.byKey(const Key('wizard-skip')));
     await t.pumpAndSettle();
     // Signing in lands on the floor home, which carries the same drawer the
@@ -144,6 +150,20 @@ void main() {
     await t.tap(find.byKey(Key(key)));
     await t.pumpAndSettle();
   }
+
+  testWidgets('a cashier is not asked to link the till to the shop network',
+      (t) async {
+    await signIn(t, role: 'cashier', lanPromptDismissed: false);
+    expect(find.byKey(const Key('lan-role-prompt')), findsNothing);
+    expect(SettingsStore(db).lanRolePromptDismissed, isFalse,
+        reason: 'the next manager to sign in is still asked');
+  });
+
+  testWidgets('a manager is asked to link the till to the shop network',
+      (t) async {
+    await signIn(t, lanPromptDismissed: false);
+    expect(find.byKey(const Key('lan-role-prompt')), findsOneWidget);
+  });
 
   testWidgets('Test connection on the server screen asks the real probe',
       (t) async {
