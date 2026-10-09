@@ -783,8 +783,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
     // counting the drawer wastes the count.
     if (!await _clearOpenWork()) return;
     if (!mounted) return;
-    // Dishflow: consolidated close needs a session customer before the drawer
-    // count starts — otherwise the night would book under Walk-in or split.
+    // Anything the shell says must be cleared before counting (Stress Lab
+    // orders still on the till). Booking the sales never blocks the count.
     if (!await _prepareCloseSync()) return;
     if (!mounted) return;
     final pending = widget.pendingSyncCount?.call() ?? 0;
@@ -833,18 +833,18 @@ class _ShiftScreenState extends State<ShiftScreen> {
     return (ref == null || ref.isEmpty) ? null : ref;
   }
 
-  /// Dishflow session-close precondition: partner configured when sales will sync.
+  /// A close precondition from the shell; a message back blocks the close.
   Future<bool> _prepareCloseSync() async {
     final prepare = widget.onPrepareCloseSync;
     if (prepare == null) return true;
     final block = await prepare();
     if (block == null) return true;
-    widget.onCloseBlocked?.call('shift.close.blocked.session_partner');
+    widget.onCloseBlocked?.call('shift.close.blocked.precondition');
     if (!mounted) return false;
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        key: const Key('session-partner-required'),
+        key: const Key('close-precondition'),
         title: Text(tr(ctx, 'Cannot close session')),
         content: Text(block),
         actions: [

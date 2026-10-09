@@ -6324,22 +6324,9 @@ class _PosAppState extends State<PosApp> {
                     'Stress Lab before closing the session.',
                   ).replaceAll('{n}', '$stress');
                 }
-                final shift = widget.shifts.currentOpenShift();
-                if (shift == null) return null;
-                // Tickets in THIS open shift only — not the whole outbox backlog.
-                if (widget.orders.awaitingSyncInShift(shift).isEmpty) return null;
-                widget.settings.mergeBatchIntoOneSaleOrder = true;
-                final needsPartnerMsg = tr(
-                  context,
-                  'Consolidated close needs a branch with a session invoice customer. '
-                  'Pick the branch under Server settings, and set the customer on '
-                  'Offline POS ▸ Branches ▸ Session close in Odoo.',
-                );
-                await _ensureSessionPartnerFromBranch();
-                if (widget.settings.odooSessionPartnerId == null &&
-                    widget.settings.odooBranchId == null) {
-                  return needsPartnerMsg;
-                }
+                // Nothing about booking the sales may stop the cash-up: a till that
+                // is offline or has no branch picked yet still has to count its
+                // drawer. The tickets stay queued and the close explains why.
                 return null;
               },
               // The allowance the counted drawer is held to, zero unless the shop set one.
@@ -6423,7 +6410,12 @@ class _PosAppState extends State<PosApp> {
                       'but Odoo did not return the sale number yet.\n'
                       'Check Sales orders for today under the session customer.';
                 }
-                final why = result.skipReason ?? widget.sync.lastError;
+                final why = widget.settings.odooSessionPartnerId == null &&
+                        widget.settings.odooBranchId == null
+                    ? 'pick the branch under Server settings, and set the '
+                        'session invoice customer on Offline POS ▸ Branches ▸ '
+                        'Session close in Odoo'
+                    : result.skipReason ?? widget.sync.lastError;
                 return 'Could not book this shift as one sale order'
                     '${why != null && why.isNotEmpty ? ': $why' : '.'}\n'
                     '${result.orderCount} order(s) stay on this till — '
