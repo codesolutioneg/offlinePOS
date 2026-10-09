@@ -575,7 +575,8 @@ class EscPos {
   /// computed against half the paper columns — otherwise banners drift right.
   EscPos centred(String s) {
     final cols = _doubleWidth ? (columns ~/ 2).clamp(1, columns) : columns;
-    if (s.length >= cols) return line(s.substring(0, cols));
+    // Too long to centre: print it whole and let the printer wrap, never cut text.
+    if (s.length >= cols) return line(s);
     final pad = (cols - s.length) ~/ 2;
     // The padding is for the byte line only; a rendered band is centred by layout.
     return _emit(' ' * pad + s, rasterText: s, rasterAlign: EscPosAlign.center);

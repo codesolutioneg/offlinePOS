@@ -32,6 +32,12 @@ void main() {
     expect(s, '    abc\n');
   });
 
+  test('a line too long to centre prints whole for the printer to wrap', () {
+    const header = 'Corniche El Nil, Maadi, Cairo';
+    final s = strippedText(EscPos(columns: 16).centred(header).build());
+    expect(s, '$header\n');
+  });
+
   test('cut is a full cut with feed', () {
     final b = EscPos().cut().build();
     expect(b, [0x1d, 0x56, 0x42, 0x00]);
