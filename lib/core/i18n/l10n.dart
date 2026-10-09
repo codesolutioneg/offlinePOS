@@ -2273,4 +2273,86 @@ const Map<String, String> _ar = {
       ': (نسبة المزيج > القاعدة و متوسط الربح > قاعدة المساهمة) يُبقى على الصنف.',
   ': (MM% < MM Rule AND Avg Profit > PC Rule) item should be repositioned on menu.':
       ': (نسبة المزيج < القاعدة و متوسط الربح > قاعدة المساهمة) يُعاد وضع الصنف في المنيو.',
+  // Shop network, session close, sections and support.
+  'Allowed categories': 'الأقسام المسموحة',
+  'Allowed payment methods': 'طرق الدفع المسموحة',
+  'Cash handling': 'إدارة النقدية',
+  'Categories, payments, staff rules': 'الأقسام، المدفوعات، قواعد الموظفين',
+  'Clears the shop key and Primary/Secondary role so you can join again with a new PIN, or become the primary. Menu and staff stay until the next join replaces them.':
+      'يمسح مفتاح المتجر ودور الجهاز (رئيسي/فرعي) لتنضم من جديد برمز PIN جديد أو تصبح الجهاز الرئيسي. يبقى المنيو والموظفون حتى يستبدلهم الانضمام التالي.',
+  'Close the session?': 'إغلاق الوردية؟',
+  'Closing session': 'جارٍ إغلاق الوردية',
+  'Connecting to primary...': 'جارٍ الاتصال بالجهاز الرئيسي...',
+  'Could not clear pairing. Try again.': 'تعذر مسح الربط. حاول مرة أخرى.',
+  'Could not reach the primary. Check both devices are on the same Wi‑Fi, Share is On, and try Join again.':
+      'تعذر الوصول إلى الجهاز الرئيسي. تأكد أن الجهازين على نفس شبكة Wi‑Fi وأن المشاركة مفعلة، ثم حاول الانضمام مرة أخرى.',
+  'Discard held prints?': 'تجاهل المطبوعات المعلقة؟',
+  'Discarded': 'تم تجاهل',
+  'Empty means every category': 'الفراغ يعني كل الأقسام',
+  'Empty means every method': 'الفراغ يعني كل الطرق',
+  'Generate join PIN': 'إنشاء رمز انضمام',
+  'Give this one-time code to the secondary till. It expires in 12 hours.':
+      'أعطِ هذا الرمز لمرة واحدة للجهاز الفرعي. تنتهي صلاحيته خلال 12 ساعة.',
+  'Go to floor': 'الذهاب إلى الصالة',
+  'If another till in the shop is already set up, join it with a PIN. If this is the first till, make it the primary.':
+      'إذا كان في المحل جهاز آخر جاهز، انضم إليه برمز PIN. وإذا كان هذا أول جهاز، فاجعله الجهاز الرئيسي.',
+  'Inherit': 'وراثة',
+  'Inherit section, allow all, or pick categories for each person':
+      'وراثة إعداد القسم، أو السماح بالكل، أو اختيار الأقسام لكل شخص',
+  'Join': 'انضمام',
+  'Join PIN': 'رمز الانضمام',
+  'Join a primary on this network': 'الانضمام لجهاز رئيسي على هذه الشبكة',
+  'Join primary': 'الانضمام للجهاز الرئيسي',
+  'Join with a PIN': 'الانضمام برمز PIN',
+  'Joined. This till now shares the primary shop key.':
+      'تم الانضمام. هذا الجهاز يشارك الآن مفتاح المتجر مع الجهاز الرئيسي.',
+  'Like Dishflow: the night books as one invoice under the session customer below.':
+      'مثل Dishflow: تُسجل الليلة كفاتورة واحدة باسم عميل الوردية أدناه.',
+  'Link tills on this network?': 'ربط الأجهزة على هذه الشبكة؟',
+  'No orders to sync.': 'لا توجد طلبات للمزامنة.',
+  'No session customer': 'لا يوجد عميل للوردية',
+  'Only the primary till can mint join PINs.':
+      'الجهاز الرئيسي فقط يمكنه إنشاء رموز الانضمام.',
+  'Per-employee categories': 'الأقسام لكل موظف',
+  'Pick': 'اختيار',
+  'Pick a session customer so the closed shift invoices as one order under that name. Without one, sales still go out one ticket at a time.':
+      'اختر عميلاً للوردية حتى تُفوتر الوردية المغلقة كطلب واحد بهذا الاسم. بدونه تُرسل المبيعات تذكرة تذكرة.',
+  'Previous sessions': 'الورديات السابقة',
+  'Primary': 'رئيسي',
+  'Primary device id': 'معرف الجهاز الرئيسي',
+  'Primary owns join PINs and section settings. Secondary joins with a PIN from the primary.':
+      'الجهاز الرئيسي يملك رموز الانضمام وإعدادات الأقسام. الجهاز الفرعي ينضم برمز من الجهاز الرئيسي.',
+  'Primary saved. Restart the app once so Share can start on the network.':
+      'تم حفظ الجهاز الرئيسي. أعد تشغيل التطبيق مرة واحدة لتبدأ المشاركة على الشبكة.',
+  'Print Z': 'طباعة تقرير Z',
+  'Restart the app, then open Shop network and Join with the PIN from the primary.':
+      'أعد تشغيل التطبيق، ثم افتح شبكة المتجر وانضم برمز PIN من الجهاز الرئيسي.',
+  'Restrict the menu and payments; optional rules per employee':
+      'تقييد المنيو والمدفوعات؛ مع قواعد اختيارية لكل موظف',
+  'Run': 'تشغيل',
+  'Secondary': 'فرعي',
+  'Section settings': 'إعدادات القسم',
+  'Session invoice customer': 'عميل فاتورة الوردية',
+  'Session invoice customer id (Odoo partner)':
+      'رقم عميل فاتورة الوردية (شريك Odoo)',
+  'Skip for now': 'تخطي الآن',
+  'Staff section': 'قسم الموظفين',
+  'Syncing from primary': 'جارٍ المزامنة من الجهاز الرئيسي',
+  'Syncing sales to Odoo…': 'جارٍ مزامنة المبيعات مع Odoo…',
+  'These will not print. Use this after a long outage when the backlog is junk.':
+      'لن تُطبع هذه. استخدم هذا بعد انقطاع طويل عندما تكون المطبوعات المتراكمة بلا فائدة.',
+  'This is the primary': 'هذا هو الجهاز الرئيسي',
+  'This till\'s role': 'دور هذا الجهاز',
+  'Turned on, a shift close sends the whole night as one sales order carrying the branch, restaurant and warehouse under the session customer. Odoo has to accept a batch payload; ask whoever looks after Odoo before turning this on.':
+      'عند التفعيل، يرسل إغلاق الوردية الليلة كلها كطلب بيع واحد يحمل الفرع والمطعم والمخزن باسم عميل الوردية. يجب أن يقبل Odoo الإرسال المجمع؛ اسأل المسؤول عن Odoo قبل التفعيل.',
+  'Unlink': 'فك الربط',
+  'Unlink / join again': 'فك الربط / الانضمام من جديد',
+  'Unlink this till?': 'فك ربط هذا الجهاز؟',
+  'Unlinked. Pick Primary, or Secondary and Join with a new PIN. Restart if Share was already on.':
+      'تم فك الربط. اختر رئيسي، أو فرعي وانضم برمز PIN جديد. أعد التشغيل إذا كانت المشاركة مفعلة.',
+  'Unused join PINs': 'رموز انضمام غير مستخدمة',
+  'Waiting for the primary on this Wi‑Fi… Keep Share On on both devices, then Join when it appears.':
+      'في انتظار الجهاز الرئيسي على هذه الشبكة… أبقِ المشاركة مفعلة على الجهازين، ثم انضم عندما يظهر.',
+  'Working...': 'جارٍ التنفيذ...',
+  'held print(s)': 'مطبوعات معلقة',
 };
