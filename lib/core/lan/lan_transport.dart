@@ -67,11 +67,24 @@ class LanProtocol {
     this.numbers,
     this.pageSize = 200,
     LanLog? onRefused,
+    DateTime Function()? clock,
   })  : _log = log,
         _applier = applier,
         _credential = credential,
         _claims = claims,
-        _onRefused = onRefused;
+        _onRefused = onRefused,
+        _clock = clock ?? DateTime.now;
+
+  /// Wrong join PINs one address may send inside [joinFailureWindow] before
+  /// [joinPath] stops answering it for [joinLockout]. A six-digit PIN is only a
+  /// secret while nobody can simply try them all.
+  static const int maxJoinFailures = 5;
+
+  /// Wrong join PINs from the whole network before [joinPath] stops answering
+  /// anyone, so a device that keeps changing its address still runs out.
+  static const int maxShopJoinFailures = 20;
+  static const Duration joinFailureWindow = Duration(minutes: 15);
+  static const Duration joinLockout = Duration(minutes: 15);
 
   /// Everything a peer has after `since`.
   static const String eventsPath = '/lan/events';
@@ -120,6 +133,10 @@ class LanProtocol {
 
   final int pageSize;
   final LanLog? _onRefused;
+  final DateTime Function() _clock;
+  final Map<String, List<DateTime>> _joinFailures = {};
+  final Map<String, DateTime> _joinLockedUntil = {};
+  static const String _anyAddress = '*';
 
   LanReply handleGet(String path, Map<String, String> query, {String? auth}) {
     if (path != eventsPath) return const LanReply(404, {'error': 'unknown path'});
@@ -147,8 +164,10 @@ class LanProtocol {
     });
   }
 
-  LanReply handlePost(String path, String body, {String? auth}) {
-    if (path == joinPath) return _handleJoin(body);
+  /// [remote] is the address the request came from, when the host knows it.
+  LanReply handlePost(String path, String body,
+      {String? auth, InternetAddress? remote}) {
+    if (path == joinPath) return _handleJoin(body, remote);
     if (path != notifyPath &&
         path != claimPath &&
         path != seatPath &&
@@ -199,11 +218,43 @@ class LanProtocol {
     return LanReply(200, {'applied': applied});
   }
 
+  /// One wrong PIN against [from] and against the network as a whole; either
+  /// reaching its limit locks that door.
+  void _countJoinFailure(String from, DateTime now) {
+    for (final key in [from, _anyAddress]) {
+      final times = _joinFailures.putIfAbsent(key, () => [])
+        ..removeWhere((t) => now.difference(t) > joinFailureWindow)
+        ..add(now);
+      final limit = key == _anyAddress ? maxShopJoinFailures : maxJoinFailures;
+      if (times.length < limit) continue;
+      _joinFailures.remove(key);
+      _joinLockedUntil[key] = now.add(joinLockout);
+      _onRefused?.call('lan.join.locked', '$key after $limit wrong PINs');
+    }
+    // Addresses that stopped trying are forgotten, so the map stays small.
+    _joinFailures
+        .removeWhere((_, times) => now.difference(times.last) > joinFailureWindow);
+  }
+
   /// Admit a secondary with a one-time PIN; no shop-key stamp required.
-  LanReply _handleJoin(String body) {
+  ///
+  /// Only from the shop's own network, and only a few wrong PINs at a time: the
+  /// answer carries the shop key and the roster.
+  LanReply _handleJoin(String body, InternetAddress? remote) {
     final gate = onJoin;
     if (gate == null) {
       return const LanReply(409, {'error': 'this device does not admit peers'});
+    }
+    if (remote != null && !isLocalNetworkAddress(remote)) {
+      _onRefused?.call('lan.join.refused', 'join from outside the LAN: ${remote.address}');
+      return const LanReply(403, {'error': 'not on this network'});
+    }
+    final now = _clock();
+    final from = remote?.address ?? 'unknown';
+    _joinLockedUntil.removeWhere((_, until) => !now.isBefore(until));
+    if (_joinLockedUntil.containsKey(from) ||
+        _joinLockedUntil.containsKey(_anyAddress)) {
+      return const LanReply(429, {'error': 'too many wrong PINs, try later'});
     }
     Map<String, dynamic> decoded;
     try {
@@ -225,8 +276,10 @@ class LanProtocol {
     final payload = gate(pin: pin.trim(), peerDeviceId: peer);
     if (payload == null) {
       _onRefused?.call('lan.join.refused', '$peer presented a bad join PIN');
+      _countJoinFailure(from, now);
       return const LanReply(403, {'error': 'bad pin'});
     }
+    _joinFailures.remove(from);
     return LanReply(200, {
       'device_id': deviceId,
       'schema': Schema.version,
@@ -442,7 +495,8 @@ class LanHost {
         'GET' => _protocol.handleGet(
             request.uri.path, request.uri.queryParameters, auth: auth),
         'POST' => _protocol.handlePost(
-            request.uri.path, await utf8.decoder.bind(request).join(), auth: auth),
+            request.uri.path, await utf8.decoder.bind(request).join(),
+            auth: auth, remote: request.connectionInfo?.remoteAddress),
         _ => const LanReply(405, {'error': 'method'}),
       };
     } catch (e) {
@@ -682,4 +736,18 @@ Future<List<String>> lanAddresses() async {
   } catch (_) {
     return const [];
   }
+}
+
+/// Loopback, link-local or a private (RFC 1918 / unique-local) address: the
+/// shop's own network rather than whatever else the till is plugged into.
+bool isLocalNetworkAddress(InternetAddress a) {
+  if (a.isLoopback || a.isLinkLocal) return true;
+  final b = a.rawAddress;
+  if (a.type == InternetAddressType.IPv4) {
+    return b[0] == 10 ||
+        (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+        (b[0] == 192 && b[1] == 168);
+  }
+  if (a.type == InternetAddressType.IPv6) return (b[0] & 0xfe) == 0xfc;
+  return false;
 }
