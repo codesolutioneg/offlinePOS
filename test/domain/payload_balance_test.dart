@@ -214,4 +214,52 @@ void main() {
     ((p['payments'] as List).first as Map)['amount'] = o.total + 0.009;
     expect(payloadBalances(p), isTrue);
   });
+
+  test('taxed sales balance once Odoo rounds each line to the piastre', () {
+    // The till charges tax the way Odoo books it, line by line to the piastre, so
+    // the check has to add up the same way or it parks good sales.
+    final prices = [12.5, 17.99, 23.0, 37.5, 45.75, 8.25, 61.4, 19.95, 33.33];
+    var seed = 7;
+    int next(int n) => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n;
+    for (final separate in [false, true]) {
+      DiscountBooking.productId = separate ? 999 : null;
+      addTearDown(() => DiscountBooking.productId = null);
+      for (final discount in [0.0, 10.0, 15.0]) {
+        for (final service in [0.0, 12.0]) {
+          for (var i = 0; i < 100; i++) {
+            final o = Order(
+              deviceId: 'till-1',
+              cashierId: 'sara',
+              discountPercent: discount,
+              serviceChargePercent: service,
+            );
+            for (var k = 0; k < 1 + next(8); k++) {
+              o.lines.add(OrderLine(
+                productId: k + 1,
+                odooProductId: k + 1,
+                name: 'Dish $k',
+                quantity: (1 + next(3)).toDouble(),
+                unitPrice: prices[next(prices.length)],
+                taxRate: 14,
+                modifiers: [
+                  if (next(3) == 0)
+                    OrderModifier(
+                        modifierId: 1,
+                        productId: 88,
+                        name: 'Extra',
+                        quantity: 1,
+                        unitPrice: prices[next(prices.length)]),
+                ],
+              ));
+            }
+            payInFull(o);
+            final p = o.toServerPayload();
+            expect(payloadBalances(p), isTrue,
+                reason: 'separate=$separate discount=$discount '
+                    'service=$service: ${payloadImbalanceReason(p)}');
+          }
+        }
+      }
+    }
+  });
 }
