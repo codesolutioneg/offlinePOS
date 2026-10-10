@@ -1,12 +1,7 @@
-// Test-only. Drives the real app on the Linux embedder through every major
-// screen and writes a PNG per stop into SHOT_DIR, so the whole till can be
-// looked at after a design change rather than screen by screen. Run it through
-// tool/run_shots.sh, which supplies the display, the dbus session and the
-// unlocked keyring the app expects.
-//
-// Not a golden test: nothing fails on a pixel difference. It exists so a human
-// can see what the till actually looks like, which the widget tests cannot show
-// because they draw every glyph as a box.
+// Test-only. The tour harness, pointed at the screens the shop network, the SQL
+// console and the session close changed: the role question, the console's
+// answers, a close with no branch set, and the new screens in Arabic. Run it
+// through tool/run_shots.sh like the tour.
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -65,7 +60,7 @@ void main() {
   late List<PosTable> floor;
   late AuditLog audit;
 
-  final dir = Directory(Platform.environment['SHOT_DIR'] ?? '/tmp/shots-tour');
+  final dir = Directory(Platform.environment['SHOT_DIR'] ?? '/tmp/shots-parity');
 
   /// Pump a bounded number of frames rather than pumpAndSettle. The running app
   /// keeps a live connectivity badge on screen, so frames never stop being
@@ -160,8 +155,6 @@ void main() {
     // The covers prompt has its own screenshot suite; the tour goes straight to
     // the counter.
     SettingsStore(db).askGuestCount = false;
-    // The shop network question has its own run in parity_shots.dart.
-    SettingsStore(db).lanRolePromptDismissed = true;
   });
 
   tearDown(() => db.close());
@@ -230,173 +223,144 @@ void main() {
     await settle(t);
   }
 
-  /// Rings a product, opening its category first: the sell screen shows one
-  /// category at a time. The menu numbers products by category (21 is in 2).
-  Future<void> ring(WidgetTester t, int id) async {
-    final product = find.byKey(Key('product-$id'));
-    if (product.hitTestable().evaluate().isEmpty) {
-      await t.tap(find.byKey(Key('cat-chip-${id ~/ 10}')));
-      await settle(t, frames: 10);
-    }
-    await t.tap(product);
-  }
-
+  /// Pops the top route; some of these screens draw their own back arrow.
   Future<void> back(WidgetTester t) async {
-    await t.pageBack();
+    await Navigator.of(t.element(find.byType(Scaffold).last)).maybePop();
     await settle(t);
   }
 
-  testWidgets('the tour, in the light theme', (t) async {
-    await t.pumpWidget(RepaintBoundary(key: shotKey, child: app()));
-    await shoot(t, '01-login');
-
-    await signIn(t);
-    await shoot(t, '02-floor');
-
-    // Seat table 2 and ring a realistic order.
-    await t.tap(find.byKey(Key('table-tile-${floor[1].id}')));
-    await settle(t, frames: 120);
-    await ring(t, 11);
-    await settle(t, frames: 10);
-    await ring(t, 21);
-    await settle(t, frames: 10);
-    await ring(t, 21);
-    await settle(t, frames: 10);
-    await ring(t, 30);
-    await shoot(t, '03-sell-counter');
-
-    // An item that asks questions: the modifier sheet.
-    await ring(t, 10);
-    await settle(t);
-    await shoot(t, '04-modifier-sheet');
-    // The sheet opens on Extras. Size is the last step, so picking one adds
-    // the line by itself.
-    await t.tap(find.byKey(const Key('mod-201')));
-    await t.pump();
-    await t.tap(find.text('Size'));
-    await settle(t, frames: 10);
-    await t.tap(find.byKey(const Key('mod-102')));
-    await settle(t);
-    expect(find.byKey(const Key('confirm-modifiers')), findsNothing);
-    await shoot(t, '05-sell-with-modifiers');
-
-    // The payment sheet, with cash chosen so the received / quick-note row shows.
-    await t.tap(findPay());
-    await settle(t);
-    await t.tap(find.byKey(const Key('method-1')));
-    await settle(t);
-    await shoot(t, '06-payment');
-    await t.tap(find.text('Cancel').last);
-    await settle(t);
-
-    // Park the tab: the floor now reads table 2 as occupied.
-    // A tall window parks it from the action bar's Exit, a short one from Hold.
-    final exit = find.byKey(const Key('order-action-exit'));
-    await t.tap(exit.evaluate().isNotEmpty ? exit : find.byKey(const Key('hold')));
-    await settle(t, frames: 60);
-    await shoot(t, '07-floor-occupied');
-
+  Future<void> openFromDrawer(WidgetTester t, String key) async {
     await openDrawer(t);
-    await shoot(t, '08-drawer');
-
-    await t.tap(find.byKey(const Key('nav-open-orders')));
-    await settle(t, frames: 60);
-    await shoot(t, '09-open-orders');
-    await back(t);
-
-    await openDrawer(t);
-    await t.tap(find.byKey(const Key('nav-shift')));
-    await settle(t, frames: 60);
-    await shoot(t, '10-shift');
-    await back(t);
-
-    await openDrawer(t);
-    await t.tap(find.byKey(const Key('nav-report')));
-    await settle(t, frames: 60);
-    await shoot(t, '11-reports');
-    await back(t);
-
-    await openDrawer(t);
-    // The drawer grew a profile header, so its tail lives below the fold on a
-    // short window and has to be scrolled into being before it can be tapped.
     await t.scrollUntilVisible(
-      find.byKey(const Key('nav-settings')),
+      find.byKey(Key(key)),
       200,
       scrollable: find
           .descendant(of: find.byType(Drawer), matching: find.byType(Scrollable))
           .first,
     );
     await settle(t, frames: 10);
-    await t.tap(find.byKey(const Key('nav-settings')));
+    await t.tap(find.byKey(Key(key)));
     await settle(t, frames: 60);
-    await shoot(t, '12-settings');
-    await back(t);
+  }
 
-    // Last stop, so nothing has to navigate back out of it.
-    await openDrawer(t);
-    await t.tap(find.byKey(const Key('nav-kitchen')));
+  Future<void> openSql(WidgetTester t) async {
+    await openFromDrawer(t, 'nav-support');
+    await t.scrollUntilVisible(find.byKey(const Key('open-sql')), 200,
+        scrollable: find.byType(Scrollable).last);
+    await settle(t, frames: 10);
+    await t.tap(find.byKey(const Key('open-sql')));
     await settle(t, frames: 60);
-    await shoot(t, '13-kitchen');
+  }
+
+  /// enterText does not always land on the desktop build, so set the field
+  /// directly.
+  void typeSql(WidgetTester t, String sql) =>
+      t.widget<TextField>(find.byKey(const Key('sql-input'))).controller!.text =
+          sql;
+
+  Future<void> runSql(WidgetTester t, String sql, {bool confirm = false}) async {
+    typeSql(t, sql);
+    await t.tap(find.byKey(const Key('sql-run')));
+    await settle(t);
+    if (confirm) {
+      expect(find.byKey(const Key('sql-write-confirm')), findsOneWidget);
+      await t.tap(find.byKey(const Key('sql-write-ok')));
+      await settle(t);
+    }
+  }
+
+  testWidgets('a manager is asked about the shop network, then the SQL console',
+      (t) async {
+    await t.pumpWidget(RepaintBoundary(key: shotKey, child: app()));
+    await signIn(t);
+    expect(find.byKey(const Key('lan-role-prompt')), findsOneWidget);
+    await shoot(t, '30-lan-role-prompt');
+    await t.tap(find.byKey(const Key('lan-role-prompt-skip')));
+    await settle(t);
+    expect(find.byKey(const Key('lan-role-prompt')), findsNothing);
+
+    await openSql(t);
+    await runSql(t, 'SELECT id, name, role FROM users ORDER BY id');
+    expect(find.byKey(const Key('sql-row-count')), findsOneWidget);
+    await shoot(t, '31-sql-rows');
+
+    typeSql(t, "WITH x AS (SELECT 1) DELETE FROM users WHERE id = 'omar'");
+    await t.tap(find.byKey(const Key('sql-run')));
+    await settle(t);
+    expect(find.byKey(const Key('sql-write-confirm')), findsOneWidget);
+    await shoot(t, '32-sql-write-confirm');
+    await t.tap(find.text('Cancel').last);
+    await settle(t);
+
+    await runSql(t, 'DELETE FROM audit_log', confirm: true);
+    expect(find.text('That statement is not allowed here.'), findsOneWidget);
+    await shoot(t, '33-sql-audit-blocked');
   });
 
-  testWidgets('the tour, with the lights off', (t) async {
-    SettingsStore(db).themeMode = 'dark';
-
+  testWidgets('a till with no branch still closes its shift', (t) async {
+    SettingsStore(db).lanRolePromptDismissed = true;
     await t.pumpWidget(RepaintBoundary(key: shotKey, child: app()));
-    await shoot(t, '14-login-dark');
-
     await signIn(t);
-    await shoot(t, '15-floor-dark');
 
-    await t.tap(find.byKey(Key('table-tile-${floor[2].id}')));
+    await t.tap(find.byKey(Key('table-tile-${floor[1].id}')));
     await settle(t, frames: 120);
-    await ring(t, 12);
+    await t.tap(find.byKey(const Key('product-21')));
     await settle(t, frames: 10);
-    await ring(t, 31);
-    await settle(t, frames: 10);
-    await ring(t, 40);
-    await shoot(t, '16-sell-dark');
-
     await t.tap(findPay());
     await settle(t);
     await t.tap(find.byKey(const Key('method-2')));
     await settle(t);
-    await shoot(t, '17-payment-dark');
-  });
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await settle(t, frames: 80);
 
-  testWidgets('the floor editor', (t) async {
-    await t.pumpWidget(RepaintBoundary(key: shotKey, child: app()));
-    await signIn(t);
-    await t.tap(find.byKey(const Key('toggle-edit')));
-    await settle(t);
-    await shoot(t, '20-floor-editor');
-
-    // Drag one table a cell over: the drop selects it and the fine controls
-    // appear on the bar.
-    final gesture = await t
-        .startGesture(t.getCenter(find.byKey(Key('table-edit-${floor[1].id}'))));
-    await t.pump(const Duration(milliseconds: 400));
-    await gesture.moveBy(const Offset(140, 140));
-    await t.pump();
-    await gesture.up();
-    await settle(t);
-    await shoot(t, '21-floor-editor-selected');
-  });
-
-  // The shop runs the till in Arabic too, so the two busiest screens are
-  // photographed under RTL.
-  testWidgets('the tour, in Arabic', (t) async {
-    SettingsStore(db).language = 'ar';
-
-    await t.pumpWidget(RepaintBoundary(key: shotKey, child: app()));
-    await signIn(t);
-    await shoot(t, '18-floor-ar');
-
-    await t.tap(find.byKey(Key('table-tile-${floor[0].id}')));
-    await settle(t, frames: 120);
-    await ring(t, 11);
+    await openFromDrawer(t, 'nav-shift');
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
     await settle(t, frames: 10);
-    await ring(t, 30);
-    await shoot(t, '19-sell-ar');
+    await shoot(t, '34-shift-before-close');
+    await t.tap(find.byKey(const Key('close-shift')));
+    await settle(t);
+    for (final d in '500'.split('')) {
+      await t.tap(find.byKey(Key('key-$d')));
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('keypad-ok')));
+    await settle(t);
+    expect(find.byKey(const Key('cash-variance-block')), findsNothing);
+    await t.tap(find.byKey(const Key('confirm-close-shift')));
+    for (var i = 0; i < 60; i++) {
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+      await t.pump(const Duration(milliseconds: 100));
+      if (find.byKey(const Key('session-done')).evaluate().isNotEmpty) break;
+    }
+    expect(find.byKey(const Key('session-done')), findsOneWidget);
+    expect(find.textContaining('pick the branch under Server settings'),
+        findsOneWidget);
+    expect(ShiftStore(db).currentOpenShift(), isNull);
+    await shoot(t, '35-session-closed-no-branch');
+  });
+
+  testWidgets('the new screens, in Arabic', (t) async {
+    SettingsStore(db)
+      ..language = 'ar'
+      ..lanRolePromptDismissed = true;
+    await t.pumpWidget(RepaintBoundary(key: shotKey, child: app()));
+    await signIn(t);
+
+    await openFromDrawer(t, 'nav-settings');
+    await t.scrollUntilVisible(find.byKey(const Key('set-lan')), 200,
+        scrollable: find.byType(Scrollable).last);
+    await settle(t, frames: 10);
+    await t.tap(find.byKey(const Key('set-lan')));
+    await settle(t, frames: 60);
+    await shoot(t, '36-lan-settings-ar');
+    await back(t);
+    await back(t);
+
+    await openFromDrawer(t, 'nav-shift');
+    await shoot(t, '37-shift-ar');
+    await back(t);
+
+    await openFromDrawer(t, 'nav-support');
+    await shoot(t, '38-support-ar');
   });
 }
