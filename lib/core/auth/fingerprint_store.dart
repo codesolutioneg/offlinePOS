@@ -37,12 +37,17 @@ class FingerprintStore {
     this._db, {
     LanPublish? publish,
     FingerprintService? service,
+    Future<bool> Function()? launchAgent,
   })  : _publish = publish,
-        _service = service;
+        _service = service,
+        _launchAgent = launchAgent;
 
   final Db _db;
   final LanPublish? _publish;
   final FingerprintService? _service;
+
+  /// Starts the USB agent before a print from another till is pushed to it.
+  final Future<bool> Function()? _launchAgent;
 
   static String recordKey(String userId) => 'fingerprint:$userId';
 
@@ -75,6 +80,11 @@ class FingerprintStore {
     List<List<int>> templates, {
     bool announce = true,
   }) {
+    _write(userId, templates, announce: announce);
+    unawaited(_pushAgent());
+  }
+
+  void _write(String userId, List<List<int>> templates, {required bool announce}) {
     _db.raw.execute(
         'DELETE FROM fingerprint_templates WHERE user_id = ?', [userId]);
     var slot = 0;
@@ -97,7 +107,6 @@ class FingerprintStore {
         },
       );
     }
-    unawaited(_pushAgent());
   }
 
   void clearUser(String userId, {bool announce = true}) =>
@@ -125,18 +134,21 @@ class FingerprintStore {
   }
 
   /// Apply a peer's enrol / clear without echoing back onto the fabric.
+  ///
+  /// The first print to reach a till that started with none also starts the
+  /// agent, since nothing else on that till would.
   void applyRemote(Map<String, dynamic> payload) {
     final userId = '${payload['user_id'] ?? ''}';
     if (userId.isEmpty) return;
-    if (payload['deleted'] == true) {
-      saveUserTemplates(userId, const [], announce: false);
-      return;
-    }
-    final raw = payload['templates'] as List? ?? const [];
-    final templates = <List<int>>[
-      for (final t in raw) List<int>.from(t as List),
-    ];
-    saveUserTemplates(userId, templates, announce: false);
+    final raw = payload['deleted'] == true
+        ? const []
+        : payload['templates'] as List? ?? const [];
+    _write(
+      userId,
+      [for (final t in raw) List<int>.from(t as List)],
+      announce: false,
+    );
+    unawaited(_pushAgent(launch: true));
   }
 
   /// Shape the agent expects for /load_templates.
@@ -158,10 +170,12 @@ class FingerprintStore {
 
   Future<void> pushToAgent() => _pushAgent();
 
-  Future<void> _pushAgent() async {
+  Future<void> _pushAgent({bool launch = false}) async {
     final svc = _service;
     if (svc == null) return;
     try {
+      final start = _launchAgent;
+      if (launch && start != null && enrolledUserIds().isNotEmpty) await start();
       if (!await svc.warmUp()) return;
       await svc.loadTemplates(agentPayload());
     } catch (_) {}

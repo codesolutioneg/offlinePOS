@@ -260,6 +260,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     db,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
     service: fingerprintService,
+    launchAgent: () => FingerprintAgentLauncher().ensureRunning(),
   );
   final shifts = ShiftStore(db);
   // What the kitchen shouted, told to every device: an item off the menu is a fact

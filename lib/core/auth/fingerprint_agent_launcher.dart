@@ -30,8 +30,17 @@ class FingerprintAgentLauncher {
   /// Spawn the silent bat next to the exe (or from the repo tools/ in debug).
   ///
   /// When [runSetup] is true (default), waits longer so pip install can finish
-  /// on a fresh PC.
-  Future<bool> ensureRunning({bool runSetup = true}) async {
+  /// on a fresh PC. Calls that overlap, from any launcher, share one start.
+  Future<bool> ensureRunning({bool runSetup = true}) {
+    final running = _starting[port];
+    if (running != null) return running;
+    return _starting[port] = _start(runSetup: runSetup)
+        .whenComplete(() => _starting.remove(port));
+  }
+
+  static final _starting = <int, Future<bool>>{};
+
+  Future<bool> _start({required bool runSetup}) async {
     if (!Platform.isWindows) return false;
     if (await isListening()) return true;
 
