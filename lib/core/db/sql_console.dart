@@ -65,11 +65,8 @@ class SqlConsole {
 
   /// Whether [sql] only reads. Writes need a confirm in the window before they run.
   ///
-  /// Asked of SQLite rather than guessed from the first keyword: a `WITH` can
-  /// front a DELETE, and only the compiled statement knows. Anything that does
-  /// not compile counts as a write, so it still meets the confirm. SQLite calls a
-  /// pragma that sets a value, or a transaction statement, read-only too, yet
-  /// both change the connection every screen shares, so they count as writes.
+  /// Asked of SQLite, since a `WITH` can front a DELETE. Anything that does not
+  /// compile, a pragma set and a transaction statement count as writes too.
   bool isRead(String sql) {
     final trimmed = sql.trim();
     if (trimmed.isEmpty) return false;
@@ -120,6 +117,7 @@ class SqlConsole {
         error: 'That statement is not allowed here.',
       );
     }
+    final wasAutocommit = _db.raw.autocommit;
     PreparedStatement? stmt;
     try {
       stmt = _db.raw.prepare(trimmed, checkNoTail: true);
@@ -151,6 +149,8 @@ class SqlConsole {
       return SqlRunResult(error: '$e');
     } finally {
       stmt?.dispose();
+      // Whatever got past the transaction guard, never leave one open.
+      if (wasAutocommit && !_db.raw.autocommit) _db.raw.execute('ROLLBACK');
     }
   }
 
@@ -192,11 +192,22 @@ class SqlConsole {
         i++;
       }
     }
-    return out.toString().trim().replaceAll(RegExp(r'\s+'), ' ').toUpperCase();
+    // SQLite skips empty statements, so `;BEGIN` is still a BEGIN.
+    return out
+        .toString()
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .replaceFirst(RegExp(r'^[\s;]+'), '')
+        .trim()
+        .toUpperCase();
   }
 
   static bool _blocked(String sql, bool readOnly) {
     final t = _plain(sql);
+    // An open transaction would hold every later write the app makes on this
+    // shared connection, and fail its own BEGINs.
+    if (RegExp(r'^(BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b').hasMatch(t)) {
+      return true;
+    }
     if (RegExp(r'\bATTACH\b').hasMatch(t)) return true;
     // `VACUUM main INTO` writes a copy as surely as `VACUUM INTO`.
     if (RegExp(r'\bVACUUM\b.*\bINTO\b').hasMatch(t)) return true;

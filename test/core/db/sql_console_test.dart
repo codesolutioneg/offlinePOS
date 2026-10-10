@@ -104,4 +104,22 @@ void main() {
     expect(console.isRead('PRAGMA foreign_keys'), isTrue);
     expect(console.isRead('PRAGMA index_list("users")'), isTrue);
   });
+
+  test('a transaction cannot be opened on the shared connection', () {
+    for (final sql in [
+      'BEGIN',
+      'begin immediate',
+      'SAVEPOINT a',
+      'COMMIT',
+      ';BEGIN',
+      '/*x*/ ; SAVEPOINT a',
+    ]) {
+      expect(console.run(sql).blocked, isTrue, reason: sql);
+    }
+    expect(db.raw.autocommit, isTrue);
+  });
+
+  test('a leading semicolon does not hide a pragma set', () {
+    expect(console.isRead(';PRAGMA user_version = 3'), isFalse);
+  });
 }
