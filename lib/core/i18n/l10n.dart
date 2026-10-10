@@ -2286,6 +2286,10 @@ const Map<String, String> _ar = {
   'Could not clear pairing. Try again.': 'تعذر مسح الربط. حاول مرة أخرى.',
   'Could not reach the primary. Check both devices are on the same Wi‑Fi, Share is On, and try Join again.':
       'تعذر الوصول إلى الجهاز الرئيسي. تأكد أن الجهازين على نفس شبكة Wi‑Fi وأن المشاركة مفعلة، ثم حاول الانضمام مرة أخرى.',
+  'Too many wrong PINs. Wait 15 minutes and try again.':
+      'أُدخل رمز PIN خاطئ عدة مرات. انتظر 15 دقيقة ثم حاول مرة أخرى.',
+  'Wrong PIN, or this till is not on the shop network.':
+      'رمز PIN غير صحيح، أو هذا الجهاز ليس على شبكة المتجر.',
   'Discard held prints?': 'تجاهل المطبوعات المعلقة؟',
   'Discarded': 'تم تجاهل',
   'Empty means every category': 'الفراغ يعني كل الأقسام',

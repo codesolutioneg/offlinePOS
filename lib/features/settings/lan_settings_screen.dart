@@ -399,22 +399,14 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
     }
     await dialogClosed;
     if (!mounted || cancelled) return;
-    final unreachable = err != null &&
-        (err.contains('TimeoutException') ||
-            err.contains('SocketException') ||
-            err.contains('Connection timed out') ||
-            err.contains('Failed host lookup'));
-    // First line only — runStep prefixes the failing stage; stack stays in logs.
+    // First line only: runStep prefixes the failing stage.
     final errLine = err?.split('\n').first.trim();
+    final known = err == null ? null : joinFailureMessage(err);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(err == null
           ? tr(context, 'Joined. This till now shares the primary shop key.')
-          : unreachable
-              ? tr(
-                  context,
-                  'Could not reach the primary. Check both devices are on '
-                      'the same Wi‑Fi, Share is On, and try Join again.',
-                )
+          : known != null
+              ? tr(context, known)
               : (errLine ?? err)),
       duration: Duration(seconds: err == null ? 4 : 10),
     ));
@@ -794,4 +786,24 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
     if (minutes < 60) return '${minutes}m';
     return '${minutes ~/ 60}h ${minutes % 60}m';
   }
+}
+
+/// The message key for a join failure staff can act on, or null to show the
+/// raw first line.
+@visibleForTesting
+String? joinFailureMessage(String err) {
+  if (err.contains('TimeoutException') ||
+      err.contains('SocketException') ||
+      err.contains('Connection timed out') ||
+      err.contains('Failed host lookup')) {
+    return 'Could not reach the primary. Check both devices are on '
+        'the same Wi‑Fi, Share is On, and try Join again.';
+  }
+  if (err.contains('HttpException: 429 ')) {
+    return 'Too many wrong PINs. Wait 15 minutes and try again.';
+  }
+  if (err.contains('HttpException: 403 ')) {
+    return 'Wrong PIN, or this till is not on the shop network.';
+  }
+  return null;
 }
