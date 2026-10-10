@@ -31,6 +31,7 @@ class BatchPush {
     required this.onOrderBooked,
     this.partnerId,
     this.partnerName,
+    this.routed,
     this.maxOrders = 500,
   });
 
@@ -64,6 +65,10 @@ class BatchPush {
   final int? Function()? partnerId;
   final String? Function()? partnerName;
 
+  /// Whether Odoo has somewhere to book the merged sale: a branch or a session
+  /// invoice customer. False keeps the sales queued until the shop is set up.
+  final bool Function()? routed;
+
   /// How many queued entries a merged payload may be built over. A week of
   /// backlog is a lot of json for one request, and a batch that times out on its
   /// size would retry at the same size forever; past this the sales go out the
@@ -87,6 +92,10 @@ class BatchPush {
     lastSkipReason = null;
     if (!enabled()) {
       lastSkipReason = 'merge not enabled';
+      return false;
+    }
+    if (routed?.call() == false) {
+      lastSkipReason = 'no branch or session invoice customer set';
       return false;
     }
     // No shift is no key, and a batch with no stable key is the one thing this

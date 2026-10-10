@@ -340,4 +340,47 @@ void main() {
     expect(find.byKey(const Key('floor-day-notice')), findsNothing);
     await lan.dispose();
   });
+
+  testWidgets('a till with sales and no branch picked still runs its Z',
+      (t) async {
+    // An upgraded or offline till: paid sales waiting to book, and neither a
+    // branch nor a session customer set. The drawer still has to be counted.
+    expect(settings.odooBranchId, isNull);
+    expect(settings.odooSessionPartnerId, isNull);
+    orders.save(Order(
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      state: OrderState.paid,
+    )
+      ..lines.add(OrderLine(productId: 1, name: 'Tea', quantity: 1, unitPrice: 10))
+      ..payments.add(OrderPayment(methodId: 1, amount: 10)));
+    expect(orders.awaitingSyncInShift(shifts.currentOpenShift()!), hasLength(1));
+
+    await t.binding.setSurfaceSize(const Size(1280, 1600));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(app(null));
+    await signIn(t);
+    await t.tap(find.byKey(const Key('floor-action-table')));
+    await t.pumpAndSettle();
+    await t.tap(find.byTooltip('Open navigation menu'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('nav-shift')));
+    await t.pumpAndSettle();
+    await t.ensureVisible(find.byKey(const Key('close-shift')));
+    await t.tap(find.byKey(const Key('close-shift')));
+    await t.pumpAndSettle();
+    for (final d in ['1', '0', '0']) {
+      await t.tap(find.byKey(Key('key-$d')));
+      await t.pump();
+    }
+    await t.tap(find.byKey(const Key('keypad-ok')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-close-shift')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('close-precondition')), findsNothing);
+    expect(shifts.currentOpenShift(), isNull, reason: 'the Z must go ahead');
+    expect(orders.awaitingSyncInShift(shifts.latestShift()!), hasLength(1),
+        reason: 'the sale stays queued for when the branch is set');
+  });
 }

@@ -4,6 +4,7 @@ import 'package:offline_pos/core/audit/audit_log.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/theme/app_colors.dart';
+import 'package:offline_pos/core/theme/app_theme.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/reports/reports_hub_screen.dart';
 import 'package:offline_pos/features/reports/rm/rm_report_viewer.dart';
@@ -369,5 +370,30 @@ void main() {
     expect(find.text('100.00'), findsWidgets);
     expect(find.text('40.00'), findsWidgets);
     expect(find.text('+150%', skipOffstage: false), findsWidgets);
+  });
+
+  testWidgets('the title bar reads on the light face in the dark theme',
+      (t) async {
+    await t.pumpWidget(MaterialApp(
+      theme: AppTheme.dark(),
+      home: Navigator(
+        onGenerateRoute: (_) => MaterialPageRoute(builder: (_) => const SizedBox()),
+      ),
+    ));
+    final nav = t.state<NavigatorState>(find.byType(Navigator).last);
+    nav.push(MaterialPageRoute(
+        builder: (_) => ReportsHubScreen(
+              allOrders: const [],
+              categories: const [],
+              formatAmount: (v) => v.toStringAsFixed(2),
+              audit: audit,
+            )));
+    await t.pumpAndSettle();
+    final title = t.widget<DefaultTextStyle>(find
+        .ancestor(of: find.text('Reports'), matching: find.byType(DefaultTextStyle))
+        .first);
+    expect(title.style.color, Colors.black);
+    final back = IconTheme.of(t.element(find.byType(BackButtonIcon)));
+    expect(back.color, Colors.black);
   });
 }

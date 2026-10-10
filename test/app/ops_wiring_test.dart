@@ -25,6 +25,7 @@ import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/server_probe.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/features/support/diagnostics_screen.dart';
+import 'package:offline_pos/features/support/sql_console_screen.dart';
 import 'package:offline_pos/features/settings/server_settings_screen.dart';
 import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
@@ -69,14 +70,14 @@ void main() {
     } catch (_) {}
   });
 
-  Future<AuthService> managerOnTheTill() async {
+  Future<AuthService> managerOnTheTill({String role = 'manager'}) async {
     final auth = AuthService(
         users: UserStore(db), hasher: FakePinHasher(), audit: AuditLog(db));
-    await auth.enrol(id: 'sara', name: 'Sara', pin: '1234', role: 'manager');
+    await auth.enrol(id: 'sara', name: 'Sara', pin: '1234', role: role);
     return auth;
   }
 
-  Widget app(AuthService auth) {
+  Widget app(AuthService auth, {bool lanPromptDismissed = true}) {
     final outbox = Outbox(store: outboxStore, senders: {});
     return PosApp(
       auth: auth,
@@ -100,7 +101,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db)..lanRolePromptDismissed = true,
+      settings: SettingsStore(db)..lanRolePromptDismissed = lanPromptDismissed,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       // Exactly what main.dart hands down, with the network and the platform
@@ -113,10 +114,12 @@ void main() {
     );
   }
 
-  Future<void> boot(WidgetTester t) async {
+  Future<void> signIn(WidgetTester t,
+      {String role = 'manager', bool lanPromptDismissed = true}) async {
     await t.binding.setSurfaceSize(const Size(1280, 1600));
     addTearDown(() => t.binding.setSurfaceSize(null));
-    await t.pumpWidget(app(await managerOnTheTill()));
+    await t.pumpWidget(app(await managerOnTheTill(role: role),
+        lanPromptDismissed: lanPromptDismissed));
     await t.tap(find.byKey(const Key('user-sara')));
     await t.pump();
     for (final d in '1234'.split('')) {
@@ -129,6 +132,10 @@ void main() {
       if (find.byKey(const Key('pin-ok')).evaluate().isEmpty) break;
     }
     await t.pumpAndSettle();
+  }
+
+  Future<void> boot(WidgetTester t, {String role = 'manager'}) async {
+    await signIn(t, role: role);
     await t.tap(find.byKey(const Key('wizard-skip')));
     await t.pumpAndSettle();
     // Signing in lands on the floor home, which carries the same drawer the
@@ -143,6 +150,20 @@ void main() {
     await t.tap(find.byKey(Key(key)));
     await t.pumpAndSettle();
   }
+
+  testWidgets('a cashier is not asked to link the till to the shop network',
+      (t) async {
+    await signIn(t, role: 'cashier', lanPromptDismissed: false);
+    expect(find.byKey(const Key('lan-role-prompt')), findsNothing);
+    expect(SettingsStore(db).lanRolePromptDismissed, isFalse,
+        reason: 'the next manager to sign in is still asked');
+  });
+
+  testWidgets('a manager is asked to link the till to the shop network',
+      (t) async {
+    await signIn(t, lanPromptDismissed: false);
+    expect(find.byKey(const Key('lan-role-prompt')), findsOneWidget);
+  });
 
   testWidgets('Test connection on the server screen asks the real probe',
       (t) async {
@@ -186,5 +207,30 @@ void main() {
         reason: 'the shell must hand Diagnostics a backup, or the button is a label');
     // The till it was taken from is still the one being used.
     expect(db.raw.select('SELECT count(*) c FROM users').first['c'], greaterThan(0));
+  });
+
+  testWidgets('a cashier cannot open the SQL console from Support', (t) async {
+    await boot(t, role: 'cashier');
+    await openDrawerItem(t, 'nav-support');
+    expect(find.byType(DiagnosticsScreen), findsOneWidget);
+
+    await t.scrollUntilVisible(find.byKey(const Key('open-sql')), 200,
+        scrollable: find.byType(Scrollable).last);
+    await t.tap(find.byKey(const Key('open-sql')));
+    await t.pumpAndSettle();
+
+    expect(find.byType(SqlConsoleScreen), findsNothing,
+        reason: 'Support is open to every cashier; the console needs a manager');
+  });
+
+  testWidgets('a manager opens the SQL console from Support', (t) async {
+    await boot(t);
+    await openDrawerItem(t, 'nav-support');
+    await t.scrollUntilVisible(find.byKey(const Key('open-sql')), 200,
+        scrollable: find.byType(Scrollable).last);
+    await t.tap(find.byKey(const Key('open-sql')));
+    await t.pumpAndSettle();
+
+    expect(find.byType(SqlConsoleScreen), findsOneWidget);
   });
 }

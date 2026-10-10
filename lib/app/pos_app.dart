@@ -698,6 +698,11 @@ class _PosAppState extends State<PosApp> {
     if (!mounted) return;
     if (widget.settings.deviceRole != DeviceRole.unset) return;
     if (widget.settings.lanRolePromptDismissed) return;
+    // Choosing a role is a settings change; a cashier leaves it for a manager.
+    if (!widget.settings.roleCan(
+        widget.auth.signedIn?.role ?? 'cashier', Permission.openSettings)) {
+      return;
+    }
     // PosApp's State sits above MaterialApp; dialogs need the navigator below.
     await Future<void>.delayed(Duration.zero);
     if (!mounted) return;
@@ -1930,7 +1935,9 @@ class _PosAppState extends State<PosApp> {
     bool live() => mounted && gen == _lockFpGen && _session == null;
     var bankPushed = false;
     try {
-      await FingerprintAgentLauncher().ensureRunning();
+      if (widget.fingerprintStore?.enrolledUserIds().isNotEmpty ?? false) {
+        await FingerprintAgentLauncher().ensureRunning();
+      }
       while (live()) {
         if (!await fp.warmUp()) {
           await Future<void>.delayed(const Duration(seconds: 10));
@@ -5618,7 +5625,11 @@ class _PosAppState extends State<PosApp> {
                           if (raw is Map) raw.cast<String, dynamic>(),
                     ];
                     store.replaceAllForJoin(entries);
-                    await FingerprintAgentLauncher().ensureRunning();
+                    // No fingers here: start nothing, but an agent already up
+                    // still drops the last shop's templates.
+                    if (entries.isNotEmpty) {
+                      await FingerprintAgentLauncher().ensureRunning();
+                    }
                     await store.pushToAgent();
                   });
                   if (err != null) return err;
@@ -6312,8 +6323,6 @@ class _PosAppState extends State<PosApp> {
                 final id = widget.settings.odooSessionPartnerId;
                 return id == null ? null : '#$id';
               },
-              // Dishflow: arm consolidated merge. Session customer comes from the branch
-              // in Odoo (Session close tab); we pull it live if this till has not cached it.
               onPrepareCloseSync: () async {
                 final stress = stressOrderCount(widget.outboxStore.db,
                     deviceId: widget.deviceId);
@@ -6324,22 +6333,9 @@ class _PosAppState extends State<PosApp> {
                     'Stress Lab before closing the session.',
                   ).replaceAll('{n}', '$stress');
                 }
-                final shift = widget.shifts.currentOpenShift();
-                if (shift == null) return null;
-                // Tickets in THIS open shift only — not the whole outbox backlog.
-                if (widget.orders.awaitingSyncInShift(shift).isEmpty) return null;
-                widget.settings.mergeBatchIntoOneSaleOrder = true;
-                final needsPartnerMsg = tr(
-                  context,
-                  'Consolidated close needs a branch with a session invoice customer. '
-                  'Pick the branch under Server settings, and set the customer on '
-                  'Offline POS ▸ Branches ▸ Session close in Odoo.',
-                );
-                await _ensureSessionPartnerFromBranch();
-                if (widget.settings.odooSessionPartnerId == null &&
-                    widget.settings.odooBranchId == null) {
-                  return needsPartnerMsg;
-                }
+                // Nothing about booking the sales may stop the cash-up: a till that
+                // is offline or has no branch picked yet still has to count its
+                // drawer. The tickets stay queued and the close explains why.
                 return null;
               },
               // The allowance the counted drawer is held to, zero unless the shop set one.
@@ -6381,6 +6377,8 @@ class _PosAppState extends State<PosApp> {
                   }
                   return 'No orders in this shift to sync.';
                 }
+                // Arm the consolidated merge. The session customer comes from the
+                // branch in Odoo (Session close tab), pulled live if not cached.
                 widget.settings.mergeBatchIntoOneSaleOrder = true;
                 await _ensureSessionPartnerFromBranch();
                 final partner =
@@ -6423,7 +6421,11 @@ class _PosAppState extends State<PosApp> {
                       'but Odoo did not return the sale number yet.\n'
                       'Check Sales orders for today under the session customer.';
                 }
-                final why = result.skipReason ?? widget.sync.lastError;
+                final why = !widget.settings.odooCloseRouted
+                    ? 'pick the branch under Server settings, and set the '
+                        'session invoice customer on Offline POS ▸ Branches ▸ '
+                        'Session close in Odoo'
+                    : result.skipReason ?? widget.sync.lastError;
                 return 'Could not book this shift as one sale order'
                     '${why != null && why.isNotEmpty ? ': $why' : '.'}\n'
                     '${result.orderCount} order(s) stay on this till — '
@@ -6945,7 +6947,11 @@ class _PosAppState extends State<PosApp> {
         printError: _printError,
         authorize: (p) => _authorize(p, context),
         onBackup: widget.backup,
-        onOpenSql: () {
+        // The same gate as the Settings entry: Support is open to every cashier,
+        // and this console can change money and users.
+        onOpenSql: () async {
+          if (!await _authorize(Permission.openSettings, context)) return;
+          if (!context.mounted) return;
           Navigator.of(context).push(MaterialPageRoute<void>(
             builder: (_) => SqlConsoleScreen(
               db: widget.outboxStore.db,

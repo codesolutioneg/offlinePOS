@@ -36,7 +36,13 @@ void main() {
         lastSeenAt: now.subtract(const Duration(seconds: 12)),
       );
 
-  Widget app({LanFacts Function()? facts, Locale? locale}) => MaterialApp(
+  Widget app(
+          {LanFacts Function()? facts,
+          Locale? locale,
+          Future<String?> Function(LanPeer, String,
+                  {void Function(String, double)? onProgress})?
+              onJoinPrimary}) =>
+      MaterialApp(
         locale: locale,
         supportedLocales: kSupportedLocales,
         localizationsDelegates: const [
@@ -49,6 +55,7 @@ void main() {
           deviceId: 'device-abc-123',
           onChanged: () => changed++,
           facts: facts,
+          onJoinPrimary: onJoinPrimary,
           nowFn: () => now,
         ),
       );
@@ -57,12 +64,17 @@ void main() {
   /// shorter than this page, and a ListView does not build what does not fit, so the
   /// peer list below the fold would read as missing rather than as off-screen.
   Future<void> open(WidgetTester t,
-      {LanFacts Function()? facts, Locale? locale}) async {
+      {LanFacts Function()? facts,
+      Locale? locale,
+      Future<String?> Function(LanPeer, String,
+              {void Function(String, double)? onProgress})?
+          onJoinPrimary}) async {
     t.view.physicalSize = const Size(1200, 2400);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.resetPhysicalSize);
     addTearDown(t.view.resetDevicePixelRatio);
-    await t.pumpWidget(app(facts: facts, locale: locale));
+    await t.pumpWidget(
+        app(facts: facts, locale: locale, onJoinPrimary: onJoinPrimary));
   }
 
   testWidgets('shows this device id and the devices it can see', (t) async {
@@ -253,4 +265,42 @@ void main() {
     expect(settings.lanRolePromptDismissed, isFalse);
     expect(find.textContaining('Unlinked'), findsOneWidget);
   });
+
+  for (final (status, en, ar) in [
+    (429, 'Too many wrong PINs. Wait 15 minutes and try again.',
+        'أُدخل رمز PIN خاطئ عدة مرات. انتظر 15 دقيقة ثم حاول مرة أخرى.'),
+    (403, 'Wrong PIN, or this till is not on the shop network.',
+        'رمز PIN غير صحيح، أو هذا الجهاز ليس على شبكة المتجر.'),
+  ]) {
+    for (final locale in [const Locale('en'), const Locale('ar')]) {
+      testWidgets('a $status join answer reads as a sentence in $locale',
+          (t) async {
+        settings.deviceRole = DeviceRole.secondary;
+        await open(t,
+            locale: locale,
+            facts: () => (
+                  servingAt: '10.0.0.5:45333',
+                  hostError: null,
+                  peers: [peer()],
+                  refused: const [],
+                  cursors: const {},
+                  lastPassAt: null,
+                  lastError: null,
+                ),
+            onJoinPrimary: (p, pin, {onProgress}) async =>
+                'Join failed: HttpException: $status from '
+                'http://10.0.0.7:45333/lan/join: {"error":"x"}\n#0 stack');
+        await t.pumpAndSettle();
+        await t.tap(find.descendant(
+            of: find.byKey(const Key('lan-join-peer-till-b')),
+            matching: find.byType(OutlinedButton)));
+        await t.pumpAndSettle();
+        await t.enterText(find.byKey(const Key('lan-join-pin-field')), '123456');
+        await t.tap(find.byKey(const Key('lan-join-confirm')));
+        await t.pumpAndSettle();
+        expect(find.text(locale.languageCode == 'ar' ? ar : en), findsOneWidget);
+        expect(find.textContaining('HttpException'), findsNothing);
+      });
+    }
+  }
 }

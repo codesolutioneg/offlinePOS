@@ -116,6 +116,8 @@ if(EXISTS "${ZK_TOOLS_DIR}/start_zk_agent.bat")
     "${ZK_TOOLS_DIR}/zk_fingerprint_agent.py"
     "${ZK_TOOLS_DIR}/zk_setup_check.py"
     "${ZK_TOOLS_DIR}/zk_ensure_python.py"
+    "${ZK_TOOLS_DIR}/zk_bootstrap_python.ps1"
+    "${ZK_TOOLS_DIR}/install_zk_driver.bat"
     "${ZK_TOOLS_DIR}/requirements-zk.txt"
     "${ZK_TOOLS_DIR}/install_zk_autostart.bat"
     "${ZK_TOOLS_DIR}/install_zk_autostart.ps1"

@@ -30,7 +30,9 @@ class SelectPill extends StatelessWidget {
     final bg = selected
         ? selectedColor
         : (dark ? AppColors.backgroundLightDark : Colors.white);
-    final fg = selected ? Colors.white : AppColors.brandNavy;
+    final fg = selected
+        ? Colors.white
+        : (dark ? AppColors.textPrimaryDark : AppColors.brandNavy);
     final border = selected
         ? selectedColor
         : (dark

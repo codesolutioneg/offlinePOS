@@ -5,8 +5,8 @@ import 'database.dart';
 /// One statement run against the till's SQLCipher file.
 ///
 /// Reads return [columns] and [rows]. Writes return [changes]. [blocked] is a
-/// statement that would reach the encryption key or attach another file, which
-/// this console never does.
+/// statement that would reach the encryption key, attach another file or rewrite
+/// the audit trail, which this console never does.
 class SqlRunResult {
   const SqlRunResult({
     this.columns = const [],
@@ -15,6 +15,7 @@ class SqlRunResult {
     this.error,
     this.blocked = false,
     this.truncated = false,
+    this.readOnly = false,
   });
 
   final List<String> columns;
@@ -23,6 +24,9 @@ class SqlRunResult {
   final String? error;
   final bool blocked;
   final bool truncated;
+
+  /// Whether the statement only read, as [SqlConsole.isRead] judged it.
+  final bool readOnly;
 
   bool get ok => error == null && !blocked;
 }
@@ -60,31 +64,63 @@ class SqlConsole {
   String previewSql(String table) => 'SELECT * FROM "${table.trim()}" LIMIT $rowCap;';
 
   /// Whether [sql] only reads. Writes need a confirm in the window before they run.
+  ///
+  /// Asked of SQLite, since a `WITH` can front a DELETE. Anything that does not
+  /// compile, a pragma set and a transaction statement count as writes too.
   bool isRead(String sql) {
-    final t = _lead(sql);
-    if (t.startsWith('SELECT') || t.startsWith('WITH') || t.startsWith('EXPLAIN')) {
-      return true;
+    final trimmed = sql.trim();
+    if (trimmed.isEmpty) return false;
+    final t = _plain(trimmed);
+    if (RegExp(r'^(BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b').hasMatch(t)) {
+      return false;
     }
-    if (t.startsWith('PRAGMA')) {
-      return !t.contains('=');
+    final pragma = RegExp(r'^PRAGMA\s+(\w+\s*\.\s*)?(\w+)\s*(\S?)').firstMatch(t);
+    if (pragma != null) {
+      final arg = pragma.group(3);
+      if (arg == '=') return false;
+      if (arg == '(' && !_readPragmas.contains(pragma.group(2))) return false;
     }
-    return false;
+    PreparedStatement? stmt;
+    try {
+      stmt = _db.raw.prepare(trimmed, checkNoTail: true);
+      return stmt.isReadOnly;
+    } catch (_) {
+      return false;
+    } finally {
+      stmt?.dispose();
+    }
   }
+
+  /// Pragmas whose argument names what to look at rather than a value to set.
+  static const _readPragmas = {
+    'TABLE_INFO',
+    'TABLE_XINFO',
+    'TABLE_LIST',
+    'INDEX_LIST',
+    'INDEX_INFO',
+    'INDEX_XINFO',
+    'FOREIGN_KEY_LIST',
+    'FOREIGN_KEY_CHECK',
+    'INTEGRITY_CHECK',
+    'QUICK_CHECK',
+  };
 
   SqlRunResult run(String sql) {
     final trimmed = sql.trim();
     if (trimmed.isEmpty) {
       return const SqlRunResult(error: 'Type a statement first.');
     }
-    if (_blocked(trimmed)) {
+    final read = isRead(trimmed);
+    if (_blocked(trimmed, read)) {
       return const SqlRunResult(
         blocked: true,
         error: 'That statement is not allowed here.',
       );
     }
+    final wasAutocommit = _db.raw.autocommit;
     PreparedStatement? stmt;
     try {
-      stmt = _db.raw.prepare(trimmed);
+      stmt = _db.raw.prepare(trimmed, checkNoTail: true);
       // select works for reads and for writes with RETURNING; a pure write comes
       // back with no column names and we report how many rows changed instead.
       final rs = stmt.select();
@@ -103,15 +139,18 @@ class SqlConsole {
           columns: cols,
           rows: rows,
           truncated: truncated,
+          readOnly: read,
         );
       }
-      return SqlRunResult(changes: _db.raw.updatedRows);
+      return SqlRunResult(changes: _db.raw.updatedRows, readOnly: read);
     } on SqliteException catch (e) {
       return SqlRunResult(error: e.message);
     } catch (e) {
       return SqlRunResult(error: '$e');
     } finally {
       stmt?.dispose();
+      // Whatever got past the transaction guard, never leave one open.
+      if (wasAutocommit && !_db.raw.autocommit) _db.raw.execute('ROLLBACK');
     }
   }
 
@@ -127,21 +166,59 @@ class SqlConsole {
     return '$v';
   }
 
-  static String _lead(String sql) {
-    var s = sql.trimLeft();
-    while (s.startsWith('--')) {
-      final nl = s.indexOf('\n');
-      if (nl < 0) return '';
-      s = s.substring(nl + 1).trimLeft();
+  /// [sql] in upper case with comments gone and identifier or string quotes
+  /// dropped, so `PRAGMA "rekey"` or `PRAGMA/**/rekey` reads as `PRAGMA REKEY`.
+  static String _plain(String sql) {
+    final out = StringBuffer();
+    var i = 0;
+    while (i < sql.length) {
+      final c = sql[i];
+      if (sql.startsWith('--', i)) {
+        final nl = sql.indexOf('\n', i);
+        i = nl < 0 ? sql.length : nl;
+        out.write(' ');
+      } else if (sql.startsWith('/*', i)) {
+        final end = sql.indexOf('*/', i + 2);
+        i = end < 0 ? sql.length : end + 2;
+        out.write(' ');
+      } else if (c == "'" || c == '"' || c == '`' || c == '[') {
+        final close = c == '[' ? ']' : c;
+        final end = sql.indexOf(close, i + 1);
+        final stop = end < 0 ? sql.length : end;
+        out.write(' ${sql.substring(i + 1, stop)} ');
+        i = stop + 1;
+      } else {
+        out.write(c);
+        i++;
+      }
     }
-    return s.replaceAll(RegExp(r'\s+'), ' ').toUpperCase();
+    // SQLite skips empty statements, so `;BEGIN` is still a BEGIN.
+    return out
+        .toString()
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .replaceFirst(RegExp(r'^[\s;]+'), '')
+        .trim()
+        .toUpperCase();
   }
 
-  static bool _blocked(String sql) {
-    final t = _lead(sql);
+  static bool _blocked(String sql, bool readOnly) {
+    final t = _plain(sql);
+    // An open transaction would hold every later write the app makes on this
+    // shared connection, and fail its own BEGINs.
+    if (RegExp(r'^(BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b').hasMatch(t)) {
+      return true;
+    }
     if (RegExp(r'\bATTACH\b').hasMatch(t)) return true;
-    if (t.contains('VACUUM INTO')) return true;
-    if (RegExp(r'\bPRAGMA\s+(KEY|REKEY|CIPHER)\b').hasMatch(t)) return true;
+    // `VACUUM main INTO` writes a copy as surely as `VACUUM INTO`.
+    if (RegExp(r'\bVACUUM\b.*\bINTO\b').hasMatch(t)) return true;
+    // With or without a schema prefix: `PRAGMA main.key` reaches the key too.
+    if (RegExp(r'\bPRAGMA\s+(\w+\s*\.\s*)?(KEY|REKEY|CIPHER\w*|WRITABLE_SCHEMA)\b')
+        .hasMatch(t)) {
+      return true;
+    }
+    // The audit trail is the record of what this console did, so nothing typed
+    // here may change it.
+    if (!readOnly && RegExp(r'\bAUDIT_LOG\b').hasMatch(t)) return true;
     return false;
   }
 

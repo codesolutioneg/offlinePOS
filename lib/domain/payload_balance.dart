@@ -11,6 +11,8 @@
 /// and a bug in building it is exactly the bug this is here to catch.
 library;
 
+import 'order.dart' show Order, roundMoney;
+
 /// How far apart the two sides may be before the payload is called broken.
 ///
 /// One piastre, the same bar the module holds its own total to. Scaling a line by
@@ -19,25 +21,17 @@ library;
 /// other.
 const double kPayloadBalanceTolerance = 0.01;
 
-/// What Odoo will total from the `lines` this payload declares.
+/// What Odoo will total from the `lines` this payload declares, before tax.
 ///
-/// Mirrors what the module does with them: each line is quantity times unit price,
-/// and each modifier that names a product becomes its own line at that modifier's
-/// quantity times the parent's. A modifier with no product is skipped there, so it
-/// must contribute nothing here either; the till folds that money into its parent's
-/// unit price before sending, which is the same contract from the other end.
+/// Mirrors what the module does with them: each line is its unit price, to the
+/// piastre, times its quantity, to the piastre, and each modifier that names a
+/// product becomes its own line at that modifier's quantity times the parent's. A
+/// modifier with no product is skipped there, so it must contribute nothing here
+/// either; the till folds that money into its parent's unit price before sending,
+/// which is the same contract from the other end.
 double payloadLinesTotal(Map<String, dynamic> payload) {
   var total = 0.0;
-  for (final raw in (payload['lines'] as List? ?? const [])) {
-    final line = (raw as Map).cast<String, dynamic>();
-    final qty = _num(line['quantity']);
-    total += qty * _num(line['unit_price']);
-    for (final rawMod in (line['modifiers'] as List? ?? const [])) {
-      final mod = (rawMod as Map).cast<String, dynamic>();
-      if (mod['product_id'] == null) continue;
-      total += qty * _num(mod['quantity']) * _num(mod['unit_price']);
-    }
-  }
+  _forEachBookedLine(payload, (base, _) => total += base);
   return total;
 }
 
@@ -54,26 +48,40 @@ double payloadPricedExtras(Map<String, dynamic> payload) =>
 /// more than the lines come to. Without this the check would read that difference
 /// as a payload that does not add up and park every taxed sale on the till.
 ///
-/// Each line's own rate, applied to that line and to the modifiers priced into it,
-/// which is exactly how the till worked the figure out before it charged the guest.
+/// Each line's own rate, applied to that line and to each product-backed modifier,
+/// with every line's tax rounded to the piastre as Odoo books it. That is exactly
+/// how the till worked out [Order.taxTotal] before it charged the guest.
 /// Delivery, tip and an absolute service fee carry no tax and so are not in here:
 /// the module books their untaxed amounts from the matching payload fields.
 double payloadTaxTotal(Map<String, dynamic> payload) {
   var tax = 0.0;
+  _forEachBookedLine(payload, (base, rate) {
+    if (rate > 0) tax += roundMoney(base * rate / 100);
+  });
+  return tax;
+}
+
+/// Calls [book] with the untaxed amount and tax rate of every line Odoo creates
+/// from this payload, each rounded the way Odoo rounds it, so the check holds the
+/// payload to the same piastre the till charged in [Order.taxTotal].
+void _forEachBookedLine(
+  Map<String, dynamic> payload,
+  void Function(double base, double rate) book,
+) {
   for (final raw in (payload['lines'] as List? ?? const [])) {
     final line = (raw as Map).cast<String, dynamic>();
     final rate = _num(line['tax_rate']);
-    if (rate <= 0) continue;
     final qty = _num(line['quantity']);
-    var net = qty * _num(line['unit_price']);
+    book(roundMoney(roundMoney(_num(line['unit_price'])) * qty), rate);
     for (final rawMod in (line['modifiers'] as List? ?? const [])) {
       final mod = (rawMod as Map).cast<String, dynamic>();
       if (mod['product_id'] == null) continue;
-      net += qty * _num(mod['quantity']) * _num(mod['unit_price']);
+      book(
+        roundMoney(roundMoney(_num(mod['unit_price'])) * (_num(mod['quantity']) * qty)),
+        rate,
+      );
     }
-    tax += net * rate / 100;
   }
-  return tax;
 }
 
 /// Everything this payload says was sold: its lines, the tax charged on them, and

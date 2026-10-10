@@ -22,8 +22,9 @@ if not defined SILENT (
 set "STATUS_DIR=%LOCALAPPDATA%\OfflinePOS"
 mkdir "%STATUS_DIR%" >nul 2>&1
 
+:: Restart a stale agent, but never kill an unrelated program on the port.
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":9201 " ^| findstr "LISTENING"') do (
-  taskkill /PID %%a /F >nul 2>&1
+  taskkill /F /FI "PID eq %%a" /FI "IMAGENAME eq python*" >nul 2>&1
 )
 
 :: Already have bundled 3.11 from a previous run?

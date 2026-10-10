@@ -186,8 +186,9 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   }
   final outboxStore = SqliteOutboxStore(db);
   final retired = outboxStore.retireRefundPushes();
-  if (retired > 0) {
-    audit.record('system', 'outbox.refunds.retired', detail: '$retired');
+  // Each refund named, so the ones Odoo never got can still be booked there.
+  for (final uuid in retired) {
+    audit.record('system', 'outbox.refunds.retired', detail: uuid);
   }
   final devices = DeviceStore(db);
 
@@ -259,6 +260,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     db,
     publish: lanOn ? (kind, uuid, payload) => lan?.publish(kind, uuid, payload) : null,
     service: fingerprintService,
+    launchAgent: () => FingerprintAgentLauncher().ensureRunning(),
   );
   final shifts = ShiftStore(db);
   // What the kitchen shouted, told to every device: an item off the menu is a fact
@@ -339,6 +341,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     batchUuid: () => ShiftStore(db).latestShift()?.uuid,
     partnerId: () => settings.odooSessionPartnerId,
     partnerName: () => settings.odooSessionPartnerName,
+    routed: () => settings.odooCloseRouted,
     onOrderBooked: (uuid, [id, name]) {
       orders.markSynced(uuid, id);
       sync.noteOdooAck(name: name, id: id);
@@ -546,9 +549,11 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   unwind.add(cloudSync.stop);
 
   // Start the ZK agent if Windows and nothing is on :9201, then load templates.
+  // A till nobody has enrolled a finger on never needs the agent at boot.
   unawaited(() async {
+    if (fingerprintStore!.enrolledUserIds().isEmpty) return;
     await FingerprintAgentLauncher().ensureRunning();
-    await fingerprintStore!.pushToAgent();
+    await fingerprintStore.pushToAgent();
     await fingerprintService.warmUp();
   }());
 
