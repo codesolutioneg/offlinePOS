@@ -31,6 +31,7 @@ class SqlConsoleScreen extends StatefulWidget {
 class _SqlConsoleScreenState extends State<SqlConsoleScreen> {
   late final SqlConsole _sql;
   late final TextEditingController _input;
+  final _columnsScroll = ScrollController();
   late List<String> _tables;
   String? _table;
   SqlRunResult? _result;
@@ -52,6 +53,7 @@ class _SqlConsoleScreenState extends State<SqlConsoleScreen> {
   @override
   void dispose() {
     _input.dispose();
+    _columnsScroll.dispose();
     super.dispose();
   }
 
@@ -247,9 +249,13 @@ class _SqlConsoleScreenState extends State<SqlConsoleScreen> {
         ),
         const SizedBox(height: 8),
         Expanded(
+          // Its own controller: on Android the vertical scroller would also claim
+          // the primary one, and the scrollbar cannot paint for two.
           child: Scrollbar(
+            controller: _columnsScroll,
             thumbVisibility: true,
             child: SingleChildScrollView(
+              controller: _columnsScroll,
               scrollDirection: Axis.horizontal,
               child: SingleChildScrollView(
                 child: DataTable(
