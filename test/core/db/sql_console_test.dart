@@ -69,4 +69,39 @@ void main() {
       expect(console.run(sql).blocked, isTrue, reason: sql);
     }
   });
+
+  test('the key stays out of reach however the pragma is spelled', () {
+    for (final sql in [
+      'PRAGMA "rekey" = \'x\'',
+      'PRAGMA [rekey] = \'x\'',
+      'PRAGMA `key` = \'x\'',
+      'PRAGMA/**/rekey = \'x\'',
+      'PRAGMA main."key" = \'x\'',
+      '/* note */ PRAGMA cipher_compatibility = 3',
+      "VACUUM main INTO 'x.db'",
+    ]) {
+      expect(console.run(sql).blocked, isTrue, reason: sql);
+    }
+  });
+
+  test('a comment inside a string does not hide the audit trail', () {
+    const sql = "CREATE TRIGGER t AFTER INSERT ON users WHEN '--' <> '' "
+        'BEGIN DELETE FROM audit_log; END';
+    expect(console.run(sql).blocked, isTrue);
+  });
+
+  test('a pragma that sets a value, or a transaction, is a write', () {
+    for (final sql in [
+      'PRAGMA foreign_keys = OFF',
+      'PRAGMA main.foreign_keys = 0',
+      'PRAGMA foreign_keys(0)',
+      'BEGIN',
+      'COMMIT',
+      'SAVEPOINT a',
+    ]) {
+      expect(console.isRead(sql), isFalse, reason: sql);
+    }
+    expect(console.isRead('PRAGMA foreign_keys'), isTrue);
+    expect(console.isRead('PRAGMA index_list("users")'), isTrue);
+  });
 }
