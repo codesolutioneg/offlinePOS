@@ -197,6 +197,8 @@ void main() {
         },
         partnerId: () => settings.odooSessionPartnerId,
         partnerName: () => settings.odooSessionPartnerName,
+        routed: () =>
+            settings.odooBranchId != null || settings.odooSessionPartnerId != null,
       ).run,
     );
     return PosApp(
@@ -448,9 +450,12 @@ void main() {
   testWidgets('B: a till with no branch or session customer still closes, sales stay queued',
       (t) async {
     await boot(t, withBranch: false);
-    // One sale only: without a session customer a merge needs two or more.
+    // Two sales, enough for a merge even without a session customer.
     await toTheCounter(t);
     await ring(t, 11);
+    await payCard(t);
+    await toTheCounter(t);
+    await ring(t, 12);
     await payCard(t);
     await closeTheShift(t, counted: '100');
 
@@ -460,7 +465,7 @@ void main() {
     expect(bookings(), isEmpty, reason: 'nothing is sent without somewhere to book it');
     expect(outboxStore.dead(), isEmpty, reason: 'queued, not parked');
     expect((await outboxStore.pending(limit: 50)).where((e) => e.kind == 'order.push'),
-        hasLength(1));
-    expect(orders.awaitingSync(), hasLength(1));
+        hasLength(2));
+    expect(orders.awaitingSync(), hasLength(2));
   });
 }

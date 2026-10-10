@@ -15,6 +15,7 @@ void main() {
   late List<Map<String, dynamic>> sent;
   late List<String> marked;
   var merging = true;
+  var routed = true;
   String? shift = 'shift-1';
   Object? failWith;
 
@@ -25,6 +26,7 @@ void main() {
     sent = [];
     marked = [];
     merging = true;
+    routed = true;
     shift = 'shift-1';
     failWith = null;
   });
@@ -38,6 +40,7 @@ void main() {
           return {'status': 'created', 'id': 1, 'name': 'Order/TEST'};
         },
         enabled: () => merging,
+        routed: () => routed,
         batchUuid: () => shift,
         onOrderBooked: (u, [id, name]) => marked.add(u),
       );
@@ -61,6 +64,18 @@ void main() {
     expect(sent.single['uuid'], 'shift-1');
     expect(marked, [a.uuid, b.uuid]);
     expect(await store.pending(), isEmpty, reason: 'nothing left for the drain');
+  });
+
+  test('with no branch or session customer the sales stay queued', () async {
+    await queueASale();
+    await queueASale(price: 250);
+    routed = false;
+
+    final push = pusher();
+    expect(await push.run(), isFalse);
+    expect(sent, isEmpty, reason: 'Odoo has nowhere to book it');
+    expect(push.lastSkipReason, 'no branch or session invoice customer set');
+    expect(await store.pending(), hasLength(2));
   });
 
   test('a failed send leaves every sale queued and nothing marked', () async {
