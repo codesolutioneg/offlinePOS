@@ -1071,8 +1071,18 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
               ));
     return Scaffold(
       backgroundColor: _face,
+      // The face stays light in the dark theme, so the bar takes its ink too.
       appBar: AppBar(
-          title: Text(tr(context, 'Reports')), actions: widget.actions),
+        foregroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.black),
+        actionsIconTheme: const IconThemeData(color: Colors.black),
+        titleTextStyle: Theme.of(context)
+            .appBarTheme
+            .titleTextStyle
+            ?.copyWith(color: Colors.black),
+        title: Text(tr(context, 'Reports')),
+        actions: widget.actions,
+      ),
       // Laid out left to right whatever the language: the tree on the left and
       // the sessions on the right is the screen this one is modelled on.
       body: Directionality(
