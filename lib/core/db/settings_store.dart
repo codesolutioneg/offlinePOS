@@ -1989,6 +1989,10 @@ class SettingsStore {
   int? get odooSessionPartnerId => _positiveId('odoo_session_partner_id');
   set odooSessionPartnerId(int? v) => _setOdooId('odoo_session_partner_id', v);
 
+  /// Whether Odoo has somewhere to book a shift's merged sale: a branch or a
+  /// session invoice customer.
+  bool get odooCloseRouted => odooBranchId != null || odooSessionPartnerId != null;
+
   /// Display name for [odooSessionPartnerId], so settings and close screens do
   /// not need a live catalogue lookup to say who the night is invoiced to.
   String? get odooSessionPartnerName => getString('odoo_session_partner_name');

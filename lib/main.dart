@@ -341,8 +341,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     batchUuid: () => ShiftStore(db).latestShift()?.uuid,
     partnerId: () => settings.odooSessionPartnerId,
     partnerName: () => settings.odooSessionPartnerName,
-    routed: () =>
-        settings.odooBranchId != null || settings.odooSessionPartnerId != null,
+    routed: () => settings.odooCloseRouted,
     onOrderBooked: (uuid, [id, name]) {
       orders.markSynced(uuid, id);
       sync.noteOdooAck(name: name, id: id);

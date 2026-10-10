@@ -6323,8 +6323,6 @@ class _PosAppState extends State<PosApp> {
                 final id = widget.settings.odooSessionPartnerId;
                 return id == null ? null : '#$id';
               },
-              // Dishflow: arm consolidated merge. Session customer comes from the branch
-              // in Odoo (Session close tab); we pull it live if this till has not cached it.
               onPrepareCloseSync: () async {
                 final stress = stressOrderCount(widget.outboxStore.db,
                     deviceId: widget.deviceId);
@@ -6379,6 +6377,8 @@ class _PosAppState extends State<PosApp> {
                   }
                   return 'No orders in this shift to sync.';
                 }
+                // Arm the consolidated merge. The session customer comes from the
+                // branch in Odoo (Session close tab), pulled live if not cached.
                 widget.settings.mergeBatchIntoOneSaleOrder = true;
                 await _ensureSessionPartnerFromBranch();
                 final partner =
@@ -6421,8 +6421,7 @@ class _PosAppState extends State<PosApp> {
                       'but Odoo did not return the sale number yet.\n'
                       'Check Sales orders for today under the session customer.';
                 }
-                final why = widget.settings.odooSessionPartnerId == null &&
-                        widget.settings.odooBranchId == null
+                final why = !widget.settings.odooCloseRouted
                     ? 'pick the branch under Server settings, and set the '
                         'session invoice customer on Offline POS ▸ Branches ▸ '
                         'Session close in Odoo'
