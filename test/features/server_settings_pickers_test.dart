@@ -228,4 +228,37 @@ void main() {
       expect(find.byKey(Key('unread-$picker')), findsNothing);
     }
   });
+
+  group('the discount product', () {
+    const withDiscount = OdooSiteChoices(
+      pointsOfSale: [
+        OdooSiteOption(id: 7, name: 'Counter', discountProductId: 55),
+        OdooSiteOption(id: 8, name: 'Terrace'),
+      ],
+    );
+
+    testWidgets('is taken from the chosen point of sale when none was named',
+        (t) async {
+      await open(t, load: () async => withDiscount);
+      await pick(t, 'restaurant', 'Counter (7)');
+      await save(t);
+      expect(settings.odooRestaurantId, 7);
+      expect(settings.odooDiscountProductId, 55);
+    });
+
+    testWidgets('typed by hand is never replaced', (t) async {
+      settings.odooDiscountProductId = 99;
+      await open(t, load: () async => withDiscount);
+      await pick(t, 'restaurant', 'Counter (7)');
+      await save(t);
+      expect(settings.odooDiscountProductId, 99);
+    });
+
+    testWidgets('stays unset when the point of sale has none', (t) async {
+      await open(t, load: () async => withDiscount);
+      await pick(t, 'restaurant', 'Terrace (8)');
+      await save(t);
+      expect(settings.odooDiscountProductId, isNull);
+    });
+  });
 }

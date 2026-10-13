@@ -886,7 +886,7 @@ class OdooPuller {
   /// company of the chosen branch.
   Future<OdooSiteChoices> siteChoices() async => OdooSiteChoices(
         branches: await _branchOptions(),
-        pointsOfSale: await _siteOptions('pos.config', byCompany: true),
+        pointsOfSale: await _pointOfSaleOptions(),
         warehouses: await _siteOptions('stock.warehouse', byCompany: true),
       );
 
@@ -936,6 +936,54 @@ class OdooPuller {
       return '$name ($code)';
     }
     return name;
+  }
+
+  /// `pos.config` rows for the restaurant picker, each with the discount product
+  /// Odoo already has for it where that product is safe to book against.
+  ///
+  /// The field belongs to Odoo's own point-of-sale discount feature, so it is asked
+  /// for as an optional: a database without it still gives up its names.
+  Future<List<OdooSiteOption>> _pointOfSaleOptions() async {
+    try {
+      final rows = await _searchReadOptional('pos.config', ['id', 'name'],
+          ['company_id', 'discount_product_id'], const []);
+      final untaxed = await _untaxedProducts({
+        for (final r in rows)
+          if (_id(r['discount_product_id']) case final int id) id,
+      });
+      return [
+        for (final r in rows)
+          if (r['id'] is int)
+            OdooSiteOption(
+              id: r['id'] as int,
+              name: (r['name'] ?? '') as String,
+              companyId: _id(r['company_id']),
+              discountProductId:
+                  untaxed.contains(_id(r['discount_product_id']))
+                      ? _id(r['discount_product_id'])
+                      : null,
+            ),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Which of [ids] are products with no sales tax on them. A read that fails
+  /// answers "none", so a product nobody could check is never trusted.
+  Future<Set<int>> _untaxedProducts(Set<int> ids) async {
+    if (ids.isEmpty) return const {};
+    try {
+      final rows = await _searchRead('product.product', ['id', 'taxes_id'], [
+        ['id', 'in', ids.toList()]
+      ]);
+      return {
+        for (final r in rows)
+          if (r['id'] is int && _ids(r['taxes_id']).isEmpty) r['id'] as int,
+      };
+    } catch (_) {
+      return const {};
+    }
   }
 
   /// One picker's rows. [byCompany] asks for the owning company as an optional
