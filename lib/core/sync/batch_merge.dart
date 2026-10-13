@@ -177,7 +177,7 @@ MergeOutcome mergeOrderPushes(
     // more than one it is left off and each ticket keeps its own below, rather
     // than posting a week onto whichever day happened to be first.
     if (businessDates.length == 1) 'business_date': businessDates.single,
-    if (partnerId != null) 'partner_id': partnerId,
+    'partner_id': ?partnerId,
     if (partnerName != null && partnerName.isNotEmpty)
       'customer_name': partnerName,
     'delivery_cost': delivery,

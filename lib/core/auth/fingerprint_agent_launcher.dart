@@ -61,7 +61,7 @@ class FingerprintAgentLauncher {
     final candidates = <String>[
       '$exeDir\\tools\\start_zk_agent.bat',
       '$exeDir\\start_zk_agent.bat',
-      if (walked != null) walked,
+      ?walked,
     ];
 
     for (final path in candidates) {
