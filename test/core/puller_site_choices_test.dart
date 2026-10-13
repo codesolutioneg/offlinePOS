@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/sync/odoo_puller.dart';
+import 'package:offline_pos/core/sync/odoo_site.dart';
 
 /// What fills the three pickers on the server screen.
 ///
@@ -83,5 +84,65 @@ void main() {
     expect(choices.isEmpty, isTrue,
         reason: 'the screen reads this as "could not be loaded" and leaves every '
             'saved id exactly where it was');
+  });
+
+  group('the discount product a point of sale already has', () {
+    OdooPuller withDiscount({
+      required Object? configField,
+      List<int> taxes = const [],
+      bool productsFail = false,
+    }) =>
+        OdooPuller(
+          call: (model, method, args, kwargs) async {
+            switch (model) {
+              case 'pos.config':
+                return [
+                  {
+                    'id': 7,
+                    'name': 'Counter',
+                    'company_id': [1, 'Downtown'],
+                    'discount_product_id': configField,
+                  },
+                ];
+              case 'product.product':
+                if (productsFail) throw Exception('no access');
+                return [
+                  {'id': 55, 'taxes_id': taxes},
+                ];
+              default:
+                return const [];
+            }
+          },
+        );
+
+    test('is offered when it carries no tax', () async {
+      final choices =
+          await withDiscount(configField: [55, 'Discount']).siteChoices();
+      expect(choices.pointsOfSale.single.discountProductId, 55);
+    });
+
+    test('is left out when it is taxed, since its line would cut the tax',
+        () async {
+      final choices = await withDiscount(
+          configField: [55, 'Discount'], taxes: [3]).siteChoices();
+      expect(choices.pointsOfSale.single.discountProductId, isNull);
+      expect(choices.pointsOfSale.single.name, 'Counter');
+    });
+
+    test('is left out when the product could not be checked', () async {
+      final choices = await withDiscount(
+          configField: [55, 'Discount'], productsFail: true).siteChoices();
+      expect(choices.pointsOfSale.single.discountProductId, isNull);
+    });
+
+    test('is simply absent on a point of sale that names none', () async {
+      final choices = await withDiscount(configField: false).siteChoices();
+      expect(choices.pointsOfSale.single.discountProductId, isNull);
+    });
+
+    test('survives the cache round trip', () {
+      const o = OdooSiteOption(id: 7, name: 'Counter', discountProductId: 55);
+      expect(OdooSiteOption.fromMap(o.toMap()).discountProductId, 55);
+    });
   });
 }

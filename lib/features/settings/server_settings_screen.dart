@@ -229,6 +229,18 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
       }
       s.odooRestaurantId = _restaurantId;
       s.odooWarehouseId = _warehouseId;
+      // A shop that named no discount product takes the one Odoo already books
+      // this point of sale's discounts against. Without one a discounted sale
+      // still totals right but splits differently there: the discount thins the
+      // tax instead of standing as its own untaxed line, and Odoo's tax no longer
+      // reads what the receipt printed.
+      if (_discountProduct.text.trim().isEmpty && _restaurantId != null) {
+        for (final o in _choices.pointsOfSale) {
+          if (o.id == _restaurantId && o.discountProductId != null) {
+            _discountProduct.text = '${o.discountProductId}';
+          }
+        }
+      }
       s.odooDiscountProductId = int.tryParse(_discountProduct.text.trim());
       s.odooLocalProductId = int.tryParse(_localProduct.text.trim());
       // Prefer the branch's Session close tab (Odoo) when it consolidates.
@@ -496,6 +508,16 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
                     DropdownMenuItem<int?>(
                         value: null,
                         child: Text(tr(context, 'No session customer'))),
+                    // The branch's own session customer can be one the local
+                    // customer list does not carry; it still has to be offered,
+                    // or the picker has a value with no row to show it on.
+                    if (_sessionPartnerId != null &&
+                        !widget.sessionPartners
+                            .any((p) => p.id == _sessionPartnerId))
+                      DropdownMenuItem<int?>(
+                          value: _sessionPartnerId,
+                          child: Text('$_sessionPartnerId '
+                              '(${tr(context, 'not in the list')})')),
                     for (final p in widget.sessionPartners)
                       DropdownMenuItem<int?>(
                           value: p.id, child: Text(p.name)),

@@ -923,6 +923,34 @@ const Map<String, String> _ar = {
       'فيه استرجاع مستني، هيتطبق أول ما البرنامج يتفتح.',
   'The staged restore was cancelled.': 'الاسترجاع المستني اتلغى.',
   'Continue': 'متابعة',
+  'Import floor from Dishflow': 'استيراد الصالة من ديش فلو',
+  'Tables, sections, printers, kitchen routing and staff':
+      'الطاولات والأقسام والطابعات وتوجيه المطبخ والموظفين',
+  'Import staff': 'استيراد الموظفين',
+  'They sign in with their Dishflow PIN. Roles are kept as they are in Dishflow.':
+      'يدخلون بنفس رمز ديش فلو. الأدوار تبقى كما هي في ديش فلو.',
+  'Staff are not imported: none of them is an admin with a PIN, and the till would be left with nobody able to manage it.':
+      'لن يُستورد الموظفون: لا يوجد بينهم مدير له رمز، وسيبقى الجهاز بلا من يديره.',
+  'Copies tables, sections, printers and kitchen routing from the Dishflow branch. Dishflow is only read.':
+      'ينسخ الطاولات والأقسام والطابعات وتوجيه المطبخ من فرع ديش فلو. ديش فلو يُقرأ فقط.',
+  'The floor is owned by the primary till. Import from the primary.':
+      'الصالة يملكها الجهاز الرئيسي. استورد من الجهاز الرئيسي.',
+  'Set the Firebase project id and API key under Dishflow owner mirror first.':
+      'أدخل معرّف مشروع Firebase ومفتاح الـ API في مرآة الأونر أولاً.',
+  'Reading…': 'جارٍ القراءة…',
+  'Read from Dishflow': 'قراءة من ديش فلو',
+  'Nothing was found for this branch.': 'لا توجد بيانات لهذا الفرع.',
+  'Section rules': 'قواعد الأقسام',
+  'Categories routed': 'أقسام موجّهة',
+  'Products routed': 'منتجات موجّهة',
+  'Replace the current floor': 'استبدال الصالة الحالية',
+  'Removes tables on this till that are not in Dishflow.':
+      'يحذف الطاولات الموجودة هنا وغير الموجودة في ديش فلو.',
+  'Close or pay every open order before importing the floor.':
+      'أغلق أو حصّل كل الطلبات المفتوحة قبل استيراد الصالة.',
+  'Imported': 'تم الاستيراد',
+  'Sections': 'الأقسام',
+  'Import': 'استيراد',
   'Show paid sales in owner Flash when online':
       'عرض المبيعات المدفوعة في فلاش الأونر عند توفر النت',
   'Mirror paid sales to Dishflow': 'رفع المبيعات المدفوعة إلى ديش فلو',

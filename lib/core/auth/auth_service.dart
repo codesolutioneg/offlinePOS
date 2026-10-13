@@ -1,4 +1,5 @@
 import '../audit/audit_log.dart';
+import 'legacy_pin.dart';
 import 'pin_hasher.dart';
 import 'pin_policy.dart';
 import 'totp.dart';
@@ -81,7 +82,7 @@ class AuthService {
       return const AuthRejected();
     }
 
-    final ok = await _hasher.verify(pin, user.pinSalt, user.pinHash);
+    final ok = await _pinMatches(user, pin);
     if (!ok) {
       _guard.recordFailure(cashierId, now: now);
       _audit.record(cashierId, 'pin.rejected');
@@ -89,9 +90,39 @@ class AuthService {
     }
 
     _guard.recordSuccess(cashierId);
-    _signedIn = user;
+    // Read back: a PIN imported from Dishflow was just re-hashed, and the
+    // signed-in account should be the row as it now stands.
+    final signedIn = _users.byId(cashierId) ?? user;
+    _signedIn = signedIn;
     _audit.record(cashierId, 'pin.unlock');
-    return AuthOk(user);
+    return AuthOk(signedIn);
+  }
+
+  /// Whether [pin] is [user]'s, whichever way their PIN is held.
+  ///
+  /// An account imported from Dishflow arrives with Dishflow's hash. The first
+  /// time its owner proves the PIN it is re-hashed the way this till hashes
+  /// every other, and Dishflow's figure is gone from the device. An account
+  /// with no PIN at all (Dishflow had none for it) matches nothing until a
+  /// manager sets one.
+  Future<bool> _pinMatches(Cashier user, String pin) async {
+    if (user.pinHash.isEmpty) return false;
+    if (!LegacyPin.isLegacy(user.pinHash)) {
+      return _hasher.verify(pin, user.pinSalt, user.pinHash);
+    }
+    if (!LegacyPin.verify(pin, user.pinSalt, user.pinHash)) return false;
+    final salt = PinHasher.newSalt();
+    _users.upsert(Cashier(
+      id: user.id,
+      name: user.name,
+      role: user.role,
+      active: user.active,
+      totpSecret: user.totpSecret,
+      pinSalt: salt,
+      pinHash: await _hasher.hash(pin, salt),
+    ));
+    _audit.record(user.id, 'pin.upgraded');
+    return true;
   }
 
   void signOut() {
@@ -116,7 +147,7 @@ class AuthService {
   Future<Cashier?> authorizeManager(String pin, {String? code}) async {
     if (!_policy.isWellFormed(pin)) return null;
     for (final m in _users.active().where((u) => u.isManager)) {
-      if (!await _hasher.verify(pin, m.pinSalt, m.pinHash)) continue;
+      if (!await _pinMatches(m, pin)) continue;
       if (m.hasSecondFactor && !Totp.verify(m.totpSecret!, code ?? '')) {
         // Named apart from a wrong PIN in the trail: the difference between a
         // stolen PIN being tried and a manager fumbling their phone is the whole
@@ -151,7 +182,7 @@ class AuthService {
       _audit.record(cashierId, 'pin.rejected');
       return false;
     }
-    if (!await _hasher.verify(pin, user.pinSalt, user.pinHash)) {
+    if (!await _pinMatches(user, pin)) {
       _guard.recordFailure(cashierId, now: now);
       _audit.record(cashierId, 'pin.rejected');
       return false;

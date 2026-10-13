@@ -97,6 +97,7 @@ class OdooSiteOption {
     this.sessionPartnerId,
     this.sessionPartnerName,
     this.isCompany = false,
+    this.discountProductId,
   });
 
   final int id;
@@ -123,6 +124,12 @@ class OdooSiteOption {
   /// Display name for [sessionPartnerId].
   final String? sessionPartnerName;
 
+  /// For a `pos.config` row: the product Odoo itself books that point of sale's
+  /// discounts against, and only when that product carries no tax. A taxed one
+  /// is left out: a discount line on it would take tax off the sale and the
+  /// server's total would no longer be the one the till charged.
+  final int? discountProductId;
+
   Map<String, dynamic> toMap() => {
         'id': id,
         'name': name,
@@ -132,6 +139,7 @@ class OdooSiteOption {
         'session_partner_id': sessionPartnerId,
         'session_partner_name': sessionPartnerName,
         if (isCompany) 'is_company': true,
+        if (discountProductId != null) 'discount_product_id': discountProductId,
       };
 
   factory OdooSiteOption.fromMap(Map<String, dynamic> m) => OdooSiteOption(
@@ -146,6 +154,9 @@ class OdooSiteOption {
             : null,
         sessionPartnerName: m['session_partner_name'] as String?,
         isCompany: m['is_company'] == true,
+        discountProductId: m['discount_product_id'] is int
+            ? m['discount_product_id'] as int
+            : null,
       );
 }
 

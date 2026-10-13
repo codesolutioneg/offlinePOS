@@ -120,6 +120,7 @@ import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/bulletin_settings_screen.dart';
 import '../features/settings/delivery_settings_screen.dart';
 import '../features/settings/cloud_backup_screen.dart';
+import '../features/settings/dishflow_floor_import_screen.dart';
 import '../features/settings/dishflow_mirror_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
 import '../features/settings/email_settings_screen.dart';
@@ -5291,6 +5292,27 @@ class _PosAppState extends State<PosApp> {
                 sync: widget.cloudSync,
               )),
         ),
+      SettingsEntry(
+        title: 'Import floor from Dishflow',
+        subtitle: 'Tables, sections, printers, kitchen routing and staff',
+        icon: Icons.cloud_download_outlined,
+        keyValue: 'set-dishflow-floor-import',
+        group: 'Server',
+        onTap: () => pushGated(
+            Permission.openSettings,
+            DishflowFloorImportScreen(
+              settings: widget.settings,
+              tables: widget.tables,
+              printers: widget.printers,
+              orders: widget.orders,
+              catalogue: widget.catalogue,
+              users: widget.users,
+              onImported: () {
+                widget.settings.publishShopBundle();
+                refresh();
+              },
+            )),
+      ),
       // Only offered on a build that has a sender: a setting whose switch does
       // nothing is worse than no setting.
       if (widget.emailer != null)
