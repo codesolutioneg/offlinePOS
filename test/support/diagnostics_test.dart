@@ -166,6 +166,11 @@ void main() {
 
   testWidgets('a build with no update channel says so', (t) async {
     await t.pumpWidget(app());
+    // The screen is a lazy list and the update section sits at its foot, below
+    // the default test surface, so it is scrolled to rather than assumed built.
+    await t.scrollUntilVisible(
+        find.byKey(const Key('no-updates')), 300,
+        scrollable: find.byType(Scrollable).first);
     expect(find.byKey(const Key('no-updates')), findsOneWidget);
   });
 
