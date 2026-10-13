@@ -496,6 +496,16 @@ class _ServerSettingsScreenState extends State<ServerSettingsScreen> {
                     DropdownMenuItem<int?>(
                         value: null,
                         child: Text(tr(context, 'No session customer'))),
+                    // The branch's own session customer can be one the local
+                    // customer list does not carry; it still has to be offered,
+                    // or the picker has a value with no row to show it on.
+                    if (_sessionPartnerId != null &&
+                        !widget.sessionPartners
+                            .any((p) => p.id == _sessionPartnerId))
+                      DropdownMenuItem<int?>(
+                          value: _sessionPartnerId,
+                          child: Text('$_sessionPartnerId '
+                              '(${tr(context, 'not in the list')})')),
                     for (final p in widget.sessionPartners)
                       DropdownMenuItem<int?>(
                           value: p.id, child: Text(p.name)),
