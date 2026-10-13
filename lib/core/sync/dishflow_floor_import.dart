@@ -1,5 +1,7 @@
 import '../../domain/order.dart';
 import '../../domain/table_section_config.dart';
+import '../auth/legacy_pin.dart';
+import '../auth/user_store.dart';
 import '../db/settings_store.dart';
 import '../db/table_store.dart';
 import '../printing/printer_registry.dart';
@@ -12,6 +14,8 @@ class DishflowFloorSnapshot {
     this.sections = const [],
     this.printerDocs = const [],
     this.customCategories = const [],
+    this.staff = const [],
+    this.staffUnread = false,
     this.branchId = '',
     this.otherBranches = const {},
   });
@@ -27,6 +31,29 @@ class DishflowFloorSnapshot {
 
   /// `custom_pos_categories`: the ids section rules are saved against.
   final List<DishflowDoc> customCategories;
+
+  /// `pos_users` for the branch: name, role, whether blocked, and the quick-login
+  /// PIN as Dishflow holds it. Nothing else on those documents is asked for.
+  final List<DishflowDoc> staff;
+
+  /// The staff list could not be read. Kept apart from "the branch has none", and
+  /// never a reason to lose the floor that was read alongside it.
+  final bool staffUnread;
+
+  /// The fields asked for on a staff document. The Odoo password Dishflow keeps
+  /// on the same document is deliberately not among them.
+  static const staffFields = [
+    'name',
+    'login',
+    'email',
+    'role',
+    'isBlocked',
+    'is_active',
+    'branchId',
+    'quickLoginEnabled',
+    'pinHash',
+    'pinSalt',
+  ];
 
   /// The branch that was asked for, as typed.
   final String branchId;
@@ -78,7 +105,28 @@ class DishflowFloorSnapshot {
       }
     }
 
+    var staff = const <DishflowDoc>[];
+    var staffUnread = false;
+    try {
+      final all = await client.listCollection(
+          projectId: projectId,
+          apiKey: apiKey,
+          collection: 'pos_users',
+          fields: staffFields);
+      staff = [
+        for (final u in all)
+          if (branchId.isEmpty ||
+              '${u.fields['branchId'] ?? ''}'.isEmpty ||
+              '${u.fields['branchId']}' == branchId)
+            u,
+      ];
+    } catch (_) {
+      staffUnread = true;
+    }
+
     return DishflowFloorSnapshot(
+      staff: staff,
+      staffUnread: staffUnread,
       tables: tables,
       sections: [
         if (rawSections is List)
@@ -126,6 +174,7 @@ class FloorImportPlan {
     this.categoryStations = const {},
     this.productStations = const {},
     this.subReceiptStation,
+    this.staff = const [],
     this.notes = const [],
   });
 
@@ -136,6 +185,21 @@ class FloorImportPlan {
   final Map<int, List<String>> productStations;
   final String? subReceiptStation;
 
+  /// The branch's people. A PIN that came across is still in Dishflow's form
+  /// (see [LegacyPin]) and becomes the till's own the first time it is typed.
+  final List<Cashier> staff;
+
+  /// The roles those people hold that this till does not have built in.
+  List<String> get staffRoles {
+    final seen = <String>[];
+    for (final c in staff) {
+      if (c.role != 'manager' && c.role != 'cashier' && !seen.contains(c.role)) {
+        seen.add(c.role);
+      }
+    }
+    return seen;
+  }
+
   /// Everything that did not carry over as-is, in plain words for the preview.
   final List<String> notes;
 
@@ -144,7 +208,8 @@ class FloorImportPlan {
       sectionConfigs.isEmpty &&
       printers.isEmpty &&
       categoryStations.isEmpty &&
-      productStations.isEmpty;
+      productStations.isEmpty &&
+      staff.isEmpty;
 
   List<String> get sections {
     final seen = <String>[];
@@ -208,8 +273,11 @@ class DishflowFloorMapper {
           'there on this till, so add one or route every category.');
     }
 
+    final staff = _staff(snapshot, notes);
+
     final subId = '${source['defaultSubReceiptPrinterId'] ?? ''}';
     return FloorImportPlan(
+      staff: staff,
       tables: tables,
       sectionConfigs: sectionConfigs,
       printers: printers,
@@ -522,6 +590,58 @@ class DishflowFloorMapper {
     return out;
   }
 
+  // ── staff ────────────────────────────────────────────────────────
+
+  /// The id an imported account is kept under, so it can never collide with one
+  /// made on the till and an import can be repeated onto the same row.
+  static String staffId(String docId) => 'dishflow-$docId';
+
+  static List<Cashier> _staff(
+      DishflowFloorSnapshot snapshot, List<String> notes) {
+    if (snapshot.staffUnread) {
+      notes.add('The staff list could not be read from Dishflow, so no staff '
+          'are imported.');
+      return const [];
+    }
+    final out = <Cashier>[];
+    var withoutPin = 0;
+    for (final u in snapshot.staff) {
+      final f = u.fields;
+      final name = [f['name'], f['login'], f['email']]
+          .map((v) => '${v ?? ''}'.trim())
+          .firstWhere((v) => v.isNotEmpty, orElse: () => '');
+      if (name.isEmpty) continue;
+
+      final hash = '${f['pinHash'] ?? ''}';
+      final salt = '${f['pinSalt'] ?? ''}';
+      final hasPin = f['quickLoginEnabled'] != false &&
+          LegacyPin.isUsable(hash, salt);
+      if (!hasPin) withoutPin++;
+
+      out.add(Cashier(
+        id: staffId(u.id),
+        name: name,
+        // The role is kept as Dishflow names it. Its admin is this till's
+        // manager, which is the one built-in role with every power.
+        role: switch ('${f['role'] ?? ''}'.trim()) {
+          '' => 'cashier',
+          final r when r.toLowerCase() == 'admin' => 'manager',
+          final r when r.toLowerCase() == 'manager' => 'manager',
+          final r when r.toLowerCase() == 'cashier' => 'cashier',
+          final r => r,
+        },
+        active: f['isBlocked'] != true && f['is_active'] != false,
+        pinSalt: hasPin ? salt.trim() : '',
+        pinHash: hasPin ? LegacyPin.wrap(hash) : '',
+      ));
+    }
+    if (withoutPin > 0) {
+      notes.add('$withoutPin staff have no quick-login PIN in Dishflow. They '
+          'are imported without one; set it under Staff.');
+    }
+    return out;
+  }
+
   // ── decoding helpers ─────────────────────────────────────────────
 
   static int? _int(Object? v) =>
@@ -542,18 +662,59 @@ class DishflowFloorImporter {
     required this.tables,
     required this.settings,
     required this.printers,
+    this.users,
   });
 
   final TableStore tables;
   final SettingsStore settings;
   final PrinterRegistry printers;
 
+  /// Where staff are written. Null on a build that imports the floor alone.
+  final UserStore? users;
+
+  /// Whether importing [plan]'s staff would leave someone able to manage the
+  /// till. The provisioning account disappears the moment a real roster exists,
+  /// so a roster with no manager who has a PIN would lock the settings for good.
+  bool staffLeaveAManager(FloorImportPlan plan) {
+    bool usable(Cashier c) => c.active && c.isManager && c.pinHash.isNotEmpty;
+    final incoming = {for (final c in plan.staff) c.id};
+    return plan.staff.any(usable) ||
+        (users?.active() ?? const <Cashier>[])
+            .any((c) => c.id != 'setup' && !incoming.contains(c.id) && usable(c));
+  }
+
   /// [replaceFloor] removes tables the plan does not contain; otherwise they
   /// stay and an incoming table that shares a name with one is renamed.
   ///
   /// The caller is expected to have checked that no order is open: a bill is
   /// recalled by its table name, and renaming the floor under one loses it.
-  void apply(FloorImportPlan plan, {required bool replaceFloor}) {
+  void apply(FloorImportPlan plan,
+      {required bool replaceFloor, bool importStaff = false}) {
+    final users = this.users;
+    if (importStaff && users != null && staffLeaveAManager(plan)) {
+      for (final role in plan.staffRoles) {
+        settings.addCustomRole(role);
+      }
+      for (final c in plan.staff) {
+        final existing = users.byId(c.id);
+        // Someone who has already signed in here, or had their PIN reset here,
+        // holds the till's own hash. A repeat import must not put Dishflow's
+        // back over it, nor take away a second factor enrolled since.
+        final keepPin = existing != null &&
+            existing.pinHash.isNotEmpty &&
+            !LegacyPin.isLegacy(existing.pinHash);
+        users.upsert(Cashier(
+          id: c.id,
+          name: c.name,
+          role: c.role,
+          active: c.active,
+          pinSalt: keepPin ? existing.pinSalt : c.pinSalt,
+          pinHash: keepPin ? existing.pinHash : c.pinHash,
+          totpSecret: existing?.totpSecret,
+        ));
+      }
+    }
+
     if (plan.tables.isNotEmpty) {
       if (replaceFloor) {
         final incoming = {for (final t in plan.tables) t.id};

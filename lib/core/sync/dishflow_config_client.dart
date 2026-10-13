@@ -18,10 +18,14 @@ class DishflowConfigClient {
   final HttpClient Function() _openClient;
 
   /// Every document in [collection], following page tokens to the end.
+  ///
+  /// [fields] narrows what the server sends back to those fields alone, for a
+  /// collection that also holds things this till has no business receiving.
   Future<List<DishflowDoc>> listCollection({
     required String projectId,
     required String apiKey,
     required String collection,
+    List<String> fields = const [],
   }) async {
     final out = <DishflowDoc>[];
     String? pageToken;
@@ -35,6 +39,7 @@ class DishflowConfigClient {
           'key': apiKey,
           'pageSize': '300',
           'pageToken': ?pageToken,
+          if (fields.isNotEmpty) 'mask.fieldPaths': fields,
         },
       );
       final decoded = await _getJson(url, what: collection);

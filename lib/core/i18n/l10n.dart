@@ -796,8 +796,13 @@ const Map<String, String> _ar = {
   'Language': 'اللغة',
   'Dishflow owner mirror': 'مرآة الأونر في ديش فلو',
   'Import floor from Dishflow': 'استيراد الصالة من ديش فلو',
-  'Tables, sections, printers and kitchen routing':
-      'الطاولات والأقسام والطابعات وتوجيه المطبخ',
+  'Tables, sections, printers, kitchen routing and staff':
+      'الطاولات والأقسام والطابعات وتوجيه المطبخ والموظفين',
+  'Import staff': 'استيراد الموظفين',
+  'They sign in with their Dishflow PIN. Roles are kept as they are in Dishflow.':
+      'يدخلون بنفس رمز ديش فلو. الأدوار تبقى كما هي في ديش فلو.',
+  'Staff are not imported: none of them is an admin with a PIN, and the till would be left with nobody able to manage it.':
+      'لن يُستورد الموظفون: لا يوجد بينهم مدير له رمز، وسيبقى الجهاز بلا من يديره.',
   'Copies tables, sections, printers and kitchen routing from the Dishflow branch. Dishflow is only read.':
       'ينسخ الطاولات والأقسام والطابعات وتوجيه المطبخ من فرع ديش فلو. ديش فلو يُقرأ فقط.',
   'The floor is owned by the primary till. Import from the primary.':

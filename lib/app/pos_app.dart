@@ -5262,7 +5262,7 @@ class _PosAppState extends State<PosApp> {
       ),
       SettingsEntry(
         title: 'Import floor from Dishflow',
-        subtitle: 'Tables, sections, printers and kitchen routing',
+        subtitle: 'Tables, sections, printers, kitchen routing and staff',
         icon: Icons.cloud_download_outlined,
         keyValue: 'set-dishflow-floor-import',
         group: 'Server',
@@ -5274,6 +5274,7 @@ class _PosAppState extends State<PosApp> {
               printers: widget.printers,
               orders: widget.orders,
               catalogue: widget.catalogue,
+              users: widget.users,
               onImported: () {
                 widget.settings.publishShopBundle();
                 refresh();

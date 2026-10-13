@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:offline_pos/core/auth/legacy_pin.dart';
+import 'package:offline_pos/core/auth/user_store.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
@@ -17,6 +19,9 @@ class _NoPrinters extends PrinterDiscovery {
   Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async =>
       const [];
 }
+
+/// Shaped like a Dishflow PIN hash: 64 hex characters.
+final _hash = 'ab' * 32;
 
 DishflowDoc _table(
   String id,
@@ -90,6 +95,34 @@ DishflowFloorSnapshot _snapshot() => DishflowFloorSnapshot(
             'defaultReceiptPrinterId': 'p-r',
           },
         ),
+      ],
+      staff: [
+        (
+          id: '2',
+          fields: {
+            'name': 'Mr Abase',
+            'role': 'admin',
+            'quickLoginEnabled': true,
+            'pinHash': _hash,
+            'pinSalt': 'a1b2c3d4',
+          },
+        ),
+        (
+          id: '38',
+          fields: {
+            'name': 'Rashad',
+            'role': 'supervisor',
+            'quickLoginEnabled': true,
+            'pinHash': _hash,
+            'pinSalt': 'a1b2c3d4',
+          },
+        ),
+        (id: '89', fields: {'login': 'kajoo@shop', 'role': 'cashier'}),
+        (
+          id: '92',
+          fields: {'name': 'Left', 'role': 'cashier', 'isBlocked': true},
+        ),
+        (id: '94', fields: {'role': 'cashier'}),
       ],
       customCategories: [
         (id: 'catA', fields: {'name': 'Food', 'odooId': 11}),
@@ -215,6 +248,47 @@ void main() {
       expect(plan.notes.join('\n'), contains('No printer is named "kitchen"'));
     });
 
+    Cashier staff(String docId) =>
+        plan.staff.firstWhere((c) => c.id == 'dishflow-$docId');
+
+    test('staff keep their name and their Dishflow role', () {
+      expect(staff('38').name, 'Rashad');
+      expect(staff('38').role, 'supervisor');
+      expect(staff('89').name, 'kajoo@shop');
+      expect(staff('89').role, 'cashier');
+      expect(plan.staffRoles, ['supervisor']);
+    });
+
+    test("Dishflow's admin is this till's manager", () {
+      expect(staff('2').role, 'manager');
+      expect(staff('2').isManager, isTrue);
+    });
+
+    test("a PIN comes across in Dishflow's form, to be upgraded on first use",
+        () {
+      expect(LegacyPin.isLegacy(staff('38').pinHash), isTrue);
+      expect(staff('38').pinSalt, 'a1b2c3d4');
+    });
+
+    test('someone with no quick-login PIN is imported without one', () {
+      expect(staff('89').pinHash, isEmpty);
+      expect(plan.notes.join('\n'), contains('2 staff have no quick-login PIN'));
+    });
+
+    test('a blocked account comes across inactive, a nameless one not at all',
+        () {
+      expect(staff('92').active, isFalse);
+      expect(plan.staff.any((c) => c.id == 'dishflow-94'), isFalse);
+      expect(plan.staff, hasLength(4));
+    });
+
+    test('a staff list that could not be read is said so', () {
+      final p = DishflowFloorMapper.plan(
+          const DishflowFloorSnapshot(staffUnread: true));
+      expect(p.staff, isEmpty);
+      expect(p.notes.single, contains('could not be read'));
+    });
+
     test('without a global document, user documents are merged', () {
       final p = DishflowFloorMapper.plan(DishflowFloorSnapshot(printerDocs: [
         (
@@ -255,6 +329,7 @@ void main() {
     late TableStore tables;
     late SettingsStore settings;
     late PrinterRegistry printers;
+    late UserStore users;
     late DishflowFloorImporter importer;
     late FloorImportPlan plan;
 
@@ -263,8 +338,9 @@ void main() {
       tables = TableStore(db);
       settings = SettingsStore(db);
       printers = PrinterRegistry(discovery: _NoPrinters());
+      users = UserStore(db);
       importer = DishflowFloorImporter(
-          tables: tables, settings: settings, printers: printers);
+          tables: tables, settings: settings, printers: printers, users: users);
       plan = DishflowFloorMapper.plan(_snapshot());
     });
 
@@ -312,6 +388,51 @@ void main() {
       importer.apply(plan, replaceFloor: true);
       expect(printers['receipt']?.host, '192.168.1.50');
       expect(printers['Cashier']?.host, '10.0.0.7');
+    });
+
+    test('staff are written with their roles, which the till then knows', () {
+      importer.apply(plan, replaceFloor: true, importStaff: true);
+      expect(users.byId('dishflow-2')?.role, 'manager');
+      expect(users.byId('dishflow-38')?.role, 'supervisor');
+      expect(settings.customRoles, contains('supervisor'));
+      expect(users.byId('dishflow-92')?.active, isFalse);
+    });
+
+    test('staff are left alone unless asked for', () {
+      importer.apply(plan, replaceFloor: true);
+      expect(users.all(), isEmpty);
+    });
+
+    test("a repeat import keeps a PIN the till has already made its own", () {
+      importer.apply(plan, replaceFloor: true, importStaff: true);
+      // What the first sign-in leaves behind.
+      users.upsert(const Cashier(
+          id: 'dishflow-38',
+          name: 'Rashad',
+          role: 'supervisor',
+          pinSalt: 'c2FsdA==',
+          pinHash: 'dGlsbC1oYXNo'));
+      importer.apply(plan, replaceFloor: true, importStaff: true);
+      expect(users.byId('dishflow-38')?.pinHash, 'dGlsbC1oYXNo');
+      expect(users.byId('dishflow-38')?.pinSalt, 'c2FsdA==');
+    });
+
+    test('staff with no admin who has a PIN are not imported at all', () {
+      final noManager = DishflowFloorMapper.plan(DishflowFloorSnapshot(staff: [
+        (
+          id: '38',
+          fields: {
+            'name': 'Rashad',
+            'role': 'cashier',
+            'pinHash': _hash,
+            'pinSalt': 'a1b2c3d4',
+          },
+        ),
+        (id: '2', fields: {'name': 'Mr Abase', 'role': 'admin'}),
+      ]));
+      expect(importer.staffLeaveAManager(noManager), isFalse);
+      importer.apply(noManager, replaceFloor: true, importStaff: true);
+      expect(users.all(), isEmpty);
     });
 
     test('routing set by hand for other categories survives', () {

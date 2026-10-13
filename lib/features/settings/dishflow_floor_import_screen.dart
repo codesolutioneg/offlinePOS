@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/auth/user_store.dart';
 import '../../core/db/catalogue_store.dart';
 import '../../core/db/order_store.dart';
 import '../../core/db/settings_store.dart';
@@ -10,8 +11,8 @@ import '../../core/sync/dishflow_config_client.dart';
 import '../../core/sync/dishflow_floor_import.dart';
 import '../../domain/table_section_config.dart';
 
-/// Copy a Dishflow branch's floor plan, section rules, printers and kitchen
-/// routing onto this till.
+/// Copy a Dishflow branch's floor plan, section rules, printers, kitchen
+/// routing and staff onto this till.
 ///
 /// One direction and on demand: Dishflow is only read, and nothing is written
 /// here until a manager has seen what would change and confirmed it. The floor
@@ -25,6 +26,7 @@ class DishflowFloorImportScreen extends StatefulWidget {
     required this.orders,
     required this.catalogue,
     required this.onImported,
+    this.users,
     this.client,
   });
 
@@ -34,6 +36,9 @@ class DishflowFloorImportScreen extends StatefulWidget {
   final OrderStore orders;
   final CatalogueStore catalogue;
   final VoidCallback onImported;
+
+  /// Where staff are written. Null leaves staff out of the import altogether.
+  final UserStore? users;
   final DishflowConfigClient? client;
 
   @override
@@ -47,6 +52,14 @@ class _DishflowFloorImportScreenState extends State<DishflowFloorImportScreen> {
   bool _busy = false;
   bool _done = false;
   late bool _replaceFloor = !widget.tables.isEmpty;
+  bool _importStaff = true;
+
+  DishflowFloorImporter get _importer => DishflowFloorImporter(
+        tables: widget.tables,
+        settings: widget.settings,
+        printers: widget.printers,
+        users: widget.users,
+      );
 
   bool get _secondary => widget.settings.deviceRole == DeviceRole.secondary;
 
@@ -90,11 +103,8 @@ class _DishflowFloorImportScreenState extends State<DishflowFloorImportScreen> {
   void _import() {
     final plan = _plan;
     if (plan == null || _floorBusy) return;
-    DishflowFloorImporter(
-      tables: widget.tables,
-      settings: widget.settings,
-      printers: widget.printers,
-    ).apply(plan, replaceFloor: _replaceFloor);
+    _importer.apply(plan,
+        replaceFloor: _replaceFloor, importStaff: _importStaff);
     widget.onImported();
     setState(() => _done = true);
   }
@@ -150,6 +160,8 @@ class _DishflowFloorImportScreenState extends State<DishflowFloorImportScreen> {
                   '${plan.categoryStations.length}'),
               _row(context, 'Products routed',
                   '${plan.productStations.length}'),
+              if (widget.users != null)
+                _row(context, 'Staff', '${plan.staff.length}'),
               for (final note in plan.notes)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
@@ -165,6 +177,28 @@ class _DishflowFloorImportScreenState extends State<DishflowFloorImportScreen> {
                   value: _replaceFloor,
                   onChanged: (v) => setState(() => _replaceFloor = v),
                 ),
+              if (widget.users != null && plan.staff.isNotEmpty)
+                if (_importer.staffLeaveAManager(plan))
+                  SwitchListTile(
+                    key: const Key('floor-import-staff'),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(tr(context, 'Import staff')),
+                    subtitle: Text(tr(context,
+                        'They sign in with their Dishflow PIN. Roles are kept as they are in Dishflow.')),
+                    value: _importStaff,
+                    onChanged: (v) => setState(() => _importStaff = v),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      tr(context,
+                          'Staff are not imported: none of them is an admin with a PIN, and the till would be left with nobody able to manage it.'),
+                      key: const Key('floor-import-staff-blocked'),
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error),
+                    ),
+                  ),
               const SizedBox(height: 12),
               if (_floorBusy)
                 Text(
