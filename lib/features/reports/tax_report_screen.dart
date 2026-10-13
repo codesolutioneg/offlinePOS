@@ -6,7 +6,8 @@ import 'report_export.dart';
 
 /// A tax report: net, tax and gross grouped by tax rate. Menu prices are net, so
 /// the tax shown is what was charged on top of them and the gross is what the
-/// customers actually paid.
+/// customers actually paid. The tax is the bill's own: charged before any order
+/// discount, with the tax carried inside delivery and service fees counted too.
 class TaxReportScreen extends StatelessWidget {
   const TaxReportScreen({super.key, required this.orders, required this.formatAmount});
 
@@ -21,20 +22,40 @@ class TaxReportScreen extends StatelessWidget {
       // The service charge travels inside the line prices, so the server taxes it at
       // each item's own rate. The report has to include it or it understates the tax
       // that was actually booked.
-      final f = o.discountFactor * o.serviceChargeFactor;
+      final s = o.serviceChargeFactor;
+      final f = o.discountFactor * s;
       for (final l in o.lines) {
         if (l.taxRate <= 0) continue;
-        // The line's net, then the tax charged on top of it. Gross is the sum of the
-        // two, which is what the customer handed over for this line.
-        final net = l.total * f;
-        final tax = net * l.taxRate / 100;
+        // The tax is the one the bill charged: on the full price, exactly as
+        // [Order.taxTotal] works it out. An order discount comes off what the
+        // guest pays and not off the taxable base, so computing the tax from the
+        // discounted net would drop the tax share of every discount given from
+        // the report while the till still collected it.
+        final tax = l.total * s * l.taxRate / 100;
+        // Gross is what the customer handed over for this line: the discounted
+        // food plus that tax. Net is whatever is left of it once the tax is set
+        // aside, which keeps net + tax == gross.
         final acc = byRate.putIfAbsent(l.taxRate, () => [0, 0]);
-        acc[0] += net + tax;
+        acc[0] += l.total * f + tax;
         acc[1] += tax;
+      }
+      // Delivery and the flat service fee never appear as lines, and the server
+      // books both tax-inclusive. A base rebuilt from the lines alone misses
+      // them, and the report then reads under the tax that was actually booked.
+      final fee = o.deliveryCost + o.serviceFee;
+      if (fee != 0) {
+        final acc = byRate.putIfAbsent(_feeTaxRate, () => [0, 0]);
+        acc[0] += fee;
+        acc[1] += fee - fee / (1 + _feeTaxRate / 100);
       }
     }
     return byRate;
   }
+
+  /// The VAT rate a fee is booked inclusive of, and so the row its tax is
+  /// reported under. Stated as the rate rather than derived from a factor, so it
+  /// lands on the same row as the food taxed at it.
+  static const double _feeTaxRate = 14;
 
   static String _rate(double r) =>
       '${r.toStringAsFixed(r == r.roundToDouble() ? 0 : 1)}%';
