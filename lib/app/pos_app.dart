@@ -116,6 +116,7 @@ import '../features/sell/sell_screen.dart';
 import '../features/settings/appearance_settings_screen.dart';
 import '../features/settings/bulletin_settings_screen.dart';
 import '../features/settings/delivery_settings_screen.dart';
+import '../features/settings/dishflow_floor_import_screen.dart';
 import '../features/settings/dishflow_mirror_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
 import '../features/settings/email_settings_screen.dart';
@@ -5254,6 +5255,26 @@ class _PosAppState extends State<PosApp> {
               sender: widget.dishflow?.sender,
               onChanged: () {
                 widget.dishflow?.apply(widget.settings);
+                widget.settings.publishShopBundle();
+                refresh();
+              },
+            )),
+      ),
+      SettingsEntry(
+        title: 'Import floor from Dishflow',
+        subtitle: 'Tables, sections, printers and kitchen routing',
+        icon: Icons.cloud_download_outlined,
+        keyValue: 'set-dishflow-floor-import',
+        group: 'Server',
+        onTap: () => pushGated(
+            Permission.openSettings,
+            DishflowFloorImportScreen(
+              settings: widget.settings,
+              tables: widget.tables,
+              printers: widget.printers,
+              orders: widget.orders,
+              catalogue: widget.catalogue,
+              onImported: () {
                 widget.settings.publishShopBundle();
                 refresh();
               },
