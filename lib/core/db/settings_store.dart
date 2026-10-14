@@ -91,6 +91,7 @@ class SettingsStore {
   static const _emailZReport = 'email_z_report';
   static const _roleOrderTypes = 'role_order_types';
   static const _shopOrderTypes = 'shop_order_types';
+  static const _paymentMethodOrderTypes = 'payment_method_order_types';
   static const _codePage = 'receipt_code_page';
   static const _arabicRaster = 'receipt_arabic_raster';
   static const _businessDayCutoverHour = 'business_day_cutover_hour';
@@ -953,6 +954,56 @@ class SettingsStore {
     disabledPaymentMethodIds = ids;
   }
 
+  /// The order types each payment method is offered for, by method id. A method
+  /// absent here is offered for every type, so a fresh till and a shop that never
+  /// opens this setting behave exactly as before it existed.
+  Map<int, Set<OrderType>> get paymentMethodOrderTypes {
+    final raw = getString(_paymentMethodOrderTypes);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      final byName = {for (final t in OrderType.values) t.name: t};
+      return {
+        for (final e in decoded.entries)
+          if (int.tryParse('${e.key}') != null && e.value is List)
+            int.parse('${e.key}'): {
+              for (final n in e.value as List)
+                if (byName['$n'] != null) byName['$n']!,
+            },
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  set paymentMethodOrderTypes(Map<int, Set<OrderType>> v) => setString(
+        _paymentMethodOrderTypes,
+        jsonEncode({
+          for (final e in v.entries)
+            if (!e.value.containsAll(OrderType.values))
+              '${e.key}': e.value.map((t) => t.name).toList(),
+        }),
+      );
+
+  /// The types [methodId] is offered for: every type unless a manager narrowed it.
+  Set<OrderType> paymentMethodTypes(int methodId) =>
+      paymentMethodOrderTypes[methodId] ?? OrderType.values.toSet();
+
+  void setPaymentMethodTypes(int methodId, Set<OrderType> types) {
+    final map = paymentMethodOrderTypes;
+    if (types.containsAll(OrderType.values)) {
+      map.remove(methodId);
+    } else {
+      map[methodId] = types;
+    }
+    paymentMethodOrderTypes = map;
+  }
+
+  /// Whether the payment sheet offers [methodId] on an order of [type].
+  bool isPaymentMethodOfferedFor(int methodId, OrderType type) =>
+      isPaymentMethodOffered(methodId) && paymentMethodTypes(methodId).contains(type);
+
   // ── letting a customer settle later ──────────────────────────────
 
   /// The tender an on-account sale books against, or null when the shop does not
@@ -1052,6 +1103,22 @@ class SettingsStore {
   /// the flash route does not need it at all.
   PrinterLogo? get receiptLogo => PrinterLogo.decode(getString('receipt_logo'));
   set receiptLogo(PrinterLogo? v) => setString('receipt_logo', v?.encode());
+
+  /// The file the logo was last loaded from, so a new size can be cut from the
+  /// original rather than from dots that have already lost detail.
+  String get receiptLogoPath => getString('receipt_logo_path') ?? '';
+  set receiptLogoPath(String v) => setString('receipt_logo_path', v.trim());
+
+  /// The tallest the logo may print, in millimetres of paper. The paper width
+  /// still caps it, so a wide logo can come out shorter than this.
+  int get receiptLogoHeightMm =>
+      (int.tryParse(getString('receipt_logo_height_mm') ?? '') ?? 20)
+          .clamp(logoHeightMinMm, logoHeightMaxMm);
+  set receiptLogoHeightMm(int v) =>
+      setString('receipt_logo_height_mm', '${v.clamp(logoHeightMinMm, logoHeightMaxMm)}');
+
+  static const int logoHeightMinMm = 6;
+  static const int logoHeightMaxMm = 60;
 
   /// The command that puts the mark on a slip, or null when the shop prints none.
   /// One place decides between the two routes, so the sale receipt, the bill and the
@@ -1540,6 +1607,7 @@ class SettingsStore {
         'role_order_types': getString(_roleOrderTypes),
         'shop_order_types': getString(_shopOrderTypes),
         'disabled_payment_methods': disabledPaymentMethodIds.toList(),
+        'payment_method_order_types': getString(_paymentMethodOrderTypes),
         'table_security': tableSecurity,
         'ask_guest_count': askGuestCount,
         'ask_cashier_on_open': askCashierOnOpen,
@@ -1652,6 +1720,9 @@ class SettingsStore {
     }
     if (bundle['shop_order_types'] is String) {
       setString(_shopOrderTypes, bundle['shop_order_types'] as String);
+    }
+    if (bundle['payment_method_order_types'] is String) {
+      setString(_paymentMethodOrderTypes, bundle['payment_method_order_types'] as String);
     }
     if (bundle['disabled_payment_methods'] is List) {
       disabledPaymentMethodIds = {

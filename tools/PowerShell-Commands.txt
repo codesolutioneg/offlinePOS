@@ -7,7 +7,14 @@
 
 1) السماح للبرنامج في الفايروول (علشان الأجهزة تشوف بعض على الشبكة)
 ----------------------------------------------------------------------
-Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command',"New-NetFirewallRule -DisplayName 'Offline POS LAN TCP' -Direction Inbound -Protocol TCP -LocalPort 45333 -Action Allow -Profile Any; New-NetFirewallRule -DisplayName 'Offline POS LAN UDP' -Direction Inbound -Protocol UDP -LocalPort 45334 -Action Allow -Profile Any; Get-NetFirewallProfile | ft Name,Enabled"
+شغّله على كل جهاز، الرئيسي والفرعي:
+
+Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command',"Get-NetFirewallRule -Action Block -EA SilentlyContinue | ? { `$_.DisplayName -match 'offline' } | Remove-NetFirewallRule; Get-NetFirewallRule -DisplayName 'Offline POS LAN*' -EA SilentlyContinue | Remove-NetFirewallRule; New-NetFirewallRule -DisplayName 'Offline POS LAN TCP' -Direction Inbound -Protocol TCP -LocalPort 45333 -Action Allow -Profile Any | Out-Null; New-NetFirewallRule -DisplayName 'Offline POS LAN UDP' -Direction Inbound -Protocol UDP -LocalPort 45334 -Action Allow -Profile Any | Out-Null; Get-NetFirewallRule -EA SilentlyContinue | ? { `$_.DisplayName -match 'offline' } | ft DisplayName, Action, Enabled -AutoSize; 'Firewall fixed'"
+
+- بيمسح أي حظر للبرنامج عمله ويندوز (لما حد يدوس Cancel على رسالة الفايروول)، والحظر ده بيغلب أي سماح.
+- بيسمح للبورتات 45333 و45334 لأي فولدر البرنامج متثبت فيه، فمش محتاج تعيده بعد التحديث.
+- لو ظهرت رسالة الفايروول "Windows Defender Firewall has blocked some features": علّم على
+  Private و Public الاتنين واضغط Allow access. أوعى تضغط Cancel.
 
 
 2) قفل الفايروول كله (للتجربة بس)
@@ -52,6 +59,14 @@ Get-NetIPAddress -AddressFamily IPv4 | ? { $_.IPAddress -notmatch '^(127|169\.25
 
 - أول 3 أرقام في الـ IP لازم تكون واحدة على الجهازين.
 - App ... listening لازم تطلع True.
+
+مين على الشبكة وفين الجهاز الرئيسي (بيسمع 15 ثانية لكل الأجهزة اللي البرنامج مفتوح عليها):
+$u = New-Object Net.Sockets.UdpClient; $u.Client.SetSocketOption('Socket','ReuseAddress',$true); $u.Client.Bind((New-Object Net.IPEndPoint([Net.IPAddress]::Any,45334))); $u.Client.ReceiveTimeout=2000; $end=(Get-Date).AddSeconds(15); $seen=@{}; "Listening for 15 seconds..."; while ((Get-Date) -lt $end) { try { $ep=New-Object Net.IPEndPoint([Net.IPAddress]::Any,0); $b=$u.Receive([ref]$ep); $j=[Text.Encoding]::UTF8.GetString($b) | ConvertFrom-Json; if (-not $seen[$j.device_id]) { $seen[$j.device_id]=1; $c=New-Object Net.Sockets.TcpClient; $ok=$false; try { $ok=$c.ConnectAsync($ep.Address,[int]$j.port).Wait(1500) } catch {}; $c.Close(); $r = if ($j.role) { $j.role } else { 'not set' }; "{0,-16} {1,-22} role: {2,-10} port: {3}  reachable: {4}" -f $ep.Address, $j.name, $r, $j.port, $ok } } catch [Net.Sockets.SocketException] {} }; $u.Close(); if ($seen.Count -eq 0) { 'No device was heard.' }
+
+- role: primary يبقى ده الجهاز الرئيسي. reachable: True يبقى الجهاز ده يقدر يتصل بيه.
+- reachable: False: الفايروول على الجهاز الرئيسي قافل البرنامج، شغّل أمر 1 عليه.
+- No device was heard: البرنامج مقفول على الرئيسي، أو الجهازين مش على نفس الشبكة،
+  أو الفايروول قافل UDP 45334. شغّل أمر 1 على الجهازين، ولو لسه، جرّب أمر 2 (قفل الفايروول) للتجربة.
 
 ومن جهاز للتاني (حط IP الجهاز التاني مكان 192.168.1.25):
 Test-NetConnection 192.168.1.25 -Port 45333 | ft RemoteAddress, PingSucceeded, TcpTestSucceeded

@@ -15,9 +15,13 @@ Get-Process offline_pos -ErrorAction SilentlyContinue | Stop-Process -Force; "Cl
 
 الخطوة 2: افتح البرنامج في الفايروول (علشان الأجهزة تشوف بعض على الشبكة)
 ---------------------------------------------------------------------------
-Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command',"New-NetFirewallRule -DisplayName 'Offline POS LAN TCP' -Direction Inbound -Protocol TCP -LocalPort 45333 -Action Allow -Profile Any; New-NetFirewallRule -DisplayName 'Offline POS LAN UDP' -Direction Inbound -Protocol UDP -LocalPort 45334 -Action Allow -Profile Any; 'Firewall OK'"
+Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command',"Get-NetFirewallRule -Action Block -EA SilentlyContinue | ? { `$_.DisplayName -match 'offline' } | Remove-NetFirewallRule; Get-NetFirewallRule -DisplayName 'Offline POS LAN*' -EA SilentlyContinue | Remove-NetFirewallRule; New-NetFirewallRule -DisplayName 'Offline POS LAN TCP' -Direction Inbound -Protocol TCP -LocalPort 45333 -Action Allow -Profile Any | Out-Null; New-NetFirewallRule -DisplayName 'Offline POS LAN UDP' -Direction Inbound -Protocol UDP -LocalPort 45334 -Action Allow -Profile Any | Out-Null; Get-NetFirewallRule -EA SilentlyContinue | ? { `$_.DisplayName -match 'offline' } | ft DisplayName, Action, Enabled -AutoSize; 'Firewall fixed'"
 
-هتفتح شاشة تانية ومكتوب فيها Firewall OK، اقفلها.
+هتفتح شاشة تانية ومكتوب فيها Firewall fixed، اقفلها.
+
+مهم: لو ظهرت بعد كده رسالة الفايروول "Windows Defender Firewall has blocked some features"،
+علّم على Private و Public الاتنين واضغط Allow access. أوعى تضغط Cancel، لأنها بتقفل البرنامج
+عن باقي الأجهزة. ولو حد داسها بالغلط، شغّل الأمر ده تاني وهو بيصلّحها.
 
 
 الخطوة 3: نزّل البرنامج وثبّته

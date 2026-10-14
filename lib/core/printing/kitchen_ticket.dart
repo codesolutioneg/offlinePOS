@@ -93,11 +93,12 @@ class KitchenTicketBuilder {
           .size();
     }
 
-    // Same seating wording as the payment receipt: "e - Table 2", centred.
+    // Same seating wording as the payment receipt: "e - Table 2", centred. Tall
+    // but normal width, so a section and a table name fit on one line.
     final tableLine = _tableDisplay(order);
     if (tableLine != null) {
       p.align(EscPosAlign.center)
-          .size(doubleWidth: true, doubleHeight: true)
+          .size(doubleHeight: true)
           .bold(true)
           .line('* $tableLine *')
           .bold(false)

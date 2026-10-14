@@ -2009,6 +2009,14 @@ class _SellScreenState extends State<SellScreen> {
         ? all
         : all.where((m) => settings.isPaymentMethodOffered(m.id)).toList();
     if (offered.isEmpty) offered = all;
+    // Narrowed to what the shop takes on this order type, unless that leaves
+    // nothing, because a sale must always be payable.
+    if (settings != null) {
+      final type = s.current.type;
+      final forType =
+          offered.where((m) => settings.paymentMethodTypes(m.id).contains(type)).toList();
+      if (forType.isNotEmpty) offered = forType;
+    }
     final sectionPays = widget.allowedPaymentMethodIds;
     if (sectionPays.isEmpty) return offered;
     final filtered =

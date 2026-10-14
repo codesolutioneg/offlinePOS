@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
+import '../../domain/order.dart' show OrderType, OrderTypeLabel;
 
 /// What each tender is called on the printed receipt.
 ///
@@ -40,6 +41,9 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
   /// Whether each method is offered on the till's payment sheet.
   final Map<int, bool> _offered = {};
 
+  /// The order types each method is offered for.
+  final Map<int, Set<OrderType>> _types = {};
+
   /// The method an on-account sale books against, or null for off.
   int? _payLater;
 
@@ -51,6 +55,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
     for (final m in widget.methods) {
       _labels[m.id] = TextEditingController(text: saved[m.id] ?? '');
       _offered[m.id] = widget.settings.isPaymentMethodOffered(m.id);
+      _types[m.id] = widget.settings.paymentMethodTypes(m.id);
     }
   }
 
@@ -66,6 +71,7 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
     for (final m in widget.methods) {
       widget.settings.setPaymentMethodLabel(m.id, _labels[m.id]?.text);
       widget.settings.setPaymentMethodOffered(m.id, _offered[m.id] ?? true);
+      widget.settings.setPaymentMethodTypes(m.id, _types[m.id] ?? OrderType.values.toSet());
     }
     widget.settings.payLaterMethodId = _payLater;
     widget.onChanged();
@@ -95,6 +101,10 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final shopTypes = [
+      for (final t in OrderType.values)
+        if (widget.settings.shopOrderTypes.contains(t)) t,
+    ];
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Payment methods'))),
       body: widget.methods.isEmpty
@@ -177,6 +187,39 @@ class _PaymentMethodsScreenState extends State<PaymentMethodsScreen> {
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ),
+                          if (_offered[m.id] ?? true) ...[
+                            const SizedBox(height: 8),
+                            Text(tr(context, 'Offered for'),
+                                style: Theme.of(context).textTheme.labelMedium),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 4,
+                              children: [
+                                for (final t in shopTypes)
+                                  FilterChip(
+                                    key: Key('payment-type-${m.id}-${t.name}'),
+                                    label: Text(tr(context, t.label)),
+                                    selected: _types[m.id]?.contains(t) ?? true,
+                                    // Set here because the shared chip theme pairs a
+                                    // navy selected fill with dark label text.
+                                    selectedColor: Theme.of(context).colorScheme.primary,
+                                    checkmarkColor: Colors.white,
+                                    backgroundColor: Colors.white,
+                                    side: BorderSide(color: Colors.grey.shade400),
+                                    labelStyle: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: (_types[m.id]?.contains(t) ?? true)
+                                          ? Colors.white
+                                          : Colors.grey.shade700,
+                                    ),
+                                    onSelected: (v) => setState(() {
+                                      final set = _types[m.id] ??= OrderType.values.toSet();
+                                      v ? set.add(t) : set.remove(t);
+                                    }),
+                                  ),
+                              ],
+                            ),
+                          ],
                           const SizedBox(height: 8),
                           TextField(
                             key: Key('payment-label-${m.id}'),

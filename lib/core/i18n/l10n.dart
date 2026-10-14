@@ -1388,6 +1388,11 @@ const Map<String, String> _ar = {
   'Give the file path of the logo image.': 'اكتب مسار ملف صورة الشعار.',
   'That file could not be read as an image.': 'تعذّرت قراءة هذا الملف كصورة.',
   'Logo stored in the printer.': 'تم تخزين الشعار في الطابعة.',
+  'Logo size': 'حجم الشعار',
+  'Offered for': 'متاحة لـ',
+  'Logo resized.': 'تم تغيير حجم الشعار.',
+  'Logo resized. Send it to the printer to store the new size.':
+      'تم تغيير حجم الشعار. أرسله للطابعة لتخزين الحجم الجديد.',
   'Kept on the till. The printer did not answer, so send it again.':
       'حُفظ على الجهاز. لم تستجب الطابعة، أعد الإرسال لاحقًا.',
   'Loaded': 'محمَّل',

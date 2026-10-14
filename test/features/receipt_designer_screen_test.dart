@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -210,6 +212,42 @@ void main() {
       expect(find.byKey(const Key('logo-status')), findsOneWidget);
       expect(settings.receiptLogo, isNull);
       expect(sent, isEmpty);
+    });
+
+    testWidgets('the size slider re-cuts the logo on the till and leaves the printer alone',
+        (t) async {
+      tallWindow(t);
+      final sent = <PrinterLogo>[];
+      final dir = (await t.runAsync(() => Directory.systemTemp.createTemp('logo')))!;
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final path = '${dir.path}${Platform.pathSeparator}logo.png';
+      await t.runAsync(() async {
+        final recorder = ui.PictureRecorder();
+        ui.Canvas(recorder).drawRect(const Rect.fromLTWH(0, 0, 400, 400),
+            Paint()..color = const Color(0xFF000000));
+        final image = await recorder.endRecording().toImage(400, 400);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        image.dispose();
+        await File(path).writeAsBytes(png!.buffer.asUint8List());
+      });
+      settings
+        ..receiptPrintLogo = true
+        ..receiptLogoPath = path;
+      await t.pumpWidget(appWithUpload(sent: sent));
+
+      // All the way left: the smallest size.
+      await t.drag(find.byKey(const Key('logo-size')), const Offset(-1000, 0));
+      for (var i = 0; i < 20 && settings.receiptLogo == null; i++) {
+        await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await t.pump();
+      }
+
+      final logo = settings.receiptLogo;
+      expect(logo, isNotNull);
+      expect(settings.receiptLogoHeightMm, SettingsStore.logoHeightMinMm);
+      expect(logo!.heightDots, SettingsStore.logoHeightMinMm * 8);
+      expect(sent, isEmpty);
+      expect(find.byKey(const Key('receipt-preview-logo')), findsOneWidget);
     });
 
     testWidgets('with no path at all it says so rather than doing nothing',

@@ -140,9 +140,8 @@ class ReceiptBuilder {
       _slip(order, reprint: reprint);
 
   /// The check handed to a table before it pays: the sale layout without anything
-  /// that implies money changed hands. No tender or change section, no drawer kick,
-  /// and it says on the paper that it is not a tax receipt, because a waiter carries
-  /// this to the table and the customer must not mistake it for the real slip.
+  /// that implies money changed hands. No tender or change section and no drawer
+  /// kick.
   ///
   /// Takes the order as-is and reads nothing but its lines and totals, so a bill can
   /// be printed as often as the table asks for it.
@@ -174,11 +173,6 @@ class ReceiptBuilder {
     // a refund is marked so a returned sale is never mistaken for a new one.
     if (order.isRefund) p.centred('*** REFUND ***');
     if (reprint) p.centred('*** REPRINT ***');
-    // A bill is titled and disclaimed at the top, where a customer reads first.
-    if (bill) {
-      p.size(doubleHeight: true).centred('*** BILL ***').size();
-      p.centred('NOT A TAX RECEIPT');
-    }
     // A sale corrected after it was first tendered says so, so a customer holding
     // the slip from before the correction can see which of the two stands.
     if (order.amended) p.centred('*** AMENDED ***');

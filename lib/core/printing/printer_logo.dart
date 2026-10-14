@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -65,18 +66,25 @@ class PrinterLogo {
     return out.toBytes();
   }
 
-  /// `GS v 0`: the whole picture, on this receipt, in this job.
-  ///
-  /// The fallback. Honest about its cost: a 384 by 200 logo is nearly ten kilobytes
-  /// on the wire for every slip, which a busy printer feels.
+  /// Rows per `GS v 0` strip in [raster]. Small enough for the receive buffer of a
+  /// cheap printer: one command carrying the whole picture made those stall
+  /// mid-logo and print the overflow as black streaks.
+  static const int bandRows = 64;
+
+  /// `GS v 0`: the whole picture, on this receipt, in this job, as strips of
+  /// [bandRows] rows that print edge to edge.
   Uint8List raster() {
-    final out = BytesBuilder()
-      ..add([
-        0x1d, 0x76, 0x30, 0x00,
-        widthBytes & 0xff, (widthBytes >> 8) & 0xff,
-        heightDots & 0xff, (heightDots >> 8) & 0xff,
-      ])
-      ..add(bits);
+    final out = BytesBuilder();
+    for (var top = 0; top < heightDots; top += bandRows) {
+      final rows = heightDots - top < bandRows ? heightDots - top : bandRows;
+      out
+        ..add([
+          0x1d, 0x76, 0x30, 0x00,
+          widthBytes & 0xff, (widthBytes >> 8) & 0xff,
+          rows & 0xff, (rows >> 8) & 0xff,
+        ])
+        ..add(Uint8List.sublistView(bits, top * widthBytes, (top + rows) * widthBytes));
+    }
     return out.toBytes();
   }
 
@@ -123,29 +131,77 @@ class PrinterLogo {
     }
   }
 
-  /// One bit per dot from straight RGBA pixels: a dot is inked where the pixel is
-  /// both opaque enough to be there and dark enough to be ink, so a logo exported on
-  /// a transparent or a white background both come out as the mark and not a block.
-  static PrinterLogo fromRgba(
-    ByteData pixels,
-    int width,
-    int height, {
-    int threshold = 160,
-  }) {
+  /// At or above this a pixel is paper: a JPG's near-white background is noise,
+  /// not a pale tint, and shading it would sprinkle dots over the whole slip.
+  static const int paperLevel = 225;
+
+  /// At or below this a pixel is solid ink.
+  static const int inkLevel = 40;
+
+  /// The grey of a straight RGBA pixel laid on white paper, 0 black to 255 white.
+  static int paperGrey(ByteData pixels, int i) {
+    final alpha = pixels.getUint8(i + 3);
+    final lum = (pixels.getUint8(i) * 299 +
+            pixels.getUint8(i + 1) * 587 +
+            pixels.getUint8(i + 2) * 114) ~/
+        1000;
+    return (lum * alpha + 255 * (255 - alpha)) ~/ 255;
+  }
+
+  /// One bit per dot from straight RGBA pixels, laid on white so a transparent
+  /// background is paper.
+  ///
+  /// Black and white stay solid; colours and greys between them are shaded with
+  /// error diffusion. A plain cut turned every red or grey part of a logo into a
+  /// solid black block, which is both the wrong picture and the slowest thing a
+  /// thermal head can print.
+  static PrinterLogo fromRgba(ByteData pixels, int width, int height) {
     // Whole bytes both ways: the row is what GS v 0 counts, the 8-dot column block
     // is what FS q counts. The edges that fall off are padding, not picture.
     final w = width - (width % 8);
     final h = height + ((8 - (height % 8)) % 8);
     final widthBytes = w ~/ 8;
     final bits = Uint8List(widthBytes * h);
+    if (w == 0) return PrinterLogo(widthDots: 0, heightDots: h, bits: bits);
+
+    final grey = Int32List(w * height);
+    final solid = Uint8List(w * height);
     for (var y = 0; y < height; y++) {
       for (var x = 0; x < w; x++) {
-        final i = ((y * width) + x) * 4;
-        final alpha = pixels.getUint8(i + 3);
-        if (alpha < 96) continue;
-        final luminance =
-            (pixels.getUint8(i) * 30 + pixels.getUint8(i + 1) * 59 + pixels.getUint8(i + 2) * 11) ~/ 100;
-        if (luminance < threshold) bits[(y * widthBytes) + (x >> 3)] |= 0x80 >> (x & 7);
+        final g = paperGrey(pixels, ((y * width) + x) * 4);
+        final at = y * w + x;
+        if (g >= paperLevel) {
+          grey[at] = 255;
+          solid[at] = 1;
+        } else if (g <= inkLevel) {
+          grey[at] = 0;
+          solid[at] = 1;
+        } else {
+          grey[at] = g;
+        }
+      }
+    }
+
+    // Floyd–Steinberg, only among the shaded pixels: a solid one neither takes nor
+    // passes on error, so the background stays clean and the edges stay sharp.
+    void spread(int x, int y, int amount) {
+      if (x < 0 || x >= w || y >= height) return;
+      final at = y * w + x;
+      if (solid[at] == 0) grey[at] += amount;
+    }
+
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < w; x++) {
+        final at = y * w + x;
+        final old = grey[at];
+        final ink = old < 128;
+        if (ink) bits[(y * widthBytes) + (x >> 3)] |= 0x80 >> (x & 7);
+        if (solid[at] == 1) continue;
+        final error = old - (ink ? 0 : 255);
+        spread(x + 1, y, error * 7 ~/ 16);
+        spread(x - 1, y + 1, error * 3 ~/ 16);
+        spread(x, y + 1, error * 5 ~/ 16);
+        spread(x + 1, y + 1, error ~/ 16);
       }
     }
     return PrinterLogo(widthDots: w, heightDots: h, bits: bits);
@@ -155,34 +211,95 @@ class PrinterLogo {
 /// Reads an image file and turns it into printer dots, or null when it is not an
 /// image, is not there, or is too small to say anything.
 ///
-/// [maxWidthDots] is the printable width: 384 dots on 58 mm paper, 576 on 80 mm.
-/// Anything wider is scaled down rather than cropped, because a manager picking a
-/// file has no reason to know the printer's dot count.
+/// The empty border around the mark is cut off first, then the mark is fitted
+/// inside [maxWidthDots] by [maxHeightDots], keeping its shape. [maxWidthDots] is
+/// the printable width: 384 dots on 58 mm paper, 576 on 80 mm. The height cap is
+/// what keeps the dots sent with every receipt to a few kilobytes: stretching a
+/// square logo to the full width of 80 mm paper made it 40 KB a slip.
 Future<PrinterLogo?> loadPrinterLogo(
   String path, {
   int maxWidthDots = 384,
-  int threshold = 160,
+  int maxHeightDots = 160,
 }) async {
+  ui.ImmutableBuffer? buffer;
+  ui.ImageDescriptor? descriptor;
+  ui.Codec? codec;
+  ui.Image? source;
+  ui.Image? fitted;
   try {
     final file = File(path);
     if (!await file.exists()) return null;
-    final codec = await ui.instantiateImageCodec(
-      await file.readAsBytes(),
-      targetWidth: maxWidthDots,
+    buffer = await ui.ImmutableBuffer.fromUint8List(await file.readAsBytes());
+    descriptor = await ui.ImageDescriptor.encoded(buffer);
+    // Finding the edges of the mark does not need a camera-sized original.
+    final shrink = math.min(1.0, _workingWidth / descriptor.width);
+    codec = await descriptor.instantiateCodec(
+      targetWidth: math.max(1, (descriptor.width * shrink).round()),
+      targetHeight: math.max(1, (descriptor.height * shrink).round()),
     );
-    final frame = await codec.getNextFrame();
-    final image = frame.image;
-    try {
-      final pixels = await image.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
-      if (pixels == null) return null;
-      final logo = PrinterLogo.fromRgba(pixels, image.width, image.height,
-          threshold: threshold);
-      return logo.widthDots < 8 ? null : logo;
-    } finally {
-      image.dispose();
-      codec.dispose();
-    }
+    source = (await codec.getNextFrame()).image;
+    final raw = await source.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
+    if (raw == null) return null;
+    final box = _markBounds(raw, source.width, source.height);
+    if (box == null) return null;
+
+    final scale = math.min(
+      _maxUpscale,
+      math.min(maxWidthDots / box.width, maxHeightDots / box.height),
+    );
+    final width = math.max(8, (box.width * scale).round());
+    final height = math.max(1, (box.height * scale).round());
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+    canvas.drawRect(
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+      ui.Paint()..color = const ui.Color(0xFFFFFFFF),
+    );
+    canvas.drawImageRect(
+      source,
+      box,
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+      ui.Paint()..filterQuality = ui.FilterQuality.high,
+    );
+    final picture = recorder.endRecording();
+    fitted = await picture.toImage(width, height);
+    picture.dispose();
+    final pixels = await fitted.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
+    if (pixels == null) return null;
+    final logo = PrinterLogo.fromRgba(pixels, width, height);
+    return logo.widthDots < 8 ? null : logo;
   } catch (_) {
     return null;
+  } finally {
+    fitted?.dispose();
+    source?.dispose();
+    codec?.dispose();
+    descriptor?.dispose();
+    buffer?.dispose();
   }
+}
+
+const int _workingWidth = 1600;
+
+/// A small icon may be enlarged this much at most; past that it prints as blocks.
+const double _maxUpscale = 4;
+
+/// The smallest rectangle holding everything that is not paper, or null for a
+/// picture that is all paper.
+ui.Rect? _markBounds(ByteData pixels, int width, int height) {
+  var left = width, top = height, right = -1, bottom = -1;
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      if (PrinterLogo.paperGrey(pixels, ((y * width) + x) * 4) >= PrinterLogo.paperLevel) {
+        continue;
+      }
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+  if (right < 0) return null;
+  return ui.Rect.fromLTRB(
+      left.toDouble(), top.toDouble(), (right + 1).toDouble(), (bottom + 1).toDouble());
 }
