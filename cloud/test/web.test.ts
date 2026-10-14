@@ -220,6 +220,22 @@ describe('what a till sends', () => {
     expect(repo.records[0].key).toBe(shop.branch.id);
   });
 
+  it('a batch naming one record twice keeps the last of it', async () => {
+    const shop = await createShop();
+    const token = await till(shop.branch.pair_code, 'till-1');
+    const res = await sync(token, [
+      order('o1', '2026-10-08T09:00:00Z', 10),
+      { kind: 'categories', key: 'a', at: null, payload: [{ id: 1 }] },
+      order('o1', '2026-10-08T09:00:00Z', 30),
+      { kind: 'categories', key: 'b', at: null, payload: [{ id: 2 }] },
+    ]);
+
+    expect(res.statusCode).toBe(200);
+    expect(repo.records).toHaveLength(2);
+    expect(repo.records.find((r) => r.kind === 'order')!.payload).toMatchObject({ total: 30 });
+    expect(repo.records.find((r) => r.kind === 'categories')!.payload).toEqual([{ id: 2 }]);
+  });
+
   it('refuses what it does not understand', async () => {
     const shop = await createShop();
     const token = await till(shop.branch.pair_code, 'till-1');

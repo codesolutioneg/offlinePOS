@@ -400,6 +400,11 @@ export class MemoryRepo implements Repo {
     deviceRowId: string,
     records: SyncRecord[],
   ): Promise<number> {
+    // As Postgres does: one upsert may not touch the same row twice.
+    const ids = new Set(records.map((r) => `${r.kind}\u0000${r.key}`));
+    if (ids.size !== records.length) {
+      throw new Error('ON CONFLICT DO UPDATE command cannot affect row a second time');
+    }
     for (const r of records) {
       const row = { ...r, shopId, branchId, deviceRowId, updatedAt: new Date() };
       const i = this.records.findIndex((x) => x.shopId === shopId && x.kind === r.kind && x.key === r.key);

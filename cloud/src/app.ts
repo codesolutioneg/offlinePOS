@@ -227,9 +227,19 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
         }
         records.push({ kind, key, at, payload: r.payload });
       }
-      const stored = await repo.upsertRecords(device.shopId, device.branchId, device.id, records);
+      // Postgres refuses to touch one row twice in a single upsert, and a batch can
+      // name a record twice: an order changed again before the till got online, or
+      // two snapshots, which are keyed by branch here whatever the till sent. The
+      // last of each wins, because a till queues its changes in order.
+      const latest = new Map<string, SyncRecord>();
+      for (const r of records) {
+        const id = `${r.kind}\u0000${r.key}`;
+        latest.delete(id);
+        latest.set(id, r);
+      }
+      await repo.upsertRecords(device.shopId, device.branchId, device.id, [...latest.values()]);
       await repo.markSynced(device.id, now());
-      return { stored };
+      return { stored: records.length };
     },
   );
 
