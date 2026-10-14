@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:offline_pos/core/audit/audit_log.dart';
+import 'package:offline_pos/core/db/data_reset.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/reservation_store.dart';
@@ -15,6 +16,7 @@ import 'package:offline_pos/core/lan/lan_applier.dart';
 import 'package:offline_pos/core/lan/lan_cart_board.dart';
 import 'package:offline_pos/core/lan/lan_claim.dart';
 import 'package:offline_pos/core/lan/lan_credential.dart';
+import 'package:offline_pos/core/lan/lan_update.dart';
 import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/lan/lan_event_log.dart';
 import 'package:offline_pos/core/lan/lan_fabric.dart';
@@ -92,6 +94,11 @@ class TestTill {
       log: log,
       onShopBundleApplied: () => dishflow.apply(settings),
       onStressCleanup: () => purgeStressOrders(db),
+      onHistoryWipe: (before) {
+        wipeOrderHistory(db, before: before);
+        settings.historyWipedAt = before;
+        settings.resetOrderNumbers();
+      },
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
     claims = LanClaimDesk(
@@ -109,6 +116,7 @@ class TestTill {
       applier: applier,
       credential: credential,
       claims: claims,
+      updates: () => updateOffer,
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
     peers = LanPeerDirectory(log: (event, detail) => refusals.add('$event: $detail'));
@@ -141,6 +149,9 @@ class TestTill {
   /// runs.
   late final LanCredential credential =
       LanCredential.rotating(() => shopKey);
+
+  /// The build this till offers the others, as a primary would.
+  LanUpdateOffer? updateOffer;
 
   late final Db db;
   late final LanEventLog log;

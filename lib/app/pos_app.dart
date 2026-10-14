@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show exit;
+import 'dart:io' show Directory, File, exit;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -23,6 +23,7 @@ import '../core/config/till_config.dart';
 import '../core/db/catalogue_store.dart';
 import '../core/db/attendance_store.dart';
 import '../core/db/customer_store.dart';
+import '../core/db/data_reset.dart';
 import '../core/db/delivery_store.dart';
 import '../core/db/order_store.dart';
 import '../core/db/reservation_store.dart';
@@ -70,6 +71,8 @@ import '../core/sync/server_probe.dart';
 import '../core/sync/sync_service.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_theme.dart';
+import '../core/updates/download.dart';
+import '../core/updates/server_update.dart';
 import '../core/updates/update_service.dart';
 import '../domain/business_day.dart';
 import '../domain/catalogue.dart';
@@ -180,10 +183,15 @@ class PosApp extends StatefulWidget {
     this.cloudBackup,
     this.cloudSync,
     this.restoreStaging,
+    this.resetStaging,
     this.activity,
     this.provisioningPin,
     this.updates,
     this.lan,
+    this.appVersion,
+    this.lanUpdateStaging,
+    this.installUpdate,
+    this.serverUpdates,
     this.emailer,
     this.reservations,
     this.assignments,
@@ -245,6 +253,9 @@ class PosApp extends StatefulWidget {
   /// Where a database restored from the cloud waits for the next launch.
   final PendingRestore? restoreStaging;
 
+  /// Where a request to delete this till's database waits for the next launch.
+  final PendingReset? resetStaging;
+
   /// The floor plan and the on-device settings a manager edits on the device.
   final TableStore tables;
   final SettingsStore settings;
@@ -284,6 +295,19 @@ class PosApp extends StatefulWidget {
 
   /// Null when this build has no update channel configured.
   final UpdateService? updates;
+
+  /// This build, compared with what the primary runs. Null in the suites.
+  final String? appVersion;
+
+  /// Where a build downloaded from the primary waits to be installed.
+  final Directory? lanUpdateStaging;
+
+  /// Replaces this program with a downloaded build and restarts it. Null off
+  /// Windows, and then a secondary is never offered the primary's build.
+  final Installer? installUpdate;
+
+  /// The release server every till checks for a newer build. Null in the suites.
+  final ServerUpdateChannel? serverUpdates;
 
   /// Sends the Z report to whoever the shop asked for, best effort. Null on a
   /// build with no mail wired, which hides the setting rather than offering one
@@ -386,6 +410,16 @@ class _PosAppState extends State<PosApp> {
   Timer? _background;
   Timer? _storeOrderPoll;
   Timer? _primaryWatch;
+  StreamSubscription<void>? _sharedSub;
+
+  /// Asks the release server and the primary, once a minute, for a newer build.
+  Timer? _updateWatch;
+  bool _updateAsking = false;
+  DateTime? _serverCheckedAt;
+  ServerRelease? _serverRelease;
+
+  /// Builds the cashier said "later" to, not asked about again until a restart.
+  final Set<String> _updatesDeclined = {};
 
   /// Seen Firebase store-order ids — first poll is silent, then new ones alert.
   final StoreOrderWatchState _storeWatch = StoreOrderWatchState();
@@ -493,6 +527,24 @@ class _PosAppState extends State<PosApp> {
       _sharedSeen = shared;
       setState(() {});
     });
+    // What another till just did (an order, a table, a bump) redraws the floor now,
+    // not on the next tick of a timer.
+    _sharedSub = widget.settings.sharedChanges.listen((_) {
+      if (!mounted) return;
+      _sharedSeen = widget.settings.sharedRevision;
+      setState(() {});
+    });
+    if ((widget.lan != null || widget.serverUpdates != null) &&
+        widget.installUpdate != null &&
+        widget.lanUpdateStaging != null &&
+        widget.appVersion != null) {
+      // The first look waits for the beacon to have found the primary.
+      _updateWatch = Timer(const Duration(seconds: 15), () {
+        unawaited(_checkPrimaryUpdate());
+        _updateWatch = Timer.periodic(
+            const Duration(minutes: 1), (_) => unawaited(_checkPrimaryUpdate()));
+      });
+    }
     unawaited(_startLan());
   }
 
@@ -528,6 +580,8 @@ class _PosAppState extends State<PosApp> {
     _printAlerts.dispose();
     _background?.cancel();
     _primaryWatch?.cancel();
+    _sharedSub?.cancel();
+    _updateWatch?.cancel();
     _stopStoreOrderWatch();
     _justParkedClear?.cancel();
     unawaited(widget.lan?.dispose());
@@ -552,6 +606,190 @@ class _PosAppState extends State<PosApp> {
       await lan.start();
     } catch (e) {
       widget.audit.record('system', 'lan.start.failed', detail: '$e');
+    }
+  }
+
+  /// A newer build from the release server or, failing that, the primary.
+  ///
+  /// The server is asked every ten minutes; it is the same build for every shop,
+  /// so a till with internet never waits for its primary to have updated first.
+  /// The primary covers a shop whose internet is down.
+  Future<_UpdateOffer?> _findUpdate(String version) async {
+    final server = widget.serverUpdates;
+    final now = DateTime.now();
+    if (server != null &&
+        (_serverCheckedAt == null ||
+            now.difference(_serverCheckedAt!) >= const Duration(minutes: 10))) {
+      _serverCheckedAt = now;
+      try {
+        final release = await server.check(version);
+        if (release != null) {
+          _serverRelease = release;
+        }
+      } on FormatException catch (e) {
+        widget.audit.record('system', 'update.server.refused', detail: '$e');
+      } catch (e) {
+        widget.audit.record('system', 'update.server.failed', detail: '$e');
+      }
+    }
+    final release = _serverRelease;
+    if (server != null && release != null) {
+      return _UpdateOffer(
+        version: release.version,
+        fromServer: true,
+        download: (staging, progress) =>
+            server.download(release, staging, onProgress: progress),
+      );
+    }
+    final lan = widget.lan;
+    if (lan == null || !lan.isRunning) return null;
+    final offer = await lan.primaryUpdate(version);
+    if (offer == null) return null;
+    return _UpdateOffer(
+      version: offer.version,
+      fromServer: false,
+      download: (staging, progress) =>
+          lan.downloadPrimaryUpdate(offer, staging, onProgress: progress),
+    );
+  }
+
+  /// Offer a newer build, when there is one, and install it on a yes.
+  ///
+  /// Never mid-sale: a dialog over a half-rung order is how a cashier taps the
+  /// wrong button. The next minute asks again.
+  Future<void> _checkPrimaryUpdate() async {
+    final install = widget.installUpdate;
+    final staging = widget.lanUpdateStaging;
+    final version = widget.appVersion;
+    if (_updateAsking || !mounted || install == null) return;
+    if (staging == null || version == null) return;
+    if (widget.activity?.saleInProgress ?? false) return;
+    _updateAsking = true;
+    try {
+      final offer = await _findUpdate(version);
+      if (offer == null || _updatesDeclined.contains(offer.version) || !mounted) return;
+      if (widget.activity?.saleInProgress ?? false) return;
+      final shown = _navigator.currentContext;
+      if (shown == null || !shown.mounted) return;
+      final yes = await _askToUpdate(shown, offer, version);
+      if (yes != true) {
+        _updatesDeclined.add(offer.version);
+        return;
+      }
+      widget.audit.record(_session?.cashierId ?? 'system', 'update.lan.accepted',
+          detail: '$version -> ${offer.version} '
+              '(${offer.fromServer ? 'server' : 'main till'})');
+      if (!shown.mounted) return;
+      await _installPrimaryUpdate(shown, offer, staging, install);
+    } finally {
+      _updateAsking = false;
+    }
+  }
+
+  Future<bool?> _askToUpdate(
+          BuildContext context, _UpdateOffer offer, String version) =>
+      showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          key: const Key('lan-update-offer'),
+          icon: const Icon(Icons.system_update_alt, size: 40),
+          title: Text(tr(ctx, 'A new version is available')),
+          content: Text(
+            '${tr(ctx, offer.fromServer ? 'The update server has' : 'The main till runs')} ${offer.version}, '
+            '${tr(ctx, 'this one runs')} $version.\n\n'
+            '${tr(ctx, 'The app closes and opens again by itself in under a minute. Orders and data stay as they are.')}',
+          ),
+          actions: [
+            TextButton(
+              key: const Key('lan-update-later'),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr(ctx, 'Later')),
+            ),
+            FilledButton(
+              key: const Key('lan-update-now'),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(tr(ctx, 'Update now')),
+            ),
+          ],
+        ),
+      );
+
+  Future<void> _installPrimaryUpdate(BuildContext context, _UpdateOffer offer,
+      Directory staging, Installer install) async {
+    final navigator = Navigator.of(context);
+    final downloading = tr(
+        context,
+        offer.fromServer
+            ? 'Downloading the update from the server...'
+            : 'Downloading the update from the main till...');
+    final installing =
+        tr(context, 'Installing. The app closes and opens again by itself...');
+    final failedText = tr(context, 'The update could not be installed');
+    final progress = ValueNotifier<_DownloadState>(const _DownloadState(0, null));
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          key: const Key('lan-update-progress'),
+          icon: const Icon(Icons.system_update_alt, size: 40),
+          title: Text(offer.version),
+          content: SizedBox(
+            width: 420,
+            child: ValueListenableBuilder<_DownloadState>(
+              valueListenable: progress,
+              builder: (_, state, _) => Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(state.done ? installing : downloading),
+                  const SizedBox(height: 16),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      key: const Key('lan-update-bar'),
+                      minHeight: 14,
+                      value: state.done ? null : state.fraction,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    state.label,
+                    key: const Key('lan-update-amount'),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+    try {
+      var shownAt = DateTime.fromMillisecondsSinceEpoch(0);
+      final file = await offer.download(staging, (got, total) {
+        final now = DateTime.now();
+        if (total != null && got < total &&
+            now.difference(shownAt) < const Duration(milliseconds: 150)) {
+          return;
+        }
+        shownAt = now;
+        progress.value = _DownloadState(got, total);
+      });
+      final last = progress.value;
+      progress.value = _DownloadState(last.received, last.total, done: true);
+      widget.audit.record('system', 'update.lan.installing', detail: offer.version);
+      // Closes this app; the handoff script installs and starts it again.
+      await install(file.path);
+    } catch (e) {
+      widget.audit.record('system', 'update.lan.failed', detail: '$e');
+      if (navigator.mounted) navigator.pop();
+      final shown = _navigator.currentContext;
+      if (mounted && shown != null && shown.mounted) {
+        showToast(shown, '$failedText: $e', kind: ToastKind.error);
+      }
     }
   }
 
@@ -2135,6 +2373,7 @@ class _PosAppState extends State<PosApp> {
         builder: (context) => KitchenDisplayScreen(
           load: () => widget.orders.kitchenTickets(),
           onStatus: (uuid, status) => widget.orders.setKitchenStatus(uuid, status),
+          changes: widget.settings.sharedChanges,
           actions: [
             IconButton(
               key: const Key('kds-network'),
@@ -2719,36 +2958,6 @@ class _PosAppState extends State<PosApp> {
     return first + parts.last.characters.first.toUpperCase();
   }
 
-  /// A required free-text reason, for discarding a tab the kitchen has started.
-  /// Returns null if the manager backs out (which aborts the cancel).
-  Future<String?> _promptReason(BuildContext context, String title) {
-    final ctrl = TextEditingController();
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          key: const Key('cancel-reason'),
-          controller: ctrl,
-          autofocus: true,
-          decoration: InputDecoration(
-              labelText: tr(ctx, 'Reason'), border: const OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-            key: const Key('cancel-reason-ok'),
-            onPressed: () {
-              final r = ctrl.text.trim();
-              if (r.isNotEmpty) Navigator.pop(ctx, r);
-            },
-            child: Text(tr(ctx, 'Confirm')),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _openAttendance(BuildContext context) =>
       _ifScreen(context, 'screen.attendance', () => _openAttendanceNow(context));
 
@@ -2788,28 +2997,18 @@ class _PosAppState extends State<PosApp> {
         onPrintBill: (order) => unawaited(_printBill(order)),
         // Discarding a parked order is money not taken, so it is manager-gated and
         // audited, then the list is popped so the change is visible.
+        //
+        // Only an order the kitchen has never seen goes from here; the list refuses
+        // a sent one and opens it instead, so its lines are voided inside. Checked
+        // again here so no other caller can discard food that may be cooking.
         onCancel: (order) async {
+          if (OpenOrdersScreen.sentToKitchen(order)) {
+            widget.audit.record(session.cashierId, 'order.cancel.refused.sent',
+                detail: order.uuid);
+            return;
+          }
           if (!await _authorize(Permission.cancelOrder, sheetContext)) return;
-          // Any line the kitchen holds, even partially fired to one of several
-          // stations, means food is already cooking.
-          final firedLines = order.lines
-              .where((l) => l.printedToKitchen || l.firedStations.isNotEmpty)
-              .toList();
-          // Discarding a tab the kitchen has started demands a reason: it prints on
-          // the cancel slip and lands in the audit, and abandoning the prompt aborts
-          // the cancel so food that is cooking is never dropped without a record.
-          var reason = 'Order cancelled';
-          if (firedLines.isNotEmpty) {
-            if (!sheetContext.mounted) return;
-            final given = await _promptReason(sheetContext, tr(sheetContext, 'Cancel order'));
-            if (given == null) return;
-            reason = given;
-          }
-          // Tell each station that holds the line to stop, so cancelling a sent
-          // order does not leave food cooking.
-          for (final line in firedLines) {
-            unawaited(_voidToKitchen(order, line, reason));
-          }
+          const reason = 'Order cancelled';
           // The till's own record that the whole order was discarded, listing every
           // line and the total removed, printed alongside the audit entry.
           unawaited(_printDeletion(order, order.lines,
@@ -3062,6 +3261,7 @@ class _PosAppState extends State<PosApp> {
       builder: (_) => KitchenDisplayScreen(
         load: () => widget.orders.kitchenTickets(),
         onStatus: (uuid, status) => widget.orders.setKitchenStatus(uuid, status),
+        changes: widget.settings.sharedChanges,
       ),
     ));
   }
@@ -5746,6 +5946,37 @@ class _PosAppState extends State<PosApp> {
           refresh();
           unawaited(_reconcileLan());
         },
+        unsyncedSales: () => widget.outboxStore.pendingSalesCount,
+        traffic: widget.lan == null ? null : () => widget.lan!.traffic.byPeer,
+        onResetTraffic: widget.lan?.traffic.reset,
+        onWipeHistory: () async {
+          final ctx = _navigator.currentContext;
+          if (ctx == null) return false;
+          final manager = await _authorizeManager(ctx, requirePin: true);
+          if (manager == null) return false;
+          final now = DateTime.now().toUtc();
+          final wiped = wipeOrderHistory(widget.outboxStore.db);
+          widget.settings.historyWipedAt = now;
+          widget.settings.resetOrderNumbers();
+          widget.lan?.announceHistoryWipe(now);
+          widget.audit.record(manager.id, 'orders.history.wiped',
+              detail: '${wiped.orders} orders, ${wiped.shifts} shifts');
+          refresh();
+          if (mounted) setState(() {});
+          return true;
+        },
+        onResetDevice: widget.resetStaging == null
+            ? null
+            : () async {
+                final ctx = _navigator.currentContext;
+                if (ctx == null) return false;
+                final manager = await _authorizeManager(ctx, requirePin: true);
+                if (manager == null) return false;
+                widget.audit.record(manager.id, 'device.reset.staged',
+                    detail: '${widget.outboxStore.pendingSalesCount} unsent sales');
+                await widget.resetStaging!.stage();
+                return true;
+              },
       );
 
   /// Gate a privileged action behind manager approval. Returns the approving
@@ -6285,6 +6516,36 @@ class _PosAppState extends State<PosApp> {
     return false;
   }
 
+  /// The tills that could not hand over their sales since [since], one line each
+  /// in the cashier's language. Empty when the whole shop is in.
+  Future<List<String>> _catchUpOtherTills(
+      BuildContext context, DateTime since) async {
+    final lan = widget.lan;
+    if (lan == null) return const [];
+    final notOnNetwork = tr(context, 'the primary is not on the network');
+    final lastSeen = tr(context, 'last seen');
+    final thisTill = tr(context, 'This till');
+    List<LanTillGap> gaps;
+    try {
+      gaps = await lan.catchUpBeforeClose(since: since);
+    } catch (e) {
+      return ['$thisTill: $e'];
+    }
+    String two(int n) => n.toString().padLeft(2, '0');
+    return [
+      for (final gap in gaps)
+        [
+          gap.name.isEmpty ? gap.deviceId : gap.name,
+          ': ',
+          gap.reason == 'the primary is not on the network'
+              ? notOnNetwork
+              : gap.reason,
+          if (gap.lastSeenAt case final at?)
+            ' ($lastSeen ${two(at.toLocal().hour)}:${two(at.toLocal().minute)})',
+        ].join(),
+    ];
+  }
+
   Future<void> _openShiftNow(BuildContext context, PosSession session,
       {bool startClose = false, String? startMovement}) {
     // Which tenders count as drawer cash, read from the synced catalogue so the
@@ -6370,6 +6631,13 @@ class _PosAppState extends State<PosApp> {
               // left with work on it or a drawer that did not add up.
               onCloseBlocked: (reason) =>
                   widget.audit.record(session.cashierId, reason),
+              // With the shop on the network, every till seen this shift hands its
+              // sales over (through the primary, from a secondary) before the count.
+              catchUpOtherTills: widget.lan?.isRunning == true
+                  ? (since) => _catchUpOtherTills(context, since)
+                  : null,
+              onCloseOverride: (reason, detail) =>
+                  widget.audit.record(session.cashierId, reason, detail: detail),
               // Gated BEFORE the shift closes, since the close is irreversible: the
               // cashier's role may allow it outright, otherwise a manager approves.
               authorizeClose: () => _authorize(Permission.closeShift, context),
@@ -6978,5 +7246,38 @@ class _PosAppState extends State<PosApp> {
         },
       ),
     ));
+  }
+}
+
+/// A newer build and where it comes from.
+class _UpdateOffer {
+  const _UpdateOffer(
+      {required this.version, required this.fromServer, required this.download});
+
+  final String version;
+  final bool fromServer;
+  final Future<File> Function(Directory staging, DownloadProgress progress)
+      download;
+}
+
+class _DownloadState {
+  const _DownloadState(this.received, this.total, {this.done = false});
+
+  final int received;
+  final int? total;
+  final bool done;
+
+  double? get fraction {
+    final t = total;
+    if (t == null || t <= 0) return null;
+    return (received / t).clamp(0.0, 1.0);
+  }
+
+  String get label {
+    String mb(int bytes) => (bytes / (1024 * 1024)).toStringAsFixed(1);
+    final t = total;
+    final f = fraction;
+    if (t == null || f == null) return '${mb(received)} MB';
+    return '${mb(received)} / ${mb(t)} MB  (${(f * 100).round()}%)';
   }
 }

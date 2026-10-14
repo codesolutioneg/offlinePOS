@@ -144,10 +144,19 @@ class SettingsStore {
 
   bool _applyingBundle = false;
 
-  /// Bumped whenever shop settings or staff arrive from another till, so the shell
-  /// can redraw with them.
+  /// Bumped whenever anything arrives from another till (orders, tables, kitchen
+  /// bumps, shop settings, staff), so the screens can redraw with it.
   int sharedRevision = 0;
-  void bumpSharedRevision() => sharedRevision++;
+  final _sharedChanges = StreamController<void>.broadcast();
+
+  /// Fires on every [bumpSharedRevision]. A screen showing the whole shop listens
+  /// here rather than polling, so an order rung on another till is on it at once.
+  Stream<void> get sharedChanges => _sharedChanges.stream;
+
+  void bumpSharedRevision() {
+    sharedRevision++;
+    _sharedChanges.add(null);
+  }
   bool _bundleCheckQueued = false;
 
   void _shopSettingsTouched() {
@@ -595,6 +604,20 @@ class SettingsStore {
     setString(_offlineOrderNoSeq, '$seq');
     return 'T${tillTagFor(deviceId)}-$seq';
   }
+
+  /// Back to `1` on both counters, after the order history was wiped.
+  void resetOrderNumbers() {
+    setString(_orderNoSeq, null);
+    setString(_offlineOrderNoSeq, null);
+  }
+
+  /// When the shop's order history was last wiped, on any till. An order rung
+  /// before it that arrives afterwards (from a till that had not heard yet) is a
+  /// wiped sale coming back, and is refused.
+  DateTime? get historyWipedAt =>
+      DateTime.tryParse(getString('history_wiped_at') ?? '')?.toUtc();
+  set historyWipedAt(DateTime? at) =>
+      setString('history_wiped_at', at?.toUtc().toIso8601String());
 
   /// A short, stable tag for a device: the last three alphanumeric characters of its
   /// id, uppercased. Kept for diagnostics / legacy rows that still carry a tag.

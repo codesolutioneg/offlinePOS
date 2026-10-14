@@ -118,6 +118,8 @@ class LanBeacon {
       'schema': Schema.version,
       if (r != null && r != DeviceRole.unset) 'role': r.wire,
       if (serving?.call() == false) 'serving': false,
+      // So the others can see how far apart the clocks are; see LanPeer.clockOffset.
+      'sent_at': DateTime.now().toUtc().millisecondsSinceEpoch,
     }));
     for (final target in _targets) {
       try {

@@ -94,7 +94,12 @@ enum LanEventKind {
   /// A manager cleared the Stress Lab's test orders on one till. Every till drops
   /// its copies too, because a till only ever removes rows it holds itself and the
   /// lab's paid sales would otherwise sit on the others until the next Z.
-  stressCleanup('dev.stress_cleanup');
+  stressCleanup('dev.stress_cleanup'),
+
+  /// A manager wiped the shop's order history, after a trial. Every till drops the
+  /// sales, shifts and queues it holds from before `before` in the payload, so the
+  /// shop starts clean on every device and not only on the one it was asked on.
+  historyWipe('orders.history_wipe');
 
   const LanEventKind(this.wire, {this.snapshot = false});
 

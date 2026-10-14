@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../db/schema.dart';
+import '../updates/download.dart';
 import 'lan_applier.dart';
 import 'lan_claim.dart';
 import 'lan_credential.dart';
@@ -11,6 +12,8 @@ import 'lan_event_log.dart';
 import 'lan_number_desk.dart';
 import 'lan_peer.dart';
 import 'lan_seat_desk.dart';
+import 'lan_traffic.dart';
+import 'lan_update.dart';
 
 /// A page of one peer's log, with the highest seq that page covers.
 ///
@@ -65,6 +68,9 @@ class LanProtocol {
     this.onJoin,
     this.seats,
     this.numbers,
+    this.catchUp,
+    this.traffic,
+    this.updates,
     this.pageSize = 200,
     LanLog? onRefused,
   })  : _log = log,
@@ -99,6 +105,19 @@ class LanProtocol {
   /// holds the shop key. Only the primary answers.
   static const String joinPath = '/lan/join';
 
+  /// A till about to close its shift asking this one (the primary) to read every
+  /// other till to the end of its log now, and to say which it could not.
+  static const String catchUpPath = '/lan/catchup';
+
+  /// Which build this till (the primary) offers the others, and its digest.
+  ///
+  /// Not gated on the schema version, unlike everything else: a till one schema
+  /// behind is exactly the one that needs to reach this.
+  static const String updatePath = '/lan/update';
+
+  /// The offered build itself, as a zip.
+  static const String updatePackagePath = '/lan/update/package';
+
   final String deviceId;
   final LanEventLog _log;
   final LanApplier _applier;
@@ -118,10 +137,22 @@ class LanProtocol {
   /// same reason. Null (or answering null) refuses with 409.
   final LanNumberDesk? Function()? numbers;
 
+  /// Reads every till seen since the given moment to the end of its log, and
+  /// answers the ones it could not as [LanTillGap] maps. Null refuses with 409.
+  final Future<List<Map<String, dynamic>>> Function(DateTime since)? catchUp;
+
+  /// Where events handed over by a peer are counted, for the shop network screen.
+  final LanTraffic? traffic;
+
+  /// The build this till offers, read per request because only the primary
+  /// offers one. Null (or answering null) refuses with 409.
+  final LanUpdateOffer? Function()? updates;
+
   final int pageSize;
   final LanLog? _onRefused;
 
   LanReply handleGet(String path, Map<String, String> query, {String? auth}) {
+    if (path == updatePath) return _handleUpdate(query, auth);
     if (path != eventsPath) return const LanReply(404, {'error': 'unknown path'});
     final unpaired = _authRefusal(auth,
         method: 'GET',
@@ -196,7 +227,34 @@ class LanProtocol {
       }
     }
     final applied = _applier.applyAll(peer, events, highSeq: highSeq);
+    traffic?.received(peer, events);
     return LanReply(200, {'applied': applied});
+  }
+
+  /// Asynchronous, unlike every other request: the answer is only known once the
+  /// other tills have been read.
+  Future<LanReply> handleCatchUp(String body, {String? auth}) async {
+    final unpaired =
+        _authRefusal(auth, method: 'POST', path: catchUpPath, body: body);
+    if (unpaired != null) return unpaired;
+    Map<String, dynamic> decoded;
+    try {
+      decoded = (jsonDecode(body) as Map).cast<String, dynamic>();
+    } catch (e) {
+      return const LanReply(400, {'error': 'unreadable body'});
+    }
+    final peer = decoded['device_id'];
+    final refusal = _schemaRefusal(
+        decoded['schema'] is int ? decoded['schema'] as int : null,
+        peer is String ? peer : null);
+    if (refusal != null) return refusal;
+    final run = catchUp;
+    if (run == null) {
+      return const LanReply(409, {'error': 'this device does not catch up others'});
+    }
+    final since = DateTime.tryParse('${decoded['since']}')?.toUtc() ??
+        DateTime.now().toUtc().subtract(const Duration(days: 1));
+    return LanReply(200, {'device_id': deviceId, 'missing': await run(since)});
   }
 
   /// Admit a secondary with a one-time PIN; no shop-key stamp required.
@@ -302,6 +360,34 @@ class LanProtocol {
       'order_no': issued.first,
       'order_nos': issued,
     });
+  }
+
+  LanReply _handleUpdate(Map<String, String> query, String? auth) {
+    final unpaired = _authRefusal(auth,
+        method: 'GET',
+        path: updatePath,
+        query: LanCredential.canonicalQuery(query),
+        peer: query['peer']);
+    if (unpaired != null) return unpaired;
+    final offer = updates?.call();
+    if (offer == null) return const LanReply(409, {'error': 'no offer'});
+    final manifest = offer.manifest();
+    if (manifest['ready'] == true) {
+      manifest['signature'] = _credential.signOffer(
+          offer.version, manifest['sha256'] as String, manifest['size'] as int);
+    }
+    return LanReply(200, manifest);
+  }
+
+  /// The offered zip for a request that holds the shop key, or null to refuse.
+  File? updatePackage(Map<String, String> query, {String? auth}) {
+    final unpaired = _authRefusal(auth,
+        method: 'GET',
+        path: updatePackagePath,
+        query: LanCredential.canonicalQuery(query),
+        peer: query['peer']);
+    if (unpaired != null) return null;
+    return updates?.call()?.package;
   }
 
   /// The first gate every request passes: proof the caller holds the shop key.
@@ -435,12 +521,18 @@ class LanHost {
   }
 
   Future<void> _serve(HttpRequest request) async {
+    if (request.method == 'GET' && request.uri.path == LanProtocol.updatePackagePath) {
+      return _servePackage(request);
+    }
     LanReply reply;
     try {
       final auth = request.headers.value(LanCredential.header);
       reply = switch (request.method) {
         'GET' => _protocol.handleGet(
             request.uri.path, request.uri.queryParameters, auth: auth),
+        'POST' when request.uri.path == LanProtocol.catchUpPath =>
+          await _protocol.handleCatchUp(
+              await utf8.decoder.bind(request).join(), auth: auth),
         'POST' => _protocol.handlePost(
             request.uri.path, await utf8.decoder.bind(request).join(), auth: auth),
         _ => const LanReply(405, {'error': 'method'}),
@@ -457,6 +549,31 @@ class LanHost {
       await request.response.close();
     } catch (_) {
       // The peer hung up mid-reply. It will ask again.
+    }
+  }
+
+  Future<void> _servePackage(HttpRequest request) async {
+    final response = request.response;
+    try {
+      final file = _protocol.updatePackage(request.uri.queryParameters,
+          auth: request.headers.value(LanCredential.header));
+      if (file == null || !await file.exists()) {
+        response.statusCode = 404;
+        response.headers.contentType = ContentType.json;
+        response.write(jsonEncode({'error': 'no package'}));
+        await response.close();
+        return;
+      }
+      response.statusCode = 200;
+      response.headers.contentType = ContentType('application', 'zip');
+      response.contentLength = await file.length();
+      await response.addStream(file.openRead());
+      await response.close();
+    } catch (e) {
+      _log?.call('lan.host.error', 'update package: $e');
+      try {
+        await response.close();
+      } catch (_) {}
     }
   }
 }
@@ -612,6 +729,34 @@ class LanHttpClient {
     return valid;
   }
 
+  /// Ask the primary [peer] to read every till seen since [since] to the end of its
+  /// log, and answer the ones it could not. A longer timeout than ordinary chatter:
+  /// the primary is reading the others while this waits.
+  Future<List<LanTillGap>> catchUp(
+    LanPeer peer, {
+    required String deviceId,
+    required DateTime since,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'since': since.toUtc().toIso8601String(),
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.catchUpPath),
+      body,
+      _credential.stamp(method: 'POST', path: LanProtocol.catchUpPath, body: body),
+      timeout: const Duration(seconds: 45),
+    );
+    final missing = (jsonDecode(text) as Map)['missing'];
+    return [
+      if (missing is List)
+        for (final m in missing)
+          if (m is Map) LanTillGap.fromMap(m.cast<String, dynamic>()),
+    ];
+  }
+
   /// Present a join PIN to [peer] (the primary). No shop-key stamp — the PIN is
   /// the admission proof. Returns the payload (shop_key, section_configs, …).
   ///
@@ -635,6 +780,61 @@ class LanHttpClient {
       timeout: const Duration(seconds: 60),
     );
     return (jsonDecode(text) as Map).cast<String, dynamic>();
+  }
+
+  /// Which build [peer] (the primary) offers. Throws when it cannot be reached or
+  /// offers nothing.
+  Future<Map<String, dynamic>> updateManifest(LanPeer peer,
+      {required String deviceId}) async {
+    final query = {'peer': deviceId};
+    final text = await _send(
+      'GET',
+      peer.baseUrl.replace(path: LanProtocol.updatePath, queryParameters: query),
+      null,
+      _credential.stamp(
+        method: 'GET',
+        path: LanProtocol.updatePath,
+        query: LanCredential.canonicalQuery(query),
+      ),
+    );
+    return (jsonDecode(text) as Map).cast<String, dynamic>();
+  }
+
+  /// Whether [manifest] was signed by a till holding this shop's key.
+  bool offerIsGenuine(Map<String, dynamic> manifest) {
+    final version = manifest['version'];
+    final sha = manifest['sha256'];
+    final size = manifest['size'];
+    if (version is! String || sha is! String || size is! int) return false;
+    return _credential.offerIsGenuine(
+        manifest['signature'] as String?, version, sha, size);
+  }
+
+  /// Downloads the offered build from [peer] into [to]. Gives up when the
+  /// transfer stalls, not when it is merely long: the package is tens of MB.
+  Future<void> downloadUpdate(LanPeer peer,
+      {required String deviceId,
+      required File to,
+      DownloadProgress? onProgress}) async {
+    final query = {'peer': deviceId};
+    final request = await _client
+        .openUrl('GET',
+            peer.baseUrl.replace(path: LanProtocol.updatePackagePath, queryParameters: query))
+        .timeout(timeout);
+    request.headers.set(
+      LanCredential.header,
+      _credential.stamp(
+        method: 'GET',
+        path: LanProtocol.updatePackagePath,
+        query: LanCredential.canonicalQuery(query),
+      ),
+    );
+    final response = await request.close().timeout(timeout);
+    if (response.statusCode != 200) {
+      final text = await utf8.decoder.bind(response).join().timeout(timeout);
+      throw HttpException('${response.statusCode} from ${peer.baseUrl}: $text');
+    }
+    await saveDownload(response, to, onProgress: onProgress);
   }
 
   Future<String> _send(

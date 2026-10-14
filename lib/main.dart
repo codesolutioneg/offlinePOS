@@ -26,6 +26,7 @@ import 'core/config/test_instance.dart';
 import 'core/config/till_config.dart';
 import 'core/db/attempt_store.dart';
 import 'core/db/catalogue_store.dart';
+import 'core/db/data_reset.dart';
 import 'core/db/database.dart';
 import 'core/db/db_key.dart';
 import 'core/db/secure_key_store.dart';
@@ -51,6 +52,7 @@ import 'core/email/email_service.dart';
 import 'core/export/db_backup.dart';
 import 'core/lan/lan_cart_board.dart';
 import 'core/lan/lan_credential.dart';
+import 'core/lan/lan_update.dart';
 import 'core/lan/lan_wiring.dart';
 import 'core/onboarding/wizard_store.dart';
 import 'core/printing/printer_discovery.dart';
@@ -67,6 +69,8 @@ import 'core/sync/retry_arming.dart';
 import 'core/sync/server_change_guard.dart';
 import 'core/sync/server_probe.dart';
 import 'core/sync/sync_service.dart';
+import 'core/updates/app_build.dart';
+import 'core/updates/server_update.dart';
 import 'core/updates/update_gate.dart';
 import 'core/updates/update_service.dart';
 import 'core/updates/update_storage.dart';
@@ -154,6 +158,10 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   // questions support would otherwise have to ask the operator to go and look up.
   log.facts(StartupProbe.facts(version: appVersion, databasePath: dbPath));
 
+  // Asked for on the shop network screen: the till starts again from nothing.
+  log.step('delete the database, if a reset was asked for');
+  final resetApplied = await PendingReset(dbPath).apply();
+
   // A database restored from the cloud is swapped in here, before anything opens
   // the file. The one it replaces is renamed beside it, never deleted.
   log.step('apply a staged cloud restore, if any');
@@ -184,6 +192,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   if (restoredOver != null) {
     audit.record('system', 'cloud.restore.applied', detail: restoredOver);
   }
+  if (resetApplied) audit.record('system', 'device.reset.applied');
   final outboxStore = SqliteOutboxStore(db);
   final retired = outboxStore.retireRefundPushes();
   if (retired > 0) {
@@ -504,8 +513,18 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
       port: TestInstance.lanPort(config.lanPort),
       beaconPort: config.lanBeaconPort,
       onShopBundleApplied: () => dishflow.apply(settings),
+      updateOffer: Platform.isWindows && AppBuild.tryParse(appVersion) != null
+          ? LanUpdateOffer(
+              version: appVersion,
+              installDirectory: File(Platform.resolvedExecutable).parent,
+              cacheDirectory: Directory(
+                  '${dir.path}${Platform.pathSeparator}updates${Platform.pathSeparator}offer'),
+              log: (event, detail) => audit.record('system', event, detail: detail),
+            )
+          : null,
     );
   }
+  final lanUpdates = Directory('${dir.path}${Platform.pathSeparator}updates');
 
   // The whole till, sealed under the shop's recovery key, to the shop's own backup
   // server whenever there is a line. Does nothing until it is paired.
@@ -582,6 +601,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     cloudBackup: cloudBackup,
     cloudSync: cloudSync,
     restoreStaging: PendingRestore(dbPath, cloudSecrets),
+    resetStaging: PendingReset(dbPath),
     odoo: odoo,
     tables: tables,
     settings: settings,
@@ -594,6 +614,13 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     reservations: reservations,
     assignments: assignments,
     lan: lan,
+    appVersion: appVersion,
+    lanUpdateStaging: lanUpdates,
+    installUpdate:
+        platformUpdateInstaller(stagingDirectory: lanUpdates, visible: true),
+    serverUpdates: Platform.isWindows && AppBuild.tryParse(appVersion) != null
+        ? ServerUpdateChannel.release()
+        : null,
     dishflow: dishflow,
     // The Z report by mail. Reads the settings on every attempt, so a password
     // corrected mid-evening is used by the next retry without a restart.

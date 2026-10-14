@@ -147,3 +147,21 @@ if(EXISTS "${ZK_TOOLS_DIR}/start_zk_agent.bat")
       COMPONENT Runtime)
   endif()
 endif()
+
+# The shop runs UpdateOfflinePOS.bat from an unzipped release to replace the
+# installed one, so every release has to carry it.
+install(FILES "${ZK_TOOLS_DIR}/update_offline_pos.ps1"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/tools"
+  COMPONENT Runtime)
+install(FILES "${ZK_TOOLS_DIR}/UpdateOfflinePOS.bat"
+  "${ZK_TOOLS_DIR}/PowerShell-Commands.txt"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+# Wipes the till back to a new install, for a machine that was set up to be tried.
+# Kept in tools\ rather than beside the exe, so it is not one stray click away.
+install(FILES
+  "${ZK_TOOLS_DIR}/ResetOfflinePOS.bat"
+  "${ZK_TOOLS_DIR}/reset_offline_pos.ps1"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/tools"
+  COMPONENT Runtime)

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' as crypto;
+
 import '../../domain/order.dart';
 import '../audit/audit_log.dart';
 import '../auth/bootstrap_cashier.dart';
@@ -8,6 +10,7 @@ import '../auth/fingerprint_store.dart';
 import '../auth/user_store.dart';
 import '../db/attendance_store.dart';
 import '../db/catalogue_store.dart';
+import '../db/data_reset.dart';
 import '../db/database.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
@@ -19,6 +22,8 @@ import '../db/table_store.dart';
 import '../printing/printer_registry.dart';
 import '../sync/odoo_endpoint.dart';
 import '../sync/stress_firebase_purge.dart';
+import '../updates/app_build.dart';
+import '../updates/download.dart';
 import '../../domain/table_section_config.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
@@ -31,7 +36,9 @@ import 'lan_number_desk.dart';
 import 'lan_peer.dart';
 import 'lan_seat_desk.dart';
 import 'lan_shift_board.dart';
+import 'lan_traffic.dart';
 import 'lan_transport.dart';
+import 'lan_update.dart';
 
 /// Everything the shop network screen reports about this device.
 ///
@@ -48,6 +55,26 @@ typedef LanFacts = ({
   DateTime? lastPassAt,
   String? lastError,
 });
+
+/// Read every till heard from since [since] to the end of its log, and answer the
+/// ones that could not be. A till last heard from before [since] is not asked: it
+/// was not part of this shift.
+Future<List<LanTillGap>> _catchUpPeers(
+    LanFabric fabric, LanPeerDirectory peers, DateTime since) async {
+  final targets =
+      peers.all.where((p) => !p.lastSeenAt.isBefore(since.toUtc())).toList();
+  final failed = await fabric.catchUp(targets);
+  return [
+    for (final p in targets)
+      if (failed[p.deviceId] case final reason?)
+        LanTillGap(
+          deviceId: p.deviceId,
+          name: p.name,
+          reason: reason,
+          lastSeenAt: p.lastSeenAt,
+        ),
+  ];
+}
 
 /// This device's whole presence on the shop LAN: the log it serves, the beacon it
 /// announces on, the server peers pull from and the replicator that keeps it level
@@ -68,6 +95,7 @@ class LanNode {
     required LanClaimDesk claims,
     required LanSeatDesk seats,
     required this.peers,
+    LanTraffic? traffic,
     /// The primary answers table reservations and order numbers; everyone else
     /// asks it.
     required bool Function() isPrimary,
@@ -75,7 +103,8 @@ class LanNode {
     required String? Function() primaryDeviceId,
     required LanLog report,
     this.hostRetry = const Duration(seconds: 30),
-  })  : _log = log,
+  })  : traffic = traffic ?? LanTraffic(),
+        _log = log,
         _isSecondary = isSecondary,
         _report = report,
         _fabric = fabric,
@@ -129,6 +158,9 @@ class LanNode {
     /// After a peer shop bundle lands (Dishflow mirror, …), re-wire senders.
     void Function()? onShopBundleApplied,
     Duration hostRetry = const Duration(seconds: 30),
+    /// This build, offered to the other tills while this one is the primary. Null
+    /// on a developer's copy, which has no release build to give.
+    LanUpdateOffer? updateOffer,
   }) {
     // Every fabric refusal, dead peer and failed announce lands in the audit trail
     // under 'system', which is where support already looks. A shop that quietly
@@ -138,6 +170,8 @@ class LanNode {
 
     final eventLog = LanEventLog(db, deviceId: deviceId);
     final peers = LanPeerDirectory(log: log);
+    final traffic =
+        LanTraffic(clockOffsetOf: (id) => peers.byId(id)?.clockOffset);
     final applier = LanApplier(
       deviceId: deviceId,
       orders: orders,
@@ -152,6 +186,14 @@ class LanNode {
       log: eventLog,
       onShopBundleApplied: onShopBundleApplied,
       onStressCleanup: () => unawaited(StressFirebasePurge().purgeEverywhere(db)),
+      onHistoryWipe: (before) {
+        final wiped = wipeOrderHistory(db, before: before);
+        settings.historyWipedAt = before;
+        settings.resetOrderNumbers();
+        log('orders.history.wiped',
+            'from another till, before ${before.toIso8601String()}: '
+            '${wiped.orders} orders, ${wiped.shifts} shifts');
+      },
       onRefused: log,
     );
     final credential = LanCredential.rotating(shopKey);
@@ -177,6 +219,7 @@ class LanNode {
       fetch: http.fetch,
       notify: (peer, events) => http.notify(peer, events, deviceId),
       onError: log,
+      traffic: traffic,
     );
     Map<String, dynamic>? joinGate({
       required String pin,
@@ -225,6 +268,11 @@ class LanNode {
         claims: claims,
         seats: () => settings.isLanPrimary ? seats : null,
         numbers: () => settings.isLanPrimary ? numbers : null,
+        catchUp: (since) async => [
+          for (final gap in await _catchUpPeers(fabric, peers, since)) gap.toMap(),
+        ],
+        traffic: traffic,
+        updates: () => settings.isLanPrimary ? updateOffer : null,
         onJoin: joinGate,
         onRefused: log,
       ),
@@ -239,6 +287,7 @@ class LanNode {
       log: eventLog,
       fabric: fabric,
       peers: peers,
+      traffic: traffic,
       client: http,
       claims: claims,
       seats: seats,
@@ -270,6 +319,9 @@ class LanNode {
 
   /// Who else is on the LAN, for the settings screen.
   final LanPeerDirectory peers;
+
+  /// What passed to and from each of them since the app started, and how fast.
+  final LanTraffic traffic;
 
   final LanEventLog _log;
   final LanFabric _fabric;
@@ -450,6 +502,58 @@ class LanNode {
   void announceStressCleanup() => publish(LanEventKind.stressCleanup,
       'stress-cleanup', {'note': kStressNote});
 
+  /// Tell the other tills the order history was wiped here, so they wipe theirs
+  /// from before the same moment.
+  void announceHistoryWipe(DateTime before) => publish(LanEventKind.historyWipe,
+      'history-wipe', {'before': before.toUtc().toIso8601String()});
+
+  /// Make sure the shop's sales are all in one place before a shift closes, and
+  /// name the tills that stopped that from being true.
+  ///
+  /// This till hands over what it has and reads what it is missing first. On a
+  /// secondary, the primary is then asked to read every till seen since [since]
+  /// to the end of its log, because the primary is where the shop's sales are
+  /// meant to meet; a primary that cannot be asked is itself the gap. On the
+  /// primary, or on a till with no primary at all, this till reads them itself.
+  Future<List<LanTillGap>> catchUpBeforeClose({required DateTime since}) async {
+    await _fabric.pass();
+    final primaryId = _primaryDeviceId()?.trim();
+    final hasPrimary = (primaryId != null && primaryId.isNotEmpty) ||
+        peers.all.any((p) => p.role == DeviceRole.primary);
+    if (_isPrimary() || !_isSecondary() || !hasPrimary) {
+      return _catchUpPeers(_fabric, peers, since);
+    }
+    final primary = _primaryPeer();
+    if (primary == null) {
+      final known = peers.all
+          .where((p) => primaryId != null && primaryId.isNotEmpty
+              ? p.deviceId == primaryId
+              : p.role == DeviceRole.primary)
+          .firstOrNull;
+      return [
+        LanTillGap(
+          deviceId: known?.deviceId ?? primaryId ?? '',
+          name: known?.name ?? 'Primary',
+          reason: 'the primary is not on the network',
+          lastSeenAt: known?.lastSeenAt,
+        ),
+      ];
+    }
+    try {
+      return await _client.catchUp(primary, deviceId: deviceId, since: since);
+    } catch (e) {
+      _report('lan.catchup.failed', '${primary.deviceId} (${primary.name}): $e');
+      return [
+        LanTillGap(
+          deviceId: primary.deviceId,
+          name: primary.name,
+          reason: '$e',
+          lastSeenAt: primary.lastSeenAt,
+        ),
+      ];
+    }
+  }
+
   /// Take a tab another till has parked, with that till's agreement.
   ///
   /// The owner is asked, and asked again when it stays silent. Only after every
@@ -556,6 +660,70 @@ class LanNode {
   /// number from its own copy of it when nothing is reserved: the primary is
   /// handing those same numbers out.
   bool get numbersBelongToPrimary => _isSecondary();
+
+  /// A build newer than [ownVersion] that the primary is offering and has signed
+  /// with the shop key, or null when there is none (yet).
+  ///
+  /// The first ask starts the primary packing, which it answers "not ready", so
+  /// null now can be an offer a minute later.
+  Future<LanUpdateAvailable?> primaryUpdate(String ownVersion) async {
+    if (_isPrimary()) return null;
+    final own = AppBuild.tryParse(ownVersion);
+    final primary = _primaryPeer();
+    if (own == null || primary == null) return null;
+    final Map<String, dynamic> manifest;
+    try {
+      manifest = await _client.updateManifest(primary, deviceId: deviceId);
+    } catch (_) {
+      // An older primary, or none offering: nothing to install.
+      return null;
+    }
+    final offered = AppBuild.tryParse(manifest['version'] as String?);
+    if (offered == null || !offered.isNewerThan(own)) return null;
+    if (manifest['ready'] != true) return null;
+    if (!_client.offerIsGenuine(manifest)) {
+      _report('lan.update.refused',
+          '${primary.deviceId} offered $offered without a valid shop-key signature');
+      return null;
+    }
+    return LanUpdateAvailable(
+      version: '$offered',
+      size: manifest['size'] as int,
+      sha256: manifest['sha256'] as String,
+    );
+  }
+
+  /// Downloads [offer] into [staging] and checks it is byte for byte what the
+  /// primary signed. Throws on anything short of that, leaving nothing behind.
+  Future<File> downloadPrimaryUpdate(
+      LanUpdateAvailable offer, Directory staging,
+      {DownloadProgress? onProgress}) async {
+    final primary = _primaryPeer();
+    if (primary == null) throw StateError('the primary is not on the network');
+    await staging.create(recursive: true);
+    final sep = Platform.pathSeparator;
+    final file = File('${staging.path}${sep}lan-${offer.version}.zip');
+    final partial = File('${file.path}.download');
+    try {
+      await _client.downloadUpdate(primary,
+          deviceId: deviceId,
+          to: partial,
+          onProgress: (got, total) => onProgress?.call(got, total ?? offer.size));
+      final size = await partial.length();
+      final digest = (await crypto.sha256.bind(partial.openRead()).first).toString();
+      if (size != offer.size || digest != offer.sha256) {
+        throw StateError('the download does not match what the primary signed '
+            '($size bytes, $digest)');
+      }
+      if (await file.exists()) await file.delete();
+      await partial.rename(file.path);
+      return file;
+    } catch (e) {
+      _report('lan.update.download_failed', '$e');
+      if (await partial.exists()) await partial.delete();
+      rethrow;
+    }
+  }
 
   LanPeer? _primaryPeer() {
     final id = _primaryDeviceId()?.trim();

@@ -16,18 +16,22 @@ const _kdsCardSurface = Color(0xFF242830);
 /// A live board of active kitchen tickets, one card per order, that a cook
 /// advances New -> Preparing -> Ready -> Served without touching the till.
 ///
-/// [load] is polled on a timer rather than pushed: the kitchen has its own
-/// device and the till that books the order may be several seconds away or
-/// offline entirely, so the board must catch up on its own schedule instead
-/// of waiting on a notification that might never arrive.
+/// [load] is re-read whenever [changes] fires and also on a timer: the till that
+/// books the order may be offline entirely, so the board must still catch up on
+/// its own schedule instead of only waiting on a notification that might never
+/// arrive.
 class KitchenDisplayScreen extends StatefulWidget {
   const KitchenDisplayScreen({
     super.key,
     required this.load,
     required this.onStatus,
+    this.changes,
     this.actions = const <Widget>[],
     this.nowFn = DateTime.now,
   });
+
+  /// Fires when another till's tickets landed here, so they show at once.
+  final Stream<void>? changes;
 
   /// Returns the active tickets, newest first. Called on every poll and on
   /// manual refresh.
@@ -56,6 +60,7 @@ class KitchenDisplayScreen extends StatefulWidget {
 class _KitchenDisplayScreenState extends State<KitchenDisplayScreen> {
   Timer? _poll;
   Timer? _clock;
+  StreamSubscription<void>? _changes;
   late List<Order> _orders;
   late DateTime _now;
 
@@ -67,6 +72,7 @@ class _KitchenDisplayScreenState extends State<KitchenDisplayScreen> {
     // A cook cannot be relied on to remember to tap refresh mid-service, so the
     // board keeps itself current even if nobody touches it.
     _poll = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
+    _changes = widget.changes?.listen((_) => _refresh());
     // Drives the wall clock in the app bar and every card's live MM:SS timer, so
     // waiting time is obvious without a cook doing the subtraction in their head.
     _clock = Timer.periodic(
@@ -79,6 +85,7 @@ class _KitchenDisplayScreenState extends State<KitchenDisplayScreen> {
   void dispose() {
     _poll?.cancel();
     _clock?.cancel();
+    _changes?.cancel();
     super.dispose();
   }
 

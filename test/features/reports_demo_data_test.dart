@@ -529,10 +529,11 @@ void main() {
     await expectShows('rep-discounts', [totals.checkDiscount, totals.discount]);
     await expectShows('rep-detailed-discounts',
         [totals.checkDiscount, totals.lineDiscount, totals.discount]);
-    // The tax the till charged, and what the customers paid less tips and
-    // delivery, which carry no tax.
+    // The tax the till charged plus the VAT inside the delivery charge, which the
+    // server books 14% inclusive, and what the customers paid less tips.
+    final deliveryVat = delivery - delivery / 1.14;
     await expectShows(
-        'rep-tax', [totals.vat, totals.total - tips - delivery]);
+        'rep-tax', [totals.vat + deliveryVat, totals.total - tips]);
     await expectShows('rep-refunds-summary', [-30]);
     await expectShows('rep-receivables', [pay[kOnAccountLabel]!]);
 

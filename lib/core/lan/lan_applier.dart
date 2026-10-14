@@ -46,9 +46,11 @@ class LanApplier {
     UserStore? users,
     void Function()? onShopBundleApplied,
     void Function()? onStressCleanup,
+    void Function(DateTime before)? onHistoryWipe,
     LanLog? onRefused,
   })  : _orders = orders,
         _onStressCleanup = onStressCleanup,
+        _onHistoryWipe = onHistoryWipe,
         _tables = tables,
         _settings = settings,
         _reservations = reservations,
@@ -77,6 +79,9 @@ class LanApplier {
 
   /// Drops this till's Stress Lab rows when another till cleared its own.
   final void Function()? _onStressCleanup;
+
+  /// Wipes this till's order history from before the given moment.
+  final void Function(DateTime before)? _onHistoryWipe;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -88,6 +93,7 @@ class LanApplier {
   /// Returns how many were actually written. Never throws.
   int applyAll(String peerDeviceId, List<LanEvent> events, {int? highSeq}) {
     var applied = 0;
+    var shown = false;
     var seen = 0;
     int? deferredAt;
     for (final event in events) {
@@ -95,6 +101,8 @@ class LanApplier {
       switch (_land(event)) {
         case _Landing.written:
           applied++;
+          // A cart feeds the customer display only, and changes on every tap.
+          if (event.kind != LanEventKind.cartDisplay) shown = true;
         case _Landing.deferred:
           deferredAt ??= event.seq;
         case _Landing.refused:
@@ -115,6 +123,7 @@ class LanApplier {
       if (hold < cursor) cursor = hold;
     }
     if (cursor > 0) _log.setCursor(peerDeviceId, cursor);
+    if (shown) _settings.bumpSharedRevision();
     return applied;
   }
 
@@ -194,6 +203,7 @@ class LanApplier {
         LanEventKind.userUpsert => _applyUser(event),
         LanEventKind.cartDisplay => _applyCart(event),
         LanEventKind.stressCleanup => _applyStressCleanup(),
+        LanEventKind.historyWipe => _applyHistoryWipe(event),
       };
       if (!written) return _Landing.refused;
       _log.stampClock(event.recordUuid, event.kind, event.at, event.originDeviceId);
@@ -242,6 +252,11 @@ class LanApplier {
       return true;
     }
     final incoming = Order.fromMap(event.payload);
+    // A sale from before the last wipe, from a till that had not heard of it yet.
+    final wipedAt = _settings.historyWipedAt;
+    if (wipedAt != null && incoming.createdAt.toUtc().isBefore(wipedAt)) {
+      return false;
+    }
     // State only moves forward. A paid order never loses to a held one, whatever
     // the clocks say: money taken is not something a later edit can undo, and the
     // till that took it is the one that books it.
@@ -250,6 +265,17 @@ class LanApplier {
     // announce: false, so applying a peer's order does not make this till claim
     // authorship of it and send it back.
     _orders.save(incoming, announce: false);
+    return true;
+  }
+
+  bool _applyHistoryWipe(LanEvent event) {
+    final wipe = _onHistoryWipe;
+    if (wipe == null) return false;
+    final before = DateTime.tryParse('${event.payload['before']}')?.toUtc();
+    if (before == null) return false;
+    final known = _settings.historyWipedAt;
+    if (known != null && !before.isAfter(known)) return true;
+    wipe(before);
     return true;
   }
 

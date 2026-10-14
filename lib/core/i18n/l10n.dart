@@ -2301,4 +2301,69 @@ const Map<String, String> _ar = {
       ': (نسبة المزيج > القاعدة و متوسط الربح > قاعدة المساهمة) يُبقى على الصنف.',
   ': (MM% < MM Rule AND Avg Profit > PC Rule) item should be repositioned on menu.':
       ': (نسبة المزيج < القاعدة و متوسط الربح > قاعدة المساهمة) يُعاد وضع الصنف في المنيو.',
+  // Start over: wipe the order history, delete this till's data.
+  'Start over': 'البدء من جديد',
+  'For a till that was set up to be tried. Each asks a manager first.':
+      'لجهاز تم تجهيزه للتجربة. كل خيار يطلب موافقة المدير أولاً.',
+  'Clear order history on every till': 'مسح سجل الطلبات من كل الأجهزة',
+  'Clear order history on every till?': 'مسح سجل الطلبات من كل الأجهزة؟',
+  'Deletes every order, shift and Z report, and what is still waiting to go to Odoo, on this till and on every till paired with it. Menu, staff, printers, floor plan and settings stay. Order numbers start again from 1. Nothing is deleted in Odoo.':
+      'يحذف كل الطلبات والورديات وتقارير Z، وما زال في انتظار الإرسال إلى Odoo، من هذا الجهاز ومن كل الأجهزة المرتبطة به. المنيو والموظفين والطابعات وخريطة الطاولات والإعدادات تبقى كما هي. ترقيم الطلبات يبدأ من 1 من جديد. لا يُحذف أي شيء من Odoo.',
+  'Clear history': 'مسح السجل',
+  'Order history cleared here. The other tills clear theirs as soon as they hear from this one. Restart the app on each till to refresh its screens.':
+      'تم مسح سجل الطلبات على هذا الجهاز. الأجهزة الأخرى تمسح سجلها بمجرد أن تتصل بهذا الجهاز. أعد تشغيل البرنامج على كل جهاز لتحديث شاشاته.',
+  'Unlink and delete this till\'s data': 'إلغاء الربط وحذف بيانات هذا الجهاز',
+  'Unlink and delete this till\'s data?': 'إلغاء الربط وحذف بيانات هذا الجهاز؟',
+  'Unlinks this till from the shop and deletes its whole database: orders, shifts, menu, staff, printers and settings. The app then closes, and opens next time as a new till. The other tills keep their own data. This cannot be undone.':
+      'يلغي ربط هذا الجهاز بالمحل ويحذف قاعدة بياناته بالكامل: الطلبات والورديات والمنيو والموظفين والطابعات والإعدادات. بعدها يُغلق البرنامج، ويفتح في المرة القادمة كجهاز جديد. الأجهزة الأخرى تحتفظ ببياناتها. لا يمكن التراجع عن ذلك.',
+  'Delete and close': 'حذف وإغلاق',
+  '{n} sales on this till have not reached Odoo yet. They will be lost.':
+      '{n} عملية بيع على هذا الجهاز لم تصل إلى Odoo بعد. ستضيع.',
+  'Type DELETE to confirm.': 'اكتب DELETE أو مسح للتأكيد.',
+  'The app will close now': 'سيتم إغلاق البرنامج الآن',
+  'Open it again: the database is deleted as it starts, and it opens as a new till.':
+      'افتحه مرة أخرى: تُحذف قاعدة البيانات أثناء التشغيل، ويفتح كجهاز جديد.',
+  'Close the app': 'إغلاق البرنامج',
+  // Clock difference between tills on the shop network screen.
+  'Clock': 'الساعة',
+  'ahead of this one': 'متقدمة عن هذا الجهاز',
+  'behind this one': 'متأخرة عن هذا الجهاز',
+  'Too far apart: these two devices refuse each other until the clocks are fixed.':
+      'الفرق كبير جداً: الجهازان يرفضان بعضهما حتى يتم ضبط الساعة.',
+  'Turn on "Set time automatically" in Windows on both devices.':
+      'فعّل "ضبط الوقت تلقائياً" في ويندوز على الجهازين.',
+  // Collecting the other tills' sales before a shift closes.
+  'Collecting sales from the other tills...': 'جاري تجميع المبيعات من الأجهزة الأخرى...',
+  'Some tills did not hand over their sales': 'بعض الأجهزة لم تسلّم مبيعاتها',
+  'Turn those tills on and connect them to the network, then try again. Closing anyway leaves their sales out of this Z.':
+      'شغّل هذه الأجهزة ووصّلها بالشبكة ثم حاول مرة أخرى. الإغلاق رغم ذلك يترك مبيعاتها خارج تقرير Z هذا.',
+  'the primary is not on the network': 'الجهاز الرئيسي غير موجود على الشبكة',
+  // Deleting from the open orders list.
+  'This order was sent to the kitchen': 'هذا الطلب أُرسل إلى المطبخ',
+  'It cannot be deleted from this list. Open it and void the items from inside: that asks for a manager PIN and a reason, tells the kitchen to stop, and keeps the void in the reports.':
+      'لا يمكن حذفه من هذه القائمة. افتح الطلب وألغِ الأصناف من داخله: سيطلب رمز المدير وسبب الإلغاء، ويُبلغ المطبخ بالإيقاف، ويبقى الإلغاء مسجلاً في التقارير.',
+  'Open order': 'فتح الطلب',
+  'A new version is available': 'فيه إصدار جديد',
+  'The main till runs': 'الجهاز الرئيسي عليه الإصدار',
+  'this one runs': 'والجهاز ده عليه',
+  'The app closes and opens again by itself in under a minute. Orders and data stay as they are.':
+      'البرنامج هيقفل ويفتح تاني لوحده في أقل من دقيقة. الأوردرات والبيانات زي ما هي.',
+  'Update now': 'حدّث دلوقتي',
+  'Downloading the update from the main till...': 'جاري تحميل التحديث من الجهاز الرئيسي...',
+  'Downloading the update from the server...': 'جاري تحميل التحديث من السيرفر...',
+  'The update server has': 'السيرفر عليه الإصدار',
+  'Installing. The app closes and opens again by itself...':
+      'جاري التثبيت. البرنامج هيقفل ويفتح تاني لوحده...',
+  'The update could not be installed': 'التحديث ماتثبتش',
+  // Traffic with each device on the shop network screen.
+  'Reset counters': 'تصفير العدادات',
+  'asked': 'بالسحب',
+  'handed over': 'بالإرسال المباشر',
+  'last': 'آخر',
+  'Round trip': 'زمن الرد',
+  'ask': 'سحب',
+  'hand over': 'إرسال',
+  'Arrival delay': 'تأخير الوصول',
+  'average': 'المتوسط',
+  'worst': 'الأسوأ',
 };

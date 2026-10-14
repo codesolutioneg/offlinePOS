@@ -31,6 +31,8 @@ class ShiftScreen extends StatefulWidget {
     this.pendingSyncCount,
     this.sessionPartnerName,
     this.onPrepareCloseSync,
+    this.catchUpOtherTills,
+    this.onCloseOverride,
     this.startCloseOnOpen = false,
     this.startMovement,
   });
@@ -63,6 +65,15 @@ class ShiftScreen extends StatefulWidget {
   /// Dishflow gate before counting cash: returns null to proceed, or an error
   /// message that blocks close (e.g. consolidated mode without a session partner).
   final Future<String?> Function()? onPrepareCloseSync;
+
+  /// Brings in every sale the other tills on the network rang since [since], before
+  /// anything is counted. Answers one line per till that could not be reached; an
+  /// empty list means every till seen this shift is in.
+  final Future<List<String>> Function(DateTime since)? catchUpOtherTills;
+
+  /// A close went ahead over something it would normally stop for, with the reason
+  /// as a short event name and what was skipped, for the audit trail.
+  final void Function(String reason, String detail)? onCloseOverride;
 
   final ShiftStore store;
   final String cashierId;
@@ -778,6 +789,10 @@ class _ShiftScreenState extends State<ShiftScreen> {
   }
 
   Future<void> _runCloseCeremony() async {
+    // First of all: the other tills' sales have to be here before open work is
+    // judged or anything is counted, or the Z comes out short.
+    if (!await _catchUpOtherTills()) return;
+    if (!mounted) return;
     // Before anything else, including the cash count: a tab still on a table
     // is a reason not to be closing at all, and finding that out after
     // counting the drawer wastes the count.
@@ -831,6 +846,112 @@ class _ShiftScreenState extends State<ShiftScreen> {
     final match = RegExp(r'Odoo order:\s*(.+)$', multiLine: true).firstMatch(message);
     final ref = match?.group(1)?.trim();
     return (ref == null || ref.isEmpty) ? null : ref;
+  }
+
+  /// Whether every till seen this shift has handed over its sales. Asked again
+  /// until they have, or until a cashier closes over the gap knowingly: a till
+  /// that is switched off for good must not be able to hold the close forever.
+  Future<bool> _catchUpOtherTills() async {
+    final catchUp = widget.catchUpOtherTills;
+    final shift = _shift;
+    if (catchUp == null || shift == null) return true;
+    while (true) {
+      final gaps = await _withProgress(
+        tr(context, 'Collecting sales from the other tills...'),
+        () => catchUp(shift.openedAt),
+      );
+      if (!mounted) return false;
+      if (gaps.isEmpty) return true;
+      widget.onCloseBlocked?.call('shift.close.blocked.tills_unreachable');
+      final choice = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          key: const Key('tills-unreachable'),
+          title: Text(tr(ctx, 'Some tills did not hand over their sales')),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final gap in gaps)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('• $gap'),
+                    ),
+                  const SizedBox(height: 8),
+                  Text(tr(
+                      ctx,
+                      'Turn those tills on and connect them to the network, then try '
+                          'again. Closing anyway leaves their sales out of this Z.')),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              key: const Key('tills-unreachable-cancel'),
+              onPressed: () => Navigator.pop(ctx, 'cancel'),
+              child: Text(tr(ctx, 'Cancel')),
+            ),
+            TextButton(
+              key: const Key('tills-unreachable-close-anyway'),
+              style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(ctx).colorScheme.error),
+              onPressed: () => Navigator.pop(ctx, 'override'),
+              child: Text(tr(ctx, 'Close anyway')),
+            ),
+            FilledButton(
+              key: const Key('tills-unreachable-retry'),
+              onPressed: () => Navigator.pop(ctx, 'retry'),
+              child: Text(tr(ctx, 'Try again')),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return false;
+      switch (choice) {
+        case 'retry':
+          continue;
+        case 'override':
+          widget.onCloseOverride
+              ?.call('shift.close.override.tills_unreachable', gaps.join('; '));
+          return true;
+        default:
+          return false;
+      }
+    }
+  }
+
+  /// Runs [work] behind a dialog that cannot be dismissed, so nothing else is
+  /// started on the till while it waits on the network.
+  Future<T> _withProgress<T>(String label, Future<T> Function() work) async {
+    final nav = Navigator.of(context, rootNavigator: true);
+    var shown = true;
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          key: const Key('close-progress'),
+          content: Row(children: [
+            const SizedBox(
+                width: 24, height: 24, child: CircularProgressIndicator()),
+            const SizedBox(width: 16),
+            Expanded(child: Text(label)),
+          ]),
+        ),
+      ),
+    ).whenComplete(() => shown = false));
+    try {
+      return await work();
+    } finally {
+      if (shown) nav.pop();
+    }
   }
 
   /// Dishflow session-close precondition: partner configured when sales will sync.

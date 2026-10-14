@@ -16,6 +16,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 import '../../core/widgets/icon_pad.dart';
 import '../../core/widgets/numeric_keypad.dart';
+import '../../core/widgets/on_screen_keyboard.dart';
 import '../../core/widgets/select_pill.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/delivery.dart';
@@ -908,33 +909,6 @@ class _SellScreenState extends State<SellScreen> {
                     subtitle: line.note,
                     onTap: () => Navigator.pop(ctx, 'note'),
                   ),
-                  _lineActionTile(
-                    key: const Key('line-price'),
-                    icon: Icons.sell_outlined,
-                    title: tr(ctx, 'Change the price'),
-                    subtitle:
-                        '${tr(ctx, 'Now')} ${widget.formatAmount(line.unitPrice)}',
-                    onTap: () => Navigator.pop(ctx, 'price'),
-                  ),
-                  _lineActionTile(
-                    key: const Key('line-discount'),
-                    icon: Icons.percent,
-                    title: tr(ctx, 'Line discount'),
-                    subtitle: line.discountPercent > 0
-                        ? '${line.discountPercent.toStringAsFixed(0)}%'
-                        : null,
-                    onTap: () => Navigator.pop(ctx, 'discount'),
-                  ),
-                  if (s.current.type == OrderType.dineIn)
-                    _lineActionTile(
-                      key: const Key('line-seat'),
-                      icon: Icons.person_pin_circle_outlined,
-                      title: tr(ctx, 'Assign to guest'),
-                      subtitle: line.seat != null
-                          ? '${tr(ctx, 'Guest')} ${line.seat}'
-                          : null,
-                      onTap: () => Navigator.pop(ctx, 'seat'),
-                    ),
                   if (line.quantity > 1 &&
                       line.quantity == line.quantity.roundToDouble())
                     _lineActionTile(
@@ -954,18 +928,6 @@ class _SellScreenState extends State<SellScreen> {
                           : tr(ctx, 'Send to the kitchen after a delay'),
                       onTap: () => Navigator.pop(ctx, 'timer'),
                     ),
-                  _lineActionTile(
-                    key: const Key('line-void'),
-                    icon: Icons.remove_circle_outline,
-                    title: line.quantity > 1
-                        ? tr(ctx, 'Void units…')
-                        : tr(ctx, 'Void this line'),
-                    subtitle: line.quantity > 1
-                        ? '${tr(ctx, 'Pick how many')} (1–${line.quantity.toStringAsFixed(0)})'
-                        : null,
-                    danger: true,
-                    onTap: () => Navigator.pop(ctx, 'void'),
-                  ),
                 ],
               ),
             ),
@@ -977,12 +939,8 @@ class _SellScreenState extends State<SellScreen> {
       await _lineModifiers(line, modifierGroups, kitchenHasLine);
     }
     if (action == 'note') await _lineNote(line);
-    if (action == 'price') await _linePrice(line);
-    if (action == 'discount') await _lineDiscount(line);
-    if (action == 'seat') await _assignSeat(line);
     if (action == 'split-units') _changed(() => s.splitLineToUnits(line.uuid));
     if (action == 'timer') await _setFireTiming(lineUuid: line.uuid);
-    if (action == 'void') await _voidLine(line);
   }
 
   /// One row in the line-actions wizard card.
@@ -1097,54 +1055,38 @@ class _SellScreenState extends State<SellScreen> {
     });
   }
 
-  /// Ask which guest a line belongs to (0/blank clears it), for splitting the bill
-  /// by cover later. A number pad, because seats are 1..N.
-  Future<void> _assignSeat(OrderLine line) async {
-    final ctrl = TextEditingController(text: line.seat?.toString() ?? '');
-    final seat = await showDialog<int>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(tr(ctx, 'Assign to guest')),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          decoration: InputDecoration(
-              labelText: tr(ctx, 'Guest number'), border: const OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, 0),
-              child: Text(tr(ctx, 'Clear'))),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, int.tryParse(ctrl.text.trim()) ?? 0),
-              child: Text(tr(ctx, 'Set'))),
-        ],
-      ),
-    );
-    if (seat == null || !mounted) return;
-    _changed(() => s.setLineSeat(line.uuid, seat > 0 ? seat : null));
-  }
-
   Future<void> _lineNote(OrderLine line) async {
     final ctrl = TextEditingController(text: line.note ?? '');
     final note = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(line.name),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(
-            controller: ctrl,
-            autofocus: true,
-            decoration: InputDecoration(
-                labelText: tr(ctx, 'Kitchen note'), border: const OutlineInputBorder()),
+        insetPadding: const EdgeInsets.all(16),
+        content: SizedBox(
+          width: 720,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                key: const Key('line-note-text'),
+                controller: ctrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                    labelText: tr(ctx, 'Kitchen note'),
+                    border: const OutlineInputBorder()),
+              ),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, children: [
+                for (final q in widget.quickComments)
+                  ActionChip(label: Text(q), onPressed: () => ctrl.text = q),
+              ]),
+              const SizedBox(height: 8),
+              OnScreenKeyboard(
+                controller: ctrl,
+                onDone: () => Navigator.pop(ctx, ctrl.text.trim()),
+              ),
+            ]),
           ),
-          const SizedBox(height: 8),
-          Wrap(spacing: 8, children: [
-            for (final q in widget.quickComments)
-              ActionChip(label: Text(q), onPressed: () => ctrl.text = q),
-          ]),
-        ]),
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
           FilledButton(
@@ -1154,43 +1096,6 @@ class _SellScreenState extends State<SellScreen> {
       ),
     );
     if (note != null) _changed(() => s.setLineNote(line.uuid, note));
-  }
-
-  /// Sell this line at another price. Gated, and the session records what it was:
-  /// a price typed at the counter has to be as traceable as a discount is.
-  Future<void> _linePrice(OrderLine line) async {
-    if (widget.authorize != null &&
-        !await widget.authorize!(Permission.priceOverride)) {
-      return;
-    }
-    if (!mounted) return;
-    final ctrl = TextEditingController(text: line.unitPrice.toStringAsFixed(2));
-    final price = await showDialog<double>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('${tr(ctx, 'Price')} ${line.name}'),
-        content: TextField(
-          key: const Key('line-price-value'),
-          controller: ctrl,
-          autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(
-              labelText: tr(ctx, 'Price for one'),
-              helperText: tr(ctx, 'Anything added to the item keeps its own price'),
-              border: const OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),
-          FilledButton(
-            key: const Key('apply-line-price'),
-            onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.trim())),
-            child: Text(tr(ctx, 'Apply')),
-          ),
-        ],
-      ),
-    );
-    if (price == null || price < 0) return;
-    _changed(() => s.setLinePrice(line.uuid, price));
   }
 
   Future<void> _lineDiscount(OrderLine line) async {
@@ -1471,11 +1376,26 @@ class _SellScreenState extends State<SellScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(tr(ctx, 'Order note')),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: InputDecoration(
-              labelText: tr(ctx, 'Note for the whole order'), border: const OutlineInputBorder()),
+        insetPadding: const EdgeInsets.all(16),
+        content: SizedBox(
+          width: 720,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                key: const Key('order-note-text'),
+                controller: ctrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                    labelText: tr(ctx, 'Note for the whole order'),
+                    border: const OutlineInputBorder()),
+              ),
+              const SizedBox(height: 8),
+              OnScreenKeyboard(
+                controller: ctrl,
+                onDone: () => Navigator.pop(ctx, ctrl.text.trim()),
+              ),
+            ]),
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr(ctx, 'Cancel'))),

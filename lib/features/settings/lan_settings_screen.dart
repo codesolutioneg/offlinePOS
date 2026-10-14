@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import '../../core/lan/lan_cart_board.dart';
 import '../../core/lan/lan_credential.dart';
 import '../../core/lan/lan_peer.dart';
 import '../../core/lan/lan_shift_board.dart';
+import '../../core/lan/lan_traffic.dart';
 import '../../core/lan/lan_wiring.dart';
 import '../../domain/table_section_config.dart';
 
@@ -42,6 +44,11 @@ class LanSettingsScreen extends StatefulWidget {
     this.facts,
     this.onSyncNow,
     this.onJoinPrimary,
+    this.onWipeHistory,
+    this.onResetDevice,
+    this.unsyncedSales,
+    this.traffic,
+    this.onResetTraffic,
     this.nowFn = DateTime.now,
   });
 
@@ -72,6 +79,26 @@ class LanSettingsScreen extends StatefulWidget {
     void Function(String step, double progress)? onProgress,
   })? onJoinPrimary;
 
+  /// Wipes the order history here and on every paired till, once a manager has
+  /// approved it. Answers whether it went ahead.
+  final Future<bool> Function()? onWipeHistory;
+
+  /// Unlinks this till and deletes its database at the next launch, once a manager
+  /// has approved it. Answers whether it was staged.
+  final Future<bool> Function()? onResetDevice;
+
+  /// Sales on this till not yet in Odoo, named in both warnings.
+  final int Function()? unsyncedSales;
+
+  /// What passed to and from each device since the app started. When given, the
+  /// screen refreshes itself every [liveRefresh] so the figures move while watched.
+  final Map<String, LanPeerTraffic> Function()? traffic;
+
+  /// Starts the traffic figures from zero, to time one test from a clean slate.
+  final VoidCallback? onResetTraffic;
+
+  static const Duration liveRefresh = Duration(seconds: 2);
+
   final DateTime Function() nowFn;
 
   @override
@@ -90,9 +117,22 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
 
   @override
   void dispose() {
+    _live?.cancel();
     _name.dispose();
     _shopKey.dispose();
     super.dispose();
+  }
+
+  Timer? _live;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.traffic != null) {
+      _live = Timer.periodic(LanSettingsScreen.liveRefresh, (_) {
+        if (mounted) setState(() {});
+      });
+    }
   }
 
   void _setEnabled(bool value) {
@@ -233,6 +273,141 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
               'Unlinked. Pick Primary, or Secondary and Join with a new PIN. '
                   'Restart if Share was already on.')),
     ));
+  }
+
+  /// The word typed to confirm either delete, in English or Arabic.
+  static const _confirmWords = {'DELETE', 'مسح'};
+
+  /// Asked before anything is deleted: what goes, how many unsent sales go with it,
+  /// and a word typed out, so it cannot be done with one stray tap.
+  Future<bool> _confirmDelete({
+    required String title,
+    required String body,
+    required String action,
+    required String keyPrefix,
+  }) async {
+    final unsynced = widget.unsyncedSales?.call() ?? 0;
+    final typed = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          key: Key('$keyPrefix-confirm'),
+          title: Text(title),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(body),
+                if (unsynced > 0) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    tr(ctx, '{n} sales on this till have not reached Odoo yet. They will be lost.')
+                        .replaceAll('{n}', '$unsynced'),
+                    key: Key('$keyPrefix-unsynced'),
+                    style: TextStyle(
+                        color: Theme.of(ctx).colorScheme.error,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Text(tr(ctx, 'Type DELETE to confirm.')),
+                const SizedBox(height: 8),
+                TextField(
+                  key: Key('$keyPrefix-word'),
+                  controller: typed,
+                  autofocus: true,
+                  onChanged: (_) => setLocal(() {}),
+                  decoration: const InputDecoration(border: OutlineInputBorder()),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr(ctx, 'Cancel')),
+            ),
+            FilledButton(
+              key: Key('$keyPrefix-confirm-yes'),
+              style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(ctx).colorScheme.error),
+              onPressed: _confirmWords.contains(typed.text.trim().toUpperCase())
+                  ? () => Navigator.pop(ctx, true)
+                  : null,
+              child: Text(action),
+            ),
+          ],
+        ),
+      ),
+    );
+    return ok == true;
+  }
+
+  Future<void> _wipeHistory() async {
+    final wipe = widget.onWipeHistory;
+    if (wipe == null) return;
+    final confirmed = await _confirmDelete(
+      title: tr(context, 'Clear order history on every till?'),
+      body: tr(
+          context,
+          'Deletes every order, shift and Z report, and what is still waiting to '
+              'go to Odoo, on this till and on every till paired with it. Menu, '
+              'staff, printers, floor plan and settings stay. Order numbers start '
+              'again from 1. Nothing is deleted in Odoo.'),
+      action: tr(context, 'Clear history'),
+      keyPrefix: 'lan-wipe-history',
+    );
+    if (!confirmed || !mounted) return;
+    final done = await wipe();
+    if (!mounted || !done) return;
+    widget.onChanged();
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(tr(
+          context,
+          'Order history cleared here. The other tills clear theirs as soon as '
+              'they hear from this one. Restart the app on each till to refresh '
+              'its screens.')),
+      duration: const Duration(seconds: 8),
+    ));
+  }
+
+  Future<void> _resetDevice() async {
+    final reset = widget.onResetDevice;
+    if (reset == null) return;
+    final confirmed = await _confirmDelete(
+      title: tr(context, 'Unlink and delete this till\'s data?'),
+      body: tr(
+          context,
+          'Unlinks this till from the shop and deletes its whole database: orders, '
+              'shifts, menu, staff, printers and settings. The app then closes, '
+              'and opens next time as a new till. The other tills keep their own '
+              'data. This cannot be undone.'),
+      action: tr(context, 'Delete and close'),
+      keyPrefix: 'lan-reset-device',
+    );
+    if (!confirmed || !mounted) return;
+    if (!await reset() || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        key: const Key('lan-reset-device-done'),
+        title: Text(tr(ctx, 'The app will close now')),
+        content: Text(tr(ctx,
+            'Open it again: the database is deleted as it starts, and it opens as a new till.')),
+        actions: [
+          FilledButton(
+            key: const Key('lan-reset-device-close'),
+            onPressed: () => exit(0),
+            child: Text(tr(ctx, 'Close the app')),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _issueJoinPin() async {
@@ -427,6 +602,7 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
   Widget build(BuildContext context) {
     final facts = widget.facts?.call() ?? _noFabric;
     final peers = facts.peers;
+    final traffic = widget.traffic?.call() ?? const <String, LanPeerTraffic>{};
     final role = widget.settings.deviceRole;
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Shop network'))),
@@ -714,8 +890,22 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
             ),
           ],
           const Divider(height: 24),
-          Text(tr(context, 'Devices on this network'),
-              style: Theme.of(context).textTheme.titleMedium),
+          Row(children: [
+            Expanded(
+              child: Text(tr(context, 'Devices on this network'),
+                  style: Theme.of(context).textTheme.titleMedium),
+            ),
+            if (widget.onResetTraffic != null)
+              TextButton.icon(
+                key: const Key('lan-traffic-reset'),
+                onPressed: () {
+                  widget.onResetTraffic!();
+                  setState(() {});
+                },
+                icon: const Icon(Icons.restart_alt, size: 18),
+                label: Text(tr(context, 'Reset counters')),
+              ),
+          ]),
           if (peers.isEmpty)
             Padding(
               key: const Key('lan-no-peers'),
@@ -731,10 +921,17 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.point_of_sale),
               title: Text(peer.name),
-              subtitle: Text([
-                '${peer.host}:${peer.port}  ${peer.deviceId}',
-                if (!peer.serving) tr(context, 'not serving'),
-              ].join('\n')),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text([
+                    '${peer.host}:${peer.port}  ${peer.deviceId}',
+                    if (!peer.serving) tr(context, 'not serving'),
+                  ].join('\n')),
+                  if (peer.clockOffset case final offset?) _clockLine(peer, offset),
+                  if (traffic[peer.deviceId] case final t?) _trafficLines(peer, t),
+                ],
+              ),
               trailing: Text([
                 _ago(peer.lastSeenAt),
                 if (facts.cursors[peer.deviceId] case final seq?)
@@ -755,6 +952,43 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
                     '${peer.host}  ${tr(context, 'data version')} ${peer.schemaVersion}'
                     ' / ${Schema.version}'),
               ),
+          ],
+          if (widget.onWipeHistory != null || widget.onResetDevice != null) ...[
+            const Divider(height: 32),
+            Text(tr(context, 'Start over'),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.error)),
+            const SizedBox(height: 4),
+            Text(
+              tr(context,
+                  'For a till that was set up to be tried. Each asks a manager first.'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (widget.onWipeHistory != null)
+                  OutlinedButton.icon(
+                    key: const Key('lan-wipe-history'),
+                    style: OutlinedButton.styleFrom(
+                        foregroundColor: Theme.of(context).colorScheme.error),
+                    onPressed: _wipeHistory,
+                    icon: const Icon(Icons.delete_sweep_outlined),
+                    label: Text(tr(context, 'Clear order history on every till')),
+                  ),
+                if (widget.onResetDevice != null)
+                  OutlinedButton.icon(
+                    key: const Key('lan-reset-device'),
+                    style: OutlinedButton.styleFrom(
+                        foregroundColor: Theme.of(context).colorScheme.error),
+                    onPressed: _resetDevice,
+                    icon: const Icon(Icons.delete_forever_outlined),
+                    label: Text(tr(context, 'Unlink and delete this till\'s data')),
+                  ),
+              ],
+            ),
           ],
           const SizedBox(height: 24),
           Text(
@@ -783,6 +1017,94 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
           ],
         ),
       );
+
+  /// How far the peer's clock is from this one. Under half a minute is shown plainly;
+  /// past it in red with what to do, and past the pairing tolerance with the fact
+  /// that the two have stopped sharing.
+  Widget _clockLine(LanPeer peer, Duration offset) {
+    final seconds = offset.inSeconds;
+    final apart = seconds.abs();
+    final amount = apart < 60
+        ? '${apart}s'
+        : apart < 3600
+            ? '${apart ~/ 60}m ${apart % 60}s'
+            : '${apart ~/ 3600}h ${(apart % 3600) ~/ 60}m';
+    final direction = seconds >= 0
+        ? tr(context, 'ahead of this one')
+        : tr(context, 'behind this one');
+    final line = '${tr(context, 'Clock')}: $amount $direction';
+    if (apart < 30) {
+      return Text(line, key: Key('lan-clock-${peer.deviceId}'));
+    }
+    final advice = offset.abs() > LanCredential.clockTolerance
+        ? tr(context,
+            'Too far apart: these two devices refuse each other until the clocks are fixed.')
+        : tr(context,
+            'Turn on "Set time automatically" in Windows on both devices.');
+    return Text(
+      '$line\n$advice',
+      key: Key('lan-clock-${peer.deviceId}'),
+      style: TextStyle(
+          color: Theme.of(context).colorScheme.error, fontWeight: FontWeight.w600),
+    );
+  }
+
+  /// What went each way with [peer], how long a round trip takes, and how late
+  /// its changes land here. A delay past [slowDelay] or a recent failure is in red,
+  /// because that is the line support is looking for.
+  Widget _trafficLines(LanPeer peer, LanPeerTraffic t) {
+    String ms(Duration? d) => d == null ? '-' : '${d.inMilliseconds} ms';
+    String secs(Duration? d) => d == null
+        ? '-'
+        : d.inMilliseconds < 1000
+            ? '${d.inMilliseconds} ms'
+            : '${(d.inMilliseconds / 1000).toStringAsFixed(1)} s';
+    final lines = [
+      '${tr(context, 'Received')}: ${t.pulled + t.received} '
+          '(${tr(context, 'asked')} ${t.pulled}, ${tr(context, 'handed over')} ${t.received})'
+          ' · ${tr(context, 'last')} ${_ago(_latest(t.lastPullAt, t.lastReceivedAt))}',
+      '${tr(context, 'Sent')}: ${t.pushed} · ${tr(context, 'last')} ${_ago(t.lastPushAt)}',
+      '${tr(context, 'Round trip')}: ${tr(context, 'ask')} ${ms(t.lastPullTook)}, '
+          '${tr(context, 'hand over')} ${ms(t.lastPushTook)}',
+      '${tr(context, 'Arrival delay')}: ${tr(context, 'last')} ${secs(t.lastDelay)}, '
+          '${tr(context, 'average')} ${secs(t.averageDelay)}, '
+          '${tr(context, 'worst')} ${secs(t.worstDelay)}',
+    ];
+    final now = widget.nowFn().toUtc();
+    final recentError = t.lastError != null &&
+        t.lastErrorAt != null &&
+        now.difference(t.lastErrorAt!) < const Duration(minutes: 5);
+    final slow = (t.lastDelay ?? Duration.zero) > slowDelay;
+    final style = Theme.of(context).textTheme.bodySmall;
+    final error = Theme.of(context).colorScheme.error;
+    return Padding(
+      key: Key('lan-traffic-${peer.deviceId}'),
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final (i, line) in lines.indexed)
+            Text(line,
+                style: i == 3 && slow
+                    ? style?.copyWith(color: error, fontWeight: FontWeight.w600)
+                    : style),
+          if (recentError)
+            Text(
+              '${tr(context, 'Last problem')} (${_ago(t.lastErrorAt)}): ${t.lastError}',
+              key: Key('lan-traffic-error-${peer.deviceId}'),
+              style: style?.copyWith(color: error),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// An arrival slower than this is shown in red: the push is meant to land in
+  /// well under a second, and the pull behind it within one interval.
+  static const Duration slowDelay = Duration(seconds: 10);
+
+  static DateTime? _latest(DateTime? a, DateTime? b) =>
+      a == null ? b : (b == null || a.isAfter(b) ? a : b);
 
   /// A plain age, because a timestamp on its own does not answer "is it working
   /// right now". Never means never, not zero seconds ago.

@@ -5,7 +5,9 @@ import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/i18n/l10n.dart';
+import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
+import 'package:offline_pos/core/lan/lan_traffic.dart';
 import 'package:offline_pos/core/lan/lan_wiring.dart';
 import 'package:offline_pos/domain/table_section_config.dart';
 import 'package:offline_pos/features/settings/lan_settings_screen.dart';
@@ -88,6 +90,61 @@ void main() {
     expect(find.textContaining('12s'), findsOneWidget);
     expect(find.textContaining('read to 42'), findsOneWidget);
     expect(find.byKey(const Key('lan-no-peers')), findsNothing);
+  });
+
+  testWidgets('each device shows what went each way and how late it landed',
+      (t) async {
+    final traffic = LanTraffic(now: () => now);
+    traffic.pulled('till-b', const [], const Duration(milliseconds: 14));
+    traffic.pushed('till-b', 3, const Duration(milliseconds: 9));
+    traffic.received('till-b', [
+      LanEvent(
+        kind: LanEventKind.orderUpsert,
+        originDeviceId: 'till-b',
+        seq: 1,
+        recordUuid: 'o-1',
+        payload: const {},
+        at: now.subtract(const Duration(seconds: 12)),
+      ),
+    ]);
+    var resets = 0;
+    t.view.physicalSize = const Size(1200, 2400);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    await t.pumpWidget(MaterialApp(
+      home: LanSettingsScreen(
+        settings: settings,
+        deviceId: 'device-abc-123',
+        onChanged: () {},
+        facts: () => (
+          servingAt: '10.0.0.5:45333',
+          hostError: null,
+          peers: [peer()],
+          refused: const [],
+          cursors: const {},
+          lastPassAt: now,
+          lastError: null,
+        ),
+        traffic: () => traffic.byPeer,
+        onResetTraffic: () {
+          resets++;
+          traffic.reset();
+        },
+        nowFn: () => now,
+      ),
+    ));
+
+    expect(find.byKey(const Key('lan-traffic-till-b')), findsOneWidget);
+    expect(find.textContaining('Sent: 3'), findsOneWidget);
+    expect(find.textContaining('ask 14 ms'), findsOneWidget);
+    expect(find.textContaining('hand over 9 ms'), findsOneWidget);
+    expect(find.textContaining('Arrival delay: last 12.0 s'), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('lan-traffic-reset')));
+    await t.pump();
+    expect(resets, 1);
+    expect(find.byKey(const Key('lan-traffic-till-b')), findsNothing);
   });
 
   testWidgets('a device on its own says so rather than looking broken', (t) async {

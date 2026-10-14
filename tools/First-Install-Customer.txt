@@ -1,0 +1,66 @@
+تثبيت Offline POS لأول مرة
+==========================
+
+الخطوات دي بتتعمل على كل جهاز، الجهاز الرئيسي الأول وبعدين الأجهزة الفرعية.
+محتاج إنترنت أثناء التثبيت بس، وبعد كده البرنامج بيشتغل من غير إنترنت.
+
+إزاي تشغّل أي أمر: افتح قايمة ابدأ، اكتب PowerShell وافتحه، انسخ السطر كله والزقه ودوس Enter.
+لو ظهرت رسالة من ويندوز بتطلب صلاحية، اضغط Yes.
+
+
+الخطوة 1: اقفل أي نسخة قديمة من البرنامج
+------------------------------------------
+Get-Process offline_pos -ErrorAction SilentlyContinue | Stop-Process -Force; "Closed"
+
+
+الخطوة 2: افتح البرنامج في الفايروول (علشان الأجهزة تشوف بعض على الشبكة)
+---------------------------------------------------------------------------
+Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command',"New-NetFirewallRule -DisplayName 'Offline POS LAN TCP' -Direction Inbound -Protocol TCP -LocalPort 45333 -Action Allow -Profile Any; New-NetFirewallRule -DisplayName 'Offline POS LAN UDP' -Direction Inbound -Protocol UDP -LocalPort 45334 -Action Allow -Profile Any; 'Firewall OK'"
+
+هتفتح شاشة تانية ومكتوب فيها Firewall OK، اقفلها.
+
+
+الخطوة 3: نزّل البرنامج وثبّته
+------------------------------
+[Net.ServicePointManager]::SecurityProtocol='Tls12'; $m = Invoke-RestMethod 'https://updates.91.99.195.177.sslip.io/offline-pos/manifest.json'; $i = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($m.manifest)) | ConvertFrom-Json; "Version: $($i.version)"; $z="$env:TEMP\offlinePOS-latest.zip"; $src="$env:TEMP\offlinePOS-update"; try { Start-BitsTransfer -Source $i.url -Destination $z -DisplayName "Offline POS $($i.version)" } catch { $ProgressPreference='SilentlyContinue'; Invoke-WebRequest $i.url -OutFile $z -UseBasicParsing }; if ((Get-FileHash $z -Algorithm SHA256).Hash.ToLower() -ne $i.sha256) { throw 'The download is damaged, run it again' }; Remove-Item $src -Recurse -Force -EA SilentlyContinue; Expand-Archive $z $src; Get-ChildItem $src -Recurse | Unblock-File; $f = @(if (-not (Test-Path 'C:\OfflinePOS\offline_pos.exe')) { '-Fresh' }); powershell -NoProfile -ExecutionPolicy Bypass -File "$src\tools\update_offline_pos.ps1" -Source $src -Target C:\OfflinePOS -Yes @f
+
+- هيحمّل حوالي 55 ميجا وهيظهر شريط التحميل.
+- بيثبّت البرنامج في C:\OfflinePOS، ويعمل اختصار "Offline POS" على سطح المكتب، ويمسح أي اختصار قديم.
+- البرنامج هيفتح لوحده في الآخر.
+- لو فيه داتا قديمة على الجهاز، بتفضل زي ما هي.
+
+
+الخطوة 4: اتأكد إن التثبيت تم
+-----------------------------
+في شاشة تسجيل الدخول، تحت اللوجو مكتوب Build ورقم الإصدار، ولازم يكون نفس الرقم اللي ظهر في الخطوة 3.
+ومن هنا ورايح افتح البرنامج من اختصار "Offline POS" اللي على سطح المكتب بس.
+
+
+الخطوة 5: ربط الأجهزة ببعض
+--------------------------
+الأزرار في الشاشة دي مكتوبة بالإنجليزي.
+- على الجهاز الرئيسي: الإعدادات > شبكة المتجر، اختار Primary، واضغط Generate join PIN. هيظهر PIN.
+- على كل جهاز فرعي: الإعدادات > شبكة المتجر، اختار Secondary. تحت Join a primary on this network
+  هيظهر اسم الجهاز الرئيسي، اضغط Join جنبه واكتب الـ PIN اللي ظهر على الرئيسي.
+- لازم كل الأجهزة تكون على نفس الشبكة (نفس الراوتر)، والبرنامج مفتوح على الرئيسي.
+
+
+بعد كده: التحديثات أوتوماتيك
+----------------------------
+مش محتاج تعمل أي حاجة تاني. لما يبقى فيه إصدار جديد، هتظهر على كل جهاز رسالة "فيه إصدار جديد"،
+وتضغط "تحديث الآن". هيظهر شريط التحميل، والبرنامج يقفل ويفتح تاني لوحده في أقل من دقيقة.
+الرسالة مبتظهرش وإنت في نص أوردر. ولو النت قاطع، الأجهزة الفرعية بتاخد التحديث من الجهاز الرئيسي.
+
+
+لو حصلت مشكلة
+--------------
+* البرنامج ما فتحش خالص بعد التثبيت:
+  C:\OfflinePOS\tools\install_vcredist.bat
+  (شغّله بدبل كليك، وافق على الصلاحية، وبعدين افتح البرنامج تاني)
+
+* الأجهزة مش شايفة بعض: شغّل ده على الجهازين والبرنامج مفتوح، وابعت صورة النتيجة:
+Get-NetIPAddress -AddressFamily IPv4 | ? { $_.IPAddress -notmatch '^(127|169\.254)' } | ft InterfaceAlias, IPAddress; "App TCP 45333 listening: " + [bool](Get-NetTCPConnection -LocalPort 45333 -State Listen -EA SilentlyContinue); "App UDP 45334 listening: " + [bool](Get-NetUDPEndpoint -LocalPort 45334 -EA SilentlyContinue); Get-NetFirewallProfile | ft Name, Enabled
+
+* التحديث من جوه البرنامج ما نجحش: ابعت صورة الشاشة، والملف ده:
+  %APPDATA%\Code Solution\Offline POS\updates\install-report.txt
+  (الصق المسار ده في شريط العنوان في File Explorer)

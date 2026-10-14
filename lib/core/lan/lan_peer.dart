@@ -17,6 +17,7 @@ class LanPeer {
     required this.lastSeenAt,
     this.role,
     this.serving = true,
+    this.clockOffset,
   });
 
   /// The peer's own device id, which is its identity here. The address is not: a
@@ -44,6 +45,14 @@ class LanPeer {
   /// network, but every request to it would be refused.
   final bool serving;
 
+  /// How far the peer's clock is ahead of this one (negative: behind), from the
+  /// time its last beacon said it was sent. Null on beacons from older builds.
+  ///
+  /// Worth showing because the clocks matter twice: past
+  /// `LanCredential.clockTolerance` the two refuse each other outright, and below
+  /// it the newer of two edits to one tab is decided by whichever clock wrote it.
+  final Duration? clockOffset;
+
   bool get isCompatible => schemaVersion == Schema.version;
 
   Uri get baseUrl => Uri.parse('http://$host:$port');
@@ -57,6 +66,7 @@ class LanPeer {
         lastSeenAt: at,
         role: role,
         serving: serving,
+        clockOffset: clockOffset,
       );
 
   /// The beacon datagram. Deliberately tiny and free of anything private: it is
@@ -90,6 +100,7 @@ class LanPeer {
       final parsed = DeviceRole.fromWire(rawRole);
       if (parsed != DeviceRole.unset) role = parsed;
     }
+    final sentAt = m['sent_at'];
     return LanPeer(
       deviceId: deviceId,
       name: m['name'] is String ? m['name'] as String : deviceId,
@@ -99,8 +110,41 @@ class LanPeer {
       lastSeenAt: at,
       role: role,
       serving: m['serving'] != false,
+      clockOffset: sentAt is int
+          ? Duration(milliseconds: sentAt - at.toUtc().millisecondsSinceEpoch)
+          : null,
     );
   }
+}
+
+/// A till that could not be read to the end of its log before a shift closed, so
+/// the sales it holds may be missing from the device that asked.
+class LanTillGap {
+  const LanTillGap({
+    required this.deviceId,
+    required this.name,
+    required this.reason,
+    this.lastSeenAt,
+  });
+
+  final String deviceId;
+  final String name;
+  final String reason;
+  final DateTime? lastSeenAt;
+
+  Map<String, dynamic> toMap() => {
+        'device_id': deviceId,
+        'name': name,
+        'reason': reason,
+        if (lastSeenAt != null) 'last_seen_at': lastSeenAt!.toUtc().toIso8601String(),
+      };
+
+  factory LanTillGap.fromMap(Map<String, dynamic> m) => LanTillGap(
+        deviceId: '${m['device_id'] ?? ''}',
+        name: '${m['name'] ?? m['device_id'] ?? ''}',
+        reason: '${m['reason'] ?? ''}',
+        lastSeenAt: DateTime.tryParse('${m['last_seen_at']}')?.toUtc(),
+      );
 }
 
 /// Whether the shop primary is among [activePeers].
@@ -185,6 +229,9 @@ class LanPeerDirectory {
   /// needs to see "last seen 40 minutes ago" rather than an empty list.
   List<LanPeer> get all =>
       _peers.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+
+  /// The peer last heard as [deviceId], stale or not.
+  LanPeer? byId(String deviceId) => _peers[deviceId];
 
   /// Peers turned away on a schema mismatch, shown on the settings screen so an
   /// unfinished rollout is visible on the device rather than only in the log.
