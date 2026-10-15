@@ -342,6 +342,19 @@ export class PrismaRepo implements Repo {
         updated_at = now()`;
   }
 
+  async deleteRecords(
+    shopId: string,
+    deviceRowId: string,
+    records: { kind: string; key: string }[],
+  ): Promise<number> {
+    if (!records.length) return 0;
+    const pairs = records.map((r) => Prisma.sql`(${r.kind}, ${r.key})`);
+    return this.db.$executeRaw`
+      DELETE FROM records
+      WHERE shop_id = ${shopId} AND device_row_id = ${deviceRowId}
+        AND (kind, key) IN (${Prisma.join(pairs)})`;
+  }
+
   async queryRecords(q: {
     shopId: string;
     branchIds: string[] | null;

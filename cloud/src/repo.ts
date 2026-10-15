@@ -149,6 +149,9 @@ export interface Repo {
   deleteUserSessions(userId: string, exceptId?: string): Promise<void>;
 
   upsertRecords(shopId: string, branchId: string, deviceRowId: string, records: SyncRecord[]): Promise<number>;
+  /// Remove [records] where [deviceRowId] was the last to send them; a till
+  /// cannot take back what another sent.
+  deleteRecords(shopId: string, deviceRowId: string, records: { kind: string; key: string }[]): Promise<number>;
   queryRecords(q: {
     shopId: string;
     /// Null for every branch of the shop.
@@ -412,6 +415,19 @@ export class MemoryRepo implements Repo {
       else this.records.push(row);
     }
     return records.length;
+  }
+
+  async deleteRecords(
+    shopId: string,
+    deviceRowId: string,
+    records: { kind: string; key: string }[],
+  ): Promise<number> {
+    const ids = new Set(records.map((r) => `${r.kind}\u0000${r.key}`));
+    const before = this.records.length;
+    this.records = this.records.filter(
+      (r) => !(r.shopId === shopId && r.deviceRowId === deviceRowId && ids.has(`${r.kind}\u0000${r.key}`)),
+    );
+    return before - this.records.length;
   }
 
   async queryRecords(q: {

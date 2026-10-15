@@ -236,6 +236,36 @@ describe('what a till sends', () => {
     expect(repo.records.find((r) => r.kind === 'categories')!.payload).toEqual([{ id: 2 }]);
   });
 
+  it('a record the till wiped is removed, but only by the till that sent it', async () => {
+    const shop = await createShop();
+    const one = await till(shop.branch.pair_code, 'till-1');
+    const two = await till(shop.branch.pair_code, 'till-2');
+    const shift = { kind: 'shift', key: 'till-1:SH1', at: '2026-10-08T08:00:00Z', payload: { id: 'SH1' } };
+    await sync(one, [order('o1', '2026-10-08T09:00:00Z'), order('o2', '2026-10-08T09:30:00Z'), shift]);
+    await sync(two, [order('o3', '2026-10-08T10:00:00Z')]);
+
+    // Another till cannot take back what this one sent.
+    expect((await sync(two, [{ kind: 'order', key: 'o1', deleted: true }])).statusCode).toBe(200);
+    expect(repo.records).toHaveLength(4);
+
+    const res = await sync(one, [
+      { kind: 'order', key: 'o1', deleted: true },
+      { kind: 'shift', key: 'till-1:SH1', deleted: true },
+      { kind: 'order', key: 'o3', deleted: true },
+      { kind: 'order', key: 'never-sent', deleted: true },
+    ]);
+    expect(res.statusCode).toBe(200);
+    expect(repo.records.map((r) => r.key).sort()).toEqual(['o2', 'o3']);
+
+    // Sent again after a wipe, it is a record again; the last word in a batch wins.
+    await sync(one, [order('o1', '2026-10-08T09:00:00Z'), { kind: 'order', key: 'o2', deleted: true }]);
+    await sync(one, [{ kind: 'order', key: 'o1', deleted: true }, order('o1', '2026-10-08T09:00:00Z', 40)]);
+    expect(repo.records.map((r) => r.key).sort()).toEqual(['o1', 'o3']);
+    expect(repo.records.find((r) => r.key === 'o1')!.payload).toMatchObject({ total: 40 });
+
+    expect((await sync(one, [{ kind: 'staff', key: 'x', deleted: true }])).statusCode).toBe(400);
+  });
+
   it('refuses what it does not understand', async () => {
     const shop = await createShop();
     const token = await till(shop.branch.pair_code, 'till-1');

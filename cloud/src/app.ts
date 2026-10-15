@@ -199,6 +199,9 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   /// The till's sales, shifts and the rest, as they change. Idempotent: the
   /// same record sent twice is stored once, so a till that never heard the
   /// answer simply sends the batch again.
+  ///
+  /// A record marked `deleted: true` is one the till no longer holds (its
+  /// history was wiped): it is removed here too, but only if this till sent it.
   app.post<{ Body: { records?: unknown } }>(
     '/v1/sync',
     { preHandler: deviceAuth, bodyLimit: 16 * 1024 * 1024 },
@@ -209,7 +212,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       if (input.length > MAX_SYNC_RECORDS) {
         return fail(reply, 413, `at most ${MAX_SYNC_RECORDS} records per batch`);
       }
-      const records: SyncRecord[] = [];
+      const records: (SyncRecord & { deleted: boolean })[] = [];
       for (const r of input as Record<string, unknown>[]) {
         const kind = String(r?.kind ?? '');
         if (!RECORD_KINDS.has(kind)) return fail(reply, 400, `unknown record kind: ${kind}`);
@@ -217,6 +220,11 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
         // the branch the device belongs to, never by what it says.
         const key = SNAPSHOT_KINDS.has(kind) ? device.branchId : String(r?.key ?? '');
         if (!key || key.length > 200) return fail(reply, 400, 'every record needs a key');
+        if (r.deleted === true) {
+          if (SNAPSHOT_KINDS.has(kind)) return fail(reply, 400, `a ${kind} snapshot cannot be deleted`);
+          records.push({ kind, key, at: null, payload: null, deleted: true });
+          continue;
+        }
         let at: Date | null = null;
         if (r.at !== null && r.at !== undefined) {
           at = new Date(String(r.at));
@@ -225,19 +233,30 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
         if (r.payload === undefined || r.payload === null) {
           return fail(reply, 400, `no payload on ${kind} ${key}`);
         }
-        records.push({ kind, key, at, payload: r.payload });
+        records.push({ kind, key, at, payload: r.payload, deleted: false });
       }
       // Postgres refuses to touch one row twice in a single upsert, and a batch can
       // name a record twice: an order changed again before the till got online, or
       // two snapshots, which are keyed by branch here whatever the till sent. The
       // last of each wins, because a till queues its changes in order.
-      const latest = new Map<string, SyncRecord>();
+      const latest = new Map<string, SyncRecord & { deleted: boolean }>();
       for (const r of records) {
         const id = `${r.kind}\u0000${r.key}`;
         latest.delete(id);
         latest.set(id, r);
       }
-      await repo.upsertRecords(device.shopId, device.branchId, device.id, [...latest.values()]);
+      const last = [...latest.values()];
+      await repo.upsertRecords(
+        device.shopId,
+        device.branchId,
+        device.id,
+        last.filter((r) => !r.deleted).map(({ deleted: _, ...r }) => r),
+      );
+      await repo.deleteRecords(
+        device.shopId,
+        device.id,
+        last.filter((r) => r.deleted).map(({ kind, key }) => ({ kind, key })),
+      );
       await repo.markSynced(device.id, now());
       return { stored: records.length };
     },

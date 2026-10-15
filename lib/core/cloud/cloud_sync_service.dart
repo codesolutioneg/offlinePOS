@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
 
 import '../audit/audit_log.dart';
+import '../db/data_reset.dart';
 import '../db/database.dart';
 import '../db/stress_purge.dart';
 import 'cloud_client.dart';
@@ -277,6 +278,13 @@ class CloudSyncService {
         'shift' => _shift(key),
         'attendance' => _attendance(key),
         'audit' => _auditRow(key),
+        // Wiped here: the server drops it, if it was this till that sent it.
+        'order$kCloudDeletedSuffix' => {'kind': 'order', 'key': key, 'deleted': true},
+        'shift$kCloudDeletedSuffix' => {
+            'kind': 'shift',
+            'key': '$deviceId:$key',
+            'deleted': true,
+          },
         _ => null,
       };
 

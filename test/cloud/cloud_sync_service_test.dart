@@ -9,7 +9,9 @@ import 'package:offline_pos/core/cloud/cloud_client.dart';
 import 'package:offline_pos/core/cloud/cloud_sync_service.dart';
 import 'package:offline_pos/core/cloud/cloud_sync_state.dart';
 import 'package:offline_pos/core/cloud/report_lookups.dart';
+import 'package:offline_pos/core/db/data_reset.dart';
 import 'package:offline_pos/core/db/database.dart';
+import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/db/stress_purge.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 
@@ -34,7 +36,11 @@ class FakeSync {
     during?.call();
     batches.add(records);
     for (final rec in records) {
-      held['${rec['kind']}/${rec['key']}'] = rec;
+      if (rec['deleted'] == true) {
+        held.remove('${rec['kind']}/${rec['key']}');
+      } else {
+        held['${rec['kind']}/${rec['key']}'] = rec;
+      }
     }
     return http.Response(jsonEncode({'stored': records.length}), 200,
         headers: {'content-type': 'application/json'});
@@ -213,6 +219,58 @@ void main() {
     expect(server.batches.where((b) => b.first['kind'] == 'order').map((b) => b.length),
         [3, 3, 1]);
     expect(pending(), 0);
+  });
+
+  test('closing a shift sends it again with its close', () async {
+    final shifts = ShiftStore(db);
+    final shift = shifts.openShift(openingFloat: 100, cashierId: 'c1');
+    final sync = service();
+    await sync.runNow();
+    expect(server.payload('shift', 'till-1:${shift.id}')?['closed_at'], isNull);
+
+    shifts.closeShift(countedCash: 150);
+    expect(await sync.runNow(), CloudSyncOutcome.synced);
+    final sent = server.payload('shift', 'till-1:${shift.id}')!;
+    expect(sent['closed_at'], isNotNull);
+    expect(sent['closing_counted'], 150);
+  });
+
+  test('a wiped history is taken off the site too, and what comes after is not',
+      () async {
+    final shifts = ShiftStore(db);
+    final shift = shifts.openShift(
+        openingFloat: 0, cashierId: 'c1', at: DateTime.utc(2026, 10, 8, 8));
+    sale('o1');
+    sale('o2');
+    final sync = service();
+    await sync.runNow();
+    expect(server.held.keys, containsAll(['order/o1', 'order/o2', 'shift/till-1:${shift.id}']));
+
+    final wiped = wipeOrderHistory(db);
+    expect(wiped, (orders: 2, shifts: 1));
+    sale('o3');
+    expect(await sync.runNow(), CloudSyncOutcome.synced);
+    expect(pending(), 0);
+    expect(server.held.containsKey('order/o1'), isFalse);
+    expect(server.held.containsKey('order/o2'), isFalse);
+    expect(server.held.containsKey('shift/till-1:${shift.id}'), isFalse);
+    expect(server.held.containsKey('order/o3'), isTrue);
+  });
+
+  test('a wiped sale that comes back is sent again after its removal', () async {
+    sale('o1');
+    final sync = service();
+    await sync.runNow();
+    wipeOrderHistory(db);
+    sale('o1');
+    await sync.runNow();
+    final order = [
+      for (final b in server.batches)
+        for (final r in b)
+          if (r['kind'] == 'order') r['deleted'] == true ? 'removed' : 'sent',
+    ];
+    expect(order, ['sent', 'removed', 'sent']);
+    expect(server.held.containsKey('order/o1'), isTrue);
   });
 
   test('pairing again queues the history again', () async {

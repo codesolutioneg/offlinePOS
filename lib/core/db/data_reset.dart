@@ -58,6 +58,10 @@ const List<String> kOrderEventKinds = [
   'shift.lifecycle',
 ];
 
+/// Appended to a `cloud_pending` kind: the record was removed from this till and
+/// the reports site is to drop it too (see `CloudSyncService`).
+const String kCloudDeletedSuffix = '.deleted';
+
 /// What [wipeOrderHistory] removed, for the audit trail and the confirmation.
 typedef HistoryWipe = ({int orders, int shifts});
 
@@ -96,6 +100,17 @@ HistoryWipe wipeOrderHistory(Db db, {DateTime? before}) {
       if (earlier(r['at'])) r['seq'] as int,
   ];
 
+  // The reports site still holds what this till sent it, so the change it
+  // waits on becomes a removal: otherwise a wiped sale stays in the site's
+  // figures, and a wiped shift stays open there for good.
+  void removeFromSite(String kind, String key) {
+    db.raw.execute(
+        'DELETE FROM cloud_pending WHERE kind IN (?, ?) AND key = ?',
+        [kind, '$kind$kCloudDeletedSuffix', key]);
+    db.raw.execute('INSERT INTO cloud_pending (kind, key) VALUES (?, ?)',
+        ['$kind$kCloudDeletedSuffix', key]);
+  }
+
   void remove() {
     for (final u in orderUuids) {
       db.raw.execute(
@@ -103,14 +118,12 @@ HistoryWipe wipeOrderHistory(Db db, {DateTime? before}) {
         [u, '$u|%'],
       );
       db.raw.execute('DELETE FROM orders WHERE uuid = ?', [u]);
-      db.raw.execute(
-          "DELETE FROM cloud_pending WHERE kind = 'order' AND key = ?", [u]);
+      removeFromSite('order', u);
       db.raw.execute('DELETE FROM lan_clocks WHERE record_uuid = ?', [u]);
     }
     for (final id in shiftIds) {
       db.raw.execute('DELETE FROM shifts WHERE id = ?', [id]);
-      db.raw.execute(
-          "DELETE FROM cloud_pending WHERE kind = 'shift' AND key = ?", [id]);
+      removeFromSite('shift', id);
     }
     for (final seq in eventSeqs) {
       db.raw.execute('DELETE FROM lan_events WHERE seq = ?', [seq]);
