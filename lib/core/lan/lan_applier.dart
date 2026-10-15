@@ -47,10 +47,12 @@ class LanApplier {
     void Function()? onShopBundleApplied,
     void Function()? onStressCleanup,
     void Function(DateTime before)? onHistoryWipe,
+    void Function(String orderUuid)? onOrderSyncedFromPeer,
     LanLog? onRefused,
   })  : _orders = orders,
         _onStressCleanup = onStressCleanup,
         _onHistoryWipe = onHistoryWipe,
+        _onOrderSyncedFromPeer = onOrderSyncedFromPeer,
         _tables = tables,
         _settings = settings,
         _reservations = reservations,
@@ -82,6 +84,10 @@ class LanApplier {
 
   /// Wipes this till's order history from before the given moment.
   final void Function(DateTime before)? _onHistoryWipe;
+
+  /// Another till booked this sale into Odoo (shop-wide session resend). Drop
+  /// any local outbox copy so this till does not push it a second time.
+  final void Function(String orderUuid)? _onOrderSyncedFromPeer;
   final LanEventLog _log;
   final LanLog? _onRefused;
 
@@ -271,6 +277,9 @@ class LanApplier {
     // announce: false, so applying a peer's order does not make this till claim
     // authorship of it and send it back.
     _orders.save(incoming, announce: false);
+    if (incoming.state == OrderState.synced) {
+      _onOrderSyncedFromPeer?.call(incoming.uuid);
+    }
     return true;
   }
 

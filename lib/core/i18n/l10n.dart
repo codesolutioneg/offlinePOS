@@ -1197,6 +1197,15 @@ const Map<String, String> _ar = {
   "Signed in": "تم تسجيل الدخول",
   "Sold": "مُباع",
   "Sync now": "مزامنة الآن",
+  'Resend last closed session': 'إعادة إرسال آخر جلسة مقفولة',
+  'Sending session...': 'جاري إرسال الجلسة...',
+  'Pulls every till\'s sales for that session from this device and books them as one Odoo sale order with the same payments. Delete the wrong SO in Odoo first.':
+      'يسحب مبيعات كل الأجهزة للجلسة دي من الجهاز ده ويبعتها كأمر بيع واحد بنفس الدفعات. احذف أمر البيع الغلط من أودو الأول.',
+  'No closed session to resend.': 'مفيش جلسة مقفولة لإعادة إرسالها.',
+  'No sales in the last closed session.': 'مفيش مبيعات في آخر جلسة مقفولة.',
+  'Resent {n} orders ({total}) as one sale order.':
+      'اتبعت {n} طلب ({total}) كأمر بيع واحد.',
+  'Could not resend the session': 'ماقدرناش نعيد إرسال الجلسة',
   "Syncing": "جارٍ المزامنة",
   "Syncing...": "جارٍ المزامنة...",
   "Table is occupied. Recall it from the floor.": "الطاولة مشغولة. استدعِها من المخطط.",

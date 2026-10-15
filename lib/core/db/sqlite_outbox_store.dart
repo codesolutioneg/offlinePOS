@@ -141,6 +141,15 @@ class SqliteOutboxStore implements OutboxStore {
     return true;
   }
 
+  /// Drop every outbox row for this sale push, sent or not. Used when another
+  /// till has already booked the ticket into Odoo (shop-wide session resend) so
+  /// this till must not push it again under a second sale order.
+  void forgetOrderPush(String payloadUuid) {
+    _db.raw.execute(
+        "DELETE FROM outbox WHERE kind = '$_order' AND payload_uuid = ?",
+        [payloadUuid]);
+  }
+
   /// Park every sale still owed to Odoo, with [reason]. They stay in the queue,
   /// unsent, and show in the refused count until a manager revives them. Returns
   /// how many were held.

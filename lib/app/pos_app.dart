@@ -6994,6 +6994,91 @@ class _PosAppState extends State<PosApp> {
     return null;
   }
 
+  /// Re-book the latest closed session as one Odoo sale order: every paid ticket
+  /// in that window on this till and every peer that has replicated here, with
+  /// the same payments they were rung with.
+  ///
+  /// For a manager who deleted a partial SO in Odoo and needs the whole night
+  /// sent again — not Sync now, which only drains this till's own outbox.
+  Future<String> _resendClosedSession() async {
+    // English on purpose (same as close-sync messages): shown on Support after
+    // awaits, so this must not touch BuildContext across gaps.
+    final shift = widget.shifts.latestShift();
+    if (shift == null || shift.closedAt == null) {
+      return 'No closed session to resend.';
+    }
+    final lan = widget.lan;
+    if (lan?.isRunning == true) {
+      try {
+        await lan!.catchUpBeforeClose(since: shift.openedAt);
+      } catch (_) {
+        // Still try with whatever this till already holds.
+      }
+    }
+    final sales = widget.orders.salesInShift(shift, anyDevice: true);
+    if (sales.isEmpty) {
+      return 'No sales in the last closed session.';
+    }
+    final stress = stressOrderCount(widget.outboxStore.db,
+        deviceId: widget.deviceId);
+    if (stress > 0) {
+      return 'This till still has $stress Stress Lab orders. Press "Clean up" '
+          'in the Stress Lab before resending the session.';
+    }
+    widget.settings.mergeBatchIntoOneSaleOrder = true;
+    await _ensureSessionPartnerFromBranch();
+    if (widget.settings.odooSessionPartnerId == null &&
+        widget.settings.odooBranchId == null) {
+      return 'Consolidated close needs a branch with a session invoice customer. '
+          'Pick the branch under Server settings, and set the customer on '
+          'Offline POS ▸ Branches ▸ Session close in Odoo.';
+    }
+    final partner = widget.settings.odooSessionPartnerName ??
+        (widget.settings.odooSessionPartnerId == null
+            ? null
+            : '#${widget.settings.odooSessionPartnerId}');
+    final total = sales.fold<double>(0, (s, o) => s + o.total);
+    final result = await widget.sync.flushClosedShift(
+      orderUuids: {for (final o in sales) o.uuid},
+      batchKey: shift.uuid,
+      enqueueOrders: () async {
+        for (final o in sales) {
+          await widget.outbox.enqueue(
+            'order.push',
+            o.uuid,
+            o.toServerPayload(),
+          );
+          // A refuse from the partial push left dead_at set; append keeps it.
+          widget.outboxStore.reviveByKey('order.push', o.uuid);
+        }
+      },
+    );
+    if (result.merged) {
+      for (final o in sales) {
+        widget.orders.tellShopSynced(o.uuid);
+      }
+      var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
+      if (odooRef == null || odooRef.isEmpty || odooRef.startsWith('#')) {
+        final resolved = await _resolveOdooSaleName(odooRef);
+        if (resolved != null) odooRef = resolved;
+      }
+      if (odooRef != null && odooRef.isNotEmpty) {
+        widget.sync.lastOdooOrderRef = odooRef;
+      }
+      final buf = StringBuffer(
+          'Resent ${result.orderCount} orders (${PosApp.money(total)}) '
+          'as one sale order.');
+      if (odooRef != null && odooRef.isNotEmpty) {
+        buf.write('\nOdoo order: $odooRef');
+      }
+      if (partner != null) buf.write('\n$partner');
+      return buf.toString();
+    }
+    final why = result.skipReason ?? widget.sync.lastError;
+    return 'Could not resend the session'
+        '${why != null && why.isNotEmpty ? ': $why' : '.'}';
+  }
+
   /// Load the branch's Session-close customer onto this till if missing.
   ///
   /// Tries the cached site choices first, then a live `branch.simple` read so a
@@ -7421,6 +7506,7 @@ class _PosAppState extends State<PosApp> {
         printError: _printError,
         authorize: (p) => _authorize(p, context),
         onBackup: widget.backup,
+        onResendClosedSession: _resendClosedSession,
         onOpenSql: () {
           Navigator.of(context).push(MaterialPageRoute<void>(
             builder: (_) => SqlConsoleScreen(

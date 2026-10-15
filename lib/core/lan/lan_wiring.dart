@@ -16,6 +16,7 @@ import '../db/order_store.dart';
 import '../db/reservation_store.dart';
 import '../db/settings_store.dart';
 import '../db/shift_store.dart';
+import '../db/sqlite_outbox_store.dart';
 import '../db/stress_purge.dart';
 import '../db/table_assignment_store.dart';
 import '../db/table_store.dart';
@@ -194,6 +195,10 @@ class LanNode {
             'from another till, before ${before.toIso8601String()}: '
             '${wiped.orders} orders, ${wiped.shifts} shifts');
       },
+      // A peer booked this ticket into Odoo (full-session resend). Drop our copy
+      // of the push so Sync now cannot open a second sale order for it.
+      onOrderSyncedFromPeer: (uuid) =>
+          SqliteOutboxStore(db).forgetOrderPush(uuid),
       onRefused: log,
     );
     final credential = LanCredential.rotating(shopKey);

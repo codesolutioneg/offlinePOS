@@ -35,10 +35,15 @@ class DiagnosticsScreen extends StatefulWidget {
     this.authorize,
     this.onBackup,
     this.onOpenSql,
+    this.onResendClosedSession,
   });
 
   final SyncService sync;
   final SqliteOutboxStore outboxStore;
+
+  /// Re-book the last closed session (every till's sales held here) as one Odoo
+  /// sale order. Null hides the button.
+  final Future<String> Function()? onResendClosedSession;
 
   /// Optional so the screen can be looked at without a print path behind it.
   final PrinterRegistry? printers;
@@ -80,11 +85,15 @@ class DiagnosticsScreen extends StatefulWidget {
 
 class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   bool _syncing = false;
+  bool _resendingSession = false;
   String? _printerBusy;
 
   /// Where the last backup landed, or why there is none. A path a cashier can read
   /// out is the whole point of the button.
   String? _backupMessage;
+
+  /// Result of the last closed-session resend, for the cashier to read out.
+  String? _resendSessionMessage;
 
   Future<void> _syncNow() async {
     setState(() => _syncing = true);
@@ -95,6 +104,22 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       await widget.sync.tick();
     }
     if (mounted) setState(() => _syncing = false);
+  }
+
+  Future<void> _resendClosedSession() async {
+    final run = widget.onResendClosedSession;
+    if (run == null) return;
+    setState(() {
+      _resendingSession = true;
+      _resendSessionMessage = null;
+    });
+    final message = await run();
+    if (mounted) {
+      setState(() {
+        _resendingSession = false;
+        _resendSessionMessage = message;
+      });
+    }
   }
 
   /// Sweeps the subnet ignoring the address we last used, for when support already
@@ -374,10 +399,32 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           const SizedBox(height: 12),
           FilledButton.icon(
             key: const Key('sync-now'),
-            onPressed: _syncing ? null : _syncNow,
+            onPressed: _syncing || _resendingSession ? null : _syncNow,
             icon: const Icon(Icons.sync),
             label: Text(_syncing ? tr(context, 'Syncing...') : tr(context, 'Sync now')),
           ),
+          if (widget.onResendClosedSession != null) ...[
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              key: const Key('resend-closed-session'),
+              onPressed:
+                  _syncing || _resendingSession ? null : _resendClosedSession,
+              icon: const Icon(Icons.cloud_upload_outlined),
+              label: Text(_resendingSession
+                  ? tr(context, 'Sending session...')
+                  : tr(context, 'Resend last closed session')),
+            ),
+            Text(
+              tr(context,
+                  'Pulls every till\'s sales for that session from this device and books them as one Odoo sale order with the same payments. Delete the wrong SO in Odoo first.'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (_resendSessionMessage != null) ...[
+              const SizedBox(height: 8),
+              Text(_resendSessionMessage!,
+                  key: const Key('resend-closed-session-result')),
+            ],
+          ],
           ..._updateSection(),
           if (widget.onOpenSql != null) ..._sqlSection(),
           if (widget.onBackup != null) ..._backupSection(),

@@ -281,6 +281,49 @@ class OrderStore {
     );
   }
 
+  /// Every completed sale in [shift]'s window — this till and every peer that
+  /// replicated here. Paid and already-synced both: a manager who deleted the
+  /// Odoo sale order and wants the whole session sent again needs the ones that
+  /// were marked synced after a partial push, not only what is still owed.
+  ///
+  /// Never feed this into the ordinary Sync now path: that stays on
+  /// [awaitingSyncInShift] so another till's tickets are not booked twice by
+  /// accident. The deliberate "resend closed session" action is the caller.
+  List<Order> salesInShift(Shift shift, {bool anyDevice = false}) {
+    final from = shift.openedAt.toIso8601String();
+    final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
+    final own = anyDevice ? null : ownDeviceId;
+    return _db.raw
+        .select(
+          "SELECT payload FROM orders WHERE state IN ('paid','synced') AND $_notRefund "
+          "${own == null ? '' : 'AND device_id = ? '}"
+          'AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC',
+          [?own, from, to],
+        )
+        .map((r) =>
+            Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Mark [uuid] synced and tell every till on the fabric, including when the
+  /// sale was rung on another device. Ordinary [markSynced] will not announce a
+  /// peer's row (authorship stays with the owner); after a shop-wide session
+  /// resend the peers must hear so they drop their own outbox copies.
+  void tellShopSynced(String uuid, [int? serverId]) {
+    final order = byUuid(uuid);
+    if (order == null) return;
+    order.state = OrderState.synced;
+    if (serverId != null) order.serverId = serverId;
+    final publish = _publish;
+    if (publish == null) {
+      _write(order, null);
+      return;
+    }
+    _write(order, () {
+      publish(LanEventKind.orderUpsert, order.uuid, order.toMap());
+    });
+  }
+
   /// Completed sales, newest first, for the history / reprint browser and the
   /// reports. Includes both paid-not-yet-synced and synced, so a sale shows up the
   /// instant it is taken, not only after the server confirms. This till's own: a
