@@ -20,7 +20,15 @@ class OrderHistoryScreen extends StatefulWidget {
     this.onRefund,
     this.onEdit,
     this.thisDeviceId,
+    this.title,
+    this.types,
   });
+
+  /// Set when the list is already one shift's orders of one kind (the floor's or
+  /// the delivery station's): the bar says so, the type chips offer only [types],
+  /// the date chips go, and a count and total head the list.
+  final String? title;
+  final List<OrderType>? types;
 
   /// Already sorted newest first by the caller (recent()); this screen does
   /// not re-sort, so a caller that wants a different order gets it.
@@ -83,8 +91,10 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final shown = _filtered;
+    final scoped = widget.types != null;
+    final types = widget.types ?? OrderType.values;
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Order history'))),
+      appBar: AppBar(title: Text(widget.title ?? tr(context, 'Order history'))),
       body: Column(
         children: [
           Padding(
@@ -112,7 +122,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                   selected: _type == null,
                   onSelected: (_) => setState(() => _type = null),
                 ),
-                for (final t in OrderType.values) ...[
+                for (final t in types) ...[
                   const SizedBox(width: 6),
                   ChoiceChip(
                     key: Key('history-type-${t.name}'),
@@ -128,19 +138,38 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                   selected: _syncedOnly,
                   onSelected: (v) => setState(() => _syncedOnly = v),
                 ),
-                const SizedBox(width: 12),
-                for (final d in const [(0, 'All'), (1, 'Today'), (7, 'Last 7 days'), (30, 'Last 30 days')]) ...[
-                  const SizedBox(width: 6),
-                  ChoiceChip(
-                    key: Key('history-days-${d.$1}'),
-                    label: Text(tr(context, d.$2)),
-                    selected: _days == d.$1,
-                    onSelected: (_) => setState(() => _days = d.$1),
-                  ),
+                if (!scoped) ...[
+                  const SizedBox(width: 12),
+                  for (final d in const [(0, 'All'), (1, 'Today'), (7, 'Last 7 days'), (30, 'Last 30 days')]) ...[
+                    const SizedBox(width: 6),
+                    ChoiceChip(
+                      key: Key('history-days-${d.$1}'),
+                      label: Text(tr(context, d.$2)),
+                      selected: _days == d.$1,
+                      onSelected: (_) => setState(() => _days = d.$1),
+                    ),
+                  ],
                 ],
               ],
             ),
           ),
+          if (scoped)
+            Padding(
+              key: const Key('history-summary'),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Row(
+                children: [
+                  Text('${tr(context, 'Orders')}: ${shown.length}',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  const Spacer(),
+                  Text(
+                    '${tr(context, 'Total')}: '
+                    '${widget.formatAmount(shown.fold(0.0, (s, o) => s + o.total))}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ],
+              ),
+            ),
           const Divider(height: 1),
           Expanded(
             child: shown.isEmpty

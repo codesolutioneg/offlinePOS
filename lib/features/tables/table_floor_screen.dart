@@ -58,6 +58,7 @@ class TableFloorScreen extends StatefulWidget {
     this.onOpenShift,
     this.onSignOut,
     this.onEndShift,
+    this.onShiftOrders,
     this.section,
     this.onSectionChanged,
     this.seatAs,
@@ -147,6 +148,9 @@ class TableFloorScreen extends StatefulWidget {
   /// Opens the End-of-Day / cash-up screen (Dishflow "End shift"). Prefer this
   /// over [onSignOut] for the toolbar button: signing out is a different action.
   final VoidCallback? onEndShift;
+
+  /// Opens this shift's paid table, takeaway and to-go orders. Null hides it.
+  final VoidCallback? onShiftOrders;
 
   /// The room to open on, and the way back up to whoever remembers it.
   ///
@@ -887,6 +891,16 @@ class _TableFloorScreenState extends State<TableFloorScreen> {
             ),
           ]
           else if (!widget.locked) ...[
+            if (widget.onShiftOrders != null && !_editing && !_assigning)
+              Padding(
+                padding: const EdgeInsetsDirectional.only(end: 4),
+                child: OutlinedButton.icon(
+                  key: const Key('floor-shift-orders'),
+                  onPressed: widget.onShiftOrders,
+                  icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                  label: Text(tr(context, 'Shift orders')),
+                ),
+              ),
             if (widget.onAssign != null)
               IconButton(
                 key: const Key('toggle-assign'),

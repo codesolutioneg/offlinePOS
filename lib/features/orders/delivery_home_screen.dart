@@ -27,7 +27,11 @@ class DeliveryHomeScreen extends StatelessWidget {
     this.onBack,
     this.bulletin,
     this.ownDeviceId,
+    this.onShiftOrders,
   });
+
+  /// Opens this shift's paid deliveries. Null hides the button.
+  final VoidCallback? onShiftOrders;
 
   final List<OrderType> types;
 
@@ -180,10 +184,29 @@ class DeliveryHomeScreen extends StatelessWidget {
                 child: DishflowBrandMark(height: 32),
               ),
             const Spacer(),
+            if (onShiftOrders != null) ...[
+              Flexible(
+                child: OutlinedButton.icon(
+                  key: const Key('delivery-home-shift-orders'),
+                  onPressed: onShiftOrders,
+                  icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                  label: Text(tr(context, 'Shift orders'),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.brandNavy,
+                    textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
             if (cashierName != null)
-              Chip(
-                avatar: const Icon(Icons.person, size: 18),
-                label: Text(cashierName!),
+              Flexible(
+                child: Chip(
+                  avatar: const Icon(Icons.person, size: 18),
+                  label: Text(cashierName!,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
               ),
           ],
         ),

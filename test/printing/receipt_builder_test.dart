@@ -12,6 +12,7 @@ String render(
   bool showTable = true,
   bool showPayment = true,
   bool showItemPrice = true,
+  bool showModifiers = true,
   String dividerStyle = 'line',
 }) {
   final bytes = ReceiptBuilder(
@@ -23,6 +24,7 @@ String render(
     showTable: showTable,
     showPayment: showPayment,
     showItemPrice: showItemPrice,
+    showModifiers: showModifiers,
     dividerStyle: dividerStyle,
     formatAmount: (v) => v.toStringAsFixed(2),
   ).build(o);
@@ -49,6 +51,16 @@ void main() {
     expect(s, contains('=> Extra Cheese'));
     final line = s.split('\n').firstWhere((l) => l.contains('Extra Cheese'));
     expect(line.startsWith('  =>'), isTrue);
+  });
+
+  test('hiding modifiers folds their price into the item so the slip still adds up', () {
+    final s = render(sample(), showModifiers: false);
+    expect(s, isNot(contains('Extra Cheese')));
+    expect(s, isNot(contains('Tomato')));
+    expect(s, isNot(contains('=>')));
+    final pizza = s.split('\n').firstWhere((l) => l.contains('Pizza'));
+    // 2 x (250 + 7)
+    expect(pizza, contains('514.00'));
   });
 
   test('a free modifier prints no amount', () {

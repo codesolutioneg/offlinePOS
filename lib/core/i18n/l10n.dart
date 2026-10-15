@@ -1036,6 +1036,9 @@ const Map<String, String> _ar = {
   'Dine-in orders only': 'طلبات الصالة فقط',
   'One line per tender': 'سطر لكل وسيلة دفع',
   'Off leaves names and quantities only': 'الإيقاف يُبقي الأسماء والكميات فقط',
+  'Show item options': 'إظهار إضافات الصنف',
+  'Shift orders': 'طلبات الجلسة',
+  'Off adds their price into the item': 'الإيقاف يضيف سعرها إلى سعر الصنف',
   'A live print preview is not shown here. Changes apply to the next printed receipt.':
       'لا تظهر معاينة طباعة حية هنا. تُطبَّق التغييرات على الإيصال التالي.',
   // roles & permissions

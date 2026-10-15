@@ -69,6 +69,7 @@ class ReceiptBuilder {
     this.showTable = true,
     this.showPayment = true,
     this.showItemPrice = true,
+    this.showModifiers = true,
     this.showTotals = true,
     this.dividerStyle = 'equals',
     this.openDrawer = false,
@@ -97,6 +98,10 @@ class ReceiptBuilder {
   final bool showTable;
   final bool showPayment;
   final bool showItemPrice;
+
+  /// Print each item's options under it. Off folds every option's amount into the
+  /// item's own price, so the lines still add up to the total.
+  final bool showModifiers;
 
   /// Print the money at the foot: the breakdown, the tax lines, the total and what
   /// was tendered. Off turns the slip into a packing list, which is the only thing a
@@ -259,12 +264,13 @@ class ReceiptBuilder {
       // negative one can be recognised here, since a line carries the money a
       // modifier is worth and not the mode it was priced in, and nothing that adds
       // to a price is ever negative.
-      final replaced =
-          l.modifiers.where((m) => m.total < 0).fold(0.0, (s, m) => s + m.total);
+      final replaced = l.modifiers
+          .where((m) => !showModifiers || m.total < 0)
+          .fold(0.0, (s, m) => s + m.total);
       // Dishflow classic: "2 Pizza" (no "x"), modifiers "  => Nx name".
       p.row('${_qty(l.quantity)} ${l.name}',
           showItemPrice ? formatAmount(l.quantity * (l.unitPrice + replaced)) : '');
-      for (final m in l.modifiers) {
+      for (final m in showModifiers ? l.modifiers : const <OrderModifier>[]) {
         final qtyPrefix =
             m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
         final label = '  => $qtyPrefix${m.name}';

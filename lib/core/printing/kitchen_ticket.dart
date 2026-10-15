@@ -51,9 +51,104 @@ class KitchenTicketBuilder {
     final lines = only ?? order.lines;
     final p = EscPos(columns: columns)..reset();
     const major = '=';
+    _header(p, order,
+        station: station, at: order.createdAt, reprint: reprint);
 
-    // Top breathing room, then ===STATION=== centred by the printer (not by
-    // space-padding — padding + align-center drifts double-width text).
+    // Items grouped by category (uppercase headers), Dishflow style.
+    String? lastCat;
+    for (final l in lines) {
+      final cat = _categoryLabel(l);
+      if (cat != null && cat != lastCat) {
+        lastCat = cat;
+        p.feed()
+            .bold(true)
+            .size(doubleHeight: true)
+            .line(cat.toUpperCase())
+            .size()
+            .bold(false)
+            .rule(major);
+      }
+      // qty + name — double height, no "x".
+      p.size(doubleHeight: true)
+          .bold(true)
+          .line('${_qty(l.quantity)}  ${l.name}')
+          .bold(false)
+          .size();
+      // Modifiers: large + clear, quantity before the name ("4x Cheese").
+      if (l.modifiers.isNotEmpty ||
+          (l.note != null && l.note!.isNotEmpty)) {
+        p.feed();
+      }
+      for (final m in l.modifiers) {
+        final qtyPrefix =
+            m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
+        final label = '    $qtyPrefix${m.name}';
+        p.size(doubleHeight: true).bold(true).line(label).bold(false).size();
+      }
+      if (l.note != null && l.note!.isNotEmpty) {
+        p.size(doubleHeight: true)
+            .bold(true)
+            .line('    ** ${l.note} **')
+            .bold(false)
+            .size();
+      }
+      p.feed();
+    }
+
+    if (order.note != null && order.note!.isNotEmpty) {
+      p.rule(major).bold(true).line('NOTE: ${order.note}').bold(false);
+    }
+    return (p..feed(3)..cut()).build();
+  }
+
+  /// A deletion slip: Dishflow-style DELETION banner so the kitchen bins a line.
+  ///
+  /// Headed exactly like the ticket that fired the line (station, order type,
+  /// company number, table, Cust(s)/ORDER), so the pass can match the two slips
+  /// at a glance; only the time is when it was deleted.
+  Uint8List buildVoid(Order order, OrderLine line, String reason,
+      {String? station, DateTime? at}) {
+    final p = EscPos(columns: columns)..reset();
+    _header(p, order, station: station, at: at ?? DateTime.now().toUtc());
+
+    final stars = '*' * (columns ~/ 2).clamp(8, 24);
+    p.feed()
+        .align(EscPosAlign.center)
+        .bold(true)
+        .line(stars)
+        .size(doubleWidth: true, doubleHeight: true)
+        .line('DELETION')
+        .size()
+        .line(stars)
+        .bold(false)
+        .align(EscPosAlign.left)
+        .feed();
+    p.size(doubleHeight: true)
+        .bold(true)
+        .line('-${_qty(line.quantity)}  ${line.name}')
+        .bold(false)
+        .size();
+    for (final m in line.modifiers) {
+      final qtyPrefix = m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
+      p.size(doubleHeight: true).bold(true).line('    $qtyPrefix${m.name}').bold(false).size();
+    }
+    if (line.note != null && line.note!.isNotEmpty) {
+      p.size(doubleHeight: true)
+          .bold(true)
+          .line('    ** ${line.note} **')
+          .bold(false)
+          .size();
+    }
+    p.feed().rule('-').bold(true).line('Reason: $reason').bold(false);
+    return (p..feed(3)..cut()).build();
+  }
+
+  /// Station banner down to the delivery contact, shared by the ticket and the
+  /// deletion slip. Everything centred is centred by the printer, never by space
+  /// padding as well: the two together push double-width text off to the right.
+  void _header(EscPos p, Order order,
+      {String? station, required DateTime at, bool reprint = false}) {
+    const major = '=';
     p.feed(4);
     p.align(EscPosAlign.center)
       ..size(doubleWidth: true, doubleHeight: true)
@@ -109,7 +204,7 @@ class KitchenTicketBuilder {
     p.align(EscPosAlign.center)
         .size(doubleWidth: true, doubleHeight: true)
         .bold(true)
-        .line(_time12(order.createdAt))
+        .line(_time12(at))
         .bold(false)
         .size();
 
@@ -126,7 +221,7 @@ class KitchenTicketBuilder {
     // Date + server centred on the paper.
     p.align(EscPosAlign.center)
         .bold(true)
-        .line(_dateMdy(order.createdAt))
+        .line(_dateMdy(at))
         .bold(false);
     final server = serverNameOf?.call(order.cashierId)?.trim();
     if (server != null && server.isNotEmpty) {
@@ -148,114 +243,6 @@ class KitchenTicketBuilder {
       if (channel.isNotEmpty) p.line('Channel: $channel');
       if (order.driverName != null) p.line('Driver: ${order.driverName}');
     }
-
-    // Items grouped by category (uppercase headers), Dishflow style.
-    String? lastCat;
-    for (final l in lines) {
-      final cat = _categoryLabel(l);
-      if (cat != null && cat != lastCat) {
-        lastCat = cat;
-        p.feed()
-            .bold(true)
-            .size(doubleHeight: true)
-            .line(cat.toUpperCase())
-            .size()
-            .bold(false)
-            .rule(major);
-      }
-      // qty + name — double height, no "x".
-      p.size(doubleHeight: true)
-          .bold(true)
-          .line('${_qty(l.quantity)}  ${l.name}')
-          .bold(false)
-          .size();
-      // Modifiers: large + clear, quantity before the name ("4x Cheese").
-      if (l.modifiers.isNotEmpty ||
-          (l.note != null && l.note!.isNotEmpty)) {
-        p.feed();
-      }
-      for (final m in l.modifiers) {
-        final qtyPrefix =
-            m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
-        final label = '    $qtyPrefix${m.name}';
-        p.size(doubleHeight: true).bold(true).line(label).bold(false).size();
-      }
-      if (l.note != null && l.note!.isNotEmpty) {
-        p.size(doubleHeight: true)
-            .bold(true)
-            .line('    ** ${l.note} **')
-            .bold(false)
-            .size();
-      }
-      p.feed();
-    }
-
-    if (order.note != null && order.note!.isNotEmpty) {
-      p.rule(major).bold(true).line('NOTE: ${order.note}').bold(false);
-    }
-    return (p..feed(3)..cut()).build();
-  }
-
-  /// A deletion slip: Dishflow-style DELETION banner so the kitchen bins a line.
-  Uint8List buildVoid(Order order, OrderLine line, String reason) {
-    final p = EscPos(columns: columns)..reset();
-    const major = '=';
-    p.feed(2);
-    p.align(EscPosAlign.center)
-      ..size(doubleWidth: true, doubleHeight: true)
-      ..bold(true)
-      ..centred('===${'KITCHEN'}===')
-      ..bold(false)
-      ..size();
-    p.align(EscPosAlign.left).rule(major);
-    final tableLine = _tableDisplay(order);
-    if (tableLine != null) {
-      p.align(EscPosAlign.center)
-          .size(doubleHeight: true)
-          .bold(true)
-          .centred(tableLine)
-          .bold(false)
-          .size();
-    }
-    p.align(EscPosAlign.center)
-        .size(doubleHeight: true)
-        .bold(true)
-        .centred(_time12(DateTime.now().toUtc()))
-        .bold(false)
-        .size();
-    p.align(EscPosAlign.left).rule(major);
-    p.bold(true).row(
-          order.guestCount != null
-              ? 'Cust(s): ${order.guestCount}'
-              : 'Cust(s): -',
-          'ORDER:${order.displayNo}',
-        ).bold(false);
-    p.rule(major);
-    p.align(EscPosAlign.center)
-        .bold(true)
-        .line('*' * (columns.clamp(8, 32)))
-        .size(doubleWidth: true, doubleHeight: true)
-        .centred('DELETION')
-        .size()
-        .line('*' * (columns.clamp(8, 32)))
-        .bold(false);
-    p.align(EscPosAlign.left);
-    p.size(doubleHeight: true)
-        .bold(true)
-        .line('-${_qty(line.quantity)}  ${line.name}')
-        .bold(false)
-        .size();
-    for (final m in line.modifiers) {
-      final qtyPrefix = m.quantity == 1 ? '' : '${_qty(m.quantity)}x ';
-      p.size(doubleHeight: true).line('       $qtyPrefix${m.name}').size();
-    }
-    if (line.note != null && line.note!.isNotEmpty) {
-      p.bold(true).line('       ** ${line.note} **').bold(false);
-    }
-    p.feed().line('Reason: $reason');
-    final server = serverNameOf?.call(order.cashierId)?.trim();
-    if (server != null && server.isNotEmpty) p.line('By: $server');
-    return (p..feed(3)..cut()).build();
   }
 
   /// Non–dine-in order type as Dishflow English kitchen label; dine-in is table-only.

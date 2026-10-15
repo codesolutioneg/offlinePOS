@@ -108,6 +108,37 @@ void main() {
       expect(text, contains('ORDER:15087'));
     });
 
+    test('a delivery deletion slip is headed like the ticket it cancels', () {
+      final order = Order(
+        deviceId: 'till-1',
+        cashierId: 'magda',
+        type: OrderType.deliveryFromCompany,
+        companyOrderNo: '666',
+        customerName: '111',
+        lines: [OrderLine(productId: 1, name: 'Frank Beef', quantity: 1, unitPrice: 100)],
+      );
+      final builder = KitchenTicketBuilder(serverNameOf: (_) => 'Magda');
+      final fired = strippedText(builder.build(order, station: 'expo in'));
+      final voided = strippedText(builder.buildVoid(
+          order, order.lines.single, 'Customer changed',
+          station: 'expo in'));
+
+      for (final shared in [
+        '===EXPO IN===',
+        OrderType.deliveryFromCompany.printBanner,
+        '#666',
+        'ORDER:${order.displayNo}',
+        'Server: Magda',
+        'Customer: 111',
+      ]) {
+        expect(fired, contains(shared));
+        expect(voided, contains(shared), reason: shared);
+      }
+      expect(voided, contains('DELETION'));
+      expect(voided, contains('-1  Frank Beef'));
+      expect(voided, contains('Reason: Customer changed'));
+    });
+
     test('a cancel slip names the same order the kitchen was given', () {
       final order = numbered(orderNo: '1508-007-A1B');
       final text = strippedText(

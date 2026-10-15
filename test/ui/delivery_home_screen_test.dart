@@ -21,6 +21,7 @@ void main() {
     void Function(Order)? onResume,
     bool Function()? guard,
     VoidCallback? onBack,
+    VoidCallback? onShiftOrders,
     List<FloorAction> actions = const [],
   }) async {
     t.view.physicalSize = const Size(1366, 768);
@@ -39,10 +40,24 @@ void main() {
         onResume: onResume ?? (_) {},
         guard: guard,
         onBack: onBack,
+        onShiftOrders: onShiftOrders,
         actions: actions,
       ),
     ));
   }
+
+  testWidgets('the shift orders button sits in the header and opens the list',
+      (t) async {
+    var opened = 0;
+    await pump(t, onShiftOrders: () => opened++);
+    await t.tap(find.byKey(const Key('delivery-home-shift-orders')));
+    expect(opened, 1);
+  });
+
+  testWidgets('no callback, no shift orders button', (t) async {
+    await pump(t);
+    expect(find.byKey(const Key('delivery-home-shift-orders')), findsNothing);
+  });
 
   testWidgets('a big button per delivery kind opens that kind', (t) async {
     final opened = <OrderType>[];

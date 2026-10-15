@@ -474,8 +474,8 @@ class _PosAppState extends State<PosApp> {
   /// another schema field to migrate.
   final Map<String, List<OrderLine>> _amending = {};
 
-  /// Lines that already had their own deletion slip printed at the moment they
-  /// were voided, so the correction slip does not print them a second time.
+  /// Lines voided on purpose while a sale was being corrected, so the correction
+  /// slip leaves them to the kitchen's DELETION slip and the audit log.
   final Set<String> _slipped = {};
 
   /// Drives the app language and text direction, seeded from the saved setting and
@@ -1537,6 +1537,7 @@ class _PosAppState extends State<PosApp> {
   ReceiptBuilder _receiptBuilder({
     bool openDrawer = false,
     bool? showItemPrice,
+    bool? showModifiers,
     bool showTotals = true,
   }) {
     final s = widget.settings;
@@ -1554,6 +1555,7 @@ class _PosAppState extends State<PosApp> {
       showTable: s.receiptShowTable,
       showPayment: s.receiptShowPayment,
       showItemPrice: showItemPrice ?? s.receiptShowItemPrice,
+      showModifiers: showModifiers ?? s.receiptShowModifiers,
       showTotals: showTotals,
       logo: s.receiptLogoCommand(),
       paymentLabels: s.paymentMethodLabels,
@@ -1583,6 +1585,7 @@ class _PosAppState extends State<PosApp> {
     // copy that still footed a total is a second receipt.
     final bytes = _receiptBuilder(
       showItemPrice: !hide,
+      showModifiers: true,
       showTotals: !hide,
     ).build(order);
     await _sendToStation(
@@ -1726,8 +1729,8 @@ class _PosAppState extends State<PosApp> {
 
   /// Print one slip for what a corrected sale lost, when it is tendered again.
   ///
-  /// A line the kitchen already held printed its own slip the moment it was voided,
-  /// and is skipped here. What is left is what the customer had paid for and no
+  /// A line voided on purpose is skipped here: the kitchen got its DELETION slip if
+  /// it held the line, and the void is audited either way. What is left is what the customer had paid for and no
   /// longer has, which leaves no paper anywhere else: a line taken off with a plain
   /// delete, and units stepped off a line that is otherwise still on the bill. A
   /// no-op on any sale that was not reopened.
@@ -1739,8 +1742,8 @@ class _PosAppState extends State<PosApp> {
     for (final l in before) {
       final still = kept[l.uuid];
       if (still == null) {
-        // Already on paper from its own void slip, and taken off the set as it is
-        // consumed so nothing accumulates across a shift.
+        // Voided on purpose, and taken off the set as it is consumed so nothing
+        // accumulates across a shift.
         if (_slipped.remove(l.uuid)) continue;
         removed.add(l);
         continue;
@@ -2664,10 +2667,10 @@ class _PosAppState extends State<PosApp> {
           onResendToKitchen: () =>
               _fireKitchen(session.current, only: session.current.lines, resend: true),
           onLinesVoided: (lines, reason, {approvedBy}) {
-            // The deletion slip is the till's own record that items were taken
-            // off, printed for every void. The kitchen cancel slip only fires
+            // The kitchen's DELETION slip is the only paper a void prints, and only
             // when the kitchen already has a copy, or it would send a cancel for
-            // food that was never ordered to the pass.
+            // food that was never ordered to the pass. The void itself is in the
+            // audit log.
             for (final line in lines) {
               if (line.printedToKitchen || line.firedStations.isNotEmpty) {
                 unawaited(_voidToKitchen(session.current, line, reason));
@@ -2678,10 +2681,6 @@ class _PosAppState extends State<PosApp> {
                 _slipped.add(line.uuid);
               }
             }
-            unawaited(_printDeletion(session.current, lines,
-                title: lines.length == 1 ? 'ITEM VOIDED' : 'ITEMS VOIDED',
-                reason: reason,
-                approvedBy: approvedBy));
           },
           onPaid: (order) {
             _publishActivity();
@@ -3050,10 +3049,44 @@ class _PosAppState extends State<PosApp> {
   void _openHistory(BuildContext context) =>
       _ifScreen(context, 'screen.history', () => _openHistoryNow(context));
 
-  void _openHistoryNow(BuildContext context) {
+  /// The open shift's paid orders, from every till, of the delivery kinds or of
+  /// everything else: what the delivery station or the floor rang since the drawer
+  /// was opened.
+  void _openShiftOrders(BuildContext context, {required bool delivery}) {
+    final shift = widget.shifts.currentOpenShift();
+    if (shift == null) {
+      showToast(context, tr(context, 'No shift is open'), kind: ToastKind.warning);
+      return;
+    }
+    _ifScreen(context, 'screen.history', () {
+      _openHistoryNow(
+        context,
+        orders: [
+          for (final o in widget.orders
+              .paidBetween(from: shift.openedAt, anyDevice: true))
+            if (o.type.isDelivery == delivery) o,
+        ],
+        title: '${tr(context, 'Shift orders')} · '
+            '${tr(context, delivery ? 'Delivery' : 'Tables')}',
+        types: [
+          for (final t in OrderType.values)
+            if (t.isDelivery == delivery) t,
+        ],
+      );
+    });
+  }
+
+  void _openHistoryNow(
+    BuildContext context, {
+    List<Order>? orders,
+    String? title,
+    List<OrderType>? types,
+  }) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (historyContext) => OrderHistoryScreen(
-        orders: widget.orders.recentAnywhere(limit: 1000),
+        orders: orders ?? widget.orders.recentAnywhere(limit: 1000),
+        title: title,
+        types: types,
         thisDeviceId: widget.deviceId,
         formatAmount: PosApp.money,
         onReprint: (order) async {
@@ -3463,6 +3496,7 @@ class _PosAppState extends State<PosApp> {
               ? _deliveryBulletin()
               : null,
           onBack: only ? null : () => setState(() => _deliveryHome = false),
+          onShiftOrders: () => _openShiftOrders(context, delivery: true),
           onOpenType: (t) => unawaited(_openDeliveryType(context, session, t)),
           onResume: (o) {
             if (o.deviceId != widget.deviceId) {
@@ -3572,6 +3606,7 @@ class _PosAppState extends State<PosApp> {
             onOpenShift: () => _openShift(floorContext, session),
             // End shift → End of Day close (not sign-out). Sign-out stays in the drawer.
             onEndShift: () => _openShift(floorContext, session, startClose: true),
+            onShiftOrders: () => _openShiftOrders(floorContext, delivery: false),
             onSignOut: _signOut,
             // The confirmation for the bill that was just parked, said up here where
             // it cannot cover the button row along the bottom.
@@ -6264,18 +6299,12 @@ class _PosAppState extends State<PosApp> {
   /// Send one cancel slip to every station holding [line], and say how it went:
   /// the worst of the stations, so one lost copy makes the whole void lost.
   Future<KitchenFireResult> _fireVoid(Order order, OrderLine line, String reason) async {
-    final List<int> bytes;
-    try {
-      bytes = KitchenTicketBuilder(
-        sectionOf: widget.tables.sectionFor,
-        categoryNameOf: (id) => widget.catalogue.categoryById(id)?.name,
-        serverNameOf: (id) => widget.users.byId(id)?.name,
-      ).buildVoid(order, line, reason);
-    } catch (e) {
-      widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
-          detail: 'void-${order.uuid}-${line.uuid}: $e');
-      return KitchenFireResult.lost;
-    }
+    final builder = KitchenTicketBuilder(
+      sectionOf: widget.tables.sectionFor,
+      categoryNameOf: (id) => widget.catalogue.categoryById(id)?.name,
+      serverNameOf: (id) => widget.users.byId(id)?.name,
+    );
+    final at = DateTime.now().toUtc();
     // Void goes to the station(s) this line was actually fired to; only when that
     // was not recorded (older orders) do we fall back to the current routing.
     final stations = line.firedStations.isNotEmpty
@@ -6287,6 +6316,15 @@ class _PosAppState extends State<PosApp> {
             .toList();
     var outcome = KitchenFireResult.sent;
     for (final station in stations) {
+      final List<int> bytes;
+      try {
+        bytes = builder.buildVoid(order, line, reason, station: station, at: at);
+      } catch (e) {
+        widget.audit.record(_session?.cashierId ?? 'system', 'kitchen.failed',
+            detail: 'void-${order.uuid}-${line.uuid}-$station: $e');
+        outcome = outcome.worst(KitchenFireResult.lost);
+        continue;
+      }
       outcome = outcome.worst(
         await _sendToStation(
           station,

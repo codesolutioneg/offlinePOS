@@ -67,6 +67,13 @@ class _ModifierSheetState extends State<ModifierSheet> {
 
   bool get _valid => widget.groups.every((g) => g.isSatisfiedBy(_countIn(g)));
 
+  /// A step behind the current one is always open; one ahead only once every
+  /// step before it is answered, so a box of ten cannot be left at eight by
+  /// tapping on to the drinks.
+  bool _canOpen(int i) =>
+      i <= _step ||
+      widget.groups.take(i).every((g) => g.isSatisfiedBy(_countIn(g)));
+
   String? get _problem {
     for (final g in widget.groups) {
       final n = _countIn(g);
@@ -314,8 +321,10 @@ class _ModifierSheetState extends State<ModifierSheet> {
           final g = groups[i];
           final selected = _step == i;
           final done = g.isSatisfiedBy(_countIn(g));
+          final open = _canOpen(i);
           return InkWell(
-            onTap: () => setState(() => _step = i),
+            key: Key('mod-step-$i'),
+            onTap: open ? () => setState(() => _step = i) : null,
             borderRadius: BorderRadius.circular(20),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 180),
@@ -336,7 +345,14 @@ class _ModifierSheetState extends State<ModifierSheet> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (done && !selected)
+                  if (!open)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Icon(Icons.lock_outline,
+                          size: 14,
+                          color: AppColors.brandNavy.withValues(alpha: 0.4)),
+                    )
+                  else if (done && !selected)
                     const Padding(
                       padding: EdgeInsets.only(right: 4),
                       child: Icon(Icons.check, size: 14, color: AppColors.primary),
@@ -346,7 +362,9 @@ class _ModifierSheetState extends State<ModifierSheet> {
                     style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w600,
-                      color: selected ? Colors.white : AppColors.brandNavy,
+                      color: selected
+                          ? Colors.white
+                          : AppColors.brandNavy.withValues(alpha: open ? 1 : 0.4),
                     ),
                   ),
                 ],

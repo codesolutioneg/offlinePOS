@@ -41,6 +41,45 @@ void main() {
     }
   });
 
+  testWidgets('a shift list offers only its own kinds, no dates, and a total',
+      (tester) async {
+    Order delivery(OrderType type, double price) => Order(
+          deviceId: 'till-1',
+          cashierId: 'sara',
+          type: type,
+          state: OrderState.paid,
+          lines: [OrderLine(productId: 1, name: 'Box', quantity: 1, unitPrice: price)],
+        );
+    final orders = [
+      delivery(OrderType.storeDelivery, 100),
+      delivery(OrderType.carDelivery, 50),
+    ];
+    await tester.pumpWidget(MaterialApp(
+      home: OrderHistoryScreen(
+        orders: orders,
+        title: 'Shift orders · Delivery',
+        types: const [
+          OrderType.deliveryFromCompany,
+          OrderType.storeDelivery,
+          OrderType.carDelivery,
+        ],
+        formatAmount: (v) => v.toStringAsFixed(2),
+        onReprint: (_) async {},
+      ),
+    ));
+
+    expect(find.text('Shift orders · Delivery'), findsOneWidget);
+    expect(find.byKey(const Key('history-type-dineIn')), findsNothing);
+    expect(find.byKey(const Key('history-days-1')), findsNothing);
+    expect(find.text('Orders: 2'), findsOneWidget);
+    expect(find.text('Total: 150.00'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('history-type-carDelivery')));
+    await tester.pumpAndSettle();
+    expect(find.text('Orders: 1'), findsOneWidget);
+    expect(find.text('Total: 50.00'), findsOneWidget);
+  });
+
   testWidgets('shows an empty state instead of a blank list with no orders',
       (tester) async {
     await tester.pumpWidget(MaterialApp(

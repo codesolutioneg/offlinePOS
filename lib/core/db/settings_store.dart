@@ -890,6 +890,11 @@ class SettingsStore {
   bool get receiptShowItemPrice => getBool('receipt_show_itemprice', fallback: true);
   set receiptShowItemPrice(bool v) => setBool('receipt_show_itemprice', v);
 
+  /// Options under each item on the customer's slip. Off by default: the guest
+  /// pays the item's price, the options are the kitchen's business.
+  bool get receiptShowModifiers => getBool('receipt_show_modifiers', fallback: false);
+  set receiptShowModifiers(bool v) => setBool('receipt_show_modifiers', v);
+
   /// Which character the receipt's separator lines are drawn with: 'line',
   /// 'equals', 'dots' or 'stars'.
   String get receiptDividerStyle => getString('receipt_divider_style') ?? 'equals';

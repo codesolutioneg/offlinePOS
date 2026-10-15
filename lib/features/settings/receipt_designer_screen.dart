@@ -64,6 +64,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
   late bool _showTable;
   late bool _showPayment;
   late bool _showItemPrice;
+  late bool _showModifiers;
   late String _dividerStyle;
   late int _columns;
   late String _fontProfile;
@@ -89,6 +90,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     _showTable = widget.settings.receiptShowTable;
     _showPayment = widget.settings.receiptShowPayment;
     _showItemPrice = widget.settings.receiptShowItemPrice;
+    _showModifiers = widget.settings.receiptShowModifiers;
     // Clamped to the offered choices: the segmented control below asserts on a
     // selection it has no segment for.
     final style = widget.settings.receiptDividerStyle;
@@ -131,6 +133,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     widget.settings.receiptShowTable = _showTable;
     widget.settings.receiptShowPayment = _showPayment;
     widget.settings.receiptShowItemPrice = _showItemPrice;
+    widget.settings.receiptShowModifiers = _showModifiers;
     widget.settings.receiptDividerStyle = _dividerStyle;
     widget.settings.receiptColumns = _columns;
     widget.settings.receiptFontProfile = _fontProfile;
@@ -328,7 +331,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     if (_showCashier) lines.add(_rowText('Server: Sara', 'Cust: (2)', columns));
     lines.add(rule);
     lines.add(_rowText('2 Coffee', _showItemPrice ? '5.00' : '', columns));
-    lines.add('  => Extra shot');
+    if (_showModifiers) lines.add('  => Extra shot');
     lines.add(_rowText('1 Sandwich', _showItemPrice ? '6.50' : '', columns));
     lines.add('-' * columns);
     lines.add('');
@@ -515,6 +518,13 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
             subtitle: Text(tr(context, 'Off leaves names and quantities only')),
             value: _showItemPrice,
             onChanged: (v) => setState(() => _showItemPrice = v),
+          ),
+          SwitchListTile(
+            key: const Key('t-modifiers'),
+            title: Text(tr(context, 'Show item options')),
+            subtitle: Text(tr(context, 'Off adds their price into the item')),
+            value: _showModifiers,
+            onChanged: (v) => setState(() => _showModifiers = v),
           ),
           ..._logoItems(context),
           const SizedBox(height: 12),
