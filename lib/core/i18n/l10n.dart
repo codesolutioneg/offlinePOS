@@ -973,6 +973,27 @@ const Map<String, String> _ar = {
   'Testing…': 'جاري الاختبار…',
   'Connected. A ping was written to diagnostics.':
       'تم الاتصال. اتكتب ping في diagnostics.',
+  'Resend open shift sales': 'إعادة إرسال مبيعات الوردية المفتوحة',
+  'For sales paid before the mirror was set up. Already sent ones are skipped.':
+      'للمبيعات اللي اتدفعت قبل ضبط الربط. اللي اتبعت قبل كده مش هيتبعت تاني.',
+  'Save the settings first.': 'احفظ الإعدادات الأول.',
+  'Turn the mirror on and fill the project id, API key and connection id first.':
+      'شغّل الربط واملأ معرف المشروع ومفتاح API ومعرف الاتصال الأول.',
+  'No shift is open on this till.': 'مفيش وردية مفتوحة على الجهاز ده.',
+  'All {total} sales of the open shift are already sent or waiting to send.':
+      'كل مبيعات الوردية المفتوحة ({total}) اتبعتت أو مستنية تتبعت.',
+  'Paid sales on this till in the open shift: {n}':
+      'المبيعات المدفوعة على الجهاز ده في الوردية المفتوحة: {n}',
+  'Already sent: {n}': 'اتبعتت قبل كده: {n}',
+  'Waiting to send: {n}': 'مستنية تتبعت: {n}',
+  'Refused before, will retry: {n}': 'اترفضت قبل كده وهتتبعت تاني: {n}',
+  'Will send now: {n}': 'هتتبعت دلوقتي: {n}',
+  'From the other tills: {n} (one already in Dishflow is overwritten, not doubled)':
+      'من الأجهزة التانية: {n} (اللي موجود في Dishflow هيتكتب فوقه، مش هيتكرر)',
+  'For sales paid before the mirror was set up, on every till. Press it here on the primary.':
+      'للمبيعات اللي اتدفعت قبل ضبط الربط على كل الأجهزة. دوس عليه هنا من جهاز السيرفر.',
+  '{n} sales queued for Dishflow. They go out with the normal sync when online.':
+      '{n} بيعة اتحطت في طابور Dishflow. هتتبعت مع المزامنة العادية لما يكون فيه إنترنت.',
   'Full Z count stays on this till; peers close quietly without recounting.':
       'عدّ النقد الكامل على هذا الجهاز؛ الباقي بتقفل بهدوء بدون إعادة عدّ.',
   'Each till syncs its own Odoo outbox on close or Sync now.':

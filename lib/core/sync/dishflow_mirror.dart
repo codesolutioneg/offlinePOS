@@ -1,5 +1,8 @@
+import '../db/order_store.dart';
 import '../db/settings_store.dart';
+import '../db/sqlite_outbox_store.dart';
 import '../../domain/order.dart';
+import '../../domain/shift.dart';
 import 'dishflow_sale_mapper.dart';
 import 'outbox.dart';
 import 'stress_guard.dart';
@@ -19,12 +22,16 @@ class DishflowMirror {
   ///
   /// When a driver is assigned, also mirrors under `drivers/{id}/orders/{saleId}`
   /// so the rider app receives the bag the same way Dishflow does.
+  ///
+  /// [driverBag] false leaves the rider app alone, for a catch-up of sales whose
+  /// bags were already handed over.
   static Future<void> enqueueIfEnabled({
     required Outbox outbox,
     required SettingsStore settings,
     required Order order,
     String? cashierName,
     String? status,
+    bool driverBag = true,
   }) async {
     if (!settings.dishflowMirrorReady || isStressOrder(order)) return;
     final payload = DishflowSaleMapper.toOutboxPayload(
@@ -38,6 +45,7 @@ class DishflowMirror {
       status: status,
     );
     await outbox.enqueue(kind, order.uuid, payload);
+    if (!driverBag) return;
     final driverId = order.driverId?.trim();
     if (driverId == null || driverId.isEmpty) return;
     if (!order.type.isDelivery) return;
@@ -78,4 +86,108 @@ class DishflowMirror {
         cashierName: cashierName,
         status: 'cancelled',
       );
+
+  /// What a catch-up of the open shift would do: the paid sales and refunds
+  /// since the shift opened, split by where each stands with the mirror.
+  ///
+  /// A sale paid before the mirror was configured never reached the queue, so it
+  /// has no row; a refused one was queued under settings Firestore rejected.
+  /// Both are owed. Sent and waiting ones are left as they are.
+  ///
+  /// [allTills] (the primary) also takes the sales replicated from the other
+  /// tills. Their queue is not visible here, so they are always sent; the doc id
+  /// carries the ringing till, so one already in Firestore is overwritten, never
+  /// doubled.
+  static DishflowResendPlan planOpenShift({
+    required Shift? shift,
+    required OrderStore orders,
+    required SqliteOutboxStore store,
+    bool allTills = false,
+  }) {
+    if (shift == null || !shift.isOpen) return const DishflowResendPlan.noShift();
+    final own = orders.ownDeviceId;
+    final sales = orders
+        .paidBetween(from: shift.openedAt, anyDevice: allTills)
+        .where((o) => !isStressOrder(o))
+        .toList();
+    bool mine(Order o) => own == null || o.deviceId == own;
+    final states =
+        store.statesOf(kind, [for (final o in sales) if (mine(o)) o.uuid]);
+    final others = [for (final o in sales) if (!mine(o)) o];
+    return DishflowResendPlan(
+      shiftOpen: true,
+      toSend: [
+        for (final o in sales)
+          if (mine(o) &&
+              !states.sent.contains(o.uuid) &&
+              !states.waiting.contains(o.uuid))
+            o,
+        ...others,
+      ],
+      sent: states.sent.length,
+      waiting: states.waiting.length,
+      refused: states.refused.length,
+      otherTills: others.length,
+    );
+  }
+
+  /// Queue [plan]'s sales the way a payment does, under the settings saved now.
+  /// The normal drain delivers them; the same doc id means a sale that did reach
+  /// Firestore is overwritten, never doubled. Returns how many were queued.
+  static Future<int> resend({
+    required Outbox outbox,
+    required SqliteOutboxStore store,
+    required SettingsStore settings,
+    required DishflowResendPlan plan,
+  }) async {
+    if (!settings.dishflowMirrorReady) return 0;
+    var queued = 0;
+    for (final order in plan.toSend) {
+      await enqueueIfEnabled(
+        outbox: outbox,
+        settings: settings,
+        order: order,
+        driverBag: false,
+      );
+      store.reviveByKey(kind, order.uuid);
+      queued++;
+    }
+    return queued;
+  }
+}
+
+/// The open shift's sales as the mirror sees them, for the catch-up button.
+class DishflowResendPlan {
+  const DishflowResendPlan({
+    required this.shiftOpen,
+    required this.toSend,
+    required this.sent,
+    required this.waiting,
+    required this.refused,
+    this.otherTills = 0,
+  });
+
+  const DishflowResendPlan.noShift()
+      : shiftOpen = false,
+        toSend = const [],
+        sent = 0,
+        waiting = 0,
+        refused = 0,
+        otherTills = 0;
+
+  final bool shiftOpen;
+
+  /// Never queued, refused, or rung on another till: these go out on
+  /// [DishflowMirror.resend].
+  final List<Order> toSend;
+  final int sent;
+  final int waiting;
+
+  /// Already counted in [toSend].
+  final int refused;
+
+  /// Sales replicated from the other tills. Already counted in [toSend].
+  final int otherTills;
+
+  int get total => toSend.length + sent + waiting;
 }

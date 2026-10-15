@@ -5474,6 +5474,18 @@ class _PosAppState extends State<PosApp> {
                 widget.settings.publishShopBundle();
                 refresh();
               },
+              planResend: () => DishflowMirror.planOpenShift(
+                shift: widget.shifts.currentOpenShift(),
+                orders: widget.orders,
+                store: widget.outboxStore,
+                allTills: widget.settings.isLanPrimary,
+              ),
+              resend: (plan) => DishflowMirror.resend(
+                outbox: widget.outbox,
+                store: widget.outboxStore,
+                settings: widget.settings,
+                plan: plan,
+              ),
             )),
       ),
       if (widget.cloudBackup != null)

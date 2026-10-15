@@ -5,6 +5,7 @@ import 'package:offline_pos/core/db/catalogue_store.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
+import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/sync/dishflow_mirror.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
@@ -129,5 +130,133 @@ void main() {
     expect(pending, hasLength(1));
     expect(pending.single.payloadUuid, paid.uuid);
     expect(pending.single.payload['fields']['status'], 'cancelled');
+  });
+
+  group('resend open shift', () {
+    late ShiftStore shifts;
+    late OrderStore orders;
+
+    void configure() {
+      settings.dishflowMirrorEnabled = true;
+      settings.dishflowProjectId = 'odc-chat';
+      settings.dishflowApiKey = 'key';
+      settings.dishflowOdooConnectionId = 'conn1';
+    }
+
+    Order sell() {
+      session.addProduct(burger);
+      return session.pay(payments: const [
+        OrderPayment(methodId: -1, amount: 50, label: 'Cash'),
+      ])!;
+    }
+
+    DishflowResendPlan plan() => DishflowMirror.planOpenShift(
+        shift: shifts.currentOpenShift(), orders: orders, store: store);
+
+    setUp(() {
+      shifts = ShiftStore(db);
+      orders = OrderStore(db);
+      shifts.openShift(
+        openingFloat: 0,
+        cashierId: 'c1',
+        at: DateTime.now().toUtc().subtract(const Duration(hours: 1)),
+      );
+    });
+
+    test('queues sales paid before the mirror was configured', () async {
+      final early = sell();
+      await Future<void>.delayed(Duration.zero);
+      expect(store.pendingDishflowCount, 0);
+
+      configure();
+      final p = plan();
+      expect(p.shiftOpen, isTrue);
+      expect(p.toSend.map((o) => o.uuid), [early.uuid]);
+
+      final queued = await DishflowMirror.resend(
+          outbox: outbox, store: store, settings: settings, plan: p);
+      expect(queued, 1);
+      final pending = await store.pending(kinds: {DishflowMirror.kind});
+      expect(pending.single.payloadUuid, early.uuid);
+      expect(pending.single.payload['fields']['status'], 'sale');
+    });
+
+    test('skips sent and waiting sales, retries refused ones', () async {
+      configure();
+      final sent = sell();
+      final waiting = sell();
+      final refused = sell();
+      await Future<void>.delayed(Duration.zero);
+      final rows = await store.pending(kinds: {DishflowMirror.kind});
+      int idOf(Order o) => rows.firstWhere((r) => r.payloadUuid == o.uuid).id;
+      await store.markSent(idOf(sent));
+      await store.markDead(idOf(refused), 'PERMISSION_DENIED');
+
+      final p = plan();
+      expect(p.total, 3);
+      expect(p.sent, 1);
+      expect(p.waiting, 1);
+      expect(p.refused, 1);
+      expect(p.toSend.map((o) => o.uuid), [refused.uuid]);
+
+      await DishflowMirror.resend(
+          outbox: outbox, store: store, settings: settings, plan: p);
+      final pending = await store.pending(kinds: {DishflowMirror.kind});
+      expect(pending.map((e) => e.payloadUuid).toSet(),
+          {waiting.uuid, refused.uuid});
+    });
+
+    test('the primary also sends the other tills\' sales', () async {
+      configure();
+      final mine = sell();
+      await Future<void>.delayed(Duration.zero);
+      final rows = await store.pending(kinds: {DishflowMirror.kind});
+      await store.markSent(rows.single.id);
+      final theirs = Order(
+        deviceId: 'till2',
+        cashierId: 'c2',
+        state: OrderState.paid,
+        orderNo: '1508-0002-T02',
+      );
+      OrderStore(db).save(theirs, announce: false);
+
+      final own = OrderStore(db, ownDeviceId: 'till1');
+      final single = DishflowMirror.planOpenShift(
+          shift: shifts.currentOpenShift(), orders: own, store: store);
+      expect(single.toSend, isEmpty);
+      expect(single.sent, 1);
+
+      final primary = DishflowMirror.planOpenShift(
+          shift: shifts.currentOpenShift(),
+          orders: own,
+          store: store,
+          allTills: true);
+      expect(primary.otherTills, 1);
+      expect(primary.toSend.map((o) => o.uuid), [theirs.uuid]);
+      expect(primary.total, 2);
+
+      await DishflowMirror.resend(
+          outbox: outbox, store: store, settings: settings, plan: primary);
+      final pending = await store.pending(kinds: {DishflowMirror.kind});
+      expect(pending.single.payloadUuid, theirs.uuid);
+      expect(pending.single.payload['doc_id'], contains('offlinepos_till2'));
+      expect(mine.deviceId, 'till1');
+    });
+
+    test('nothing to do without an open shift', () async {
+      configure();
+      shifts.closeShift(countedCash: 0);
+      expect(plan().shiftOpen, isFalse);
+    });
+
+    test('resend does nothing while the mirror is not ready', () async {
+      sell();
+      final p = plan();
+      expect(p.toSend, hasLength(1));
+      final queued = await DishflowMirror.resend(
+          outbox: outbox, store: store, settings: settings, plan: p);
+      expect(queued, 0);
+      expect(store.pendingDishflowCount, 0);
+    });
   });
 }

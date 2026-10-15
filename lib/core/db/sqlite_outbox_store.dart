@@ -168,6 +168,39 @@ class SqliteOutboxStore implements OutboxStore {
       'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 WHERE id = ?',
       [id]);
 
+  /// [revive] by key, for a caller that just re-queued the record and knows it
+  /// by uuid rather than by row id. [append] leaves `dead_at` alone, so without
+  /// this a refused row would take the new payload and still never drain.
+  void reviveByKey(String kind, String payloadUuid) => _db.raw.execute(
+      'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 '
+      'WHERE kind = ? AND payload_uuid = ? AND dead_at IS NOT NULL',
+      [kind, payloadUuid]);
+
+  /// Where each of [uuids] stands for [kind]: delivered, still waiting, or
+  /// refused. A uuid with no row at all is in none of the three.
+  ({Set<String> sent, Set<String> waiting, Set<String> refused}) statesOf(
+      String kind, Iterable<String> uuids) {
+    final sent = <String>{};
+    final waiting = <String>{};
+    final refused = <String>{};
+    final wanted = uuids.toSet();
+    if (wanted.isEmpty) return (sent: sent, waiting: waiting, refused: refused);
+    final rows = _db.raw.select(
+        'SELECT payload_uuid, sent_at, dead_at FROM outbox WHERE kind = ?', [kind]);
+    for (final r in rows) {
+      final uuid = r['payload_uuid'] as String;
+      if (!wanted.contains(uuid)) continue;
+      if (r['dead_at'] != null) {
+        refused.add(uuid);
+      } else if (r['sent_at'] != null) {
+        sent.add(uuid);
+      } else {
+        waiting.add(uuid);
+      }
+    }
+    return (sent: sent, waiting: waiting, refused: refused);
+  }
+
   /// Age of the oldest thing still waiting, which is how long the books have been
   /// out of date.
   ///
