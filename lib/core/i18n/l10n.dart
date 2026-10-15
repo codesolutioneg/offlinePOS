@@ -1404,6 +1404,13 @@ const Map<String, String> _ar = {
       'لا توجد طابعة إيصال. أضف طابعة باسم receipt أو delivery',
   'Printer offline — job held':
       'الطابعة غير متصلة — المهمة محتجزة وستُطبع لاحقًا',
+  'Printing…': 'جاري الطباعة…',
+  'Receipt printer is not connected': 'طابعة الإيصالات مش متصلة',
+  'Printer address: {a}': 'عنوان الطابعة: {a}',
+  'Check the printer is on, has paper, and is on the same network as this till.':
+      'اتأكد إن الطابعة شغالة وفيها ورق وعلى نفس الشبكة بتاعة الجهاز ده.',
+  'Set up the receipt printer for this till in Settings › Printers.':
+      'عرّف طابعة الإيصالات للجهاز ده من الإعدادات › الطابعات.',
   'Logo': 'الشعار',
   'LOGO': 'الشعار',
   'Print the shop logo': 'طباعة شعار المحل',

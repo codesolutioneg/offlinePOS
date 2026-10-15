@@ -87,7 +87,9 @@ class _FlashPreviewScreenState extends State<FlashPreviewScreen> {
     if (_printing) return;
     setState(() {
       _printing = true;
-      _printStatus = null;
+      // Finding a printer that is off takes several seconds of retries, so say
+      // something is happening rather than leave a slip that looks done.
+      _printStatus = tr(context, 'Printing…');
     });
     try {
       final flash = widget.onPrintFlash;
@@ -114,19 +116,60 @@ class _FlashPreviewScreenState extends State<FlashPreviewScreen> {
     } catch (e) {
       if (!mounted) return;
       final raw = '$e';
-      final msg = raw.contains('No receipt printer')
+      final offline = raw.contains('Printer offline');
+      final missing = raw.contains('No receipt printer');
+      final address = offline && raw.contains(': ')
+          ? raw.substring(raw.lastIndexOf(': ') + 2).trim()
+          : null;
+      final msg = missing
           ? tr(context, 'No receipt printer configured')
-          : raw.contains('Printer offline')
-              ? tr(context, 'Printer offline — job held')
+          : offline
+              ? tr(context, 'Receipt printer is not connected')
               : raw;
-      setState(() => _printStatus = msg);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${tr(context, 'Print failed')}: $msg'),
-        backgroundColor: AppColors.error,
-      ));
+      setState(() {
+        _printStatus = msg;
+        _printing = false;
+      });
+      await _showPrintFailed(msg, address: address, canRetry: !missing);
     } finally {
-      if (mounted) setState(() => _printing = false);
+      if (mounted && _printing) setState(() => _printing = false);
     }
+  }
+
+  /// A dialog rather than a snackbar: the slip is often a popup over the floor,
+  /// where a snackbar lands behind it, and a report that did not print looks
+  /// exactly like one that did.
+  Future<void> _showPrintFailed(String message,
+      {String? address, required bool canRetry}) async {
+    final retry = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('flash-print-failed'),
+        icon: const Icon(Icons.print_disabled, color: AppColors.error, size: 36),
+        title: Text(message),
+        content: Text([
+          if (address != null && address.isNotEmpty)
+            tr(ctx, 'Printer address: {a}').replaceAll('{a}', address),
+          canRetry
+              ? tr(ctx,
+                  'Check the printer is on, has paper, and is on the same network as this till.')
+              : tr(ctx, 'Set up the receipt printer for this till in Settings › Printers.'),
+        ].join('\n')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(tr(ctx, 'Close')),
+          ),
+          if (canRetry)
+            FilledButton(
+              key: const Key('flash-print-retry'),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(tr(ctx, 'Try again')),
+            ),
+        ],
+      ),
+    );
+    if (retry == true && mounted) await _print();
   }
 
   @override

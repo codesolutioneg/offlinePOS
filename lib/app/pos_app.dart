@@ -7074,12 +7074,13 @@ class _PosAppState extends State<PosApp> {
         return cashLabels.contains(s);
       },
     );
-    final now = DateTime.now();
+    // Not spooled: a report asked for now and printed hours later, when the
+    // printer comes back, is paper nobody is waiting for. The screen offers a retry.
     try {
-      await _receiptPrinter.send(bytes,
-          reference: 'flash-${data.title}-${now.millisecondsSinceEpoch}');
+      await _receiptPrinter.sendNow(bytes);
     } on PrinterUnavailable {
-      throw StateError('Printer offline — job held');
+      final host = widget.printers[PosApp.receiptPrinter]?.host;
+      throw StateError('Printer offline${host == null ? '' : ': $host'}');
     }
   }
 
