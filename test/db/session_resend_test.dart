@@ -103,6 +103,54 @@ void main() {
     expect(outcome.batch!.payload['order_count'], 2);
   });
 
+  test('a fully cancelled sale is not resent — complimentary must not inflate Odoo',
+      () {
+    final opened = DateTime.utc(2026, 10, 15, 10);
+    final closed = opened.add(const Duration(hours: 8));
+    final shift = Shift(
+      id: '1',
+      openedAt: opened,
+      closedAt: closed,
+      openingFloat: 0,
+      cashierId: 'sara',
+    );
+    final keep = paid(
+        device: 'primary',
+        price: 100,
+        at: opened.add(const Duration(hours: 1)));
+    final voided = paid(
+        device: 'primary',
+        price: 50,
+        at: opened.add(const Duration(hours: 2)));
+    voided.payments = [
+      OrderPayment(methodId: 9, amount: voided.total, label: 'Complimentary')
+    ];
+    orders.save(voided, announce: false);
+    final refund = Order(
+      deviceId: 'primary',
+      cashierId: 'sara',
+      createdAt: opened.add(const Duration(hours: 3)).toUtc(),
+      type: OrderType.takeaway,
+      refundOfUuid: voided.uuid,
+    )..lines.add(OrderLine(
+        productId: 1,
+        odooProductId: 1,
+        name: 'Tea',
+        quantity: -1,
+        unitPrice: 50,
+        taxRate: 14,
+      ));
+    refund.payments = [
+      OrderPayment(methodId: 9, amount: refund.total, label: 'Complimentary')
+    ];
+    refund.state = OrderState.paid;
+    orders.save(refund, announce: false);
+
+    final forOdoo = orders.salesInShift(shift, anyDevice: true);
+    expect(forOdoo.map((o) => o.uuid), [keep.uuid]);
+    expect(forOdoo.any((o) => o.uuid == voided.uuid), isFalse);
+  });
+
   test('forgetOrderPush clears a sent row so a peer cannot push twice', () async {
     final outbox = SqliteOutboxStore(db);
     const uuid = 'sale-1';

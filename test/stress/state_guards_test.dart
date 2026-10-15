@@ -166,9 +166,12 @@ void main() {
       till.orders.save(refundOf(sale), announce: false);
 
       final shift = till.shifts.currentOpenShift()!;
-      expect(till.orders.awaitingSync().map((o) => o.uuid), [sale.uuid]);
-      expect(till.orders.awaitingSyncInShift(shift).map((o) => o.uuid), [sale.uuid],
-          reason: 'the close would count the refund as synced and arm a retry for it');
+      // Full cancel: the original and its refund cancel out. Neither is owed —
+      // same rule as Flash — or a consolidated SO would re-book voided
+      // complimentary / officer tickets.
+      expect(till.orders.awaitingSync(), isEmpty);
+      expect(till.orders.awaitingSyncInShift(shift), isEmpty,
+          reason: 'a full cancel must not ride the close into Odoo');
     });
 
     test('refund pushes queued before the change are closed out', () async {

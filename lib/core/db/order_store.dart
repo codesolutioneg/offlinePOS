@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../domain/cancelled_sales.dart';
 import '../../domain/order.dart';
 import '../../domain/shift.dart';
 import '../lan/lan_cart_board.dart';
@@ -260,7 +261,11 @@ class OrderStore {
   /// Scoped to this till, and that scoping is what keeps the books straight: this
   /// is the list the sync reconcile sweeps into the outbox, so a sale replicated
   /// from another till must never appear in it or the shop would book it twice.
-  List<Order> awaitingSync() => _mine("state = 'paid' AND $_notRefund");
+  ///
+  /// Fully cancelled pairs are omitted so a voided complimentary cannot re-enter
+  /// the outbox on the next Sync now.
+  List<Order> awaitingSync() =>
+      salesForOdoo(_mine("state = 'paid'"));
 
   /// Refunds never go to Odoo, by the owner's decision: the shop books them there
   /// by hand. So they are never owed, never hold a close open, and never count as
@@ -272,19 +277,25 @@ class OrderStore {
   /// Close-shift sync uses this — not [awaitingSync] — so a backlog from an
   /// earlier shift cannot ride along under the new shift's uuid, and the Z and
   /// the Odoo SO cover the same tickets.
+  ///
+  /// Fully cancelled sales (original + matching refund) are dropped: the refund
+  /// rows are loaded only to detect the pair, then stripped so Odoo never sees
+  /// a complimentary / officer ticket the cashier already voided.
   List<Order> awaitingSyncInShift(Shift shift) {
     final from = shift.openedAt.toIso8601String();
     final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
-    return _mine(
-      "state = 'paid' AND $_notRefund AND created_at >= ? AND created_at <= ?",
+    return salesForOdoo(_mine(
+      "state = 'paid' AND created_at >= ? AND created_at <= ?",
       [from, to],
-    );
+    ));
   }
 
   /// Every completed sale in [shift]'s window — this till and every peer that
   /// replicated here. Paid and already-synced both: a manager who deleted the
   /// Odoo sale order and wants the whole session sent again needs the ones that
   /// were marked synced after a partial push, not only what is still owed.
+  ///
+  /// Fully cancelled pairs are excluded the same way as [awaitingSyncInShift].
   ///
   /// Never feed this into the ordinary Sync now path: that stays on
   /// [awaitingSyncInShift] so another till's tickets are not booked twice by
@@ -293,9 +304,9 @@ class OrderStore {
     final from = shift.openedAt.toIso8601String();
     final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
     final own = anyDevice ? null : ownDeviceId;
-    return _db.raw
+    final raw = _db.raw
         .select(
-          "SELECT payload FROM orders WHERE state IN ('paid','synced') AND $_notRefund "
+          "SELECT payload FROM orders WHERE state IN ('paid','synced') "
           "${own == null ? '' : 'AND device_id = ? '}"
           'AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC',
           [?own, from, to],
@@ -303,6 +314,7 @@ class OrderStore {
         .map((r) =>
             Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
         .toList();
+    return salesForOdoo(raw);
   }
 
   /// Mark [uuid] synced and tell every till on the fabric, including when the

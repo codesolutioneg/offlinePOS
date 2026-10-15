@@ -1,3 +1,4 @@
+import '../../../domain/cancelled_sales.dart' as cancelled;
 import '../../../domain/order.dart';
 import '../restaurant_analytics.dart';
 
@@ -83,33 +84,9 @@ class FlashReportData {
 class FlashReportBuilder {
   FlashReportBuilder._();
 
-  /// Sales that a full refund in [orders] has taken back, plus those refunds.
-  ///
-  /// Flash counts checks the shop still holds. A "Cancel sale" / full refund used
-  /// to leave the original check on the slip (and a matching negative refund), so
-  /// the cashier saw an order they had just cancelled. Dropping the pair makes
-  /// the report match the till: that sale is gone.
-  static List<Order> withoutFullyCancelled(List<Order> orders) {
-    final refundNet = <String, double>{};
-    for (final o in orders) {
-      final of = o.refundOfUuid;
-      if (of == null) continue;
-      refundNet[of] = (refundNet[of] ?? 0) + o.total;
-    }
-    final cancelled = <String>{};
-    for (final o in orders) {
-      if (o.isRefund) continue;
-      final net = o.total + (refundNet[o.uuid] ?? 0);
-      if (net.abs() < 0.02) cancelled.add(o.uuid);
-    }
-    if (cancelled.isEmpty) return orders;
-    return [
-      for (final o in orders)
-        if (!cancelled.contains(o.uuid) &&
-            (o.refundOfUuid == null || !cancelled.contains(o.refundOfUuid)))
-          o,
-    ];
-  }
+  /// See [cancelled.withoutFullyCancelled].
+  static List<Order> withoutFullyCancelled(List<Order> orders) =>
+      cancelled.withoutFullyCancelled(orders);
 
   static FlashReportData build({
     required String title,
