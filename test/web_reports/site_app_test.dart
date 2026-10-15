@@ -17,6 +17,40 @@ class FakeSite {
   String? signedIn;
 
   static const branch = {'id': 'b1', 'name': 'Main'};
+  final branches = <Map<String, Object?>>[branch];
+
+  /// A completed sale on [device] in [branchId], rung at [at].
+  static Map<String, Object?> saleAt(DateTime at, String no,
+      {String branchId = 'b1', String device = 'till-1', double price = 10}) {
+    final order = Order(deviceId: device, cashierId: 'sara', createdAt: at.toUtc(), orderNo: no)
+      ..lines.add(OrderLine(productId: 1, name: 'Tea', quantity: 1, unitPrice: price))
+      ..state = OrderState.paid;
+    return {
+      'kind': 'order',
+      'key': order.uuid,
+      'branch_id': branchId,
+      'at': at.toUtc().toIso8601String(),
+      'payload': order.toMap(),
+    };
+  }
+
+  /// A drawer opened on [device] at [opened], not yet closed.
+  static Map<String, Object?> shiftAt(DateTime opened, String device, String id) => {
+        'kind': 'shift',
+        'key': '$device:$id',
+        'branch_id': 'b1',
+        'at': opened.toUtc().toIso8601String(),
+        'payload': {
+          'id': id,
+          'uuid': 'u-$id',
+          'opened_at': opened.toUtc().toIso8601String(),
+          'closed_at': null,
+          'opening_float': 0,
+          'cashier_id': 'sara',
+          'closing_counted': null,
+          'movements': '[]',
+        },
+      };
 
   final accounts = <String, (String, Map<String, Object?>)>{
     'owner': (
@@ -110,12 +144,12 @@ class FakeSite {
         return reply(200, {
           'user': user,
           'shop': {'id': 's1', 'name': 'Demo shop'},
-          'branches': [branch],
+          'branches': branches,
         });
       case '/api/branches':
         return reply(200, {
           'branches': [
-            {...branch, 'devices': <Object>[]},
+            for (final b in branches) {...b, 'devices': <Object>[]},
           ],
         });
       case '/api/records':
@@ -288,6 +322,65 @@ void main() {
     expect(
         find.descendant(of: find.byKey(const Key('kpi-orders')), matching: find.text('3')),
         findsOneWidget);
+  });
+
+  int listed(WidgetTester t) => find
+      .byWidgetPredicate((w) =>
+          w is Text &&
+          w.key is ValueKey<String> &&
+          (w.key as ValueKey<String>).value.startsWith('order-cashier-'))
+      .evaluate()
+      .length;
+
+  testWidgets('the latest orders filter by branch', (t) async {
+    site.branches.add({'id': 'b2', 'name': 'Downtown'});
+    site.records.add(FakeSite.saleAt(
+        DateTime.now().subtract(const Duration(hours: 1)), '555', branchId: 'b2'));
+    t.view.physicalSize = const Size(1500, 2400);
+    await start(t);
+    await signIn(t, 'owner', 'owner-pass-1');
+    t.view.physicalSize = const Size(1500, 2400);
+    await t.pumpAndSettle();
+    expect(listed(t), 4);
+
+    await t.tap(find.byKey(const Key('orders-branch')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('orders-branch-b2')).last);
+    await t.pumpAndSettle();
+    expect(listed(t), 1);
+
+    await t.tap(find.byKey(const Key('orders-clear')));
+    await t.pumpAndSettle();
+    expect(listed(t), 4);
+  });
+
+  testWidgets('a sale after midnight counts under the day its shift opened', (t) async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final yesterday = DateTime(today.year, today.month, today.day - 1);
+    site.records
+      ..add(FakeSite.shiftAt(DateTime(yesterday.year, yesterday.month, yesterday.day, 14),
+          'till-9', 'SH9'))
+      ..add(FakeSite.saleAt(DateTime(today.year, today.month, today.day, 0, 55), '777',
+          device: 'till-9', price: 50));
+    t.view.physicalSize = const Size(1500, 2400);
+    await start(t);
+    await signIn(t, 'owner', 'owner-pass-1');
+    t.view.physicalSize = const Size(1500, 2400);
+    await t.pumpAndSettle();
+
+    Finder kpiOrders(String n) =>
+        find.descendant(of: find.byKey(const Key('kpi-orders')), matching: find.text(n));
+
+    // Rung today at 00:55, but in yesterday's shift: not one of today's.
+    expect(kpiOrders('3'), findsOneWidget);
+    await t.enterText(find.byKey(const Key('orders-search')), '777');
+    await t.pumpAndSettle();
+    expect(listed(t), 0);
+
+    await t.tap(find.byKey(const Key('period-yesterday')));
+    await t.pumpAndSettle();
+    expect(kpiOrders('1'), findsOneWidget);
+    expect(listed(t), 1);
   });
 
   testWidgets('a cashier the staff list does not know is shown by id', (t) async {

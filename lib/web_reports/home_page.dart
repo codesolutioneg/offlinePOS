@@ -9,13 +9,15 @@ import '../core/theme/app_colors.dart';
 import '../domain/order.dart';
 import 'branches_page.dart';
 import 'reports_page.dart';
+import 'shift_days.dart';
 import 'site_api.dart';
 import 'site_widgets.dart';
 import 'users_page.dart';
 
 enum _Period { today, yesterday, week }
 
-typedef _Sale = ({String branchId, Order order});
+/// A completed sale and the day it counts under: the day its shift opened.
+typedef _Sale = ({String branchId, Order order, DateTime day});
 
 class _Stats {
   double sales = 0;
@@ -137,6 +139,7 @@ class _HomePageState extends State<HomePage> {
   // The latest orders' own filters. A date range of its own, when picked,
   // replaces the page's period for the list alone.
   final _search = TextEditingController();
+  String? _branch;
   String? _cashier;
   OrderType? _type;
   String? _device;
@@ -161,15 +164,30 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  static _Sale? _saleOf(SiteRecord r) {
+  static _Sale? _saleOf(SiteRecord r, ShiftDays shifts) {
     final order = Order.fromMap(r.payload.cast<String, dynamic>());
     if (order.state != OrderState.paid && order.state != OrderState.synced) return null;
-    return (branchId: r.branchId, order: order);
+    return (branchId: r.branchId, order: order, day: shifts.dayOf(order));
+  }
+
+  static DateTime _plusDays(DateTime d, int n) => DateTime(d.year, d.month, d.day + n);
+
+  /// The completed sales of the shifts opened from [from] up to [to] (both
+  /// midnights). A shift opened before [to] can sell past it, and one opened
+  /// up to a week before [from] can still claim sales after it.
+  Future<List<_Sale>> _salesOpenedIn(DateTime from, DateTime to) async {
+    final shifts = ShiftDays(await widget.api.records(['shift'], from: _plusDays(from, -7)));
+    final rows = await widget.api.records(['order'], from: from, to: _plusDays(to, 1));
+    return [
+      for (final r in rows)
+        if (_saleOf(r, shifts) case final sale?)
+          if (!sale.day.isBefore(from) && sale.day.isBefore(to)) sale,
+    ];
   }
 
   /// The period's window and the one it is compared with: the same stretch
   /// before it, cut at the same time of day so a morning is not set against a
-  /// whole day.
+  /// whole day. Days are the days shifts opened on.
   ({DateTime from, DateTime to, DateTime prevFrom, DateTime prevTo}) _window(DateTime now) {
     final days = _period == _Period.week ? 7 : 1;
     final today = DateTime(now.year, now.month, now.day);
@@ -192,19 +210,17 @@ class _HomePageState extends State<HomePage> {
       final now = DateTime.now();
       final w = _window(now);
       final branches = await widget.api.branches();
-      final rows = await widget.api.records(['order'], from: w.prevFrom, to: w.to);
+      final sales = await _salesOpenedIn(w.prevFrom, w.to);
       final staff = ReportLookups.fromRecords([
         for (final r in await widget.api.records(['staff'])) (kind: r.kind, payload: r.payload),
       ]).staffNames;
+      final running = w.to.isAfter(now);
       final current = <_Sale>[];
       final previous = <_Sale>[];
-      for (final r in rows) {
-        final sale = _saleOf(r);
-        if (sale == null) continue;
-        final at = sale.order.createdAt.toLocal();
-        if (!at.isBefore(w.from) && at.isBefore(w.to)) {
+      for (final sale in sales) {
+        if (!sale.day.isBefore(w.from)) {
           current.add(sale);
-        } else if (!at.isBefore(w.prevFrom) && at.isBefore(w.prevTo)) {
+        } else if (!running || sale.order.createdAt.toLocal().isBefore(w.prevTo)) {
           previous.add(sale);
         }
       }
@@ -235,17 +251,9 @@ class _HomePageState extends State<HomePage> {
     final range = _range;
     if (range == null) return;
     final generation = ++_rangeGeneration;
-    final from = DateTime(range.start.year, range.start.month, range.start.day);
-    final to = DateTime(range.end.year, range.end.month, range.end.day + 1);
     try {
-      final rows = await widget.api.records(['order'], from: from, to: to);
-      final sales = <_Sale>[];
-      for (final r in rows) {
-        final sale = _saleOf(r);
-        if (sale == null) continue;
-        final at = sale.order.createdAt.toLocal();
-        if (!at.isBefore(from) && at.isBefore(to)) sales.add(sale);
-      }
+      final sales = await _salesOpenedIn(
+          DateUtils.dateOnly(range.start), _plusDays(range.end, 1));
       if (!mounted || generation != _rangeGeneration || _range != range) return;
       setState(() => _rangeSales = sales);
     } catch (e) {
@@ -291,6 +299,7 @@ class _HomePageState extends State<HomePage> {
   void _clearFilters() {
     _search.clear();
     setState(() {
+      _branch = null;
       _cashier = null;
       _type = null;
       _device = null;
@@ -712,8 +721,7 @@ class _HomePageState extends State<HomePage> {
       final days = [for (var i = 6; i >= 0; i--) DateTime(now.year, now.month, now.day - i)];
       final values = List<double>.filled(7, 0);
       for (final s in sales) {
-        final t = s.order.createdAt.toLocal();
-        final i = days.indexWhere((d) => d.year == t.year && d.month == t.month && d.day == t.day);
+        final i = days.indexWhere((d) => d == s.day);
         if (i >= 0) values[i] += s.order.total;
       }
       return (values: values, labels: [for (final d in days) '${d.day}/${d.month}']);
@@ -863,6 +871,7 @@ class _HomePageState extends State<HomePage> {
 
   bool get _filtered =>
       _search.text.trim().isNotEmpty ||
+      _branch != null ||
       _cashier != null ||
       _type != null ||
       _device != null ||
@@ -877,7 +886,8 @@ class _HomePageState extends State<HomePage> {
         child: DropdownButtonHideUnderline(child: child),
       );
 
-  Widget _filters(BuildContext context, List<_Sale> sales, Map<String, String> devices) {
+  Widget _filters(BuildContext context, List<_Sale> sales, Map<String, String> devices,
+      List<SiteBranch> branches) {
     final cashiers = {for (final s in sales) s.order.cashierId, ?_cashier}.toList()
       ..sort((a, b) => _cashierName(a).toLowerCase().compareTo(_cashierName(b).toLowerCase()));
     final types = {for (final s in sales) s.order.type, ?_type}.toList()
@@ -911,6 +921,18 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ),
+        if (branches.isNotEmpty)
+          _filterBox(DropdownButton<String?>(
+            key: const Key('orders-branch'),
+            value: branches.any((b) => b.id == _branch) ? _branch : null,
+            hint: Text(tr(context, 'All branches')),
+            items: [
+              DropdownMenuItem(value: null, child: Text(tr(context, 'All branches'))),
+              for (final b in branches)
+                DropdownMenuItem(key: Key('orders-branch-${b.id}'), value: b.id, child: Text(b.name)),
+            ],
+            onChanged: (v) => changed(() => _branch = v),
+          )),
         _filterBox(DropdownButton<String?>(
           key: const Key('orders-cashier'),
           value: _cashier,
@@ -972,12 +994,13 @@ class _HomePageState extends State<HomePage> {
       for (final b in branches)
         for (final d in b.devices) d.id: d.name,
     };
-    final showBranch = branches.length > 1;
+    final showBranch = branches.length > 1 && _branch == null;
     final all = sales ?? const <_Sale>[];
     final q = _search.text.trim();
     final rows = [
       for (final s in all)
-        if ((_cashier == null || s.order.cashierId == _cashier) &&
+        if ((_branch == null || s.branchId == _branch) &&
+            (_cashier == null || s.order.cashierId == _cashier) &&
             (_type == null || s.order.type == _type) &&
             (_device == null || s.order.deviceId == _device) &&
             (q.isEmpty ||
@@ -1013,7 +1036,7 @@ class _HomePageState extends State<HomePage> {
     return _Panel(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _filters(context, all, devices),
+        _filters(context, all, devices, branches),
         const SizedBox(height: 8),
         if (sales == null)
           const Padding(
@@ -1042,7 +1065,7 @@ class _HomePageState extends State<HomePage> {
                     textDirection: TextDirection.ltr,
                     style: const TextStyle(fontWeight: FontWeight.w600)),
               ),
-              Text(manyDays
+              Text(manyDays || !DateUtils.isSameDay(s.order.createdAt.toLocal(), s.day)
                   ? siteWhen(context, s.order.createdAt).substring(5)
                   : siteWhen(context, s.order.createdAt).split(' ').last),
               Text(names[s.branchId] ?? ''),
