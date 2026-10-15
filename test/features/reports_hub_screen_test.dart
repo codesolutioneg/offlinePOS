@@ -4,6 +4,7 @@ import 'package:offline_pos/core/audit/audit_log.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/theme/app_colors.dart';
+import 'package:offline_pos/domain/business_day.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/reports/reports_hub_screen.dart';
 import 'package:offline_pos/features/reports/rm/rm_report_viewer.dart';
@@ -290,12 +291,16 @@ void main() {
   });
 
   Order sale(double amount, {int daysAgo = 0}) {
-    final at = DateTime.now().subtract(Duration(days: daysAgo));
+    // Pin to the trading day, not the calendar clock — before the shop cutover
+    // "today" is still yesterday's service, and noon-of-calendar-today sits
+    // outside that window (or pulls yesterday's sale into it).
+    final day = BusinessDay.of(DateTime.now()).date;
+    final at = DateTime(day.year, day.month, day.day - daysAgo, 12);
     return Order(
       deviceId: 'd',
       cashierId: 'sara',
       type: OrderType.takeaway,
-      createdAt: DateTime(at.year, at.month, at.day, 12).toUtc(),
+      createdAt: at.toUtc(),
       lines: [
         OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: amount)
       ],

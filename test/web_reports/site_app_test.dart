@@ -82,7 +82,9 @@ class FakeSite {
   };
 
   late final List<Map<String, Object?>> records = () {
-    final at = DateTime.now().toUtc().subtract(const Duration(hours: 1));
+    // Local noon today — UTC−1h lands on yesterday right after local midnight.
+    final now = DateTime.now();
+    final at = DateTime(now.year, now.month, now.day, 12).toUtc();
     Map<String, Object?> sale(String name, double price, double qty, String no,
         {String cashier = 'sara', String device = 'till-1', OrderType type = OrderType.dineIn}) {
       final order = Order(deviceId: device, cashierId: cashier, createdAt: at, type: type, orderNo: no)
@@ -334,8 +336,9 @@ void main() {
 
   testWidgets('the latest orders filter by branch', (t) async {
     site.branches.add({'id': 'b2', 'name': 'Downtown'});
+    final now = DateTime.now();
     site.records.add(FakeSite.saleAt(
-        DateTime.now().subtract(const Duration(hours: 1)), '555', branchId: 'b2'));
+        DateTime(now.year, now.month, now.day, 12), '555', branchId: 'b2'));
     t.view.physicalSize = const Size(1500, 2400);
     await start(t);
     await signIn(t, 'owner', 'owner-pass-1');

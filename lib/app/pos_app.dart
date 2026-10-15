@@ -4310,7 +4310,9 @@ class _PosAppState extends State<PosApp> {
         printers: widget.printers,
         settings: widget.settings,
         categories: widget.catalogue.categories(),
-        products: widget.catalogue.products(),
+        // Full menu for routing — the default product query caps at 200 and would
+        // hide most of a large shop from the assign grid.
+        products: widget.catalogue.products(limit: 10000),
         onChanged: onChanged,
         deviceId: widget.deviceId,
         deviceName: widget.settings.lanDeviceName ?? widget.deviceId,

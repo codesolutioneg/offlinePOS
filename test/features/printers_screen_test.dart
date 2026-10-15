@@ -348,6 +348,29 @@ void main() {
       expect(find.byKey(const Key('product-route-10')), findsOneWidget);
       expect(find.byKey(const Key('product-route-11')), findsNothing);
     });
+
+    testWidgets('category chips match the sell screen: empty folders stay off',
+        (t) async {
+      final cats = const [
+        Category(id: 1, name: 'Mains'),
+        Category(id: 2, name: 'Drinks'),
+        Category(id: 99, name: 'Combo'),
+      ];
+      await tall(t);
+      await t.pumpWidget(MaterialApp(
+        home: PrintersScreen(
+          printers: printers,
+          settings: settings,
+          categories: cats,
+          products: products,
+          onChanged: () => changedCount++,
+        ),
+      ));
+
+      expect(find.byKey(const Key('product-category-1')), findsOneWidget);
+      expect(find.byKey(const Key('product-category-2')), findsOneWidget);
+      expect(find.byKey(const Key('product-category-99')), findsNothing);
+    });
   });
 
   group('what the printer can spell', () {

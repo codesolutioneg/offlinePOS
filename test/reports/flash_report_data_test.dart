@@ -53,6 +53,83 @@ void main() {
     expect(flash.byPaymentMethod['Visa'], closeTo(57, 0.01));
   });
 
+  test('a fully cancelled sale drops out of Flash with its refund', () {
+    final sale = _paid(
+        uuid: 'sale-1',
+        deviceId: 'till-1',
+        cashierId: 'sara',
+        type: OrderType.dineIn,
+        price: 100);
+    final refund = Order(
+      uuid: 'refund-1',
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      type: OrderType.dineIn,
+      lines: [
+        OrderLine(
+            productId: 1,
+            name: 'Item',
+            quantity: -1,
+            unitPrice: 100,
+            taxRate: 14),
+      ],
+      payments: const [
+        OrderPayment(methodId: -1, amount: -114, label: 'Cash'),
+      ],
+      refundOfUuid: 'sale-1',
+    )..state = OrderState.paid;
+    final kept = _paid(
+        uuid: 'sale-2',
+        deviceId: 'till-1',
+        cashierId: 'sara',
+        type: OrderType.dineIn,
+        price: 50);
+
+    final flash = FlashReportBuilder.build(
+      title: 'Flash',
+      periodLabel: 'Today',
+      orders: [sale, refund, kept],
+    );
+    expect(flash.orders.map((o) => o.uuid), ['sale-2']);
+    expect(flash.ordersCount, 1);
+    expect(flash.byPaymentMethod['Cash'], closeTo(57, 0.01));
+  });
+
+  test('a partial refund still nets on Flash without dropping the sale', () {
+    final sale = _paid(
+        uuid: 'sale-1',
+        deviceId: 'till-1',
+        cashierId: 'sara',
+        type: OrderType.dineIn,
+        price: 100);
+    final refund = Order(
+      uuid: 'refund-1',
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      type: OrderType.dineIn,
+      lines: [
+        OrderLine(
+            productId: 1,
+            name: 'Item',
+            quantity: -0.5,
+            unitPrice: 100,
+            taxRate: 14),
+      ],
+      payments: const [
+        OrderPayment(methodId: -1, amount: -57, label: 'Cash'),
+      ],
+      refundOfUuid: 'sale-1',
+    )..state = OrderState.paid;
+
+    final flash = FlashReportBuilder.build(
+      title: 'Flash',
+      periodLabel: 'Today',
+      orders: [sale, refund],
+    );
+    expect(flash.ordersCount, 2);
+    expect(flash.byPaymentMethod['Cash'], closeTo(57, 0.01));
+  });
+
   test('deliveryOnly keeps delivery channels', () {
     final orders = [
       _paid(

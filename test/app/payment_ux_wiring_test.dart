@@ -408,4 +408,34 @@ void main() {
     expect(find.byType(SellScreen), findsOneWidget);
     expect(await slipCount('part-'), 1);
   });
+
+  testWidgets('mixed methods takes part on card and the rest on cash', (t) async {
+    final order = tableOnTheTill(type: OrderType.takeaway);
+    await signIn(t);
+
+    await t.tap(findPay());
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('split-toggle')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('mixed-methods-hint')), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('method-2'))); // Card
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('tender-amount')), '100');
+    await t.tap(find.byKey(const Key('add-tender')));
+    await t.pumpAndSettle();
+
+    await t.tap(find.byKey(const Key('method-1'))); // Cash for the rest
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('add-tender')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('confirm-payment')));
+    await t.pumpAndSettle();
+
+    final sale = orders.byUuid(order.uuid)!;
+    expect(sale.state, OrderState.paid);
+    expect(sale.payments, hasLength(2));
+    expect(sale.payments.map((p) => p.label), containsAll(['Card', 'Cash']));
+    expect(sale.payments.fold(0.0, (s, p) => s + p.amount), closeTo(300, 0.01));
+  });
 }

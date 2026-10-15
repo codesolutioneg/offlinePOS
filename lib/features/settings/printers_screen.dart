@@ -135,6 +135,24 @@ class _PrintersScreenState extends State<PrintersScreen>
       ..sort();
   }
 
+  /// Same categories the sell screen shows: only ones that have something to sell.
+  /// Empty Odoo folders (Combo, Desert, …) stay off this rail so routing matches
+  /// the counter the cashier already knows. A category already routed stays
+  /// visible so a manager can clear it. No product list (tests / empty menu)
+  /// falls back to every category handed in.
+  List<Category> get _menuCategories {
+    if (widget.products.isEmpty) return widget.categories;
+    final stocked = {
+      for (final p in widget.products)
+        if (p.categoryId != null) p.categoryId!,
+    };
+    final routed = widget.settings.categoryStations.keys.toSet();
+    return [
+      for (final c in widget.categories)
+        if (stocked.contains(c.id) || routed.contains(c.id)) c,
+    ];
+  }
+
   Future<void> _rescan(String name) async {
     final host = await widget.printers.refresh(name);
     if (!mounted) return;
@@ -431,7 +449,7 @@ class _PrintersScreenState extends State<PrintersScreen>
                         onSelected: (_) =>
                             setState(() => _productCategoryFilter = null),
                       ),
-                      for (final category in widget.categories) ...[
+                      for (final category in _menuCategories) ...[
                         const SizedBox(width: 6),
                         ChoiceChip(
                           key: Key('product-category-${category.id}'),
@@ -487,18 +505,19 @@ class _PrintersScreenState extends State<PrintersScreen>
 
   Widget _categoriesTab(List<String> stations) {
     final assignments = widget.settings.categoryStations;
+    final cats = _menuCategories;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         _infoBanner(tr(context,
             'Pick which kitchen printers print each category. A product with its own printers ignores this.')),
-        if (widget.categories.isEmpty)
+        if (cats.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Text(tr(context, 'No categories to route yet.')),
           )
         else
-          for (final category in widget.categories)
+          for (final category in cats)
             Card(
               key: Key('route-${category.id}'),
               child: Padding(

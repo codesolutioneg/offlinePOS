@@ -5401,7 +5401,12 @@ class _PaymentSheetState extends State<_PaymentSheet> {
         : (typed > _remaining ? _remaining : typed);
     setState(() {
       _tenders.add(OrderPayment(methodId: _method!.id, amount: amt, label: _method!.name));
-      _tenderAmount.clear();
+      _method = null;
+      // Next method's amount starts as what is still owed, so cash-for-the-rest
+      // is Add without retyping.
+      final left = _grand - _tenders.fold(0.0, (s, t) => s + t.amount);
+      _tenderAmount.text =
+          left > 0.001 ? left.toStringAsFixed(2) : '';
     });
   }
 
@@ -5580,7 +5585,17 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       child: InkWell(
         key: Key('method-${m.id}'),
         borderRadius: BorderRadius.circular(14),
-        onTap: () => setState(() => _method = m),
+        onTap: () => setState(() {
+          _method = m;
+          // Mixed methods: picking the next tender fills the amount with what
+          // is still owed, so "visa then cash for the rest" stays two taps + Add.
+          if (_split &&
+              _tenders.isNotEmpty &&
+              _tenderAmount.text.trim().isEmpty &&
+              _remaining > 0.001) {
+            _tenderAmount.text = _remaining.toStringAsFixed(2);
+          }
+        }),
         child: Container(
           height: 76,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -5697,15 +5712,40 @@ class _PaymentSheetState extends State<_PaymentSheet> {
             const Spacer(),
             // One bill paid part cash, part card. Named for the methods, not for
             // splitting the bill: that is what the mode row answers.
-            FilterChip(
-              key: const Key('split-toggle'),
-              label: Text(tr(context, 'Mixed methods')),
-              selected: _split,
-              onSelected: (v) => setState(() {
-                _split = v;
-                _tenders.clear();
-              }),
-            ),
+            // Explicit colours: the selected chip's default fill is primary and
+            // ate the label in light mode (only the checkmark stayed visible).
+            Builder(builder: (context) {
+              final scheme = Theme.of(context).colorScheme;
+              return FilterChip(
+                key: const Key('split-toggle'),
+                selected: _split,
+                showCheckmark: true,
+                checkmarkColor: scheme.onPrimary,
+                selectedColor: scheme.primary,
+                backgroundColor: scheme.surfaceContainerHighest,
+                side: BorderSide(
+                    color: _split ? scheme.primary : scheme.outlineVariant),
+                labelStyle: TextStyle(
+                  color: _split ? scheme.onPrimary : scheme.onSurface,
+                  fontWeight: FontWeight.w700,
+                ),
+                label: Text(
+                  tr(context, 'Mixed methods'),
+                  style: TextStyle(
+                    color: _split ? scheme.onPrimary : scheme.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                onSelected: (v) => setState(() {
+                  _split = v;
+                  _tenders.clear();
+                  _tenderAmount.clear();
+                  if (v && _remaining > 0.001) {
+                    _tenderAmount.text = _remaining.toStringAsFixed(2);
+                  }
+                }),
+              );
+            }),
           ]),
           const SizedBox(height: 8),
           _amountOwed(context),
@@ -5715,9 +5755,27 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                if (widget.modes.isNotEmpty) ...[
+                if (widget.modes.isNotEmpty && !_split) ...[
                   const SizedBox(height: 12),
                   _modeRow(context),
+                ],
+                if (_split) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    key: const Key('mixed-methods-hint'),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.info.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: AppColors.info.withValues(alpha: 0.35)),
+                    ),
+                    child: Text(
+                      tr(context,
+                          'Pick a method, set its amount, tap Add. Then pick the next method for what is left (e.g. Visa then Cash).'),
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
                 ],
                 const SizedBox(height: 12),
                 // The tender comes before the tip and the cash, because picking it is

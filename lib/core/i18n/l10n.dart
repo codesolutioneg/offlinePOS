@@ -2055,6 +2055,8 @@ const Map<String, String> _ar = {
   'By guest': 'لكل ضيف',
   'By item': 'لكل صنف',
   'Mixed methods': 'طرق متعددة',
+  'Pick a method, set its amount, tap Add. Then pick the next method for what is left (e.g. Visa then Cash).':
+      'اختار طريقة الدفع، اكتب المبلغ، دوس إضافة. بعدين اختار الطريقة التانية للباقي (مثلاً فيزا وبعدين كاش).',
   'Change to give back': 'الباقي للعميل',
   'Bill': 'الفاتورة',
   'Move / merge': 'نقل / دمج',
