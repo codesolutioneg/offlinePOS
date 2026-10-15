@@ -218,6 +218,32 @@ class LanPeerDirectory {
     return joined;
   }
 
+  /// A signed request from [deviceId], which proves it is on the network and holds
+  /// the shop key even when its beacon never arrives here (a second adapter, an
+  /// access point that drops broadcast from one side). Without this a till that can
+  /// hear the others but not be heard pushes to them and is never read from.
+  ///
+  /// A peer already known keeps what its beacon said and is only marked as seen.
+  void heard(String deviceId, {required String host, required int port}) {
+    if (deviceId.isEmpty || _refused.containsKey(deviceId)) return;
+    final at = _now().toUtc();
+    final known = _peers[deviceId];
+    if (known != null) {
+      _peers[deviceId] = known.seenAt(at);
+      return;
+    }
+    _peers[deviceId] = LanPeer(
+      deviceId: deviceId,
+      name: deviceId,
+      host: host,
+      port: port,
+      schemaVersion: Schema.version,
+      lastSeenAt: at,
+    );
+    _log?.call('lan.peer.joined',
+        '$deviceId at $host:$port, from its requests: its beacon does not reach this till');
+  }
+
   /// Peers heard from recently enough to be worth talking to, by name.
   List<LanPeer> get active {
     final cutoff = _now().toUtc().subtract(staleAfter);

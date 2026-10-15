@@ -197,7 +197,8 @@ class LanNode {
       onRefused: log,
     );
     final credential = LanCredential.rotating(shopKey);
-    final http = client ?? LanHttpClient(credential: credential);
+    final http = client ??
+        LanHttpClient(credential: credential, selfId: deviceId, selfPort: port);
     final claims = LanClaimDesk(
       deviceId: deviceId,
       orders: orders,
@@ -273,6 +274,8 @@ class LanNode {
         ],
         traffic: traffic,
         updates: () => settings.isLanPrimary ? updateOffer : null,
+        onContact: (id, from, peerPort) =>
+            peers.heard(id, host: from, port: peerPort),
         onJoin: joinGate,
         onRefused: log,
       ),

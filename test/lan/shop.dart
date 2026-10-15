@@ -110,6 +110,7 @@ class TestTill {
           (requesterId != null && requesterId == order.cashierId),
       audit: (event, detail) => audited.add('$event: $detail'),
     );
+    peers = LanPeerDirectory(log: (event, detail) => refusals.add('$event: $detail'));
     protocol = LanProtocol(
       deviceId: deviceId,
       log: log,
@@ -117,9 +118,9 @@ class TestTill {
       credential: credential,
       claims: claims,
       updates: () => updateOffer,
+      onContact: (id, from, port) => peers.heard(id, host: from, port: port),
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
-    peers = LanPeerDirectory(log: (event, detail) => refusals.add('$event: $detail'));
     fabric = LanFabric(
       deviceId: deviceId,
       log: log,

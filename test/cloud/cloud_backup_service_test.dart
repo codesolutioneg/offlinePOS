@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -251,10 +252,17 @@ void main() {
     final s = service(tick: const Duration(milliseconds: 10));
     await s.pair(url: 'https://backup.test', pairCode: 'SHOP-1');
     Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 150));
+    // A backup is real encryption and real I/O, slow on a loaded machine: what must
+    // happen is waited for, what must not is given the same short window.
+    Future<void> until(FutureOr<bool> Function() done) async {
+      for (var i = 0; i < 100 && !await done(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
     s.start();
     addTearDown(s.stop);
 
-    await settle();
+    await until(() => cloud.backups.isNotEmpty);
     expect(cloud.backups, hasLength(1), reason: 'never backed up, so due at once');
 
     sell('sale-2');
@@ -264,7 +272,7 @@ void main() {
 
     clock = clock.add(const Duration(minutes: 31));
     cloud.offline = true;
-    await settle();
+    await until(() async => (await s.status()).lastError != null);
     expect((await s.status()).lastError, isNotNull);
 
     cloud.offline = false;
@@ -273,7 +281,7 @@ void main() {
     expect(cloud.backups, hasLength(1), reason: 'still inside the retry wait');
 
     clock = clock.add(const Duration(minutes: 4));
-    await settle();
+    await until(() => cloud.backups.length >= 2);
     expect(cloud.backups, hasLength(2));
   });
 

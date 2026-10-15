@@ -71,6 +71,7 @@ class LanProtocol {
     this.catchUp,
     this.traffic,
     this.updates,
+    this.onContact,
     this.pageSize = 200,
     LanLog? onRefused,
   })  : _log = log,
@@ -148,10 +149,23 @@ class LanProtocol {
   /// offers one. Null (or answering null) refuses with 409.
   final LanUpdateOffer? Function()? updates;
 
+  /// A pull or a notify that passed the key and schema checks, with the address it
+  /// came from and the port the sender serves on. Sent only by builds that say who
+  /// they are, so an older till is still found by its beacon alone.
+  final void Function(String deviceId, String host, int port)? onContact;
+
   final int pageSize;
   final LanLog? _onRefused;
 
-  LanReply handleGet(String path, Map<String, String> query, {String? auth}) {
+  void _contact(String? peer, String? from, Object? port) {
+    if (onContact == null || peer == null || peer.isEmpty || from == null) return;
+    final p = port is int ? port : int.tryParse('${port ?? ''}');
+    if (p == null || p <= 0) return;
+    onContact!(peer, from, p);
+  }
+
+  LanReply handleGet(String path, Map<String, String> query,
+      {String? auth, String? from}) {
     if (path == updatePath) return _handleUpdate(query, auth);
     if (path != eventsPath) return const LanReply(404, {'error': 'unknown path'});
     final unpaired = _authRefusal(auth,
@@ -162,6 +176,7 @@ class LanProtocol {
     if (unpaired != null) return unpaired;
     final refusal = _schemaRefusal(int.tryParse(query['schema'] ?? ''), query['peer']);
     if (refusal != null) return refusal;
+    _contact(query['peer'], from, query['port']);
     final since = int.tryParse(query['since'] ?? '') ?? 0;
     final events = _log.since(since, limit: pageSize);
     // The high-water mark is the log's own end when the page is short, so a peer
@@ -178,7 +193,7 @@ class LanProtocol {
     });
   }
 
-  LanReply handlePost(String path, String body, {String? auth}) {
+  LanReply handlePost(String path, String body, {String? auth, String? from}) {
     if (path == joinPath) return _handleJoin(body);
     if (path != notifyPath &&
         path != claimPath &&
@@ -205,6 +220,7 @@ class LanProtocol {
     if (peer is! String || peer.isEmpty) {
       return const LanReply(400, {'error': 'no device_id'});
     }
+    _contact(peer, from, decoded['port']);
     if (path == claimPath) return _handleClaim(decoded, peer);
     if (path == seatPath) return _handleSeat(decoded, peer);
     if (path == numberPath) return _handleNumber(decoded['count']);
@@ -527,14 +543,17 @@ class LanHost {
     LanReply reply;
     try {
       final auth = request.headers.value(LanCredential.header);
+      final from = request.connectionInfo?.remoteAddress.address;
       reply = switch (request.method) {
         'GET' => _protocol.handleGet(
-            request.uri.path, request.uri.queryParameters, auth: auth),
+            request.uri.path, request.uri.queryParameters,
+            auth: auth, from: from),
         'POST' when request.uri.path == LanProtocol.catchUpPath =>
           await _protocol.handleCatchUp(
               await utf8.decoder.bind(request).join(), auth: auth),
         'POST' => _protocol.handlePost(
-            request.uri.path, await utf8.decoder.bind(request).join(), auth: auth),
+            request.uri.path, await utf8.decoder.bind(request).join(),
+            auth: auth, from: from),
         _ => const LanReply(405, {'error': 'method'}),
       };
     } catch (e) {
@@ -582,19 +601,36 @@ class LanHost {
 /// background timer, and a till that fell off the switch must cost seconds, not a
 /// stalled pass.
 class LanHttpClient {
-  LanHttpClient({required LanCredential credential, Duration? timeout, HttpClient? client})
-      : timeout = timeout ?? const Duration(seconds: 3),
+  LanHttpClient({
+    required LanCredential credential,
+    Duration? timeout,
+    HttpClient? client,
+    this.selfId,
+    this.selfPort,
+  })  : timeout = timeout ?? const Duration(seconds: 3),
         _credential = credential,
         _client = client ?? HttpClient() {
     _client.connectionTimeout = this.timeout;
   }
+
+  /// Who is asking and where it serves, sent with every pull and notify so the
+  /// peer can read this till back even if this till's beacon never reaches it.
+  final String? selfId;
+  final int? selfPort;
 
   final Duration timeout;
   final LanCredential _credential;
   final HttpClient _client;
 
   Future<LanPage> fetch(LanPeer peer, int since) async {
-    final query = {'since': '$since', 'schema': '${Schema.version}'};
+    final query = {
+      'since': '$since',
+      'schema': '${Schema.version}',
+      if (selfId != null && selfPort != null) ...{
+        'peer': selfId!,
+        'port': '$selfPort',
+      },
+    };
     final url = peer.baseUrl
         .replace(path: LanProtocol.eventsPath, queryParameters: query);
     final body = await _send(
@@ -630,6 +666,7 @@ class LanHttpClient {
     final body = jsonEncode({
       'device_id': deviceId,
       'schema': Schema.version,
+      'port': ?selfPort,
       'events': [for (final e in events) e.toMap()],
     });
     await _send(
