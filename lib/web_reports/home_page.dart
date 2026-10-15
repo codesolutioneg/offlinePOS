@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../core/cloud/report_lookups.dart';
 import '../core/i18n/l10n.dart';
 import '../core/theme/app_colors.dart';
 import '../domain/order.dart';
@@ -130,6 +131,20 @@ class _HomePageState extends State<HomePage> {
   int _generation = 0;
   Timer? _timer;
 
+  /// Staff ids to names, from the tills' staff lists.
+  Map<String, String> _staff = const {};
+
+  // The latest orders' own filters. A date range of its own, when picked,
+  // replaces the page's period for the list alone.
+  final _search = TextEditingController();
+  String? _cashier;
+  OrderType? _type;
+  String? _device;
+  DateTimeRange? _range;
+  List<_Sale>? _rangeSales;
+  int _rangeGeneration = 0;
+  int _shown = 10;
+
   SiteUser get _user => widget.session.user;
 
   @override
@@ -142,7 +157,14 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _timer?.cancel();
+    _search.dispose();
     super.dispose();
+  }
+
+  static _Sale? _saleOf(SiteRecord r) {
+    final order = Order.fromMap(r.payload.cast<String, dynamic>());
+    if (order.state != OrderState.paid && order.state != OrderState.synced) return null;
+    return (branchId: r.branchId, order: order);
   }
 
   /// The period's window and the one it is compared with: the same stretch
@@ -171,13 +193,15 @@ class _HomePageState extends State<HomePage> {
       final w = _window(now);
       final branches = await widget.api.branches();
       final rows = await widget.api.records(['order'], from: w.prevFrom, to: w.to);
+      final staff = ReportLookups.fromRecords([
+        for (final r in await widget.api.records(['staff'])) (kind: r.kind, payload: r.payload),
+      ]).staffNames;
       final current = <_Sale>[];
       final previous = <_Sale>[];
       for (final r in rows) {
-        final order = Order.fromMap(r.payload.cast<String, dynamic>());
-        if (order.state != OrderState.paid && order.state != OrderState.synced) continue;
-        final at = order.createdAt.toLocal();
-        final sale = (branchId: r.branchId, order: order);
+        final sale = _saleOf(r);
+        if (sale == null) continue;
+        final at = sale.order.createdAt.toLocal();
         if (!at.isBefore(w.from) && at.isBefore(w.to)) {
           current.add(sale);
         } else if (!at.isBefore(w.prevFrom) && at.isBefore(w.prevTo)) {
@@ -187,12 +211,14 @@ class _HomePageState extends State<HomePage> {
       if (!mounted || generation != _generation) return;
       setState(() {
         _branches = branches;
+        _staff = staff;
         _current = current;
         _previous = previous;
         _error = null;
         _updatedAt = now;
         _loading = false;
       });
+      await _loadRange();
     } catch (e) {
       if (e is SiteError && e.signedOut) return widget.onLogout();
       if (mounted && generation == _generation) {
@@ -204,13 +230,74 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// The completed sales inside the list's own date range, both days whole.
+  Future<void> _loadRange() async {
+    final range = _range;
+    if (range == null) return;
+    final generation = ++_rangeGeneration;
+    final from = DateTime(range.start.year, range.start.month, range.start.day);
+    final to = DateTime(range.end.year, range.end.month, range.end.day + 1);
+    try {
+      final rows = await widget.api.records(['order'], from: from, to: to);
+      final sales = <_Sale>[];
+      for (final r in rows) {
+        final sale = _saleOf(r);
+        if (sale == null) continue;
+        final at = sale.order.createdAt.toLocal();
+        if (!at.isBefore(from) && at.isBefore(to)) sales.add(sale);
+      }
+      if (!mounted || generation != _rangeGeneration || _range != range) return;
+      setState(() => _rangeSales = sales);
+    } catch (e) {
+      if (e is SiteError && e.signedOut) return widget.onLogout();
+      if (mounted && generation == _rangeGeneration) setState(() => _error = e);
+    }
+  }
+
   void _pick(_Period p) {
     if (p == _period) return;
     setState(() {
       _period = p;
       _current = null;
+      _range = null;
+      _rangeSales = null;
+      _shown = 10;
     });
     _load();
+  }
+
+  Future<void> _pickRange() async {
+    final now = DateTime.now();
+    final w = _window(now);
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year, now.month, now.day),
+      initialDateRange: _range ??
+          DateTimeRange(
+            start: w.from,
+            end: DateTime(w.to.year, w.to.month, w.to.day - 1),
+          ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _range = picked;
+      _rangeSales = null;
+      _shown = 10;
+    });
+    await _loadRange();
+  }
+
+  void _clearFilters() {
+    _search.clear();
+    setState(() {
+      _cashier = null;
+      _type = null;
+      _device = null;
+      _range = null;
+      _rangeSales = null;
+      _shown = 10;
+    });
   }
 
   Future<void> _open(Widget page) async {
@@ -552,7 +639,7 @@ class _HomePageState extends State<HomePage> {
       const SizedBox(height: 32),
       _sectionTitle(context, tr(context, 'Latest orders'), null),
       const SizedBox(height: 12),
-      _latest(context, current, branches),
+      _latest(context, _range == null ? current : _rangeSales, branches),
     ];
   }
 
@@ -752,22 +839,163 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
-  Widget _latest(BuildContext context, List<_Sale> sales, List<SiteBranch> branches) {
-    final theme = Theme.of(context);
-    final names = {for (final b in branches) b.id: b.name};
-    final showBranch = branches.length > 1;
-    final rows = [...sales]..sort((a, b) => b.order.createdAt.compareTo(a.order.createdAt));
-    if (rows.isEmpty) {
-      return _Panel(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 24),
-          child: Center(
-            child: Text(tr(context, 'No sales in this period'),
-                style: const TextStyle(color: AppColors.textSecondaryLight)),
+  String _cashierName(String id) => id.isEmpty ? '—' : (_staff[id] ?? id);
+
+  /// A till's name, or the start of its id when it was never given one.
+  static String _deviceName(String id, Map<String, String> names) {
+    final name = names[id] ?? id;
+    return name == id && id.length > 12 ? id.substring(0, 8) : name;
+  }
+
+  static String _day(DateTime d) => '${d.day}/${d.month}';
+
+  String _rangeLabel(BuildContext context) {
+    final range = _range;
+    if (range == null) {
+      final w = _window(DateTime.now());
+      final last = DateTime(w.to.year, w.to.month, w.to.day - 1);
+      return w.from == last ? _day(w.from) : '${_day(w.from)} – ${_day(last)}';
+    }
+    return DateUtils.isSameDay(range.start, range.end)
+        ? _day(range.start)
+        : '${_day(range.start)} – ${_day(range.end)}';
+  }
+
+  bool get _filtered =>
+      _search.text.trim().isNotEmpty ||
+      _cashier != null ||
+      _type != null ||
+      _device != null ||
+      _range != null;
+
+  Widget _filterBox(Widget child) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.surface),
+        ),
+        child: DropdownButtonHideUnderline(child: child),
+      );
+
+  Widget _filters(BuildContext context, List<_Sale> sales, Map<String, String> devices) {
+    final cashiers = {for (final s in sales) s.order.cashierId, ?_cashier}.toList()
+      ..sort((a, b) => _cashierName(a).toLowerCase().compareTo(_cashierName(b).toLowerCase()));
+    final types = {for (final s in sales) s.order.type, ?_type}.toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+    final tills = {for (final s in sales) s.order.deviceId, ?_device}.toList()
+      ..sort((a, b) => _deviceName(a, devices).compareTo(_deviceName(b, devices)));
+    void changed(VoidCallback f) => setState(() {
+          f();
+          _shown = 10;
+        });
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        SizedBox(
+          width: 220,
+          child: TextField(
+            key: const Key('orders-search'),
+            controller: _search,
+            onChanged: (_) => changed(() {}),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: tr(context, 'Search order number'),
+              prefixIcon: const Icon(Icons.search, size: 20),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: AppColors.surface),
+              ),
+            ),
           ),
         ),
-      );
-    }
+        _filterBox(DropdownButton<String?>(
+          key: const Key('orders-cashier'),
+          value: _cashier,
+          hint: Text(tr(context, 'All cashiers')),
+          items: [
+            DropdownMenuItem(value: null, child: Text(tr(context, 'All cashiers'))),
+            for (final c in cashiers)
+              DropdownMenuItem(
+                  key: Key('orders-cashier-$c'), value: c, child: Text(_cashierName(c))),
+          ],
+          onChanged: (v) => changed(() => _cashier = v),
+        )),
+        _filterBox(DropdownButton<OrderType?>(
+          key: const Key('orders-type'),
+          value: _type,
+          hint: Text(tr(context, 'All types')),
+          items: [
+            DropdownMenuItem(value: null, child: Text(tr(context, 'All types'))),
+            for (final t in types)
+              DropdownMenuItem(
+                  key: Key('orders-type-${t.name}'), value: t, child: Text(tr(context, t.label))),
+          ],
+          onChanged: (v) => changed(() => _type = v),
+        )),
+        if (tills.length > 1)
+          _filterBox(DropdownButton<String?>(
+            key: const Key('orders-till'),
+            value: _device,
+            hint: Text(tr(context, 'All tills')),
+            items: [
+              DropdownMenuItem(value: null, child: Text(tr(context, 'All tills'))),
+              for (final d in tills)
+                DropdownMenuItem(
+                    key: Key('orders-till-$d'), value: d, child: Text(_deviceName(d, devices))),
+            ],
+            onChanged: (v) => changed(() => _device = v),
+          )),
+        OutlinedButton.icon(
+          key: const Key('orders-dates'),
+          onPressed: _pickRange,
+          icon: const Icon(Icons.date_range, size: 18),
+          label: Text(_rangeLabel(context), textDirection: TextDirection.ltr),
+        ),
+        if (_filtered)
+          TextButton.icon(
+            key: const Key('orders-clear'),
+            onPressed: _clearFilters,
+            icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+            label: Text(tr(context, 'Clear filters')),
+          ),
+      ],
+    );
+  }
+
+  Widget _latest(BuildContext context, List<_Sale>? sales, List<SiteBranch> branches) {
+    final theme = Theme.of(context);
+    final names = {for (final b in branches) b.id: b.name};
+    final devices = {
+      for (final b in branches)
+        for (final d in b.devices) d.id: d.name,
+    };
+    final showBranch = branches.length > 1;
+    final all = sales ?? const <_Sale>[];
+    final q = _search.text.trim();
+    final rows = [
+      for (final s in all)
+        if ((_cashier == null || s.order.cashierId == _cashier) &&
+            (_type == null || s.order.type == _type) &&
+            (_device == null || s.order.deviceId == _device) &&
+            (q.isEmpty ||
+                s.order.displayNo.contains(q) ||
+                (s.order.companyOrderNo ?? '').contains(q)))
+          s,
+    ]..sort((a, b) => b.order.createdAt.compareTo(a.order.createdAt));
+    final range = _range;
+    final manyDays = range == null
+        ? _period == _Period.week
+        : !DateUtils.isSameDay(range.start, range.end);
+
+    Widget message(String text) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          child: Center(
+            child: Text(text, style: const TextStyle(color: AppColors.textSecondaryLight)),
+          ),
+        );
     final head = theme.textTheme.bodySmall
         ?.copyWith(color: AppColors.textSecondaryLight, fontWeight: FontWeight.w600);
     Widget line(List<Widget> cells, {Color? color}) => Container(
@@ -778,49 +1006,86 @@ class _HomePageState extends State<HomePage> {
             SizedBox(width: 110, child: cells[1]),
             if (showBranch) Expanded(child: cells[2]),
             Expanded(child: cells[3]),
-            SizedBox(width: 120, child: Align(alignment: AlignmentDirectional.centerEnd, child: cells[4])),
+            Expanded(child: cells[4]),
+            SizedBox(width: 120, child: Align(alignment: AlignmentDirectional.centerEnd, child: cells[5])),
           ]),
         );
     return _Panel(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Column(children: [
-        line([
-          Text('#', style: head),
-          Text(tr(context, 'Time'), style: head),
-          Text(tr(context, 'Branch'), style: head),
-          Text(tr(context, 'Type'), style: head),
-          Text(tr(context, 'Total'), style: head),
-        ]),
-        const Divider(height: 1),
-        for (final s in rows.take(10)) ...[
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _filters(context, all, devices),
+        const SizedBox(height: 8),
+        if (sales == null)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (all.isEmpty)
+          message(tr(context, 'No sales in this period'))
+        else if (rows.isEmpty)
+          message(tr(context, 'No orders match the filters'))
+        else ...[
           line([
-            Align(
-              alignment: AlignmentDirectional.centerStart,
-              child: Text(s.order.displayNo,
-                  textDirection: TextDirection.ltr,
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
-            ),
-            Text(_period == _Period.week
-                ? siteWhen(context, s.order.createdAt).substring(5)
-                : siteWhen(context, s.order.createdAt).split(' ').last),
-            Text(names[s.branchId] ?? ''),
-            Row(children: [
-              if (s.order.isRefund) ...[
-                const Icon(Icons.undo, size: 16, color: AppColors.error),
-                const SizedBox(width: 4),
-              ],
-              Flexible(
-                child: Text(tr(context, s.order.isRefund ? 'Refund' : s.order.type.label),
-                    overflow: TextOverflow.ellipsis),
-              ),
-            ]),
-            Text(_grouped(s.order.total),
-                textDirection: TextDirection.ltr,
-                style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: s.order.total < 0 ? AppColors.error : AppColors.textPrimaryLight)),
+            Text('#', style: head),
+            Text(tr(context, 'Time'), style: head),
+            Text(tr(context, 'Branch'), style: head),
+            Text(tr(context, 'Cashier'), style: head),
+            Text(tr(context, 'Type'), style: head),
+            Text(tr(context, 'Total'), style: head),
           ]),
-          const Divider(height: 1, color: AppColors.surface),
+          const Divider(height: 1),
+          for (final s in rows.take(_shown)) ...[
+            line([
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(s.order.displayNo,
+                    textDirection: TextDirection.ltr,
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+              ),
+              Text(manyDays
+                  ? siteWhen(context, s.order.createdAt).substring(5)
+                  : siteWhen(context, s.order.createdAt).split(' ').last),
+              Text(names[s.branchId] ?? ''),
+              Text(_cashierName(s.order.cashierId),
+                  key: Key('order-cashier-${s.order.uuid}'), overflow: TextOverflow.ellipsis),
+              Row(children: [
+                if (s.order.isRefund) ...[
+                  const Icon(Icons.undo, size: 16, color: AppColors.error),
+                  const SizedBox(width: 4),
+                ],
+                Flexible(
+                  child: Text(tr(context, s.order.isRefund ? 'Refund' : s.order.type.label),
+                      overflow: TextOverflow.ellipsis),
+                ),
+              ]),
+              Text(_grouped(s.order.total),
+                  textDirection: TextDirection.ltr,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: s.order.total < 0 ? AppColors.error : AppColors.textPrimaryLight)),
+            ]),
+            const Divider(height: 1, color: AppColors.surface),
+          ],
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(children: [
+              Expanded(
+                child: Text(
+                  tr(context, 'Showing {n} of {total}')
+                      .replaceAll('{n}', '${math.min(_shown, rows.length)}')
+                      .replaceAll('{total}', '${rows.length}'),
+                  key: const Key('orders-count'),
+                  style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textSecondaryLight),
+                ),
+              ),
+              if (rows.length > _shown)
+                TextButton(
+                  key: const Key('orders-more'),
+                  onPressed: () => setState(() => _shown += 20),
+                  child: Text(tr(context, 'Show more')),
+                ),
+            ]),
+          ),
         ],
       ]),
     );

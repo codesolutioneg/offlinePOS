@@ -49,8 +49,9 @@ class FakeSite {
 
   late final List<Map<String, Object?>> records = () {
     final at = DateTime.now().toUtc().subtract(const Duration(hours: 1));
-    Map<String, Object?> sale(String name, double price, double qty) {
-      final order = Order(deviceId: 'till-1', cashierId: 'sara', createdAt: at)
+    Map<String, Object?> sale(String name, double price, double qty, String no,
+        {String cashier = 'sara', String device = 'till-1', OrderType type = OrderType.dineIn}) {
+      final order = Order(deviceId: device, cashierId: cashier, createdAt: at, type: type, orderNo: no)
         ..lines.add(OrderLine(productId: 1, name: name, quantity: qty, unitPrice: price))
         ..state = OrderState.paid;
       return {
@@ -63,9 +64,18 @@ class FakeSite {
     }
 
     return [
-      sale('Koshary', 45, 2),
-      sale('Tea', 10, 1),
-      sale('Om Ali', 40, 1),
+      sale('Koshary', 45, 2, '101'),
+      sale('Tea', 10, 1, '102', cashier: 'omar', device: 'till-2', type: OrderType.takeaway),
+      sale('Om Ali', 40, 1, '103', type: OrderType.takeaway),
+      {
+        'kind': 'staff',
+        'key': 'b1',
+        'branch_id': 'b1',
+        'at': null,
+        'payload': {
+          'items': {'sara': 'Sara Ali', 'omar': 'Omar Adel'},
+        },
+      },
       {
         'kind': 'shop',
         'key': 'b1',
@@ -222,6 +232,78 @@ void main() {
     await t.tap(find.byKey(const Key('branch-reports-b1')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('rep-summary')), findsOneWidget);
+  });
+
+  testWidgets('the latest orders name who rang them, and filter by cashier, type, till and number',
+      (t) async {
+    t.view.physicalSize = const Size(1500, 2400);
+    await start(t);
+    await signIn(t, 'owner', 'owner-pass-1');
+    t.view.physicalSize = const Size(1500, 2400);
+    await t.pumpAndSettle();
+
+    List<String> cashiers() => [
+          for (final w in t.widgetList<Text>(find.byWidgetPredicate((w) =>
+              w is Text &&
+              w.key is ValueKey<String> &&
+              (w.key as ValueKey<String>).value.startsWith('order-cashier-'))))
+            w.data!,
+        ]..sort();
+    Future<void> choose(String dropdown, String item) async {
+      await t.tap(find.byKey(Key(dropdown)));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(Key(item)).last);
+      await t.pumpAndSettle();
+    }
+
+    Future<void> clear() async {
+      await t.tap(find.byKey(const Key('orders-clear')));
+      await t.pumpAndSettle();
+    }
+
+    // The staff list turns the till's ids into names.
+    expect(cashiers(), ['Omar Adel', 'Sara Ali', 'Sara Ali']);
+    expect(find.byKey(const Key('orders-clear')), findsNothing);
+
+    await choose('orders-cashier', 'orders-cashier-omar');
+    expect(cashiers(), ['Omar Adel']);
+    await clear();
+    expect(cashiers(), hasLength(3));
+
+    await choose('orders-type', 'orders-type-takeaway');
+    expect(cashiers(), ['Omar Adel', 'Sara Ali']);
+    await choose('orders-till', 'orders-till-till-1');
+    expect(cashiers(), ['Sara Ali']);
+    await clear();
+
+    await t.enterText(find.byKey(const Key('orders-search')), '103');
+    await t.pumpAndSettle();
+    expect(cashiers(), ['Sara Ali']);
+    await t.enterText(find.byKey(const Key('orders-search')), '999');
+    await t.pumpAndSettle();
+    expect(cashiers(), isEmpty);
+    await clear();
+    expect(cashiers(), hasLength(3));
+    // The headline figures do not move with the list's filters.
+    expect(
+        find.descendant(of: find.byKey(const Key('kpi-orders')), matching: find.text('3')),
+        findsOneWidget);
+  });
+
+  testWidgets('a cashier the staff list does not know is shown by id', (t) async {
+    site.records.removeWhere((r) => r['kind'] == 'staff');
+    t.view.physicalSize = const Size(1500, 2400);
+    await start(t);
+    await signIn(t, 'owner', 'owner-pass-1');
+    t.view.physicalSize = const Size(1500, 2400);
+    await t.pumpAndSettle();
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is Text &&
+            w.key is ValueKey<String> &&
+            (w.key as ValueKey<String>).value.startsWith('order-cashier-') &&
+            w.data == 'omar'),
+        findsOneWidget);
   });
 
   testWidgets('an accountant sees only the reports the owner allowed', (t) async {
