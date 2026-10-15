@@ -113,6 +113,7 @@ void main() {
   late AuditLog audit;
   late SettingsStore settings;
   late MemorySpoolStore spool;
+  late Map<String, MemorySpoolStore> stationSpools;
 
   /// Replaced by a test that wants printers that actually answer.
   late PrinterRegistry printers;
@@ -129,6 +130,7 @@ void main() {
     settings = SettingsStore(db);
     settings.lanRolePromptDismissed = true;
     spool = MemorySpoolStore();
+    stationSpools = {};
     printers = PrinterRegistry(discovery: _NoPrinters());
     CatalogueStore(db).replaceAll(
       categories: const [Category(id: 1, name: 'Food')],
@@ -179,6 +181,8 @@ void main() {
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       receiptSpool: spool,
+      stationSpool: (station) =>
+          stationSpools.putIfAbsent(station, MemorySpoolStore.new),
     );
   }
 
@@ -418,6 +422,52 @@ void main() {
       expect(papers['10.0.0.9'], isNull, reason: 'nothing reroutes unasked');
       final sale = orders.recent(limit: 1).single;
       expect(await slipsMatching(sale.uuid), hasLength(1));
+    });
+  });
+
+  group('when a kitchen printer is off', () {
+    testWidgets('its ticket waits for it and never comes out at the cash desk',
+        (t) async {
+      final papers = <String, _Paper>{};
+      printers = PrinterRegistry(
+        discovery: _Subnet({'10.0.0.5'}),
+        identify: _anonymous,
+        open: (host, port) => host == '10.0.0.7'
+            ? _SwitchedOff()
+            : papers.putIfAbsent(host, () => _Paper()),
+      );
+      printers.remember('receipt', host: '10.0.0.5');
+      printers.remember('kitchen', host: '10.0.0.7');
+
+      await sellAPizza(t);
+
+      final atTheDesk =
+          (papers['10.0.0.5']?.jobs ?? const <Uint8List>[]).map(printed).toList();
+      expect(atTheDesk.where((j) => j.contains('TOTAL')), hasLength(1));
+      expect(atTheDesk.where((j) => j.contains('===KITCHEN===')), isEmpty,
+          reason: 'the receipt printer prints only when the check is closed');
+      expect(await slipsMatching('kot-'), isEmpty);
+      final held = await stationSpools['kitchen']!.oldestFirst();
+      expect(held.map((j) => j.reference),
+          [startsWith('kot-')],
+          reason: 'held against the kitchen, so it prints there when it is back');
+    });
+
+    testWidgets('a shop with only a receipt printer still gets its tickets there',
+        (t) async {
+      final papers = <String, _Paper>{};
+      printers = PrinterRegistry(
+        discovery: _Subnet({'10.0.0.5'}),
+        identify: _anonymous,
+        open: (host, port) => papers.putIfAbsent(host, () => _Paper()),
+      );
+      printers.remember('receipt', host: '10.0.0.5');
+
+      await sellAPizza(t);
+
+      final atTheDesk =
+          (papers['10.0.0.5']?.jobs ?? const <Uint8List>[]).map(printed).toList();
+      expect(atTheDesk.where((j) => j.contains('===KITCHEN===')), hasLength(1));
     });
   });
 }

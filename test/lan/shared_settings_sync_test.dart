@@ -74,6 +74,28 @@ void main() {
     expect(primary.accessFor('cashier', 'order.settle'), AccessRule.manager);
   });
 
+  test('kitchen routing changed on a secondary reaches the primary with who did it',
+      () async {
+    secondary.noteBundleActor(
+        user: 'Sara', deviceId: 'till-b', deviceName: 'Bar till');
+    secondary.setProductStation(10, 'kitchen', true);
+    secondary.setCategoryStation(1, 'bar', true);
+    await settle();
+
+    expect(fromB, isNotEmpty);
+    final payload = fromB.last.payload;
+    expect(payload['product_stations'], isA<Map>());
+    expect((payload['product_stations'] as Map)['10'], ['kitchen']);
+    expect((payload['category_stations'] as Map)['1'], ['bar']);
+    expect(payload['_audit'], isA<Map>());
+    expect(payload['_audit']['by_user'], 'Sara');
+    expect(payload['_audit']['by_device_name'], 'Bar till');
+
+    primary.applyShopBundle(payload);
+    expect(primary.productStations[10], ['kitchen']);
+    expect(primary.categoryStations[1], ['bar']);
+  });
+
   test('writes that are not shop settings announce nothing', () async {
     primary.setString('last_sync_at', DateTime.now().toIso8601String());
     primary.setString('lan_primary_device_id', 'abc');

@@ -34,6 +34,7 @@ const List<AccessItem> floorMiscItems = [
   (id: 'merge', label: 'Merge Tables', icon: Icons.merge_type),
   (id: 'unmerge', label: 'Unmerge Tables', icon: Icons.call_split),
   (id: 'print-all', label: 'Print All', icon: Icons.print_outlined),
+  (id: 'printers', label: 'Printers & routing', icon: Icons.print_outlined),
   (id: 'end-of-day', label: 'End Of Day', icon: Icons.nightlight_round),
   (id: 'paid-in', label: 'Paid In', icon: Icons.move_to_inbox),
   (id: 'paid-out', label: 'Paid Out', icon: Icons.outbox),

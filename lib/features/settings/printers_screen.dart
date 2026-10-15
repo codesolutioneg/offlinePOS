@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/db/settings_store.dart';
@@ -11,17 +13,14 @@ import '../../domain/catalogue.dart';
 /// printer shop can route every category here without configuring anything.
 const _defaultStation = 'kitchen';
 
-/// Configure printers by name and address, point each product category at one or
-/// more kitchen stations (printer names) that should print its tickets, and
-/// optionally override that routing for individual products.
+/// Configure printers by name and address, and route each product and category
+/// to the kitchen station(s) that should print its tickets.
 ///
+/// Three tabs match how a manager thinks about the job: per product (overrides),
+/// per category (the usual case), and the printers / receipt defaults themselves.
 /// A printer is addressed by name everywhere else in the app (see
 /// [PrinterRegistry]) because the address it answers on drifts under DHCP;
-/// this is the one screen where a manager types that name in, alongside a
-/// starting address the registry can try first. Category and product routing
-/// live in [SettingsStore] rather than the registry because either can be
-/// routed to a station name before any printer with that name has ever
-/// answered a scan.
+/// this is the one screen where a manager types that name in.
 class PrintersScreen extends StatefulWidget {
   const PrintersScreen({
     super.key,
@@ -30,39 +29,110 @@ class PrintersScreen extends StatefulWidget {
     required this.categories,
     required this.onChanged,
     this.onTestPrint,
+    this.onReceiptDesign,
+    this.onRoutingAudit,
+    this.deviceId,
+    this.deviceName,
+    this.cashierName,
     this.products = const [],
+    this.initialTab = 0,
   });
 
   final PrinterRegistry printers;
   final SettingsStore settings;
   final List<Category> categories;
 
-  /// Products offered for per-item routing overrides. Empty hides that section
-  /// entirely: a shop that never needs finer-grained routing than "category"
-  /// should not be shown an empty checklist.
+  /// Products offered for per-item routing overrides. Empty shows an empty list
+  /// on the products tab rather than hiding the tab: the manager still needs to
+  /// see that nothing is routable yet.
   final List<Product> products;
 
   /// Sends a test receipt to the named printer. Null hides the test action.
   final Future<void> Function(String printerName)? onTestPrint;
 
+  /// Opens the receipt designer. Null hides that shortcut.
+  final VoidCallback? onReceiptDesign;
+
+  /// Local audit trail when kitchen routing changes on this till. Peers write
+  /// the same line from the LAN event.
+  final void Function(String detail)? onRoutingAudit;
+
+  /// This till's id / name and the signed-in cashier, stamped onto the LAN
+  /// announcement so every till can say who changed the routing.
+  final String? deviceId;
+  final String? deviceName;
+  final String? cashierName;
+
   /// Called after every printer or routing change, so the caller can refresh
   /// or persist whatever it holds derived from either store.
   final VoidCallback onChanged;
+
+  /// 0 = products, 1 = categories, 2 = defaults (printers + paper).
+  final int initialTab;
 
   @override
   State<PrintersScreen> createState() => _PrintersScreenState();
 }
 
-class _PrintersScreenState extends State<PrintersScreen> {
-  /// The station the per-product checklist is currently ticking boxes for. Reset
-  /// to the first available station whenever it points at nothing pickable.
-  String? _productStationPick;
+class _PrintersScreenState extends State<PrintersScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs;
   String _productSearch = '';
   int? _productCategoryFilter;
+  bool _assignedOnly = false;
+  StreamSubscription<void>? _shared;
+
+  /// Station the assign-products grid is ticking against. Null until the first
+  /// build picks one from [_stations].
+  String? _assignStation;
+
+  @override
+  void initState() {
+    super.initState();
+    final start = widget.initialTab.clamp(0, 2);
+    _tabs = TabController(length: 3, vsync: this, initialIndex: start);
+    // Another till's routing change lands in settings; redraw so the ticks match.
+    _shared = widget.settings.sharedChanges.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _shared?.cancel();
+    _tabs.dispose();
+    super.dispose();
+  }
 
   void _notify() {
     widget.onChanged();
     setState(() {});
+  }
+
+  /// Stamp who is changing shared kitchen routing, and leave a local audit line.
+  void _routingAboutToChange(String detail) {
+    final deviceId = widget.deviceId;
+    if (deviceId != null && deviceId.isNotEmpty) {
+      widget.settings.noteBundleActor(
+        user: widget.cashierName?.trim().isNotEmpty == true
+            ? widget.cashierName!.trim()
+            : '?',
+        deviceId: deviceId,
+        deviceName: widget.deviceName,
+      );
+    }
+    widget.onRoutingAudit?.call(detail);
+  }
+
+  List<String> get _stations {
+    final categoryAssignments = widget.settings.categoryStations;
+    return <String>{
+      _defaultStation,
+      for (final printer in widget.printers.printers) printer.name,
+      for (final list in categoryAssignments.values) ...list,
+      for (final list in widget.settings.productStations.values) ...list,
+    }.toList()
+      ..sort();
   }
 
   Future<void> _rescan(String name) async {
@@ -97,42 +167,378 @@ class _PrintersScreenState extends State<PrintersScreen> {
     // A rename must carry the routing across, or every category/product still
     // pointing at the old name would silently fall back to the default kitchen.
     if (newName != printer.name) {
+      _routingAboutToChange('renamed ${printer.name} → $newName');
       widget.settings.renameStation(printer.name, newName);
     }
     _notify();
   }
 
   void _setCategoryStation(int categoryId, String station, bool enabled) {
+    _routingAboutToChange(
+        'category $categoryId → $station ${enabled ? 'on' : 'off'}');
     widget.settings.setCategoryStation(categoryId, station, enabled);
     _notify();
   }
 
   void _setProductStation(int productId, String station, bool enabled) {
+    _routingAboutToChange(
+        'product $productId → $station ${enabled ? 'on' : 'off'}');
     widget.settings.setProductStation(productId, station, enabled);
     _notify();
   }
 
+  /// Selected chips stay readable in light mode: dark fill, light label.
+  Widget _assignChip({
+    required Key key,
+    required String label,
+    required bool selected,
+    required ValueChanged<bool> onSelected,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return FilterChip(
+      key: key,
+      selected: selected,
+      showCheckmark: true,
+      checkmarkColor: scheme.onPrimary,
+      selectedColor: scheme.primary,
+      backgroundColor: scheme.surface,
+      side: BorderSide(color: scheme.outlineVariant),
+      labelStyle: TextStyle(
+        color: selected ? scheme.onPrimary : scheme.onSurface,
+        fontWeight: FontWeight.w600,
+      ),
+      label: SizedBox(
+        width: 160,
+        child: Text(
+          label,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: selected ? scheme.onPrimary : scheme.onSurface,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      onSelected: onSelected,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final categoryAssignments = widget.settings.categoryStations;
-    // The default station and every configured printer are always offered,
-    // plus anything a category or product already points at, even a name
-    // that got renamed or removed since: a stale assignment must stay
-    // pickable so its chip never disappears out from under it.
-    final stations = <String>{
-      _defaultStation,
-      for (final printer in widget.printers.printers) printer.name,
-      for (final list in categoryAssignments.values) ...list,
-      for (final list in widget.settings.productStations.values) ...list,
-    }.toList()
-      ..sort();
-
     return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'Printers & routing'))),
-      body: ListView(
+      appBar: AppBar(
+        title: Text(tr(context, 'Printers & routing')),
+        actions: [
+          TextButton.icon(
+            key: const Key('manage-printers'),
+            onPressed: () => _tabs.animateTo(2),
+            icon: const Icon(Icons.print),
+            label: Text(tr(context, 'Manage printers')),
+          ),
+          if (widget.onReceiptDesign != null)
+            TextButton.icon(
+              key: const Key('open-receipt-design'),
+              onPressed: widget.onReceiptDesign,
+              icon: const Icon(Icons.edit_outlined),
+              label: Text(tr(context, 'Receipt design')),
+            ),
+        ],
+        bottom: TabBar(
+          controller: _tabs,
+          tabs: [
+            Tab(
+              key: const Key('printers-tab-products'),
+              icon: const Icon(Icons.checklist_rtl),
+              text: tr(context, 'Assign products'),
+            ),
+            Tab(
+              key: const Key('printers-tab-categories'),
+              icon: const Icon(Icons.category_outlined),
+              text: tr(context, 'Category printers'),
+            ),
+            Tab(
+              key: const Key('printers-tab-defaults'),
+              icon: const Icon(Icons.print_outlined),
+              text: tr(context, 'Default printers'),
+            ),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabs,
+        children: [
+          _productsTab(_stations),
+          _categoriesTab(_stations),
+          _defaultsTab(),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoBanner(String message) => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.info.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppColors.info.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.info_outline, color: AppColors.info, size: 20),
+            const SizedBox(width: 8),
+            Expanded(child: Text(message)),
+          ],
+        ),
+      );
+
+  Widget _productsTab(List<String> stations) {
+    final pick = stations.contains(_assignStation)
+        ? _assignStation!
+        : (stations.isEmpty ? _defaultStation : stations.first);
+    if (_assignStation != pick) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _assignStation = pick);
+      });
+    }
+    final assignments = widget.settings.productStations;
+    final countFor = <String, int>{
+      for (final s in stations)
+        s: assignments.values.where((list) => list.contains(s)).length,
+    };
+    final filtered = widget.products.where((p) {
+      final onPick = (assignments[p.id] ?? const []).contains(pick);
+      if (_assignedOnly && !onPick) return false;
+      if (_productCategoryFilter != null &&
+          p.categoryId != _productCategoryFilter) {
+        return false;
+      }
+      if (_productSearch.isEmpty) return true;
+      return p.name.toLowerCase().contains(_productSearch.toLowerCase());
+    }).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Station list first in LTR, last in RTL — managers pick a printer,
+          // then tick products onto it, the way the kitchen thinks about the job.
+          SizedBox(
+            width: 220,
+            child: Card(
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                    child: Text(tr(context, 'Printers'),
+                        style: const TextStyle(fontWeight: FontWeight.w800)),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        for (final station in stations)
+                          ListTile(
+                            key: Key('assign-station-$station'),
+                            selected: station == pick,
+                            selectedTileColor:
+                                AppColors.info.withValues(alpha: 0.12),
+                            title: Text(station),
+                            trailing: Text(
+                              '${countFor[station] ?? 0}',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: station == pick
+                                    ? AppColors.info
+                                    : Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                              ),
+                            ),
+                            onTap: () =>
+                                setState(() => _assignStation = station),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _infoBanner(tr(context,
+                    'Pick a printer, then tick the products that should print there. Product settings override the category.')),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        key: const Key('product-search'),
+                        decoration: InputDecoration(
+                          prefixIcon: const Icon(Icons.search),
+                          hintText: tr(context, 'Search for product…'),
+                          border: const OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        onChanged: (v) =>
+                            setState(() => _productSearch = v),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      key: const Key('assigned-count'),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppColors.success.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        tr(context, '{n} assigned')
+                            .replaceAll('{n}', '${countFor[pick] ?? 0}'),
+                        style: const TextStyle(
+                            color: AppColors.success,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilterChip(
+                      key: const Key('assigned-only'),
+                      label: Text(tr(context, 'Assigned only')),
+                      selected: _assignedOnly,
+                      onSelected: (v) => setState(() => _assignedOnly = v),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 40,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      ChoiceChip(
+                        key: const Key('product-category-all'),
+                        label: Text(tr(context, 'All')),
+                        selected: _productCategoryFilter == null,
+                        onSelected: (_) =>
+                            setState(() => _productCategoryFilter = null),
+                      ),
+                      for (final category in widget.categories) ...[
+                        const SizedBox(width: 6),
+                        ChoiceChip(
+                          key: Key('product-category-${category.id}'),
+                          label: Text(category.name),
+                          selected: _productCategoryFilter == category.id,
+                          onSelected: (_) => setState(
+                              () => _productCategoryFilter = category.id),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: widget.products.isEmpty
+                      ? Center(
+                          child:
+                              Text(tr(context, 'No products to route yet.')))
+                      : filtered.isEmpty
+                          ? Center(
+                              child: Text(tr(context, 'No products match.')))
+                          : GridView.builder(
+                              gridDelegate:
+                                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 220,
+                                mainAxisExtent: 64,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                              ),
+                              itemCount: filtered.length,
+                              itemBuilder: (context, i) {
+                                final product = filtered[i];
+                                final on =
+                                    (assignments[product.id] ?? const [])
+                                        .contains(pick);
+                                return _assignChip(
+                                  key: Key('product-route-${product.id}'),
+                                  label: product.name,
+                                  selected: on,
+                                  onSelected: (enabled) => _setProductStation(
+                                      product.id, pick, enabled),
+                                );
+                              },
+                            ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _categoriesTab(List<String> stations) {
+    final assignments = widget.settings.categoryStations;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _infoBanner(tr(context,
+            'Pick which kitchen printers print each category. A product with its own printers ignores this.')),
+        if (widget.categories.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(tr(context, 'No categories to route yet.')),
+          )
+        else
+          for (final category in widget.categories)
+            Card(
+              key: Key('route-${category.id}'),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(category.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        for (final station in stations)
+                          FilterChip(
+                            key: Key(
+                                'route-station-${category.id}-$station'),
+                            label: Text(station),
+                            selected: (assignments[category.id] ?? const [])
+                                .contains(station),
+                            onSelected: (enabled) => _setCategoryStation(
+                                category.id, station, enabled),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+      ],
+    );
+  }
+
+  Widget _defaultsTab() => ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _sectionHeader(context, tr(context, 'Printers'), Icons.print, AppColors.info),
+          _sectionHeader(
+              context, tr(context, 'Printers'), Icons.print, AppColors.info),
           Text(
             tr(context,
                 'receipt / delivery = this till only. kitchen / bar = shared on LAN join.'),
@@ -150,31 +556,22 @@ class _PrintersScreenState extends State<PrintersScreen> {
             label: Text(tr(context, 'Add printer')),
           ),
           const SizedBox(height: 24),
-          _sectionHeader(
-              context, tr(context, 'Receipt & paper'), Icons.receipt_long, AppColors.primary),
+          _sectionHeader(context, tr(context, 'Receipt & paper'),
+              Icons.receipt_long, AppColors.primary),
           _receiptOptions(),
-          const SizedBox(height: 24),
-          _sectionHeader(context, tr(context, 'Kitchen routing'), Icons.restaurant, AppColors.warning),
-          ..._routingRows(stations, categoryAssignments),
-          if (widget.products.isNotEmpty) ...[
-            const SizedBox(height: 24),
-            _sectionHeader(
-                context, tr(context, 'Item routing'), Icons.checklist, AppColors.success),
-            _productRoutingSection(stations),
-          ],
         ],
-      ),
-    );
-  }
+      );
 
-  Widget _sectionHeader(BuildContext context, String title, IconData icon, Color color) =>
+  Widget _sectionHeader(
+          BuildContext context, String title, IconData icon, Color color) =>
       Padding(
         padding: const EdgeInsets.only(bottom: 10, top: 4),
         child: Row(children: [
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8)),
             child: Icon(icon, size: 18, color: color),
           ),
           const SizedBox(width: 8),
@@ -196,7 +593,9 @@ class _PrintersScreenState extends State<PrintersScreen> {
     // Only printers that actually exist, unlike the routing chips below: a category
     // can be pointed at a station before its printer is bought, but a copy sent to a
     // name nothing answers to just prints a second slip at the till.
-    final existing = {for (final printer in widget.printers.printers) printer.name};
+    final existing = {
+      for (final printer in widget.printers.printers) printer.name
+    };
     // Whatever is already chosen stays pickable, even if that printer was removed
     // since, so the setting never disappears out from under a manager. Each list
     // keeps only its own choice: the delivery printer's default name is not a
@@ -216,7 +615,8 @@ class _PrintersScreenState extends State<PrintersScreen> {
         padding: const EdgeInsets.all(12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Text(tr(context, 'Paper width'), style: const TextStyle(fontWeight: FontWeight.w600)),
+            Text(tr(context, 'Paper width'),
+                style: const TextStyle(fontWeight: FontWeight.w600)),
             const Spacer(),
             SegmentedButton<int>(
               key: const Key('paper-width'),
@@ -233,7 +633,8 @@ class _PrintersScreenState extends State<PrintersScreen> {
           ]),
           const Divider(),
           Row(children: [
-            Text(tr(context, 'Copies'), style: const TextStyle(fontWeight: FontWeight.w600)),
+            Text(tr(context, 'Copies'),
+                style: const TextStyle(fontWeight: FontWeight.w600)),
             const Spacer(),
             IconButton(
                 key: const Key('copies-minus'),
@@ -244,7 +645,9 @@ class _PrintersScreenState extends State<PrintersScreen> {
                         _notify();
                       }
                     : null),
-            Text('$copies', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            Text('$copies',
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             IconButton(
                 key: const Key('copies-plus'),
                 icon: const Icon(Icons.add_circle_outline),
@@ -293,7 +696,8 @@ class _PrintersScreenState extends State<PrintersScreen> {
               key: const Key('sub-receipt-hide-prices'),
               contentPadding: EdgeInsets.zero,
               title: Text(tr(context, 'Hide prices on that copy')),
-              subtitle: Text(tr(context, 'A packing list: names and quantities only')),
+              subtitle: Text(
+                  tr(context, 'A packing list: names and quantities only')),
               value: widget.settings.subReceiptHidePrices,
               onChanged: (v) {
                 widget.settings.subReceiptHidePrices = v;
@@ -317,8 +721,7 @@ class _PrintersScreenState extends State<PrintersScreen> {
                   : '',
               items: [
                 DropdownMenuItem(
-                    value: '',
-                    child: Text(tr(context, 'Same as receipt'))),
+                    value: '', child: Text(tr(context, 'Same as receipt'))),
                 for (final station in deliveryChoices)
                   DropdownMenuItem(value: station, child: Text(station)),
               ],
@@ -345,11 +748,15 @@ class _PrintersScreenState extends State<PrintersScreen> {
             SegmentedButton<String>(
               key: const Key('code-page'),
               segments: [
-                ButtonSegment(value: 'wpc1252', label: Text(tr(context, 'Latin'))),
-                ButtonSegment(value: 'wpc1256', label: Text(tr(context, 'Arabic'))),
+                ButtonSegment(
+                    value: 'wpc1252', label: Text(tr(context, 'Latin'))),
+                ButtonSegment(
+                    value: 'wpc1256', label: Text(tr(context, 'Arabic'))),
               ],
               selected: {
-                widget.settings.receiptCodePage == 'wpc1256' ? 'wpc1256' : 'wpc1252'
+                widget.settings.receiptCodePage == 'wpc1256'
+                    ? 'wpc1256'
+                    : 'wpc1252'
               },
               onSelectionChanged: (s) {
                 widget.settings.receiptCodePage = s.first;
@@ -364,8 +771,8 @@ class _PrintersScreenState extends State<PrintersScreen> {
             key: const Key('arabic-raster'),
             contentPadding: EdgeInsets.zero,
             title: Text(tr(context, 'Print missing letters as an image')),
-            subtitle: Text(tr(
-                context, 'Slower, but a name the table cannot spell still prints')),
+            subtitle: Text(tr(context,
+                'Slower, but a name the table cannot spell still prints')),
             value: widget.settings.receiptArabicRaster,
             onChanged: (v) {
               widget.settings.receiptArabicRaster = v;
@@ -403,13 +810,17 @@ class _PrintersScreenState extends State<PrintersScreen> {
               leading: CircleAvatar(
                 backgroundColor: statusColor.withValues(alpha: 0.15),
                 foregroundColor: statusColor,
-                child: Icon(isKitchen ? Icons.soup_kitchen : Icons.receipt_long),
+                child:
+                    Icon(isKitchen ? Icons.soup_kitchen : Icons.receipt_long),
               ),
               title: Row(children: [
-                Flexible(child: Text(printer.name, overflow: TextOverflow.ellipsis)),
+                Flexible(
+                    child:
+                        Text(printer.name, overflow: TextOverflow.ellipsis)),
                 const SizedBox(width: 8),
                 StatusChip(
-                    known ? tr(context, 'Ready') : tr(context, 'Not found'), statusColor),
+                    known ? tr(context, 'Ready') : tr(context, 'Not found'),
+                    statusColor),
               ]),
               subtitle: Text(_describe(printer)),
               trailing: Row(
@@ -437,7 +848,8 @@ class _PrintersScreenState extends State<PrintersScreen> {
                   IconButton(
                     key: Key('remove-${printer.name}'),
                     tooltip: tr(context, 'Remove'),
-                    icon: const Icon(Icons.delete_outline, color: AppColors.error),
+                    icon:
+                        const Icon(Icons.delete_outline, color: AppColors.error),
                     onPressed: () => _remove(printer.name),
                   ),
                 ],
@@ -452,27 +864,29 @@ class _PrintersScreenState extends State<PrintersScreen> {
     try {
       await widget.onTestPrint?.call(name);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$name: ${tr(context, 'test receipt sent')}')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('$name: ${tr(context, 'test receipt sent')}')));
     } catch (e) {
       // Surface the real reason (timeout, refused, no route) — "not reachable"
       // alone hid that a typed IP was never tried after a short probe failed.
       if (!mounted) return;
-      final detail = e is PrinterUnavailable
-          ? e.message
-          : '$e';
+      final detail = e is PrinterUnavailable ? e.message : '$e';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           backgroundColor: AppColors.error,
-          content: Text('$name: ${tr(context, 'not reachable')}\n$detail')));
+          content:
+              Text('$name: ${tr(context, 'not reachable')}\n$detail')));
     }
   }
 
   String _describe(ConfiguredPrinter printer) {
-    final address =
-        printer.host == null ? 'no address yet' : '${printer.host}:${printer.port}';
-    final identity = printer.identity == null ? '' : ' - identity ${printer.identity}';
-    final seen =
-        printer.lastSeenAt == null ? '' : ' - last seen ${_formatTime(printer.lastSeenAt!)}';
+    final address = printer.host == null
+        ? 'no address yet'
+        : '${printer.host}:${printer.port}';
+    final identity =
+        printer.identity == null ? '' : ' - identity ${printer.identity}';
+    final seen = printer.lastSeenAt == null
+        ? ''
+        : ' - last seen ${_formatTime(printer.lastSeenAt!)}';
     // The spare is part of what this printer is: support reading the screen has to
     // see where a ticket goes when this one is off.
     final backup = printer.backup == null
@@ -485,148 +899,6 @@ class _PrintersScreenState extends State<PrintersScreen> {
     final local = at.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(local.hour)}:${two(local.minute)}';
-  }
-
-  /// One card per category with a toggleable chip per known station, so a
-  /// category that should fire at both the grill and the expo pass can have
-  /// both chips selected at once rather than being forced to pick one.
-  List<Widget> _routingRows(List<String> stations, Map<int, List<String>> assignments) {
-    if (widget.categories.isEmpty) {
-      return [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Text(tr(context, 'No categories to route yet.')),
-        ),
-      ];
-    }
-    return [
-      for (final category in widget.categories)
-        Card(
-          key: Key('route-${category.id}'),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(category.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
-                    for (final station in stations)
-                      FilterChip(
-                        key: Key('route-station-${category.id}-$station'),
-                        label: Text(station),
-                        selected: (assignments[category.id] ?? const []).contains(station),
-                        onSelected: (enabled) =>
-                            _setCategoryStation(category.id, station, enabled),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-    ];
-  }
-
-  /// Pick one station, then tick which products override their category and
-  /// route to it directly. Filterable by category and searchable by name so a
-  /// shop with a long menu can still find one item quickly.
-  Widget _productRoutingSection(List<String> stations) {
-    final pick = stations.contains(_productStationPick)
-        ? _productStationPick!
-        : (stations.isEmpty ? _defaultStation : stations.first);
-    final assignments = widget.settings.productStations;
-    final categoryNames = {for (final c in widget.categories) c.id: c.name};
-    final filtered = widget.products.where((p) {
-      if (_productCategoryFilter != null && p.categoryId != _productCategoryFilter) {
-        return false;
-      }
-      if (_productSearch.isEmpty) return true;
-      return p.name.toLowerCase().contains(_productSearch.toLowerCase());
-    }).toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(tr(context, 'Printer'), style: const TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                for (final station in stations)
-                  ChoiceChip(
-                    key: Key('product-station-pick-$station'),
-                    label: Text(station),
-                    selected: pick == station,
-                    onSelected: (_) => setState(() => _productStationPick = station),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              key: const Key('product-search'),
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search),
-                hintText: tr(context, 'Search products'),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-              onChanged: (v) => setState(() => _productSearch = v),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  ChoiceChip(
-                    key: const Key('product-category-all'),
-                    label: Text(tr(context, 'All')),
-                    selected: _productCategoryFilter == null,
-                    onSelected: (_) => setState(() => _productCategoryFilter = null),
-                  ),
-                  for (final category in widget.categories) ...[
-                    const SizedBox(width: 6),
-                    ChoiceChip(
-                      key: Key('product-category-${category.id}'),
-                      label: Text(category.name),
-                      selected: _productCategoryFilter == category.id,
-                      onSelected: (_) => setState(() => _productCategoryFilter = category.id),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const Divider(),
-            if (filtered.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(tr(context, 'No products match.')),
-              )
-            else
-              for (final product in filtered)
-                CheckboxListTile(
-                  key: Key('product-route-${product.id}'),
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(product.name),
-                  subtitle: product.categoryId == null
-                      ? null
-                      : Text(categoryNames[product.categoryId] ?? ''),
-                  value: (assignments[product.id] ?? const []).contains(pick),
-                  onChanged: (v) => _setProductStation(product.id, pick, v ?? false),
-                ),
-          ],
-        ),
-      ),
-    );
   }
 }
 
@@ -712,7 +984,8 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
         .toList()
       ..sort((a, b) => a.name.compareTo(b.name));
     return AlertDialog(
-      title: Text(editing ? tr(context, 'Edit printer') : tr(context, 'Add printer')),
+      title: Text(
+          editing ? tr(context, 'Edit printer') : tr(context, 'Add printer')),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -769,11 +1042,15 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
               Expanded(child: Text(tr(context, 'If it is off, print at'))),
               DropdownButton<String>(
                 key: const Key('printer-backup'),
-                value: others.map((p) => p.name).contains(_backup) ? _backup : '',
+                value: others.map((p) => p.name).contains(_backup)
+                    ? _backup
+                    : '',
                 items: [
-                  DropdownMenuItem(value: '', child: Text(tr(context, 'Nowhere'))),
+                  DropdownMenuItem(
+                      value: '', child: Text(tr(context, 'Nowhere'))),
                   for (final other in others)
-                    DropdownMenuItem(value: other.name, child: Text(other.name)),
+                    DropdownMenuItem(
+                        value: other.name, child: Text(other.name)),
                 ],
                 onChanged: (v) => setState(() => _backup = v ?? ''),
               ),

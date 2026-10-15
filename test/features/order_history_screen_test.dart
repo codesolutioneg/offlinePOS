@@ -4,41 +4,62 @@ import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/orders/order_history_screen.dart';
 
 void main() {
-  testWidgets('lists history tiles for each order', (tester) async {
+  testWidgets('lists history rows with type, number, amount, payment and cashier',
+      (tester) async {
     final orders = [
       Order(
         deviceId: 'till-1',
         cashierId: 'sara',
         createdAt: DateTime.utc(2026, 8, 6, 12, 30),
         state: OrderState.synced,
+        type: OrderType.dineIn,
         lines: [
           OrderLine(productId: 10, name: 'Margherita', quantity: 1, unitPrice: 250),
         ],
         payments: const [OrderPayment(methodId: 1, amount: 250, label: 'Cash')],
-      ),
+      )..orderNo = '42',
       Order(
         deviceId: 'till-1',
         cashierId: 'sara',
         createdAt: DateTime.utc(2026, 8, 6, 12, 0),
         state: OrderState.paid,
+        type: OrderType.takeaway,
         lines: [
           OrderLine(productId: 11, name: 'Water', quantity: 2, unitPrice: 10),
         ],
         payments: const [OrderPayment(methodId: 2, amount: 20, label: 'Card')],
-      ),
+      )..orderNo = '41',
     ];
 
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(MaterialApp(
       home: OrderHistoryScreen(
         orders: orders,
         formatAmount: (v) => v.toStringAsFixed(2),
+        cashierNameOf: (id) => id == 'sara' ? 'Sara' : id,
         onReprint: (_) async {},
       ),
     ));
 
+    expect(find.byKey(const Key('history-columns')), findsOneWidget);
+    expect(find.text('Order type'), findsOneWidget);
+    expect(find.text('Order no.'), findsOneWidget);
+    expect(find.text('Amount'), findsOneWidget);
+    expect(find.text('Payment method'), findsOneWidget);
+    expect(find.text('Cashier'), findsOneWidget);
     for (final order in orders) {
       expect(find.byKey(Key('history-${order.uuid}')), findsOneWidget);
     }
+    expect(find.text('Dine-in'), findsWidgets);
+    expect(find.text('Takeaway'), findsWidgets);
+    expect(find.text('Cash'), findsOneWidget);
+    expect(find.text('Card'), findsOneWidget);
+    expect(find.text('Sara'), findsWidgets);
+    expect(find.text('42'), findsOneWidget);
+    expect(find.text('41'), findsOneWidget);
+    expect(find.text('250.00'), findsOneWidget);
+    expect(find.text('20.00'), findsOneWidget);
   });
 
   testWidgets('a shift list offers only its own kinds, no dates, and a total',

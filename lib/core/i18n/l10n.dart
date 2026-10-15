@@ -731,7 +731,24 @@ const Map<String, String> _ar = {
   'No categories to route yet.': 'لا توجد أقسام للتوجيه بعد.',
   'Item routing': 'توجيه الأصناف',
   'Search products': 'ابحث عن منتجات',
+  'Search for product…': 'بحث عن منتج...',
   'No products match.': 'لا توجد منتجات مطابقة.',
+  'No products to route yet.': 'لا توجد منتجات للتوجيه بعد.',
+  'Product printers': 'طابعات المنتجات',
+  'Assign products': 'تعيين المنتجات',
+  'Category printers': 'طابعات الفئات',
+  'Default printers': 'الطابعات الافتراضية',
+  'Receipt design': 'تصميم الإيصال',
+  'Assigned only': 'المعينة فقط',
+  '{n} assigned': '{n} معين',
+  'Uses category': 'حسب الفئة',
+  'Order no.': 'رقم الطلب',
+  'Product settings override category settings. Open a product to pick its printers.':
+      'إعدادات المنتج تفوق على إعدادات الفئة. افتح المنتج لتعديل طابعاته.',
+  'Pick a printer, then tick the products that should print there. Product settings override the category.':
+      'اختار طابعة، وبعدين علّم المنتجات اللي تطبع عليها. إعداد المنتج بيفوق الفئة.',
+  'Pick which kitchen printers print each category. A product with its own printers ignores this.':
+      'اختر طابعات المطبخ لكل فئة. المنتج اللي له طابعات خاصة يتجاهل ده.',
   // tables floor
   'Edit floor': 'تعديل الصالة',
   'Shape': 'الشكل',

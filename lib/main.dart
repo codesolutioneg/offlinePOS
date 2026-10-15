@@ -586,6 +586,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     outboxStore: outboxStore,
     printers: printers,
     receiptSpool: SqlitePrintJobStore(db, printer: PosApp.receiptPrinter),
+    stationSpool: (station) => SqlitePrintJobStore(db, printer: station),
     wizards: WizardStore(db),
     shifts: shifts,
     deviceId: deviceId,

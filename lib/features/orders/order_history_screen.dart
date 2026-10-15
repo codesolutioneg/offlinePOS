@@ -20,6 +20,7 @@ class OrderHistoryScreen extends StatefulWidget {
     this.onRefund,
     this.onEdit,
     this.thisDeviceId,
+    this.cashierNameOf,
     this.title,
     this.types,
   });
@@ -37,6 +38,10 @@ class OrderHistoryScreen extends StatefulWidget {
 
   /// This till's device id, so rows from another till can be labelled.
   final String? thisDeviceId;
+
+  /// Resolves a cashier id to the name that should appear in the table. Null
+  /// shows the id itself.
+  final String Function(String cashierId)? cashierNameOf;
 
   /// Reprints the receipt for [order]. Awaited so the confirmation snackbar
   /// only fires once the job has actually been handed to the printer.
@@ -178,18 +183,28 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                     title: tr(context, 'No orders yet'),
                     message: tr(context, 'Completed sales will show up here'),
                   )
-                    : ListView.separated(
-                    itemCount: shown.length,
-                    separatorBuilder: (context, index) => const Divider(height: 1),
-                    itemBuilder: (context, i) => _HistoryTile(
-                      key: Key('history-${shown[i].uuid}'),
-                      order: shown[i],
-                      formatAmount: widget.formatAmount,
-                      onReprint: widget.onReprint,
-                      onRefund: widget.onRefund,
-                      onEdit: widget.onEdit,
-                      thisDeviceId: widget.thisDeviceId,
-                    ),
+                : Column(
+                    children: [
+                      const _HistoryHeader(),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: ListView.separated(
+                          itemCount: shown.length,
+                          separatorBuilder: (context, index) =>
+                              const Divider(height: 1),
+                          itemBuilder: (context, i) => _HistoryRow(
+                            key: Key('history-${shown[i].uuid}'),
+                            order: shown[i],
+                            formatAmount: widget.formatAmount,
+                            cashierNameOf: widget.cashierNameOf,
+                            onReprint: widget.onReprint,
+                            onRefund: widget.onRefund,
+                            onEdit: widget.onEdit,
+                            thisDeviceId: widget.thisDeviceId,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
           ),
         ],
@@ -198,8 +213,39 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   }
 }
 
-class _HistoryTile extends StatelessWidget {
-  const _HistoryTile({
+/// Column titles for the history table: type, number, amount, tender, cashier.
+class _HistoryHeader extends StatelessWidget {
+  const _HistoryHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.labelLarge?.copyWith(
+          fontWeight: FontWeight.w800,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        );
+    return Padding(
+      key: const Key('history-columns'),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(flex: 3, child: Text(tr(context, 'Order type'), style: style)),
+          Expanded(flex: 2, child: Text(tr(context, 'Order no.'), style: style)),
+          Expanded(
+              flex: 2,
+              child: Text(tr(context, 'Amount'),
+                  style: style, textAlign: TextAlign.end)),
+          Expanded(
+              flex: 3, child: Text(tr(context, 'Payment method'), style: style)),
+          Expanded(flex: 2, child: Text(tr(context, 'Cashier'), style: style)),
+          const SizedBox(width: 88),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryRow extends StatelessWidget {
+  const _HistoryRow({
     super.key,
     required this.order,
     required this.formatAmount,
@@ -207,6 +253,7 @@ class _HistoryTile extends StatelessWidget {
     this.onRefund,
     this.onEdit,
     this.thisDeviceId,
+    this.cashierNameOf,
   });
 
   final Order order;
@@ -215,6 +262,7 @@ class _HistoryTile extends StatelessWidget {
   final Future<void> Function(Order order)? onRefund;
   final Future<void> Function(Order order)? onEdit;
   final String? thisDeviceId;
+  final String Function(String cashierId)? cashierNameOf;
 
   /// synced: the server has it. paid: tendered but still queued. Nothing else
   /// reaches this screen, since a draft or held order was never a completed
@@ -224,6 +272,16 @@ class _HistoryTile extends StatelessWidget {
         OrderState.paid => 'queued',
         OrderState.draft || OrderState.held => null,
       };
+
+  String get _paymentLabel {
+    if (order.payments.isEmpty) return '—';
+    final names = <String>[];
+    for (final p in order.payments) {
+      final name = (p.label ?? '').trim();
+      names.add(name.isEmpty ? '#${p.methodId}' : name);
+    }
+    return names.join(' · ');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -235,19 +293,8 @@ class _HistoryTile extends StatelessWidget {
         order.deviceId.isNotEmpty &&
         order.deviceId != thisDeviceId;
     final typeLabel = tr(context, order.type.label);
-    final subtitle = fromOther
-        ? '$typeLabel · ${tr(context, 'Other till')} ${order.deviceId.length > 8 ? order.deviceId.substring(0, 8) : order.deviceId}'
-        : typeLabel;
-    return ListTile(
-      title: Text(
-          '$time  ${order.displayNo}  ${formatAmount(order.total)}'),
-      subtitle: Text(subtitle),
-      trailing: badge == null
-          ? null
-          : Chip(
-              label: Text(tr(context, badge)),
-              visualDensity: VisualDensity.compact,
-            ),
+    final cashier = cashierNameOf?.call(order.cashierId) ?? order.cashierId;
+    return InkWell(
       onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
         builder: (_) => OrderDetailScreen(
           order: order,
@@ -257,6 +304,65 @@ class _HistoryTile extends StatelessWidget {
           onEdit: onEdit,
         ),
       )),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(typeLabel,
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(time,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant,
+                          )),
+                  if (fromOther)
+                    Text(
+                      '${tr(context, 'Other till')} ${order.deviceId.length > 8 ? order.deviceId.substring(0, 8) : order.deviceId}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                ],
+              ),
+            ),
+            Expanded(
+              flex: 2,
+              child: Text(order.displayNo,
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+            Expanded(
+              flex: 2,
+              child: Text(formatAmount(order.total),
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+            Expanded(
+              flex: 3,
+              child: Text(_paymentLabel, overflow: TextOverflow.ellipsis),
+            ),
+            Expanded(
+              flex: 2,
+              child: Text(cashier, overflow: TextOverflow.ellipsis),
+            ),
+            SizedBox(
+              width: 88,
+              child: badge == null
+                  ? const SizedBox.shrink()
+                  : Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: Chip(
+                        label: Text(tr(context, badge)),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

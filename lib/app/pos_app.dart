@@ -57,6 +57,7 @@ import '../core/printing/printer_registry.dart';
 import '../core/printing/printer_transport.dart';
 import '../core/printing/receipt_builder.dart';
 import '../core/printing/registry_printer.dart';
+import '../core/printing/raster_line.dart';
 import '../core/printing/spool_store.dart';
 import '../core/sync/dishflow_mirror.dart';
 import '../core/sync/dishflow_wiring.dart';
@@ -178,6 +179,7 @@ class PosApp extends StatefulWidget {
     this.delivery,
     this.config = const TillConfig(),
     this.receiptSpool,
+    this.stationSpool,
     this.checkServer,
     this.backup,
     this.cloudBackup,
@@ -286,6 +288,10 @@ class PosApp extends StatefulWidget {
   /// a rush spent with the printer off is still reprintable after the nightly
   /// restart.
   final SpoolStore? receiptSpool;
+
+  /// Where a kitchen station's tickets wait when its printer does not answer, one
+  /// store per station name. Null holds them in memory.
+  final SpoolStore Function(String station)? stationSpool;
 
   /// Published for the update gate, so it can see a customer mid-order.
   final TillActivity? activity;
@@ -503,6 +509,34 @@ class _PosAppState extends State<PosApp> {
       detail: job.reference,
     ),
   );
+
+  /// A ticket a station's own printer could not take waits for that printer: the
+  /// receipt printer only ever gets kitchen paper for a station with no printer.
+  final Map<String, SpooledPrinter> _stationSpools = {};
+
+  SpooledPrinter _stationSpool(String station) => _stationSpools.putIfAbsent(
+        station,
+        () => SpooledPrinter(
+          RegistryPrinter(widget.printers, station),
+          spool: widget.stationSpool?.call(station),
+          onDropped: (job) => widget.audit.record(
+            _session?.cashierId ?? 'system',
+            'kitchen.dropped',
+            detail: job.reference,
+          ),
+        ),
+      );
+
+  /// Every configured printer other than the receipt one, including stations whose
+  /// tickets were held before the last restart.
+  Iterable<SpooledPrinter> get _stationSpoolsInUse => [
+        for (final p in widget.printers.printers)
+          if (p.name != PosApp.receiptPrinter) _stationSpool(p.name),
+      ];
+
+  int get _heldPrints =>
+      _receiptPrinter.spooledCount +
+      _stationSpoolsInUse.fold(0, (n, s) => n + s.spooledCount);
 
   @override
   void initState() {
@@ -815,8 +849,11 @@ class _PosAppState extends State<PosApp> {
     _lockIfIdle();
     _fireDueTimedLines();
     if (_receiptPrinter.hasSpooled) await _receiptPrinter.flush();
+    for (final station in _stationSpoolsInUse) {
+      if (station.hasSpooled) await station.flush();
+    }
     // The printer is back and the backlog is out, so nothing is left to chase.
-    if (!_receiptPrinter.hasSpooled && _printAlerts.value.isNotEmpty) {
+    if (_heldPrints == 0 && _printAlerts.value.isNotEmpty) {
       _printAlerts.value = const [];
     }
     // A Z report queued while the line was down goes out on its own, rather than
@@ -2525,7 +2562,7 @@ class _PosAppState extends State<PosApp> {
           refusedToSync: () => widget.sync.refusedToSync,
           // Tickets and receipts a printer would not take. They flush themselves,
           // but until they do the kitchen has not seen them.
-          spooledJobs: () => _receiptPrinter.spooledCount,
+          spooledJobs: () => _heldPrints,
           categoryColors: widget.settings.categoryColors,
           // Read only when the shop shows them, and answered from a map the
           // catalogue holds: no picture is fetched while a tile is being built.
@@ -3088,6 +3125,7 @@ class _PosAppState extends State<PosApp> {
         title: title,
         types: types,
         thisDeviceId: widget.deviceId,
+        cashierNameOf: (id) => widget.users.byId(id)?.name ?? id,
         formatAmount: PosApp.money,
         onReprint: (order) async {
           // Reprinting a receipt is a permissioned action: a cashier without it
@@ -4135,6 +4173,8 @@ class _PosAppState extends State<PosApp> {
           'Unmerge Tables', const Color(0xFFE91E63), linked.isNotEmpty),
       const IconPadItem('print-all', 'misc-print-all', Icons.print_outlined,
           'Print All', Color(0xFF424242)),
+      IconPadItem('printers', 'misc-printers', Icons.print_outlined,
+          'Printers & routing', const Color(0xFF0E7490), isManager),
       IconPadItem('end-of-day', 'misc-end-of-day', Icons.nightlight_round,
           'End Of Day', const Color(0xFF4A4A4A), shiftOpen),
       IconPadItem('paid-in', 'misc-paid-in', Icons.move_to_inbox, 'Paid In',
@@ -4193,6 +4233,8 @@ class _PosAppState extends State<PosApp> {
             tr(context, 'Unmerge which table?'), SellStartAction.unmergeTable);
       case 'print-all':
         await _printAllChecks(context);
+      case 'printers':
+        await _openPrintersRouting(context);
       case 'end-of-day':
         await _openShift(context, session, startClose: true);
       case 'paid-in':
@@ -4250,6 +4292,62 @@ class _PosAppState extends State<PosApp> {
         _openDiagnostics(context);
     }
   }
+
+  /// Manager shortcut from Misc: open product / category / printer routing without
+  /// walking through the settings hub.
+  Future<void> _openPrintersRouting(BuildContext context) async {
+    if (!await _authorize(Permission.managePrinters, context) || !context.mounted) {
+      return;
+    }
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => _printersScreen(onChanged: () {
+        if (mounted) setState(() {});
+      }),
+    ));
+  }
+
+  Widget _printersScreen({required VoidCallback onChanged}) => PrintersScreen(
+        printers: widget.printers,
+        settings: widget.settings,
+        categories: widget.catalogue.categories(),
+        products: widget.catalogue.products(),
+        onChanged: onChanged,
+        deviceId: widget.deviceId,
+        deviceName: widget.settings.lanDeviceName ?? widget.deviceId,
+        cashierName: widget.auth.signedIn?.name ?? _session?.cashierId,
+        onRoutingAudit: (detail) => widget.audit.record(
+          widget.auth.signedIn?.id ?? _session?.cashierId ?? 'system',
+          'settings.kitchen_routing',
+          detail: detail,
+        ),
+        onReceiptDesign: () {
+          Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => ReceiptDesignerScreen(
+              settings: widget.settings,
+              onChanged: onChanged,
+              onUploadLogo: _uploadLogo,
+              onTestPrint: () =>
+                  _printReceipt(_sampleOrder(), reprint: true),
+            ),
+          ));
+        },
+        // Send a sample receipt straight to the chosen printer so a manager can
+        // prove THAT printer is wired. No receipt-printer fallback here: a test
+        // must fail honestly if the named station is unreachable.
+        onTestPrint: (name) async {
+          final s = widget.settings;
+          final bytes = ReceiptBuilder(
+            shopName: s.shopName ?? widget.config.shopName,
+            footer: s.receiptFooter ?? widget.config.receiptFooter,
+            columns: s.receiptColumns,
+            dividerStyle: s.receiptDividerStyle,
+            logo: s.receiptLogoCommand(),
+            formatAmount: PosApp.money,
+          ).build(_sampleOrder(), reprint: true);
+          await RegistryPrinter(widget.printers, name)
+              .send(Uint8List.fromList(bytes));
+        },
+      );
 
   /// Parked tabs sitting on a table with something on them, by table name.
   List<Order> _openTableTabs() => widget.orders
@@ -5340,28 +5438,8 @@ class _PosAppState extends State<PosApp> {
         icon: Icons.print,
         keyValue: 'set-printers',
         group: 'Hardware',
-        onTap: () => pushGated(Permission.managePrinters, PrintersScreen(
-            printers: widget.printers,
-            settings: widget.settings,
-            categories: widget.catalogue.categories(),
-            products: widget.catalogue.products(),
-            onChanged: refresh,
-            // Send a sample receipt straight to the chosen printer so a manager can
-            // prove THAT printer is wired. No receipt-printer fallback here: a test
-            // must fail honestly if the named station is unreachable.
-            onTestPrint: (name) async {
-              final s = widget.settings;
-              final bytes = ReceiptBuilder(
-                shopName: s.shopName ?? widget.config.shopName,
-                footer: s.receiptFooter ?? widget.config.receiptFooter,
-                columns: s.receiptColumns,
-                dividerStyle: s.receiptDividerStyle,
-                logo: s.receiptLogoCommand(),
-                formatAmount: PosApp.money,
-              ).build(_sampleOrder(), reprint: true);
-              await RegistryPrinter(widget.printers, name)
-                  .send(Uint8List.fromList(bytes));
-            })),
+        onTap: () => pushGated(
+            Permission.managePrinters, _printersScreen(onChanged: refresh)),
       ),
       SettingsEntry(
         title: 'This device type',
@@ -6352,6 +6430,9 @@ class _PosAppState extends State<PosApp> {
   }) async {
     final payload = Uint8List.fromList(bytes);
     void probe(PrintOutcome o) => _probe(channel, o, order, reference);
+    if (widget.printers[station] != null) {
+      return _sendToStationPrinter(station, payload, reference, probe);
+    }
     try {
       await RegistryPrinter(widget.printers, station).send(payload);
       probe(PrintOutcome.atPrinter);
@@ -6393,6 +6474,57 @@ class _PosAppState extends State<PosApp> {
       probe(PrintOutcome.lost);
       return KitchenFireResult.lost;
     }
+  }
+
+  /// A station that has its own printer: the ticket prints there or waits there,
+  /// never at the cash desk. Behind anything already waiting, so the kitchen reads
+  /// tickets in the order they were sent.
+  Future<KitchenFireResult> _sendToStationPrinter(
+    String station,
+    Uint8List payload,
+    String reference,
+    void Function(PrintOutcome) probe,
+  ) async {
+    void failed(Object e) => widget.audit.record(
+          _session?.cashierId ?? 'system',
+          'kitchen.failed',
+          detail: '$reference: $e',
+        );
+    final Uint8List job;
+    try {
+      job = await rasteriseEscPos(payload);
+    } catch (e) {
+      failed(e);
+      probe(PrintOutcome.lost);
+      return KitchenFireResult.lost;
+    }
+    final spool = _stationSpool(station);
+    if (spool.hasSpooled) await spool.flush();
+    if (!spool.hasSpooled) {
+      try {
+        await spool.send(job, reference: reference);
+        probe(PrintOutcome.atPrinter);
+        return KitchenFireResult.sent;
+      } catch (e) {
+        // SpooledPrinter persists before it rethrows, so this is held, not lost.
+        widget.audit.record(
+          _session?.cashierId ?? 'system',
+          'kitchen.spooled',
+          detail: '$reference: $e',
+        );
+        probe(PrintOutcome.spooled);
+        return KitchenFireResult.spooled;
+      }
+    }
+    try {
+      await spool.hold(job, reference: reference);
+    } catch (e) {
+      failed(e);
+      probe(PrintOutcome.lost);
+      return KitchenFireResult.lost;
+    }
+    probe(PrintOutcome.spooled);
+    return KitchenFireResult.spooled;
   }
 
   /// Tell the Stress Lab's probe, when one is listening, where a job went and
@@ -7174,7 +7306,7 @@ class _PosAppState extends State<PosApp> {
       printer: StressPrinter(
         fireKitchen: _fireKitchen,
         printReceipt: _printReceipt,
-        heldPrints: () => _receiptPrinter.spooledCount,
+        heldPrints: () => _heldPrints,
         attachProbe: (probe) => _printProbe = probe,
       ),
     );
@@ -7251,7 +7383,7 @@ class _PosAppState extends State<PosApp> {
           : () => widget.delivery!.drivers(activeOnly: true),
       zones: widget.delivery == null ? null : () => widget.delivery!.zones(),
       attachProbe: (probe) => _printProbe = probe,
-      heldPrints: () => _receiptPrinter.spooledCount,
+      heldPrints: () => _heldPrints,
       reserveSeat: (table) async {
         final lan = widget.lan;
         if (lan == null || !lan.isRunning) return true;

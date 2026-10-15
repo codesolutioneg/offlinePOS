@@ -160,6 +160,20 @@ class SettingsStore {
   }
   bool _bundleCheckQueued = false;
 
+  /// Who just changed shop settings on this till, stamped onto the next bundle
+  /// announcement so the other tills can write "edited from device X by Y".
+  ({String user, String deviceId, String? deviceName})? _bundleActor;
+
+  /// Remember who is about to change shared settings (kitchen routing, roles, …)
+  /// so the LAN announcement carries that trail. Cleared after the announce.
+  void noteBundleActor({
+    required String user,
+    required String deviceId,
+    String? deviceName,
+  }) {
+    _bundleActor = (user: user, deviceId: deviceId, deviceName: deviceName);
+  }
+
   void _shopSettingsTouched() {
     if (_applyingBundle || _bundleCheckQueued || _publish == null) return;
     _bundleCheckQueued = true;
@@ -178,7 +192,22 @@ class SettingsStore {
     final bundle = exportShopBundle();
     final hash = _bundleHash(bundle);
     final last = getString(_sharedBundleHash);
-    if (last == hash) return;
+    if (last == hash) {
+      _bundleActor = null;
+      return;
+    }
+    final actor = _bundleActor;
+    _bundleActor = null;
+    if (actor != null) {
+      // Not part of the hash: who changed it is a trail, not shop state.
+      bundle['_audit'] = {
+        'by_user': actor.user,
+        'by_device': actor.deviceId,
+        if (actor.deviceName != null && actor.deviceName!.isNotEmpty)
+          'by_device_name': actor.deviceName,
+        'at': DateTime.now().toUtc().toIso8601String(),
+      };
+    }
     setString(_sharedBundleHash, hash);
     publish(LanEventKind.shopBundle, shopBundleRecord, bundle);
   }

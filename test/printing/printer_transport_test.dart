@@ -116,6 +116,20 @@ void main() {
       expect(inner.received.single, job);
     });
 
+    test('a held job queues behind the backlog without touching the printer',
+        () async {
+      final inner = Recording(failTimes: 1);
+      final spooled = SpooledPrinter(inner);
+      final first = Uint8List.fromList([1]);
+      final second = Uint8List.fromList([2]);
+      await spooled.send(first).catchError((_) {});
+      await spooled.hold(second, reference: 'kot-2');
+      expect(inner.calls, 1);
+      expect(spooled.spooledCount, 2);
+      expect(await spooled.flush(), 2);
+      expect(inner.received, [first, second]);
+    });
+
     test('flushing stops at the first failure so tickets print in order', () async {
       final inner = Recording(failTimes: 3);
       final spooled = SpooledPrinter(inner);

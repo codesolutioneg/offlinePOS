@@ -349,8 +349,44 @@ class LanApplier {
   }
 
   bool _applyShopBundle(LanEvent event) {
+    final beforeCats = _settings.categoryStations;
+    final beforeProducts = _settings.productStations;
     _settings.applyShopBundle(event.payload);
     _onShopBundleApplied?.call();
+    // Kitchen routing is shop-wide: when another till changes it, leave a trail
+    // on every till (including the master) naming the device and the user.
+    final routingChanged = !_sameStations(beforeCats, _settings.categoryStations) ||
+        !_sameStations(beforeProducts, _settings.productStations);
+    if (routingChanged) {
+      final audit = event.payload['_audit'];
+      final byUser = audit is Map ? '${audit['by_user'] ?? ''}' : '';
+      final byName = audit is Map ? '${audit['by_device_name'] ?? ''}' : '';
+      final device = byName.isNotEmpty
+          ? byName
+          : (audit is Map && '${audit['by_device'] ?? ''}'.isNotEmpty
+              ? '${audit['by_device']}'
+              : event.originDeviceId);
+      final who = byUser.isEmpty ? '?' : byUser;
+      _onRefused?.call(
+        'settings.kitchen_routing',
+        'edited from $device by $who',
+      );
+    }
+    return true;
+  }
+
+  static bool _sameStations(
+    Map<int, List<String>> a,
+    Map<int, List<String>> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (final e in a.entries) {
+      final other = b[e.key];
+      if (other == null || other.length != e.value.length) return false;
+      for (final s in e.value) {
+        if (!other.contains(s)) return false;
+      }
+    }
     return true;
   }
 
