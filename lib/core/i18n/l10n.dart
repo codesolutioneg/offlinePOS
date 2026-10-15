@@ -1038,6 +1038,12 @@ const Map<String, String> _ar = {
   'Off leaves names and quantities only': 'الإيقاف يُبقي الأسماء والكميات فقط',
   'Show item options': 'إظهار إضافات الصنف',
   'Shift orders': 'طلبات الجلسة',
+  'Read every till again': 'إعادة القراءة من كل الأجهزة',
+  'Read every till again?': 'إعادة القراءة من كل الأجهزة؟',
+  'For a till that is missing a sale or shows a table another till already closed. Every other till\'s history is read again from the start; nothing here is deleted, and a paid order never goes back to open. It can take a minute.':
+      'للجهاز اللي ناقصه أوردر أو ظاهر عليه طاولة اتقفلت على جهاز تاني. هيتقرا سجل كل الأجهزة التانية من الأول؛ مفيش حاجة هتتمسح هنا، والأوردر المدفوع عمره ما يرجع مفتوح. ممكن ياخد دقيقة.',
+  'Read again': 'اقرأ من جديد',
+  'Every till read again from the start': 'اتقرا سجل كل الأجهزة من الأول',
   'Off adds their price into the item': 'الإيقاف يضيف سعرها إلى سعر الصنف',
   'A live print preview is not shown here. Changes apply to the next printed receipt.':
       'لا تظهر معاينة طباعة حية هنا. تُطبَّق التغييرات على الإيصال التالي.',

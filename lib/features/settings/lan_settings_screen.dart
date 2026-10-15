@@ -43,6 +43,7 @@ class LanSettingsScreen extends StatefulWidget {
     this.buildDefault = false,
     this.facts,
     this.onSyncNow,
+    this.onRereadAll,
     this.onJoinPrimary,
     this.onWipeHistory,
     this.onResetDevice,
@@ -70,6 +71,9 @@ class LanSettingsScreen extends StatefulWidget {
 
   /// Runs one catch-up pass now. Null when the fabric is not running.
   final Future<void> Function()? onSyncNow;
+
+  /// Reads every till's log again from the start. Null hides the button.
+  final Future<void> Function()? onRereadAll;
 
   /// Secondary presents a PIN to [peer] (the primary). Returns an error message
   /// or null on success. [onProgress] reports first-join sync steps (0..1).
@@ -227,6 +231,39 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
     }
     widget.onChanged();
     setState(() {});
+  }
+
+  Future<void> _rereadAll() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('lan-reread-confirm'),
+        title: Text(tr(ctx, 'Read every till again?')),
+        content: Text(tr(
+            ctx,
+            'For a till that is missing a sale or shows a table another till '
+                'already closed. Every other till\'s history is read again from '
+                'the start; nothing here is deleted, and a paid order never goes '
+                'back to open. It can take a minute.')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+          FilledButton(
+            key: const Key('lan-reread-confirm-yes'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Read again')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await widget.onRereadAll!();
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr(context, 'Every till read again from the start'))));
   }
 
   Future<void> _clearPairing() async {
@@ -886,6 +923,18 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
                 },
                 icon: const Icon(Icons.sync),
                 label: Text(tr(context, 'Catch up now')),
+              ),
+            ),
+          ],
+          if (widget.onRereadAll != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: OutlinedButton.icon(
+                key: const Key('lan-reread-all'),
+                onPressed: _rereadAll,
+                icon: const Icon(Icons.history),
+                label: Text(tr(context, 'Read every till again')),
               ),
             ),
           ],

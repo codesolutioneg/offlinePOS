@@ -100,6 +100,11 @@ class LanEventLog {
     );
   }
 
+  /// Forget how far every peer has been read, so the next pass reads each log from
+  /// the start. Safe for the reason [cursorFor] starts at 0: every event is an
+  /// upsert under last-write-wins, and an order never moves back a state.
+  void resetCursors() => _db.raw.execute('DELETE FROM lan_cursors');
+
   /// Peer device id to the last seq applied from it, for the LAN settings screen.
   Map<String, int> cursors() => {
         for (final r in _db.raw.select(

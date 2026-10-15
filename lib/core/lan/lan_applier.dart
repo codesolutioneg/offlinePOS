@@ -234,14 +234,20 @@ class LanApplier {
   /// An order that has moved further along than the copy here lands whatever the
   /// sender's clock says. A till whose clock runs slow still took the money; a
   /// skewed clock must not leave a paid bill looking open on the rest of the shop.
+  ///
+  /// A paid order with no copy here at all also lands: a join clears this till's
+  /// open tabs but keeps their clocks, and a sale is never deleted, so the clock
+  /// alone must not keep it away. A tab that was discarded stays discarded.
   bool _movesForward(LanEvent event) {
     if (event.kind != LanEventKind.orderUpsert) return false;
     if (event.payload['deleted'] == true) return false;
     final state = event.payload['state'];
-    final local = _orders.byUuid(event.recordUuid);
-    if (state is! String || local == null) return false;
+    if (state is! String) return false;
     final incoming = OrderState.values.asNameMap()[state];
-    return incoming != null && _rank(incoming) > _rank(local.state);
+    if (incoming == null) return false;
+    final local = _orders.byUuid(event.recordUuid);
+    if (local == null) return _rank(incoming) >= _rank(OrderState.paid);
+    return _rank(incoming) > _rank(local.state);
   }
 
   bool _applyOrder(LanEvent event) {

@@ -38,7 +38,11 @@ void main() {
         lastSeenAt: now.subtract(const Duration(seconds: 12)),
       );
 
-  Widget app({LanFacts Function()? facts, Locale? locale}) => MaterialApp(
+  Widget app(
+          {LanFacts Function()? facts,
+          Locale? locale,
+          Future<void> Function()? onRereadAll}) =>
+      MaterialApp(
         locale: locale,
         supportedLocales: kSupportedLocales,
         localizationsDelegates: const [
@@ -51,6 +55,7 @@ void main() {
           deviceId: 'device-abc-123',
           onChanged: () => changed++,
           facts: facts,
+          onRereadAll: onRereadAll,
           nowFn: () => now,
         ),
       );
@@ -59,12 +64,15 @@ void main() {
   /// shorter than this page, and a ListView does not build what does not fit, so the
   /// peer list below the fold would read as missing rather than as off-screen.
   Future<void> open(WidgetTester t,
-      {LanFacts Function()? facts, Locale? locale}) async {
+      {LanFacts Function()? facts,
+      Locale? locale,
+      Future<void> Function()? onRereadAll}) async {
     t.view.physicalSize = const Size(1200, 2400);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.resetPhysicalSize);
     addTearDown(t.view.resetDevicePixelRatio);
-    await t.pumpWidget(app(facts: facts, locale: locale));
+    await t.pumpWidget(
+        app(facts: facts, locale: locale, onRereadAll: onRereadAll));
   }
 
   testWidgets('shows this device id and the devices it can see', (t) async {
@@ -145,6 +153,35 @@ void main() {
     await t.pump();
     expect(resets, 1);
     expect(find.byKey(const Key('lan-traffic-till-b')), findsNothing);
+  });
+
+  testWidgets('reading every till again asks first, then runs', (t) async {
+    var reads = 0;
+    await open(t,
+        facts: () => (
+              servingAt: '10.0.0.5:45333',
+              hostError: null,
+              peers: [peer()],
+              refused: const [],
+              cursors: const {'till-b': 42},
+              lastPassAt: now,
+              lastError: null,
+            ),
+        onRereadAll: () async => reads++);
+
+    await t.tap(find.byKey(const Key('lan-reread-all')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('lan-reread-confirm')), findsOneWidget);
+    await t.tap(find.text('Cancel'));
+    await t.pumpAndSettle();
+    expect(reads, 0);
+
+    await t.tap(find.byKey(const Key('lan-reread-all')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('lan-reread-confirm-yes')));
+    await t.pumpAndSettle();
+    expect(reads, 1);
+    expect(find.text('Every till read again from the start'), findsOneWidget);
   });
 
   testWidgets('a device on its own says so rather than looking broken', (t) async {

@@ -447,6 +447,14 @@ class LanNode {
   /// One catch-up pass now, for the Sync now button on the settings screen.
   Future<void> pass() => _fabric.pass();
 
+  /// Read every peer's log again from the start, for a till that skipped an event
+  /// it should have kept (a paid sale it still shows as open, or does not show).
+  Future<void> rereadAll() {
+    _log.resetCursors();
+    _report('lan.cursors.reset', 'reading every till again from the start');
+    return _fabric.pass();
+  }
+
   /// Present a join PIN to [primary] and return shop_key + section_configs.
   Future<Map<String, dynamic>> joinWithPrimary(LanPeer primary, String pin) =>
       _client.join(primary, pin: pin, deviceId: deviceId);

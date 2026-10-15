@@ -5792,6 +5792,7 @@ class _PosAppState extends State<PosApp> {
         buildDefault: widget.config.lanDefault,
         facts: widget.lan == null ? null : () => widget.lan!.facts,
         onSyncNow: widget.lan?.pass,
+        onRereadAll: widget.lan?.rereadAll,
         onJoinPrimary: widget.lan == null
             ? null
             : (peer, pin, {onProgress}) async {
