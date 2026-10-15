@@ -11,6 +11,8 @@
 /// and a bug in building it is exactly the bug this is here to catch.
 library;
 
+import 'order.dart' show roundMoney;
+
 /// How far apart the two sides may be before the payload is called broken.
 ///
 /// One piastre, the same bar the module holds its own total to. Scaling a line by
@@ -18,6 +20,12 @@ library;
 /// anything above it is a real charge that is on one side of the sale and not the
 /// other.
 const double kPayloadBalanceTolerance = 0.01;
+
+/// One line (or product-backed modifier) as Odoo prices it: unit to the piastre,
+/// times quantity to the piastre. Matches [Order]'s booked base so a night of
+/// tickets merged into one payload still equals the sum of what each sale paid.
+double _bookedBase(double unitPrice, double qty) =>
+    roundMoney(roundMoney(unitPrice) * qty);
 
 /// What Odoo will total from the `lines` this payload declares.
 ///
@@ -31,11 +39,11 @@ double payloadLinesTotal(Map<String, dynamic> payload) {
   for (final raw in (payload['lines'] as List? ?? const [])) {
     final line = (raw as Map).cast<String, dynamic>();
     final qty = _num(line['quantity']);
-    total += qty * _num(line['unit_price']);
+    total += _bookedBase(_num(line['unit_price']), qty);
     for (final rawMod in (line['modifiers'] as List? ?? const [])) {
       final mod = (rawMod as Map).cast<String, dynamic>();
       if (mod['product_id'] == null) continue;
-      total += qty * _num(mod['quantity']) * _num(mod['unit_price']);
+      total += _bookedBase(_num(mod['unit_price']), qty * _num(mod['quantity']));
     }
   }
   return total;
@@ -65,13 +73,16 @@ double payloadTaxTotal(Map<String, dynamic> payload) {
     final rate = _num(line['tax_rate']);
     if (rate <= 0) continue;
     final qty = _num(line['quantity']);
-    var net = qty * _num(line['unit_price']);
+    var net = _bookedBase(_num(line['unit_price']), qty);
     for (final rawMod in (line['modifiers'] as List? ?? const [])) {
       final mod = (rawMod as Map).cast<String, dynamic>();
       if (mod['product_id'] == null) continue;
-      net += qty * _num(mod['quantity']) * _num(mod['unit_price']);
+      net += _bookedBase(_num(mod['unit_price']), qty * _num(mod['quantity']));
     }
-    tax += net * rate / 100;
+    // Per line to the piastre, the same way Odoo and [Order.taxTotal] charge it.
+    // Without this, a merged night of many taxed tickets drifts by dust that the
+    // till already absorbed when each sale was paid, and Sync now refuses the lot.
+    tax += roundMoney(net * rate / 100);
   }
   return tax;
 }

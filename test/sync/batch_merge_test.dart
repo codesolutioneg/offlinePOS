@@ -260,6 +260,38 @@ void main() {
     expect(outcome.notMerged!.reason, contains('does not add up'));
   });
 
+  test('a night of taxed tickets still merges: piastre rounding does not refuse it',
+      () {
+    // Each sale is paid at Order.total (tax to the piastre). Recomputing tax on
+    // the merged lines without that rounding used to drift by ~0.17 on a shift
+    // like this and park Sync now with "payload does not add up".
+    final sales = <OutboxEntry>[
+      for (var i = 0; i < 50; i++)
+        entryFor(() {
+          final o = Order(
+            deviceId: 'till-1',
+            cashierId: 'sara',
+            type: OrderType.takeaway,
+          )..lines.add(OrderLine(
+              productId: 10,
+              odooProductId: 10,
+              name: 'Tea',
+              quantity: 1,
+              unitPrice: 33.33,
+              taxRate: 14,
+            ));
+          o.payments = [
+            OrderPayment(methodId: 1, amount: o.total, label: 'Cash')
+          ];
+          o.state = OrderState.paid;
+          return o;
+        }()),
+    ];
+    final outcome = mergeOrderPushes(sales, batchUuid: 'shift-tax');
+    expect(outcome.notMerged, isNull, reason: outcome.notMerged?.reason);
+    expect(payloadBalances(outcome.batch!.payload), isTrue);
+  });
+
   test('the same shift merges to the same key every time', () {
     final a = paidSale();
     final b = paidSale(price: 250);
