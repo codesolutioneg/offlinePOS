@@ -117,8 +117,13 @@ void main() {
   });
 
   group('collecting the other tills\' sales before the count', () {
-    Widget closing(Future<List<String>> Function(DateTime) catchUp,
-            {List<String>? blocked, List<String>? overrides}) =>
+    Widget closing(
+      Future<List<String>> Function(DateTime since,
+              {void Function(String status)? onProgress})
+          catchUp, {
+      List<String>? blocked,
+      List<String>? overrides,
+    }) =>
         MaterialApp(
           home: ShiftScreen(
             store: shifts,
@@ -135,7 +140,7 @@ void main() {
         (t) async {
       final opened = shifts.openShift(openingFloat: 0, cashierId: 'sara');
       DateTime? since;
-      await t.pumpWidget(closing((s) async {
+      await t.pumpWidget(closing((s, {onProgress}) async {
         since = s;
         return const [];
       }));
@@ -150,7 +155,7 @@ void main() {
       shifts.openShift(openingFloat: 0, cashierId: 'sara');
       final blocked = <String>[];
       var calls = 0;
-      await t.pumpWidget(closing((_) async {
+      await t.pumpWidget(closing((s, {onProgress}) async {
         calls++;
         return calls == 1 ? ['Bar: unreachable'] : const [];
       }, blocked: blocked));
@@ -169,7 +174,8 @@ void main() {
 
     testWidgets('cancel leaves the shift open', (t) async {
       shifts.openShift(openingFloat: 0, cashierId: 'sara');
-      await t.pumpWidget(closing((_) async => ['Bar: unreachable']));
+      await t.pumpWidget(
+          closing((s, {onProgress}) async => ['Bar: unreachable']));
       await t.pumpAndSettle();
 
       await t.tap(find.byKey(const Key('tills-unreachable-cancel')));
@@ -183,8 +189,8 @@ void main() {
         (t) async {
       shifts.openShift(openingFloat: 0, cashierId: 'sara');
       final overrides = <String>[];
-      await t.pumpWidget(
-          closing((_) async => ['Bar: unreachable'], overrides: overrides));
+      await t.pumpWidget(closing((s, {onProgress}) async => ['Bar: unreachable'],
+          overrides: overrides));
       await t.pumpAndSettle();
 
       await t.tap(find.byKey(const Key('tills-unreachable-close-anyway')));

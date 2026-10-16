@@ -131,7 +131,12 @@ class LanFabric {
   /// up on the next pass" is not good enough.
   ///
   /// Waits for a pass already running rather than racing it for the same cursors.
-  Future<Map<String, String>> catchUp(Iterable<LanPeer> targets) async {
+  /// [onProgress] is called with a short status as each peer is pulled, for the
+  /// close-ceremony progress dialog.
+  Future<Map<String, String>> catchUp(
+    Iterable<LanPeer> targets, {
+    void Function(String status)? onProgress,
+  }) async {
     final failed = <String, String>{};
     final fetch = _fetch;
     if (fetch == null) return failed;
@@ -140,10 +145,20 @@ class LanFabric {
     }
     _passing = true;
     try {
-      for (final peer in targets) {
+      final list = targets.toList();
+      if (list.isEmpty) {
+        onProgress?.call('No other tills to collect from');
+        return failed;
+      }
+      onProgress?.call('Looking for ${list.length} till(s)...');
+      for (var i = 0; i < list.length; i++) {
+        final peer = list[i];
+        final who = peer.name.isEmpty ? peer.deviceId : peer.name;
+        onProgress?.call('Pulling from $who (${i + 1}/${list.length})...');
         final error = await _pull(peer, fetch, maxPagesPerCatchUp);
         if (error != null) failed[peer.deviceId] = error;
       }
+      onProgress?.call('Finished collecting from other tills');
     } finally {
       _passing = false;
     }

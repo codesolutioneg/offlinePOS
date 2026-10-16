@@ -161,14 +161,18 @@ class FlashThermalEscPos {
     return s.contains('cash') || s == 'نقدي' || s == 'كاش';
   }
 
+  /// Checks that actually took this tender (non-zero amount). A cancelled /
+  /// zeroed complimentary line must not inflate Number beside a real 148.19.
   static int _ordersCountFor(List<Order> orders, String paymentLabel) {
     final want = paymentLabel.trim().toLowerCase();
     var n = 0;
     for (final o in orders) {
       if (o.payments.isEmpty) {
-        if (want == 'cash') n++;
-      } else if (o.payments
-          .any((p) => (p.label ?? 'Cash').trim().toLowerCase() == want)) {
+        if (want == 'cash' && o.total.abs() >= 0.02) n++;
+      } else if (o.payments.any((p) {
+        final label = (p.label ?? 'Cash').trim().toLowerCase();
+        return label == want && p.amount.abs() >= 0.02;
+      })) {
         n++;
       }
     }

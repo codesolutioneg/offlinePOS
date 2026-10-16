@@ -99,11 +99,14 @@ RmBinding _sessionSummary(List<Order> all, List<Category> categories,
 
   for (final o in orders) {
     if (o.payments.isEmpty) {
-      tender('Cash', orderTotal(o), isCash: true, newCheck: true);
+      final amt = orderTotal(o);
+      if (amt.abs() < 0.02) continue;
+      tender('Cash', amt, isCash: true, newCheck: true);
       continue;
     }
     final seen = <String>{};
     for (final p in o.payments) {
+      if (p.amount.abs() < 0.02) continue;
       final label = (p.label ?? '').trim().isEmpty ? 'Cash' : p.label!.trim();
       tender(label, p.amount,
           newCheck: seen.add(label),

@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../domain/attendance_entry.dart';
+import '../../domain/cancelled_sales.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/delivery.dart';
 import '../../domain/order.dart';
 import '../../domain/report_sources.dart';
 import '../../domain/shift.dart';
+import '../../domain/shop_sessions.dart';
 import 'activity_report_screen.dart';
 import 'attendance_report_screen.dart';
 import 'cashier_report_screen.dart';
@@ -256,9 +258,14 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     );
     // Every till on the network, as the Flash reports read it: a back-office
     // report is the shop's, and the two have to agree on what the shop sold.
+    // RefundsSummary / refundDetails need the raw set (refunds still present).
+    final keepRefunds =
+        report.id == 'RefundsSummary' || report.id == 'refundDetails';
     final binding = bindRmReport(
       report.id,
-      orders: _shopFilteredFor(period),
+      orders: keepRefunds
+          ? _shopPeriodOrders(period)
+          : _shopFilteredFor(period),
       categories: widget.categories,
       costs: widget.costs,
       cashTenderIds: widget.cashTenderIds,
@@ -377,20 +384,42 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   List<Order> _localIn(DateTime? from, DateTime? to) =>
       widget.ordersIn?.call(from, to) ?? widget.allOrders;
 
-  /// Local till orders in [period].
-  List<Order> _filteredFor(ReportPeriodChoice period) {
+  /// Reports that must still see refund rows (and cancel pairs for context).
+  static const _refundReportKeys = {
+    'rep-refunds',
+    'rep-activity',
+    'rep-refunds-summary',
+  };
+
+  /// Local till orders in [period] before cancel/refund stripping.
+  List<Order> _localPeriodOrders(ReportPeriodChoice period) {
     final (from, to) = _windowOf(period);
-    return _applyStaffType(_localIn(from, to).where((o) => _inPeriod(o, period)));
+    return _applyStaffType(
+        _localIn(from, to).where((o) => _inPeriod(o, period)));
   }
 
-  /// Every till on the LAN in [period] (Flash).
-  List<Order> _shopFilteredFor(ReportPeriodChoice period) {
+  /// Every till on the LAN in [period] before cancel/refund stripping.
+  List<Order> _shopPeriodOrders(ReportPeriodChoice period) {
     final (from, to) = _windowOf(period);
     final source = widget.shopOrdersIn?.call(from, to) ??
         widget.shopOrders ??
         _localIn(from, to);
     return _applyStaffType(source.where((o) => _inPeriod(o, period)));
   }
+
+  /// Local till orders in [period].
+  ///
+  /// Sales reports drop fully cancelled pairs and strip refunds — same books as
+  /// Flash / Odoo session close. Refunds & voids keep the raw set.
+  List<Order> _filteredFor(ReportPeriodChoice period, {String? reportKey}) {
+    final raw = _localPeriodOrders(period);
+    if (reportKey != null && _refundReportKeys.contains(reportKey)) return raw;
+    return salesForOdoo(raw);
+  }
+
+  /// Every till on the LAN in [period] (Flash and shop-wide sales).
+  List<Order> _shopFilteredFor(ReportPeriodChoice period) =>
+      salesForOdoo(_shopPeriodOrders(period));
 
   (DateTime?, DateTime?) _windowOf(ReportPeriodChoice period) =>
       period.window(shiftOpenedAt: _shiftOpenedAt);
@@ -862,7 +891,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     final build = report?.build;
     if (build == null) return;
     final period = _period(context);
-    final orders = _filteredFor(period);
+    final orders = _filteredFor(period, reportKey: key);
     await showReportWindow(
       context,
       ReportWindow(
@@ -1571,9 +1600,10 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   /// period to exactly that shift.
   Widget _sessions(BuildContext context) {
     final store = widget.shifts;
+    final closed = collapseShopShiftClones(store?.recentClosed(limit: 50) ?? const []);
     final shifts = <Shift>[
       ?store?.currentOpenShift(),
-      ...?store?.recentClosed(limit: 50),
+      ...closed,
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
@@ -1602,7 +1632,10 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
             ),
             padding: EdgeInsets.symmetric(vertical: _pad + 4),
             alignment: Alignment.center,
-            child: Text(tr(context, 'Sessions'), style: _text),
+            child: Text(
+              '${tr(context, 'Sessions')} (${shifts.length})',
+              style: _text,
+            ),
           ),
           Expanded(
             child: ListView(children: [
@@ -1626,6 +1659,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
           _shiftPick = picked ? null : shift;
           _custom = null;
         }),
+        onLongPress: () => _showSessionPayments(context, shift),
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: 6, vertical: _pad),
           child: Row(children: [
@@ -1643,8 +1677,93 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            IconButton(
+              key: Key('session-payments-${shift.id}'),
+              tooltip: tr(context, 'Payments'),
+              iconSize: 18,
+              color: picked ? Colors.white : _blue,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              icon: const Icon(Icons.payments_outlined),
+              onPressed: () => _showSessionPayments(context, shift),
+            ),
           ]),
         ),
+      ),
+    );
+  }
+
+  /// Payments for one session — quick check when Odoo and the Flash disagree.
+  Future<void> _showSessionPayments(BuildContext context, Shift shift) async {
+    final period = ReportPeriodChoice.exact(
+      shift.openedAt.toLocal(),
+      shift.closedAt?.toLocal(),
+      '${tr(context, 'Session')} ${_stamp(shift.openedAt)}',
+    );
+    final orders = _shopFilteredFor(period);
+    final byPay = <String, double>{};
+    var total = 0.0;
+    for (final o in orders) {
+      total += o.total;
+      if (o.payments.isEmpty) {
+        byPay['Cash'] = (byPay['Cash'] ?? 0) + o.total;
+      } else {
+        for (final p in o.payments) {
+          final label = (p.label ?? 'Cash').trim().isEmpty ? 'Cash' : p.label!.trim();
+          byPay[label] = (byPay[label] ?? 0) + p.amount;
+        }
+      }
+    }
+    final tenders = byPay.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('session-payments-dialog'),
+        title: Text('${tr(ctx, 'Session')} ${_stamp(shift.openedAt)}'),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '${tr(ctx, 'Orders')}: ${orders.length}  ·  '
+                '${tr(ctx, 'Total')}: ${widget.formatAmount(total)}',
+              ),
+              const Divider(),
+              if (tenders.isEmpty)
+                Text(tr(ctx, 'No payments in this session'))
+              else
+                for (final t in tenders)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(children: [
+                      Expanded(child: Text(t.key)),
+                      Text(widget.formatAmount(t.value)),
+                    ]),
+                  ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr(ctx, 'Close')),
+          ),
+          TextButton(
+            key: const Key('session-use-for-reports'),
+            onPressed: () {
+              setState(() {
+                _shiftPick = shift;
+                _custom = null;
+              });
+              Navigator.pop(ctx);
+            },
+            child: Text(tr(ctx, 'Use for reports')),
+          ),
+        ],
       ),
     );
   }

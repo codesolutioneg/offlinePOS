@@ -95,7 +95,7 @@ void main() {
     expect(flash.byPaymentMethod['Cash'], closeTo(57, 0.01));
   });
 
-  test('a partial refund still nets on Flash without dropping the sale', () {
+  test('a partial refund stays off Flash; the sale keeps its full total', () {
     final sale = _paid(
         uuid: 'sale-1',
         deviceId: 'till-1',
@@ -126,8 +126,9 @@ void main() {
       periodLabel: 'Today',
       orders: [sale, refund],
     );
-    expect(flash.ordersCount, 2);
-    expect(flash.byPaymentMethod['Cash'], closeTo(57, 0.01));
+    expect(flash.orders.map((o) => o.uuid), ['sale-1']);
+    expect(flash.ordersCount, 1);
+    expect(flash.byPaymentMethod['Cash'], closeTo(114, 0.01));
   });
 
   test('deliveryOnly keeps delivery channels', () {

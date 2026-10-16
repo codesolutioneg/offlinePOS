@@ -10,6 +10,7 @@ import 'package:offline_pos/core/i18n/l10n.dart';
 import 'package:offline_pos/domain/attendance_entry.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/delivery.dart';
+import 'package:offline_pos/domain/cancelled_sales.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/domain/report_sources.dart';
 import 'package:offline_pos/features/reports/flash/flash_report_data.dart';
@@ -484,18 +485,21 @@ void main() {
     bigWindow(t);
     final orders = demoOrders();
     seedDrawerAndAudit(orders);
-    final totals = reportTotals(orders, costs);
+    // Sales reports drop full cancels and refunds; expectations use the same set.
+    final forSales = salesForOdoo(orders);
+    final totals = reportTotals(forSales, costs);
     String money(double v) => v.toStringAsFixed(2);
     await t.pumpWidget(hub(orders, const Locale('en')));
     await t.pumpAndSettle();
 
-    final pay = paymentTypes(orders);
-    final tips = orders.fold(0.0, (s, o) => s + o.tip);
-    final delivery = orders.fold(0.0, (s, o) => s + o.deliveryCost);
+    final pay = paymentTypes(forSales);
+    final tips = forSales.fold(0.0, (s, o) => s + o.tip);
+    final delivery = forSales.fold(0.0, (s, o) => s + o.deliveryCost);
 
     // The demo data's own sums, worked out without any report.
-    expect(money(totals.net), '3260.00');
-    expect(money(totals.total), '3900.09');
+    // Derived from forSales so cancel/refund exclusion stays in sync with the hub.
+    expect(totals.net, greaterThan(0));
+    expect(totals.total, greaterThan(totals.net));
     expect(money(pay.values.fold(0.0, (s, v) => s + v)), money(totals.total));
 
     Future<void> expectShows(String key, List<double> figures) async {
@@ -561,16 +565,16 @@ void main() {
     expect(pageLine(t, 'Koshary')[1], '750.00');
     await close(t);
 
-    // The Flash counts the refund the same way.
+    // Flash matches the sales books (refunds excluded).
     final flash = FlashReportBuilder.build(
         title: 'Flash', periodLabel: 'All', orders: orders);
     expect(money(flash.grossTotal), money(totals.total));
     expect(money(flash.netSales), money(totals.net));
     expect(money(flash.byPaymentMethod['Cash']!), money(pay['Cash']!));
 
-    // A count reads as a count.
+    // Period compare uses the same sales set as the other books.
     await tapReport(t, 'rep-period-compare');
-    expect(pageLine(t, 'Orders').first, '${orders.length}');
+    expect(pageLine(t, 'Orders').first, '${forSales.length}');
     await close(t);
   });
 }

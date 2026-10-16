@@ -159,6 +159,29 @@ void main() {
     expect(line(doc, 'Visa'), ['Visa', '1', '100.00']);
   });
 
+  test('session summary: a zeroed complimentary line does not inflate Number',
+      () {
+    final real = sale(OrderType.dineIn, lines: [
+      burger()
+    ], payments: const [
+      OrderPayment(methodId: 9, amount: 148.19, label: 'complimentary'),
+    ]);
+    final ghost = sale(OrderType.dineIn, lines: [
+      burger(quantity: 0)
+    ], payments: const [
+      OrderPayment(methodId: 9, amount: 0, label: 'complimentary'),
+    ]);
+    final binding = bindRmReport('SessionSummary',
+        orders: [real, ghost], categories: categories, costs: costs)!;
+    final doc = layOutRmReport(
+      named('SessionSummary'),
+      const RmSystem(shop: '', report: '', period: '', ranAt: '', filter: ''),
+      rows: binding.rows,
+      headless: binding.headless,
+    );
+    expect(line(doc, 'complimentary'), ['complimentary', '1', '148.19']);
+  });
+
   test('session summary: groups are credits, with discounts and gross', () {
     final doc = page('SessionSummary');
     // Three burgers: 200 + 90 net, 10 given away on the line, 300 gross.

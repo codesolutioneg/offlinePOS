@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../core/cloud/report_lookups.dart';
 import '../core/i18n/l10n.dart';
 import '../core/theme/app_colors.dart';
+import '../domain/cancelled_sales.dart';
 import '../domain/order.dart';
 import 'branches_page.dart';
 import 'reports_page.dart';
@@ -40,9 +41,18 @@ class _Stats {
   }
 
   static _Stats of(Iterable<_Sale> sales) {
+    final orders = [for (final x in sales) x.order];
     final s = _Stats();
-    for (final x in sales) {
-      s.add(x.order);
+    // Sales KPIs: no full cancels, no refund rows (matches Flash / session SO).
+    for (final o in salesForOdoo(orders)) {
+      s.add(o);
+    }
+    // Refunds KPI: refunds that are not half of a full cancel pair.
+    for (final o in withoutFullyCancelled(orders)) {
+      if (o.isRefund || o.total < 0) {
+        s.refunds += o.total.abs();
+        s.refundCount++;
+      }
     }
     return s;
   }

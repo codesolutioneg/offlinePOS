@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../../domain/cancelled_sales.dart';
+import '../../domain/order.dart';
 import '../../domain/report_sources.dart';
 import '../../domain/shift.dart';
 import '../../domain/shift_movement.dart';
@@ -205,15 +207,30 @@ class ShiftStore implements ReportShifts {
   }
 
   /// The sales taken in [shift]'s window: paid or already synced, so a close after
-  /// a sync still counts them.
-  List<Map<String, dynamic>> _salesIn(Shift shift) => _db.raw.select(
-        "SELECT cashier_id, total, payload FROM orders "
-        "WHERE state IN ('paid', 'synced') AND created_at >= ? AND created_at <= ?",
-        [
-          shift.openedAt.toIso8601String(),
-          (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String(),
-        ],
-      );
+  /// a sync still counts them. Full cancel pairs and refunds are dropped the same
+  /// way as Flash / the Odoo session merge, so the End of Day card matches what
+  /// close will send.
+  List<Map<String, dynamic>> _salesIn(Shift shift) {
+    final rows = _db.raw.select(
+      "SELECT cashier_id, total, payload FROM orders "
+      "WHERE state IN ('paid', 'synced') AND created_at >= ? AND created_at <= ?",
+      [
+        shift.openedAt.toIso8601String(),
+        (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String(),
+      ],
+    );
+    final rowByUuid = <String, Map<String, dynamic>>{};
+    final decoded = <Order>[];
+    for (final r in rows) {
+      final o = Order.fromMap(
+          jsonDecode(r['payload'] as String) as Map<String, dynamic>);
+      decoded.add(o);
+      rowByUuid[o.uuid] = r;
+    }
+    return [
+      for (final o in salesForOdoo(decoded)) rowByUuid[o.uuid]!,
+    ];
+  }
 
   /// The payments recorded on one order payload, empty when none were.
   List<Map<String, Object?>> _payments(String payload) => [

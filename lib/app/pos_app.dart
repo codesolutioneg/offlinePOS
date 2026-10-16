@@ -79,6 +79,7 @@ import '../domain/business_day.dart';
 import '../domain/catalogue.dart';
 import '../domain/floor_bulletin.dart';
 import '../domain/order.dart';
+import '../domain/session_close_check.dart';
 import '../domain/table_floor_info.dart';
 import '../domain/table_section_config.dart';
 import '../domain/shift.dart';
@@ -6704,7 +6705,10 @@ class _PosAppState extends State<PosApp> {
   /// The tills that could not hand over their sales since [since], one line each
   /// in the cashier's language. Empty when the whole shop is in.
   Future<List<String>> _catchUpOtherTills(
-      BuildContext context, DateTime since) async {
+    BuildContext context,
+    DateTime since, {
+    void Function(String status)? onProgress,
+  }) async {
     final lan = widget.lan;
     if (lan == null) return const [];
     final notOnNetwork = tr(context, 'the primary is not on the network');
@@ -6712,7 +6716,10 @@ class _PosAppState extends State<PosApp> {
     final thisTill = tr(context, 'This till');
     List<LanTillGap> gaps;
     try {
-      gaps = await lan.catchUpBeforeClose(since: since);
+      gaps = await lan.catchUpBeforeClose(
+        since: since,
+        onProgress: onProgress,
+      );
     } catch (e) {
       return ['$thisTill: $e'];
     }
@@ -6772,7 +6779,11 @@ class _PosAppState extends State<PosApp> {
                     widget.shifts.currentOpenShift() ??
                     widget.shifts.latestShift();
                 if (shift == null) return widget.sync.pendingSales;
-                return widget.orders.awaitingSyncInShift(shift).length;
+                // Shop-wide: the End of Day card and the Odoo push both cover
+                // every till that has replicated here, not only this outbox.
+                return widget.orders
+                    .salesInShift(shift, anyDevice: true)
+                    .length;
               },
               sessionPartnerName: () {
                 final name = widget.settings.odooSessionPartnerName;
@@ -6794,8 +6805,12 @@ class _PosAppState extends State<PosApp> {
                 }
                 final shift = widget.shifts.currentOpenShift();
                 if (shift == null) return null;
-                // Tickets in THIS open shift only — not the whole outbox backlog.
-                if (widget.orders.awaitingSyncInShift(shift).isEmpty) return null;
+                // Whole shop session — same set close will push — not this till alone.
+                if (widget.orders
+                    .salesInShift(shift, anyDevice: true)
+                    .isEmpty) {
+                  return null;
+                }
                 widget.settings.mergeBatchIntoOneSaleOrder = true;
                 final needsPartnerMsg = tr(
                   context,
@@ -6819,8 +6834,11 @@ class _PosAppState extends State<PosApp> {
               // With the shop on the network, every till seen this shift hands its
               // sales over (through the primary, from a secondary) before the count.
               catchUpOtherTills: widget.lan?.isRunning == true
-                  ? (since) => _catchUpOtherTills(context, since)
+                  ? (since, {onProgress}) =>
+                      _catchUpOtherTills(context, since, onProgress: onProgress)
                   : null,
+              sessionSalesForClose: (shift) =>
+                  widget.orders.salesInShift(shift, anyDevice: true),
               onCloseOverride: (reason, detail) =>
                   widget.audit.record(session.cashierId, reason, detail: detail),
               // Gated BEFORE the shift closes, since the close is irreversible: the
@@ -6845,8 +6863,10 @@ class _PosAppState extends State<PosApp> {
                 _announceDayClose(session);
                 final shift = widget.shifts.latestShift();
                 if (shift == null) return 'No shift to sync.';
-                // Same window the Z used: paid tickets created between open and close.
-                final shiftOrders = widget.orders.awaitingSyncInShift(shift);
+                // Same set the End of Day card shows: every till that replicated
+                // here for this window — not only this till's outbox.
+                final shiftOrders =
+                    widget.orders.salesInShift(shift, anyDevice: true);
                 if (shiftOrders.isEmpty) {
                   final existing =
                       widget.sync.lastOdooOrderRef ??
@@ -6867,18 +6887,21 @@ class _PosAppState extends State<PosApp> {
                   orderUuids: {for (final o in shiftOrders) o.uuid},
                   batchKey: shift.uuid,
                   enqueueOrders: () async {
-                    // Fresh wire payloads so delivery / tip / service fee are not
-                    // stale zeros left from an older enqueue.
                     for (final o in shiftOrders) {
                       await widget.outbox.enqueue(
                         'order.push',
                         o.uuid,
                         o.toServerPayload(),
                       );
+                      // A refuse from a partial push left dead_at; revive like resend.
+                      widget.outboxStore.reviveByKey('order.push', o.uuid);
                     }
                   },
                 );
                 if (result.merged) {
+                  for (final o in shiftOrders) {
+                    widget.orders.tellShopSynced(o.uuid);
+                  }
                   var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
                   if (odooRef == null ||
                       odooRef.isEmpty ||
@@ -7018,6 +7041,17 @@ class _PosAppState extends State<PosApp> {
     final sales = widget.orders.salesInShift(shift, anyDevice: true);
     if (sales.isEmpty) {
       return 'No sales in the last closed session.';
+    }
+    final screen =
+        widget.shifts.summary(shift, cashMethodIds: {
+      for (final m in widget.catalogue.paymentMethods())
+        if (m.isCash) m.id,
+    });
+    final match = matchSessionClose(screen: screen, sendOrders: sales);
+    if (!match.ok) {
+      return 'Orders on this till do not match the session card — '
+          'collect sales from the other tills and try again.\n'
+          '${match.lines.join('\n')}';
     }
     final stress = stressOrderCount(widget.outboxStore.db,
         deviceId: widget.deviceId);

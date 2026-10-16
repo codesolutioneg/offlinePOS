@@ -16,7 +16,11 @@ List<Order> withoutFullyCancelled(List<Order> orders) {
   final cancelled = <String>{};
   for (final o in orders) {
     if (o.isRefund) continue;
-    final net = o.total + (refundNet[o.uuid] ?? 0);
+    // Need a real refund against this ticket — a legitimate zero-total
+    // complimentary must not look like a cancel (net 0 with no refund).
+    final refunded = refundNet[o.uuid];
+    if (refunded == null) continue;
+    final net = o.total + refunded;
     if (net.abs() < 0.02) cancelled.add(o.uuid);
   }
   if (cancelled.isEmpty) return orders;

@@ -3,6 +3,7 @@ import '../domain/attendance_entry.dart';
 import '../domain/order.dart';
 import '../domain/report_sources.dart';
 import '../domain/shift.dart';
+import '../domain/shop_sessions.dart';
 import 'site_api.dart';
 
 /// What the reports screen reads, for one branch or all of them, from the rows
@@ -58,10 +59,10 @@ class SiteReportData implements ReportAttendance, ReportAudit {
       for (final r in rows)
         if (r.kind != 'shift') (kind: r.kind, payload: r.payload),
     ]);
-    shifts = MemoryReportShifts([
+    shifts = MemoryReportShifts(collapseShopShiftClones([
       for (final r in rows)
         if (r.kind == 'shift') shiftFromRow(r.payload),
-    ]);
+    ]));
     final today = _now();
     await prepare(DateTime(today.year, today.month, today.day - 31), null);
   }

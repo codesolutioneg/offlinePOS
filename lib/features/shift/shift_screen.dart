@@ -6,6 +6,8 @@ import '../../core/db/shift_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/numeric_keypad.dart';
+import '../../domain/order.dart';
+import '../../domain/session_close_check.dart';
 import '../../domain/shift.dart';
 
 /// Open a shift with a float, record cash in/out, and close with an End-of-Day
@@ -32,6 +34,7 @@ class ShiftScreen extends StatefulWidget {
     this.sessionPartnerName,
     this.onPrepareCloseSync,
     this.catchUpOtherTills,
+    this.sessionSalesForClose,
     this.onCloseOverride,
     this.startCloseOnOpen = false,
     this.startMovement,
@@ -68,8 +71,16 @@ class ShiftScreen extends StatefulWidget {
 
   /// Brings in every sale the other tills on the network rang since [since], before
   /// anything is counted. Answers one line per till that could not be reached; an
-  /// empty list means every till seen this shift is in.
-  final Future<List<String>> Function(DateTime since)? catchUpOtherTills;
+  /// empty list means every till seen this shift is in. [onProgress] updates the
+  /// close progress dialog as each peer is pulled.
+  final Future<List<String>> Function(
+    DateTime since, {
+    void Function(String status)? onProgress,
+  })? catchUpOtherTills;
+
+  /// Shop-wide sales that close will push to Odoo (every till that replicated
+  /// here). Used to match the End of Day card before counting the drawer.
+  final List<Order> Function(Shift shift)? sessionSalesForClose;
 
   /// A close went ahead over something it would normally stop for, with the reason
   /// as a short event name and what was skipped, for the audit trail.
@@ -793,6 +804,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
     // judged or anything is counted, or the Z comes out short.
     if (!await _catchUpOtherTills()) return;
     if (!mounted) return;
+    // Screen totals must match the shop-wide set that will go to Odoo.
+    if (!await _verifySessionTotals()) return;
+    if (!mounted) return;
     // Before anything else, including the cash count: a tab still on a table
     // is a reason not to be closing at all, and finding that out after
     // counting the drawer wastes the count.
@@ -858,7 +872,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
     while (true) {
       final gaps = await _withProgress(
         tr(context, 'Collecting sales from the other tills...'),
-        () => catchUp(shift.openedAt),
+        (setStatus) => catchUp(shift.openedAt, onProgress: setStatus),
       );
       if (!mounted) return false;
       if (gaps.isEmpty) return true;
@@ -925,10 +939,86 @@ class _ShiftScreenState extends State<ShiftScreen> {
     }
   }
 
+  /// End of Day card vs the shop-wide set close will send. Mismatch means a
+  /// peer's tickets are still missing — retry catch-up, do not send a short SO.
+  Future<bool> _verifySessionTotals() async {
+    final salesOf = widget.sessionSalesForClose;
+    final shift = _shift;
+    if (salesOf == null || shift == null) return true;
+    while (true) {
+      if (!mounted) return false;
+      await _withProgress(
+        tr(context, 'Checking totals against other tills...'),
+        (setStatus) async {
+          setStatus(tr(context, 'Checking totals against other tills...'));
+          await Future<void>.delayed(Duration.zero);
+        },
+      );
+      if (!mounted) return false;
+      final screen =
+          widget.store.summary(shift, cashMethodIds: widget.cashMethodIds);
+      final send = salesOf(shift);
+      final match =
+          matchSessionClose(screen: screen, sendOrders: send);
+      if (match.ok) return true;
+      widget.onCloseBlocked?.call('shift.close.blocked.totals_mismatch');
+      final choice = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          key: const Key('session-totals-mismatch'),
+          title: Text(tr(ctx, 'Orders do not match the screen')),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(tr(
+                    ctx,
+                    'The End of Day totals do not match what this till would '
+                    'send to Odoo. Collect sales from the other tills and try again.',
+                  )),
+                  const SizedBox(height: 12),
+                  for (final line in match.lines)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text('• $line'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              key: const Key('session-totals-cancel'),
+              onPressed: () => Navigator.pop(ctx, 'cancel'),
+              child: Text(tr(ctx, 'Cancel')),
+            ),
+            FilledButton(
+              key: const Key('session-totals-retry'),
+              onPressed: () => Navigator.pop(ctx, 'retry'),
+              child: Text(tr(ctx, 'Try again')),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return false;
+      if (choice != 'retry') return false;
+      if (!await _catchUpOtherTills()) return false;
+    }
+  }
+
   /// Runs [work] behind a dialog that cannot be dismissed, so nothing else is
-  /// started on the till while it waits on the network.
-  Future<T> _withProgress<T>(String label, Future<T> Function() work) async {
+  /// started on the till while it waits on the network. [work] may call
+  /// [setStatus] to update the label as peers are pulled.
+  Future<T> _withProgress<T>(
+    String label,
+    Future<T> Function(void Function(String status) setStatus) work,
+  ) async {
     final nav = Navigator.of(context, rootNavigator: true);
+    final status = ValueNotifier<String>(label);
     var shown = true;
     unawaited(showDialog<void>(
       context: context,
@@ -938,18 +1028,24 @@ class _ShiftScreenState extends State<ShiftScreen> {
         canPop: false,
         child: AlertDialog(
           key: const Key('close-progress'),
-          content: Row(children: [
-            const SizedBox(
-                width: 24, height: 24, child: CircularProgressIndicator()),
-            const SizedBox(width: 16),
-            Expanded(child: Text(label)),
-          ]),
+          content: ValueListenableBuilder<String>(
+            valueListenable: status,
+            builder: (_, text, _) => Row(children: [
+              const SizedBox(
+                  width: 24, height: 24, child: CircularProgressIndicator()),
+              const SizedBox(width: 16),
+              Expanded(child: Text(text)),
+            ]),
+          ),
         ),
       ),
     ).whenComplete(() => shown = false));
     try {
-      return await work();
+      return await work((s) {
+        status.value = s;
+      });
     } finally {
+      status.dispose();
       if (shown) nav.pop();
     }
   }

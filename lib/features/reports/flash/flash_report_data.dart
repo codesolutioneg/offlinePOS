@@ -107,8 +107,9 @@ class FlashReportBuilder {
     var delivery = 0.0;
     var tips = 0.0;
 
-    // Fully cancelled sales drop out entirely; a partial refund still nets here.
-    orders = withoutFullyCancelled(orders);
+    // Drop full cancel pairs and every refund row — returns live in Refunds
+    // reports only (same rule as session summary / item sales).
+    orders = cancelled.salesForOdoo(orders);
     for (final o in orders) {
       final total = o.total;
       gross += total;
@@ -127,9 +128,12 @@ class FlashReportBuilder {
       byDevice[till] = (byDevice[till] ?? 0) + total;
 
       if (o.payments.isEmpty) {
-        byPay['Cash'] = (byPay['Cash'] ?? 0) + total;
+        if (total.abs() >= 0.02) {
+          byPay['Cash'] = (byPay['Cash'] ?? 0) + total;
+        }
       } else {
         for (final p in o.payments) {
+          if (p.amount.abs() < 0.02) continue;
           final k = (p.label ?? '').trim().isEmpty ? 'Cash' : p.label!.trim();
           byPay[k] = (byPay[k] ?? 0) + p.amount;
         }

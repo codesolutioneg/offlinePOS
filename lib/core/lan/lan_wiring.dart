@@ -61,10 +61,14 @@ typedef LanFacts = ({
 /// ones that could not be. A till last heard from before [since] is not asked: it
 /// was not part of this shift.
 Future<List<LanTillGap>> _catchUpPeers(
-    LanFabric fabric, LanPeerDirectory peers, DateTime since) async {
+  LanFabric fabric,
+  LanPeerDirectory peers,
+  DateTime since, {
+  void Function(String status)? onProgress,
+}) async {
   final targets =
       peers.all.where((p) => !p.lastSeenAt.isBefore(since.toUtc())).toList();
-  final failed = await fabric.catchUp(targets);
+  final failed = await fabric.catchUp(targets, onProgress: onProgress);
   return [
     for (final p in targets)
       if (failed[p.deviceId] case final reason?)
@@ -531,13 +535,17 @@ class LanNode {
   /// to the end of its log, because the primary is where the shop's sales are
   /// meant to meet; a primary that cannot be asked is itself the gap. On the
   /// primary, or on a till with no primary at all, this till reads them itself.
-  Future<List<LanTillGap>> catchUpBeforeClose({required DateTime since}) async {
+  Future<List<LanTillGap>> catchUpBeforeClose({
+    required DateTime since,
+    void Function(String status)? onProgress,
+  }) async {
+    onProgress?.call('Handing over this till\'s sales...');
     await _fabric.pass();
     final primaryId = _primaryDeviceId()?.trim();
     final hasPrimary = (primaryId != null && primaryId.isNotEmpty) ||
         peers.all.any((p) => p.role == DeviceRole.primary);
     if (_isPrimary() || !_isSecondary() || !hasPrimary) {
-      return _catchUpPeers(_fabric, peers, since);
+      return _catchUpPeers(_fabric, peers, since, onProgress: onProgress);
     }
     final primary = _primaryPeer();
     if (primary == null) {
@@ -555,6 +563,8 @@ class LanNode {
         ),
       ];
     }
+    final who = primary.name.isEmpty ? primary.deviceId : primary.name;
+    onProgress?.call('Asking $who to collect every till...');
     try {
       return await _client.catchUp(primary, deviceId: deviceId, since: since);
     } catch (e) {

@@ -37,9 +37,10 @@ Shift shiftFromRow(Map<String, Object?> r) {
   return Shift(
     id: r['id'] as String,
     uuid: r['uuid'] as String?,
-    openedAt: DateTime.parse(r['opened_at'] as String),
-    closedAt:
-        r['closed_at'] == null ? null : DateTime.parse(r['closed_at'] as String),
+    openedAt: DateTime.parse(r['opened_at'] as String).toUtc(),
+    closedAt: r['closed_at'] == null
+        ? null
+        : DateTime.parse(r['closed_at'] as String).toUtc(),
     openingFloat: (r['opening_float'] as num).toDouble(),
     cashierId: r['cashier_id'] as String,
     closingCounted: (r['closing_counted'] as num?)?.toDouble(),
