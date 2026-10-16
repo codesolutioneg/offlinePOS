@@ -1,0 +1,79 @@
+أوامر Offline POS في PowerShell
+==============================
+
+إزاي تستخدمها: افتح PowerShell (من قايمة ابدأ اكتب PowerShell)، انسخ السطر كله والزقه ودوس Enter.
+الأوامر اللي محتاجة صلاحية مدير بتطلبها لوحدها، وافق على رسالة ويندوز اللي هتظهر.
+
+
+1) السماح للبرنامج في الفايروول (علشان الأجهزة تشوف بعض على الشبكة)
+----------------------------------------------------------------------
+شغّله على كل جهاز، الرئيسي والفرعي:
+
+Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command',"Get-NetFirewallRule -Action Block -EA SilentlyContinue | ? { `$_.DisplayName -match 'offline' } | Remove-NetFirewallRule; Get-NetFirewallRule -DisplayName 'Offline POS LAN*' -EA SilentlyContinue | Remove-NetFirewallRule; New-NetFirewallRule -DisplayName 'Offline POS LAN TCP' -Direction Inbound -Protocol TCP -LocalPort 45333 -Action Allow -Profile Any | Out-Null; New-NetFirewallRule -DisplayName 'Offline POS LAN UDP' -Direction Inbound -Protocol UDP -LocalPort 45334 -Action Allow -Profile Any | Out-Null; Get-NetFirewallRule -EA SilentlyContinue | ? { `$_.DisplayName -match 'offline' } | ft DisplayName, Action, Enabled -AutoSize; 'Firewall fixed'"
+
+- بيمسح أي حظر للبرنامج عمله ويندوز (لما حد يدوس Cancel على رسالة الفايروول)، والحظر ده بيغلب أي سماح.
+- بيسمح للبورتات 45333 و45334 لأي فولدر البرنامج متثبت فيه، فمش محتاج تعيده بعد التحديث.
+- لو ظهرت رسالة الفايروول "Windows Defender Firewall has blocked some features": علّم على
+  Private و Public الاتنين واضغط Allow access. أوعى تضغط Cancel.
+
+
+2) قفل الفايروول كله (للتجربة بس)
+---------------------------------
+Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command',"Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False; Get-NetFirewallProfile | ft Name,Enabled"
+
+ورجوعه تاني:
+Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-Command',"Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True; Get-NetFirewallProfile | ft Name,Enabled"
+
+
+3) تحديث البرنامج لآخر إصدار من السيرفر (محتاج إنترنت)
+-------------------------------------------------------
+اقفل البرنامج وشغّل:
+
+[Net.ServicePointManager]::SecurityProtocol='Tls12'; $m = Invoke-RestMethod 'https://updates.91.99.195.177.sslip.io/offline-pos/manifest.json'; $i = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($m.manifest)) | ConvertFrom-Json; "Latest: $($i.version)"; $z="$env:TEMP\offlinePOS-latest.zip"; $src="$env:TEMP\offlinePOS-update"; try { Start-BitsTransfer -Source $i.url -Destination $z -DisplayName "Offline POS $($i.version)" } catch { $ProgressPreference='SilentlyContinue'; Invoke-WebRequest $i.url -OutFile $z -UseBasicParsing }; if ((Get-FileHash $z -Algorithm SHA256).Hash.ToLower() -ne $i.sha256) { throw 'The download is damaged, run it again' }; Remove-Item $src -Recurse -Force -EA SilentlyContinue; Expand-Archive $z $src; Get-ChildItem $src -Recurse | Unblock-File; powershell -NoProfile -ExecutionPolicy Bypass -File "$src\tools\update_offline_pos.ps1" -Source $src -Yes
+
+بيدوّر على البرنامج المتثبت لوحده ويحدّثه. لو مش متثبت، زوّد في آخر السطر:  -Fresh -Target C:\OfflinePOS
+
+ملحوظة: من إصدار 1.1.1+10 وطالع مش محتاج الأمر ده. كل جهاز (رئيسي أو فرعي) بيسأل السيرفر
+لوحده، ويطلع له "فيه إصدار جديد" ويتحدّث بضغطة زرار. ولو مفيش إنترنت بياخده من الجهاز الرئيسي.
+
+
+3ب) تحديث من ملف zip (من غير إنترنت)
+------------------------------------
+حط ملف offlinePOS-windows-....zip في فولدر Downloads وشغّل:
+
+$zip = Get-ChildItem "$env:USERPROFILE\Downloads" -Filter 'offlinePOS-windows-*.zip' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; $src = "$env:TEMP\offlinePOS-update"; Remove-Item $src -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive $zip.FullName $src; Get-ChildItem $src -Recurse | Unblock-File; $f = @(if (-not (Test-Path 'C:\OfflinePOS\offline_pos.exe')) { '-Fresh' }); powershell -NoProfile -ExecutionPolicy Bypass -File "$src\tools\update_offline_pos.ps1" -Source $src -Target C:\OfflinePOS -Yes @f
+
+ده بيثبّت في C:\OfflinePOS لو مش متثبت، وبيحدّثه لو متثبت.
+
+
+4) التأكد إن التحديث تم
+-----------------------
+$dir = (Get-Content "$env:APPDATA\Code Solution\Offline POS\install_dir.txt" -ErrorAction SilentlyContinue); "Installed at   : $dir"; if ($dir) { "Installed ver  : " + (Get-Item "$($dir.Trim())\offline_pos.exe").VersionInfo.ProductVersion }; Get-CimInstance Win32_Process -Filter "Name='offline_pos.exe'" | % { "Running ver    : " + (Get-Item $_.ExecutablePath).VersionInfo.ProductVersion + "  from " + $_.ExecutablePath }; $b = Get-ChildItem "$([Environment]::GetFolderPath('MyDocuments'))\OfflinePOS-backups" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1; "Last update at : $($b.Name)"
+
+وكمان شاشة تسجيل الدخول في البرنامج مكتوب تحت فيها رقم الإصدار (Build).
+
+
+5) كشف الشبكة (شغّله على الجهازين والبرنامج مفتوح)
+---------------------------------------------------
+Get-NetIPAddress -AddressFamily IPv4 | ? { $_.IPAddress -notmatch '^(127|169\.254)' } | ft InterfaceAlias, IPAddress; Get-NetConnectionProfile | ft InterfaceAlias, Name, NetworkCategory; "App TCP 45333 listening: " + [bool](Get-NetTCPConnection -LocalPort 45333 -State Listen -EA SilentlyContinue); "App UDP 45334 listening: " + [bool](Get-NetUDPEndpoint -LocalPort 45334 -EA SilentlyContinue); Get-NetFirewallProfile | ft Name, Enabled
+
+- أول 3 أرقام في الـ IP لازم تكون واحدة على الجهازين.
+- App ... listening لازم تطلع True.
+
+مين على الشبكة وفين الجهاز الرئيسي (بيسمع 15 ثانية لكل الأجهزة اللي البرنامج مفتوح عليها):
+$u = New-Object Net.Sockets.UdpClient; $u.Client.SetSocketOption('Socket','ReuseAddress',$true); $u.Client.Bind((New-Object Net.IPEndPoint([Net.IPAddress]::Any,45334))); $u.Client.ReceiveTimeout=2000; $end=(Get-Date).AddSeconds(15); $seen=@{}; "Listening for 15 seconds..."; while ((Get-Date) -lt $end) { try { $ep=New-Object Net.IPEndPoint([Net.IPAddress]::Any,0); $b=$u.Receive([ref]$ep); $j=[Text.Encoding]::UTF8.GetString($b) | ConvertFrom-Json; if (-not $seen[$j.device_id]) { $seen[$j.device_id]=1; $c=New-Object Net.Sockets.TcpClient; $ok=$false; try { $ok=$c.ConnectAsync($ep.Address,[int]$j.port).Wait(1500) } catch {}; $c.Close(); $r = if ($j.role) { $j.role } else { 'not set' }; "{0,-16} {1,-22} role: {2,-10} port: {3}  reachable: {4}" -f $ep.Address, $j.name, $r, $j.port, $ok } } catch [Net.Sockets.SocketException] {} }; $u.Close(); if ($seen.Count -eq 0) { 'No device was heard.' }
+
+- role: primary يبقى ده الجهاز الرئيسي. reachable: True يبقى الجهاز ده يقدر يتصل بيه.
+- reachable: False: الفايروول على الجهاز الرئيسي قافل البرنامج، شغّل أمر 1 عليه.
+- No device was heard: البرنامج مقفول على الرئيسي، أو الجهازين مش على نفس الشبكة،
+  أو الفايروول قافل UDP 45334. شغّل أمر 1 على الجهازين، ولو لسه، جرّب أمر 2 (قفل الفايروول) للتجربة.
+
+ومن جهاز للتاني (حط IP الجهاز التاني مكان 192.168.1.25):
+Test-NetConnection 192.168.1.25 -Port 45333 | ft RemoteAddress, PingSucceeded, TcpTestSucceeded
+
+
+6) مسح كل الداتا ورجوع البرنامج كأنه جديد (مع نسخة احتياطية)
+-------------------------------------------------------------
+اقفل الشيفت واتأكد إن كل المبيعات وصلت Odoo الأول. شغّل ResetOfflinePOS.bat من فولدر tools، أو:
+
+Get-Process offline_pos -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 2; $d = "$env:APPDATA\Code Solution\Offline POS"; $b = "$([Environment]::GetFolderPath('MyDocuments'))\OfflinePOS-backups\reset-$(Get-Date -Format yyyyMMdd-HHmmss)"; if (Test-Path $d) { Copy-Item $d $b -Recurse; Remove-Item $d -Recurse -Force; "Deleted. Backup: $b" } else { "Nothing to delete" }

@@ -11,6 +11,8 @@
 /// and a bug in building it is exactly the bug this is here to catch.
 library;
 
+import 'order.dart' show roundMoney;
+
 /// How far apart the two sides may be before the payload is called broken.
 ///
 /// One piastre, the same bar the module holds its own total to. Scaling a line by
@@ -18,6 +20,12 @@ library;
 /// anything above it is a real charge that is on one side of the sale and not the
 /// other.
 const double kPayloadBalanceTolerance = 0.01;
+
+/// One line (or product-backed modifier) as Odoo prices it: unit to the piastre,
+/// times quantity to the piastre. Matches [Order]'s booked base so a night of
+/// tickets merged into one payload still equals the sum of what each sale paid.
+double _bookedBase(double unitPrice, double qty) =>
+    roundMoney(roundMoney(unitPrice) * qty);
 
 /// What Odoo will total from the `lines` this payload declares.
 ///
@@ -31,11 +39,11 @@ double payloadLinesTotal(Map<String, dynamic> payload) {
   for (final raw in (payload['lines'] as List? ?? const [])) {
     final line = (raw as Map).cast<String, dynamic>();
     final qty = _num(line['quantity']);
-    total += qty * _num(line['unit_price']);
+    total += _bookedBase(_num(line['unit_price']), qty);
     for (final rawMod in (line['modifiers'] as List? ?? const [])) {
       final mod = (rawMod as Map).cast<String, dynamic>();
       if (mod['product_id'] == null) continue;
-      total += qty * _num(mod['quantity']) * _num(mod['unit_price']);
+      total += _bookedBase(_num(mod['unit_price']), qty * _num(mod['quantity']));
     }
   }
   return total;
@@ -44,7 +52,9 @@ double payloadLinesTotal(Map<String, dynamic> payload) {
 /// The two charges that reach Odoo as fields of their own rather than as lines,
 /// for the module to price into the sale it builds.
 double payloadPricedExtras(Map<String, dynamic> payload) =>
-    _num(payload['delivery_cost']) + _num(payload['tip']);
+    _num(payload['delivery_cost']) +
+    _num(payload['tip']) +
+    _num(payload['service_fee']);
 
 /// The tax this payload's own lines say will be charged on them.
 ///
@@ -54,8 +64,8 @@ double payloadPricedExtras(Map<String, dynamic> payload) =>
 ///
 /// Each line's own rate, applied to that line and to the modifiers priced into it,
 /// which is exactly how the till worked the figure out before it charged the guest.
-/// Delivery and a tip carry no tax and so are not in here: the module books their
-/// lines untaxed for the same reason.
+/// Delivery, tip and an absolute service fee carry no tax and so are not in here:
+/// the module books their untaxed amounts from the matching payload fields.
 double payloadTaxTotal(Map<String, dynamic> payload) {
   var tax = 0.0;
   for (final raw in (payload['lines'] as List? ?? const [])) {
@@ -63,13 +73,16 @@ double payloadTaxTotal(Map<String, dynamic> payload) {
     final rate = _num(line['tax_rate']);
     if (rate <= 0) continue;
     final qty = _num(line['quantity']);
-    var net = qty * _num(line['unit_price']);
+    var net = _bookedBase(_num(line['unit_price']), qty);
     for (final rawMod in (line['modifiers'] as List? ?? const [])) {
       final mod = (rawMod as Map).cast<String, dynamic>();
       if (mod['product_id'] == null) continue;
-      net += qty * _num(mod['quantity']) * _num(mod['unit_price']);
+      net += _bookedBase(_num(mod['unit_price']), qty * _num(mod['quantity']));
     }
-    tax += net * rate / 100;
+    // Per line to the piastre, the same way Odoo and [Order.taxTotal] charge it.
+    // Without this, a merged night of many taxed tickets drifts by dust that the
+    // till already absorbed when each sale was paid, and Sync now refuses the lot.
+    tax += roundMoney(net * rate / 100);
   }
   return tax;
 }
@@ -110,7 +123,7 @@ String? payloadImbalanceReason(Map<String, dynamic> payload) {
   final gap = payloadImbalance(payload);
   return 'payload does not add up: tendered ${_money(payloadTendered(payload))} '
       'against lines ${_money(payloadLinesTotal(payload))} plus tax '
-      '${_money(payloadTaxTotal(payload))} plus delivery and tip '
+      '${_money(payloadTaxTotal(payload))} plus delivery, tip and service fee '
       '${_money(payloadPricedExtras(payload))}, a gap of ${_money(gap)}';
 }
 

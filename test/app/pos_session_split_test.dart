@@ -63,7 +63,7 @@ void main() {
       final pizzaLine = lineFor(10);
 
       final check = session.payCheck([pizzaLine],
-          payments: const [OrderPayment(methodId: 1, amount: 100, label: 'Cash')]);
+          payments: const [OrderPayment(methodId: 1, amount: 100, label: 'Cash')])!;
 
       expect(check.state, OrderState.paid);
       expect(check.total, 100);
@@ -156,8 +156,9 @@ void main() {
     test('moving a line off a discounted table keeps its discounted price', () {
       session.setTable('1');
       session.addProduct(pizza); // 100
+      session.addProduct(cola); // stays behind, so this is a partial move
       session.setDiscount(10); // whole-order 10%
-      expect(session.current.lines.single.total, 100); // line total is pre-order-discount
+      expect(session.current.lines.first.total, 100); // line total is pre-order-discount
       final move = {lineFor(10)};
 
       final target = session.moveLinesToTable(move, '2');
@@ -165,6 +166,19 @@ void main() {
       // The moved line now owns the 10% as a line discount, so it is worth 90 on a
       // fresh (undiscounted) table rather than snapping back to 100.
       expect(target.lines.single.total, closeTo(90, 0.001));
+    });
+
+    test('moving a whole discounted table keeps the bill and its discount', () {
+      session.setTable('1');
+      session.addProduct(pizza); // 100
+      session.setDiscount(10);
+      final uuid = session.current.uuid;
+
+      final target = session.moveLinesToTable({lineFor(10)}, '2');
+
+      expect(target.uuid, uuid);
+      expect(target.discountPercent, 10);
+      expect(target.total, closeTo(90, 0.001));
     });
 
     test('moving into an already-discounted table does not double-discount', () {
@@ -235,6 +249,98 @@ void main() {
 
       expect(orders.byUuid(held.uuid), isNull);
       expect(session.current.lines.map((l) => l.productId).toSet(), {10, 11});
+    });
+
+    test('claimSeat parks an empty bill so the table occupies immediately', () {
+      session.claimSeat('12');
+      expect(session.current.state, OrderState.held);
+      expect(session.current.tableLabel, '12');
+      expect(session.current.lines, isEmpty);
+      expect(orders.occupyingAnywhere().single.tableLabel, '12');
+    });
+
+    test('starting a tableless sale releases an empty claim', () {
+      session.claimSeat('12');
+      session.startFresh(OrderType.takeaway);
+      expect(orders.occupyingAnywhere(), isEmpty);
+    });
+
+    test('backing out of an empty claim frees the table', () {
+      session.claimSeat('12');
+      session.newOrder();
+      expect(orders.occupyingAnywhere(), isEmpty);
+    });
+
+    test('separate carts share a table without folding lines', () {
+      session.setTable('1');
+      session.addProduct(pizza);
+      session.hold();
+      final source = orders.held().single;
+      session.setTable('2');
+      session.addProduct(cola);
+      session.mergeAsSeparateCarts(source.uuid);
+      expect(orders.byUuid(source.uuid)!.tableLabel, '2');
+      expect(session.current.lines.single.productId, 11);
+      expect(orders.byUuid(source.uuid)!.lines.single.productId, 10);
+      expect(session.current.linkedOrderUuids, contains(source.uuid));
+      expect(
+        orders.occupyingAnywhere().where((o) => o.tableLabel == '2'),
+        hasLength(2),
+      );
+    });
+
+    test('splitting a linked tab onto a free table unlinks it', () {
+      session.setTable('1');
+      session.addProduct(pizza);
+      session.hold();
+      final source = orders.held().single;
+      session.setTable('2');
+      session.addProduct(cola);
+      session.mergeAsSeparateCarts(source.uuid);
+      session.splitTabToTable('9');
+      expect(session.current.tableLabel, '9');
+      expect(session.current.linkedOrderUuids, isEmpty);
+      expect(orders.byUuid(source.uuid)!.tableLabel, '2');
+      expect(orders.byUuid(source.uuid)!.linkedOrderUuids, isEmpty);
+    });
+
+    test('paying one tab leaves its sibling occupying the table', () {
+      session.setTable('1');
+      session.addProduct(pizza);
+      session.hold();
+      final source = orders.held().single;
+      session.setTable('2');
+      session.addProduct(cola);
+      session.mergeAsSeparateCarts(source.uuid);
+      session.pay(
+          payments: const [OrderPayment(methodId: 1, amount: 20, label: 'Cash')]);
+      expect(orders.occupyingAnywhere().single.uuid, source.uuid);
+      expect(orders.byUuid(source.uuid)!.linkedOrderUuids, isEmpty);
+    });
+
+    test('clearing the table turns dine-in into takeaway', () {
+      session.setTable('1');
+      session.addProduct(pizza);
+      session.clearTableToTakeaway();
+      expect(session.current.tableLabel, isNull);
+      expect(session.current.type, OrderType.takeaway);
+    });
+
+    test('moveLinesToTable can name which tab to join', () {
+      session.setTable('2');
+      session.addProduct(cake);
+      session.hold();
+      final first = orders.held().single;
+      session.setTable('2');
+      session.addProduct(pizza);
+      session.hold();
+      session.setTable('1');
+      session.addProduct(cola);
+      session.moveLinesToTable({lineFor(11)}, '2', targetOrderUuid: first.uuid);
+      expect(
+        orders.byUuid(first.uuid)!.lines.map((l) => l.productId).toSet(),
+        {12, 11},
+      );
     });
   });
 }

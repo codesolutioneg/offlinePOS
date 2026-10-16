@@ -30,7 +30,11 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
   late bool _showTax;
   late bool _askGuests;
   late bool _askCashierOnOpen;
+  late bool _tableOpenRequireAuth;
+  late bool _moveRequiresKitchen;
   late bool _askSessionStaff;
+  late bool _showOrderTypeStrip;
+  late bool _showRevenueCenter;
   late int _cutoverHour;
   late Set<OrderType> _offered;
   late bool _sectionsSide;
@@ -46,7 +50,11 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     _showTax = widget.settings.receiptShowTax;
     _askGuests = widget.settings.askGuestCount;
     _askCashierOnOpen = widget.settings.askCashierOnOpen;
+    _tableOpenRequireAuth = widget.settings.tableOpenRequireAuth;
+    _moveRequiresKitchen = widget.settings.moveRequiresKitchen;
     _askSessionStaff = widget.settings.askSessionStaff;
+    _showOrderTypeStrip = widget.settings.showOrderTypeStrip;
+    _showRevenueCenter = widget.settings.showRevenueCenter;
     _cutoverHour = widget.settings.businessDayCutoverHour;
     _offered = widget.settings.shopOrderTypes;
     _sectionsSide = widget.settings.floorSectionsSide;
@@ -82,7 +90,11 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
     widget.settings.receiptShowTax = _showTax;
     widget.settings.askGuestCount = _askGuests;
     widget.settings.askCashierOnOpen = _askCashierOnOpen;
+    widget.settings.tableOpenRequireAuth = _tableOpenRequireAuth;
+    widget.settings.moveRequiresKitchen = _moveRequiresKitchen;
     widget.settings.askSessionStaff = _askSessionStaff;
+    widget.settings.showOrderTypeStrip = _showOrderTypeStrip;
+    widget.settings.showRevenueCenter = _showRevenueCenter;
     widget.settings.businessDayCutoverHour = _cutoverHour;
     widget.settings.shopOrderTypes = _offered;
     widget.settings.floorSectionsSide = _sectionsSide;
@@ -102,6 +114,32 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Text(
+            tr(context, 'Tables'),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          SwitchListTile(
+            key: const Key('ask-cashier-on-open'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Ask who is opening the table')),
+            subtitle: Text(tr(context, 'On a shared till, assigns the table to them')),
+            value: _askCashierOnOpen,
+            onChanged: (v) => setState(() => _askCashierOnOpen = v),
+          ),
+          SwitchListTile(
+            key: const Key('table-open-require-auth'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(tr(context, 'Require PIN or fingerprint to open a table')),
+            subtitle: Text(tr(
+              context,
+              'After choosing the waiter. Turn off to assign by name only.',
+            )),
+            value: _tableOpenRequireAuth,
+            onChanged: _askCashierOnOpen
+                ? (v) => setState(() => _tableOpenRequireAuth = v)
+                : null,
+          ),
+          const Divider(height: 28),
           TextField(
             key: const Key('shop-name'),
             controller: _shopName,
@@ -145,11 +183,12 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
             onChanged: (v) => setState(() => _askGuests = v),
           ),
           SwitchListTile(
-            key: const Key('ask-cashier-on-open'),
-            title: Text(tr(context, 'Ask who is opening the table')),
-            subtitle: Text(tr(context, 'On a shared till, assigns the table to them')),
-            value: _askCashierOnOpen,
-            onChanged: (v) => setState(() => _askCashierOnOpen = v),
+            key: const Key('move-requires-kitchen'),
+            title: Text(tr(context, 'Move table only after kitchen')),
+            subtitle: Text(tr(context,
+                'A dine-in bill cannot change tables until a line is sent')),
+            value: _moveRequiresKitchen,
+            onChanged: (v) => setState(() => _moveRequiresKitchen = v),
           ),
           SwitchListTile(
             key: const Key('ask-session-staff'),
@@ -201,6 +240,23 @@ class _ShopSettingsScreenState extends State<ShopSettingsScreen> {
                   onSelected: (v) => _toggleOffered(t, v),
                 ),
             ],
+          ),
+          // The two ways to change an open order's type. Each is shop-wide and
+          // sits above the levels: off, a manager does not see it either.
+          SwitchListTile(
+            key: const Key('show-order-type-strip'),
+            title: Text(tr(context, 'Show the order types above the bill')),
+            subtitle: Text(tr(context, 'Off hides them from everyone, managers included')),
+            value: _showOrderTypeStrip,
+            onChanged: (v) => setState(() => _showOrderTypeStrip = v),
+          ),
+          SwitchListTile(
+            key: const Key('show-revenue-center'),
+            title: Text(tr(context, 'Show Revenue Center in Misc')),
+            subtitle: Text(tr(context,
+                'Changes an open order between dine-in, takeaway and delivery')),
+            value: _showRevenueCenter,
+            onChanged: (v) => setState(() => _showRevenueCenter = v),
           ),
           const SizedBox(height: 12),
           ListTile(

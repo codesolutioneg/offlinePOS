@@ -84,7 +84,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       config: const TillConfig(),
@@ -162,7 +162,7 @@ void main() {
 
     // The floor refuses the order with the strip up, and goes on refusing it once
     // the reminder is gone: dismissing it is not a way past the gate.
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsNothing);
     expect(find.byKey(const Key('shift-nudge')).hitTestable(), findsOneWidget);
@@ -175,7 +175,7 @@ void main() {
     // Let the refusal toast clear the button it is sitting over, then try again.
     await t.pump(const Duration(seconds: 4));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('floor-takeaway')));
+    await t.tap(find.byKey(const Key('floor-action-table')));
     await t.pumpAndSettle();
     expect(find.byType(SellScreen), findsNothing);
   });
@@ -201,7 +201,7 @@ void main() {
     // Out from the floor, which is where a cashier who cannot sell stands: the
     // next one's PIN screen is not the place to be told about the last one's
     // drawer.
-    await t.tap(find.byKey(const Key('sign-out')));
+    await t.tap(find.byKey(const Key('floor-action-end')));
     await t.pumpAndSettle();
 
     expect(find.byKey(const Key('shift-nudge')), findsNothing);

@@ -34,10 +34,16 @@ class DiagnosticsScreen extends StatefulWidget {
     this.printError,
     this.authorize,
     this.onBackup,
+    this.onOpenSql,
+    this.onResendClosedSession,
   });
 
   final SyncService sync;
   final SqliteOutboxStore outboxStore;
+
+  /// Re-book the last closed session (every till's sales held here) as one Odoo
+  /// sale order. Null hides the button.
+  final Future<String> Function()? onResendClosedSession;
 
   /// Optional so the screen can be looked at without a print path behind it.
   final PrinterRegistry? printers;
@@ -64,6 +70,10 @@ class DiagnosticsScreen extends StatefulWidget {
   /// the action rather than offering one that cannot work.
   final Future<String> Function()? onBackup;
 
+  /// Opens the live SQL window. Null hides the row, so a suite that does not
+  /// wire the database is unchanged.
+  final VoidCallback? onOpenSql;
+
   /// Gate for adding, editing or forgetting a printer here: it is the same
   /// managePrinters right the Settings printer screen uses, so support cannot be a
   /// back door around it. Reprint and find-printer stay open to any cashier.
@@ -75,16 +85,41 @@ class DiagnosticsScreen extends StatefulWidget {
 
 class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   bool _syncing = false;
+  bool _resendingSession = false;
   String? _printerBusy;
 
   /// Where the last backup landed, or why there is none. A path a cashier can read
   /// out is the whole point of the button.
   String? _backupMessage;
 
+  /// Result of the last closed-session resend, for the cashier to read out.
+  String? _resendSessionMessage;
+
   Future<void> _syncNow() async {
     setState(() => _syncing = true);
-    await widget.sync.tick();
+    final retry = widget.sync.closedShiftRetry;
+    if (retry != null) {
+      await retry();
+    } else {
+      await widget.sync.tick();
+    }
     if (mounted) setState(() => _syncing = false);
+  }
+
+  Future<void> _resendClosedSession() async {
+    final run = widget.onResendClosedSession;
+    if (run == null) return;
+    setState(() {
+      _resendingSession = true;
+      _resendSessionMessage = null;
+    });
+    final message = await run();
+    if (mounted) {
+      setState(() {
+        _resendingSession = false;
+        _resendSessionMessage = message;
+      });
+    }
   }
 
   /// Sweeps the subnet ignoring the address we last used, for when support already
@@ -108,6 +143,42 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     setState(() => _printerBusy = 'spool');
     await widget.spool!.flush();
     if (mounted) setState(() => _printerBusy = null);
+  }
+
+  Future<void> _discardHeld() async {
+    final spool = widget.spool;
+    if (spool == null || !spool.hasSpooled) return;
+    final n = spool.spooledCount;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Discard held prints?')),
+        content: Text(
+          tr(ctx,
+              'These will not print. Use this after a long outage when the backlog is junk.'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('confirm-discard-spool'),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('${tr(ctx, 'Discard')} ($n)'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _printerBusy = 'spool');
+    final dropped = await spool.clearHeld();
+    if (!mounted) return;
+    setState(() => _printerBusy = null);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(
+          '${tr(context, 'Discarded')} $dropped ${tr(context, 'held print(s)')}'),
+    ));
   }
 
   /// Take a copy of the till, on demand.
@@ -163,7 +234,12 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     if (result.deleted) {
       registry.forget(result.name);
     } else {
-      registry.remember(result.name, host: result.host, port: result.port);
+      registry.remember(
+        result.name,
+        host: result.host,
+        port: result.port,
+        pinned: true,
+      );
     }
     if (mounted) setState(() {});
   }
@@ -323,11 +399,34 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           const SizedBox(height: 12),
           FilledButton.icon(
             key: const Key('sync-now'),
-            onPressed: _syncing ? null : _syncNow,
+            onPressed: _syncing || _resendingSession ? null : _syncNow,
             icon: const Icon(Icons.sync),
             label: Text(_syncing ? tr(context, 'Syncing...') : tr(context, 'Sync now')),
           ),
+          if (widget.onResendClosedSession != null) ...[
+            const SizedBox(height: 8),
+            FilledButton.tonalIcon(
+              key: const Key('resend-closed-session'),
+              onPressed:
+                  _syncing || _resendingSession ? null : _resendClosedSession,
+              icon: const Icon(Icons.cloud_upload_outlined),
+              label: Text(_resendingSession
+                  ? tr(context, 'Sending session...')
+                  : tr(context, 'Resend last closed session')),
+            ),
+            Text(
+              tr(context,
+                  'Pulls every till\'s sales for that session from this device and books them as one Odoo sale order with the same payments. Delete the wrong SO in Odoo first.'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (_resendSessionMessage != null) ...[
+              const SizedBox(height: 8),
+              Text(_resendSessionMessage!,
+                  key: const Key('resend-closed-session-result')),
+            ],
+          ],
           ..._updateSection(),
+          if (widget.onOpenSql != null) ..._sqlSection(),
           if (widget.onBackup != null) ..._backupSection(),
           if (widget.printers != null) ..._printerSection(),
           if (widget.wizards != null && widget.cashierId != null)
@@ -367,6 +466,25 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       ],
     ];
   }
+
+  /// Opens the live SQL window when Support wired one. Writes there change the
+  /// till the floor is reading, so the row is only shown when a door was handed in.
+  List<Widget> _sqlSection() => [
+        const SizedBox(height: 16),
+        Text(tr(context, 'SQL console'),
+            style: const TextStyle(fontWeight: FontWeight.bold)),
+        Text(
+          tr(context,
+              'Inspect and edit the live till database. Writes are confirmed first.'),
+          style: const TextStyle(fontSize: 12, color: Colors.black54),
+        ),
+        TextButton.icon(
+          key: const Key('open-sql'),
+          onPressed: widget.onOpenSql,
+          icon: const Icon(Icons.storage_outlined),
+          label: Text(tr(context, 'Open SQL console')),
+        ),
+      ];
 
   /// One copy of the whole till, encrypted exactly as it sits on disk, for the day
   /// the machine does not come back on.
@@ -437,6 +555,13 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           onPressed: _printerBusy == null ? _reprint : null,
           icon: const Icon(Icons.print),
           label: Text('${tr(context, 'Reprint')} ${spool.spooledCount} ${tr(context, 'held receipt(s)')}'),
+        ),
+        TextButton.icon(
+          key: const Key('discard-spool'),
+          onPressed: _printerBusy == null ? _discardHeld : null,
+          icon: const Icon(Icons.delete_outline, color: Colors.red),
+          label: Text(
+              '${tr(context, 'Discard')} ${spool.spooledCount} ${tr(context, 'held print(s)')}'),
         ),
         // Which sales have no paper, and why the last attempt failed. A count
         // alone cannot tell support whether the printer is off, out of paper, or
@@ -545,7 +670,7 @@ class _PrinterDialogState extends State<_PrinterDialog> {
               // held receipts.
               enabled: widget.existing == null,
               decoration: InputDecoration(
-                  labelText: tr(context, 'Name (receipt, kitchen, bar)')),
+                  labelText: tr(context, 'Name (receipt, kitchen, delivery, bar)')),
             ),
             TextField(
               key: const Key('printer-host'),

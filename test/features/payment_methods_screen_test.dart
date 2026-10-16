@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/domain/catalogue.dart';
+import 'package:offline_pos/domain/order.dart' show OrderType;
 import 'package:offline_pos/features/settings/payment_methods_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -34,6 +35,15 @@ void main() {
         ),
       );
 
+  // Tall enough that every method card, order types and all, is built on screen.
+  setUp(() {
+    final view = TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+    view.physicalSize = const Size(1000, 2400);
+    view.devicePixelRatio = 1;
+    addTearDown(view.resetPhysicalSize);
+    addTearDown(view.resetDevicePixelRatio);
+  });
+
   testWidgets('a printed name is saved against the method id', (t) async {
     await t.pumpWidget(app());
 
@@ -43,6 +53,33 @@ void main() {
 
     expect(settings.paymentMethodLabels, {2: 'Visa / Mastercard'});
     expect(changedCount, 1);
+  });
+
+  testWidgets('a method can be narrowed to the order types it is taken on', (t) async {
+    await t.pumpWidget(app());
+
+    // Every type starts ticked.
+    expect(
+        t.widget<FilterChip>(find.byKey(const Key('payment-type-2-dineIn'))).selected,
+        isTrue);
+
+    await t.tap(find.byKey(const Key('payment-type-2-dineIn')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('save-payment-labels')));
+    await t.pumpAndSettle();
+
+    expect(settings.isPaymentMethodOfferedFor(2, OrderType.dineIn), isFalse);
+    expect(settings.isPaymentMethodOfferedFor(2, OrderType.takeaway), isTrue);
+    expect(settings.isPaymentMethodOfferedFor(1, OrderType.dineIn), isTrue);
+  });
+
+  testWidgets('a method switched off hides its order types', (t) async {
+    await t.pumpWidget(app());
+    expect(find.byKey(const Key('payment-type-2-dineIn')), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('payment-offered-2')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('payment-type-2-dineIn')), findsNothing);
   });
 
   testWidgets('emptying the box gives the method its own name back', (t) async {

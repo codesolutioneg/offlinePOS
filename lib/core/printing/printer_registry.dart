@@ -20,6 +20,7 @@ class ConfiguredPrinter {
     this.identity,
     this.lastSeenAt,
     this.backup,
+    this.pinned = false,
   });
 
   /// The stable, human-chosen identity: 'kitchen', 'bar', 'receipt'. Receipts are
@@ -43,6 +44,11 @@ class ConfiguredPrinter {
   /// through a lease change too.
   final String? backup;
 
+  /// [host] was typed in by support, so a sweep never moves it: a printer that is
+  /// off at that address spools there rather than being swapped for whichever
+  /// printer happens to answer on the range.
+  final bool pinned;
+
   ConfiguredPrinter copyWith({
     String? host,
     int? port,
@@ -57,6 +63,7 @@ class ConfiguredPrinter {
         identity: identity ?? this.identity,
         lastSeenAt: lastSeenAt ?? this.lastSeenAt,
         backup: backup ?? this.backup,
+        pinned: pinned,
       );
 
   Map<String, Object?> toMap() => {
@@ -66,6 +73,7 @@ class ConfiguredPrinter {
         'identity': identity,
         'last_seen_at': lastSeenAt?.toUtc().toIso8601String(),
         'backup': backup,
+        'pinned': pinned,
       };
 
   /// Returns null for a row that cannot be trusted, so one corrupt record cannot
@@ -77,12 +85,13 @@ class ConfiguredPrinter {
     return ConfiguredPrinter(
       name: name,
       host: map['host'] is String ? map['host'] as String : null,
-      port: map['port'] is int ? map['port'] as int : 9100,
+      port: map['port'] is num ? (map['port'] as num).toInt() : 9100,
       identity: map['identity'] is String ? map['identity'] as String : null,
       lastSeenAt: seen is String ? DateTime.tryParse(seen) : null,
       backup: map['backup'] is String && (map['backup'] as String).isNotEmpty
           ? map['backup'] as String
           : null,
+      pinned: map['pinned'] == true,
     );
   }
 }
@@ -203,7 +212,15 @@ class PrinterRegistry {
   /// The spare survives a re-point: support typing in a new address for the kitchen
   /// printer is not saying the shop stopped having a spare. [setBackup] is how it
   /// changes or goes away.
-  void remember(String name, {String? host, int port = 9100, String? backup}) {
+  ///
+  /// [pinned] is for an address support typed in: see [ConfiguredPrinter.pinned].
+  void remember(
+    String name, {
+    String? host,
+    int port = 9100,
+    String? backup,
+    bool pinned = false,
+  }) {
     final existing = _printers[name];
     final spare = backup ?? existing?.backup;
     _printers[name] = ConfiguredPrinter(
@@ -217,6 +234,7 @@ class PrinterRegistry {
       // is dropped rather than carried onto whatever now answers there.
       identity: existing != null && existing.host == host ? existing.identity : null,
       lastSeenAt: existing != null && existing.host == host ? existing.lastSeenAt : null,
+      pinned: pinned && host != null,
     );
     _identityAsked.remove(name);
     // Pointing the till somewhere new is an explicit statement that the world
@@ -238,6 +256,7 @@ class PrinterRegistry {
       identity: printer.identity,
       lastSeenAt: printer.lastSeenAt,
       backup: spare,
+      pinned: printer.pinned,
     );
     onChanged?.call();
   }
@@ -283,6 +302,54 @@ class PrinterRegistry {
         'printers': [for (final printer in _printers.values) printer.toMap()],
       };
 
+  /// Printer names that belong to **this till only** (cash drawer / bag slip).
+  /// Kitchen / bar / grill stations are shared across the shop LAN; these are not.
+  static const Set<String> deviceLocalPrinterNames = {
+    'receipt',
+    'delivery',
+  };
+
+  /// Replace this till's printers with a primary's snapshot (same LAN shop).
+  ///
+  /// Wipes everything, including receipt — prefer [applySharedStationsFromMap]
+  /// on join so each till keeps its own receipt printer.
+  void applyFromMap(Map<String, Object?> saved) {
+    _printers.clear();
+    _sweepFailedAt.clear();
+    _identityAsked.clear();
+    final rows = saved['printers'];
+    if (rows is Iterable) {
+      for (final row in rows) {
+        if (row is! Map) continue;
+        final printer = ConfiguredPrinter.fromMap(row.cast<String, Object?>());
+        if (printer != null) _printers[printer.name] = printer;
+      }
+    }
+    onChanged?.call();
+  }
+
+  /// Join / shop sync: take shared station printers from [saved], keep this
+  /// till's [deviceLocalPrinterNames] (`receipt`, `delivery`) so three counters
+  /// on one kitchen LAN each kick their own drawer without stealing the
+  /// primary's receipt IP.
+  void applySharedStationsFromMap(
+    Map<String, Object?> saved, {
+    Set<String> keepLocalNames = deviceLocalPrinterNames,
+  }) {
+    final kept = <String, ConfiguredPrinter>{
+      for (final name in keepLocalNames)
+        if (_printers[name] != null) name: _printers[name]!,
+    };
+    applyFromMap(saved);
+    for (final name in keepLocalNames) {
+      _printers.remove(name);
+    }
+    for (final e in kept.entries) {
+      _printers[e.key] = e.value;
+    }
+    onChanged?.call();
+  }
+
   Future<String?> _locate(String name, {required bool tryLastKnown}) async {
     final printer = _printers[name];
     if (printer == null) return null;
@@ -291,7 +358,8 @@ class PrinterRegistry {
     Duration left() => resolveBudget - spent.elapsed;
 
     final lastKnown = printer.host;
-    if (tryLastKnown &&
+    final pinned = printer.pinned && lastKnown != null;
+    if ((tryLastKnown || pinned) &&
         lastKnown != null &&
         await _discovery.probe(lastKnown, port: printer.port)) {
       _sweepFailedAt.remove(name);
@@ -303,6 +371,7 @@ class PrinterRegistry {
     // and the two look identical from here, so a sweep that finds nothing buys a
     // cooling-off period. Without it a dead printer costs a full subnet sweep per
     // receipt, for as long as it stays dead.
+    if (pinned) return null;
     if (tryLastKnown && sweepHeldOffFor(name)) return null;
 
     final candidates =
@@ -322,14 +391,30 @@ class PrinterRegistry {
       return _sweptAndFoundNothing(name);
     }
 
-    if (candidates.length == 1) {
+    // With no identity, only a lone printer on the range it was last seen on is
+    // taken for it: a lease moves inside one /24. A till with an address on a
+    // second range sweeps that one too, and a printer answering there is another
+    // department's, not ours back from a busy moment.
+    final nearby = lastKnown == null
+        ? candidates
+        : [
+            for (final c in candidates)
+              if (_sameSubnet(c.host, lastKnown)) c,
+          ];
+    if (nearby.length == 1) {
       _sweepFailedAt.remove(name);
-      return _confirm(name, candidates.single.host);
+      return _confirm(name, nearby.single.host);
     }
 
     // Several printers answer and none of them has ever told us who it is, so there
     // is nothing to match on. Support picks, rather than the till guessing.
     return _sweptAndFoundNothing(name);
+  }
+
+  static bool _sameSubnet(String a, String b) {
+    final pa = a.split('.');
+    final pb = b.split('.');
+    return pa.length == 4 && pb.length == 4 && pa.take(3).join('.') == pb.take(3).join('.');
   }
 
   String? _sweptAndFoundNothing(String name) {

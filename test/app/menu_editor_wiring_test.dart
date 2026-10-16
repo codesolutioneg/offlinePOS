@@ -7,6 +7,7 @@ import 'package:offline_pos/core/auth/user_store.dart';
 import 'package:offline_pos/core/config/till_config.dart';
 import 'package:offline_pos/core/db/attendance_store.dart';
 import 'package:offline_pos/core/db/catalogue_store.dart';
+import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/core/db/customer_store.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
@@ -60,6 +61,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     pulledPrice = 10;
     serverUp = true;
@@ -196,6 +198,8 @@ void main() {
 
   Future<void> openMenuEditor(WidgetTester t) async {
     await openSettingsHub(t);
+    await t.scrollUntilVisible(find.byKey(const Key('set-menu')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-menu')));
     await t.pumpAndSettle();
   }
@@ -211,6 +215,13 @@ void main() {
       await t.pumpAndSettle();
     }
     expect(find.byKey(const Key('search')), findsOneWidget);
+  }
+
+  /// The grid shows one category at a time; an item given none is on Other.
+  Future<void> openTabOf(WidgetTester t, Product p) async {
+    await t.tap(find.byKey(Key(
+        p.categoryId == null ? 'cat-chip-other' : 'cat-chip-${p.categoryId}')));
+    await t.pumpAndSettle();
   }
 
   testWidgets('a manager types an item that was never in Odoo and a cashier rings it',
@@ -255,6 +266,7 @@ void main() {
 
     // And the cashier can sell it, with no server anywhere in the path.
     await backToSelling(t);
+    await openTabOf(t, created);
     expect(find.byKey(Key('product-${created.id}')), findsOneWidget);
     await t.tap(find.byKey(Key('product-${created.id}')));
     await t.pumpAndSettle();
@@ -285,6 +297,7 @@ void main() {
     final created = CatalogueStore(db)
         .products()
         .firstWhere((p) => p.name == 'Double apple');
+    await openTabOf(t, created);
     await t.tap(find.byKey(Key('product-${created.id}')));
     await t.pumpAndSettle();
 
@@ -330,6 +343,7 @@ void main() {
     final created =
         CatalogueStore(db).products().firstWhere((p) => p.name == 'House pizza');
     expect(created.odooId, 1);
+    await openTabOf(t, created);
     await t.tap(find.byKey(Key('product-${created.id}')));
     await t.pumpAndSettle();
 
@@ -361,6 +375,8 @@ void main() {
 
     // Odoo says something else, and a refresh arrives.
     pulledPrice = 30;
+    await t.scrollUntilVisible(find.byKey(const Key('set-refresh-menu')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-refresh-menu')));
     await t.pumpAndSettle();
 
@@ -380,6 +396,8 @@ void main() {
 
     pulledPrice = 30;
     await openSettingsHub(t);
+    await t.scrollUntilVisible(find.byKey(const Key('set-refresh-menu')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-refresh-menu')));
     await t.pumpAndSettle();
 
@@ -406,6 +424,8 @@ void main() {
     await t.pageBack();
     await t.pumpAndSettle();
 
+    await t.scrollUntilVisible(find.byKey(const Key('set-refresh-menu')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-refresh-menu')));
     await t.pumpAndSettle();
 

@@ -5,8 +5,11 @@ import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
 import 'package:offline_pos/core/i18n/l10n.dart';
+import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
+import 'package:offline_pos/core/lan/lan_traffic.dart';
 import 'package:offline_pos/core/lan/lan_wiring.dart';
+import 'package:offline_pos/domain/table_section_config.dart';
 import 'package:offline_pos/features/settings/lan_settings_screen.dart';
 
 import '../db/sqlite_loader.dart';
@@ -35,7 +38,11 @@ void main() {
         lastSeenAt: now.subtract(const Duration(seconds: 12)),
       );
 
-  Widget app({LanFacts Function()? facts, Locale? locale}) => MaterialApp(
+  Widget app(
+          {LanFacts Function()? facts,
+          Locale? locale,
+          Future<void> Function()? onRereadAll}) =>
+      MaterialApp(
         locale: locale,
         supportedLocales: kSupportedLocales,
         localizationsDelegates: const [
@@ -48,6 +55,7 @@ void main() {
           deviceId: 'device-abc-123',
           onChanged: () => changed++,
           facts: facts,
+          onRereadAll: onRereadAll,
           nowFn: () => now,
         ),
       );
@@ -56,18 +64,22 @@ void main() {
   /// shorter than this page, and a ListView does not build what does not fit, so the
   /// peer list below the fold would read as missing rather than as off-screen.
   Future<void> open(WidgetTester t,
-      {LanFacts Function()? facts, Locale? locale}) async {
+      {LanFacts Function()? facts,
+      Locale? locale,
+      Future<void> Function()? onRereadAll}) async {
     t.view.physicalSize = const Size(1200, 2400);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.resetPhysicalSize);
     addTearDown(t.view.resetDevicePixelRatio);
-    await t.pumpWidget(app(facts: facts, locale: locale));
+    await t.pumpWidget(
+        app(facts: facts, locale: locale, onRereadAll: onRereadAll));
   }
 
   testWidgets('shows this device id and the devices it can see', (t) async {
     await open(t,
       facts: () => (
         servingAt: '10.0.0.5:45333',
+        hostError: null,
         peers: [peer()],
         refused: const [],
         cursors: const {'till-b': 42},
@@ -88,6 +100,90 @@ void main() {
     expect(find.byKey(const Key('lan-no-peers')), findsNothing);
   });
 
+  testWidgets('each device shows what went each way and how late it landed',
+      (t) async {
+    final traffic = LanTraffic(now: () => now);
+    traffic.pulled('till-b', const [], const Duration(milliseconds: 14));
+    traffic.pushed('till-b', 3, const Duration(milliseconds: 9));
+    traffic.received('till-b', [
+      LanEvent(
+        kind: LanEventKind.orderUpsert,
+        originDeviceId: 'till-b',
+        seq: 1,
+        recordUuid: 'o-1',
+        payload: const {},
+        at: now.subtract(const Duration(seconds: 12)),
+      ),
+    ]);
+    var resets = 0;
+    t.view.physicalSize = const Size(1200, 2400);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    await t.pumpWidget(MaterialApp(
+      home: LanSettingsScreen(
+        settings: settings,
+        deviceId: 'device-abc-123',
+        onChanged: () {},
+        facts: () => (
+          servingAt: '10.0.0.5:45333',
+          hostError: null,
+          peers: [peer()],
+          refused: const [],
+          cursors: const {},
+          lastPassAt: now,
+          lastError: null,
+        ),
+        traffic: () => traffic.byPeer,
+        onResetTraffic: () {
+          resets++;
+          traffic.reset();
+        },
+        nowFn: () => now,
+      ),
+    ));
+
+    expect(find.byKey(const Key('lan-traffic-till-b')), findsOneWidget);
+    expect(find.textContaining('Sent: 3'), findsOneWidget);
+    expect(find.textContaining('ask 14 ms'), findsOneWidget);
+    expect(find.textContaining('hand over 9 ms'), findsOneWidget);
+    expect(find.textContaining('Arrival delay: last 12.0 s'), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('lan-traffic-reset')));
+    await t.pump();
+    expect(resets, 1);
+    expect(find.byKey(const Key('lan-traffic-till-b')), findsNothing);
+  });
+
+  testWidgets('reading every till again asks first, then runs', (t) async {
+    var reads = 0;
+    await open(t,
+        facts: () => (
+              servingAt: '10.0.0.5:45333',
+              hostError: null,
+              peers: [peer()],
+              refused: const [],
+              cursors: const {'till-b': 42},
+              lastPassAt: now,
+              lastError: null,
+            ),
+        onRereadAll: () async => reads++);
+
+    await t.tap(find.byKey(const Key('lan-reread-all')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('lan-reread-confirm')), findsOneWidget);
+    await t.tap(find.text('Cancel'));
+    await t.pumpAndSettle();
+    expect(reads, 0);
+
+    await t.tap(find.byKey(const Key('lan-reread-all')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('lan-reread-confirm-yes')));
+    await t.pumpAndSettle();
+    expect(reads, 1);
+    expect(find.text('Every till read again from the start'), findsOneWidget);
+  });
+
   testWidgets('a device on its own says so rather than looking broken', (t) async {
     await open(t);
 
@@ -102,6 +198,7 @@ void main() {
     await open(t,
       facts: () => (
         servingAt: null,
+        hostError: 'cannot serve on port 45333: errno = 10049',
         peers: const [],
         refused: [peer(deviceId: 'till-c', schema: Schema.version + 1)],
         cursors: const {},
@@ -111,6 +208,8 @@ void main() {
     );
 
     expect(find.byKey(const Key('lan-last-error')), findsOneWidget);
+    // A server that could not bind says why, next to "not serving".
+    expect(find.byKey(const Key('lan-host-error')), findsOneWidget);
     // Down past the peer list: an unfinished rollout is visible on the device
     // rather than only in the audit trail.
     await t.dragUntilVisible(find.byKey(const Key('lan-refused-till-c')),
@@ -229,5 +328,23 @@ void main() {
 
     expect(settings.lanShopKey, isNot('the-old-key'));
     expect(find.text(settings.lanShopKey!), findsOneWidget);
+  });
+
+  testWidgets('Unlink clears role and shop key and leaves them cleared',
+      (t) async {
+    settings.deviceRole = DeviceRole.secondary;
+    settings.lanShopKey = 'paired-shop-key';
+    settings.lanRolePromptDismissed = true;
+    await open(t);
+
+    await t.tap(find.byKey(const Key('lan-unlink')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('lan-unlink-confirm-yes')));
+    await t.pumpAndSettle();
+
+    expect(settings.deviceRole, DeviceRole.unset);
+    expect(settings.lanShopKey, isNull);
+    expect(settings.lanRolePromptDismissed, isFalse);
+    expect(find.textContaining('Unlinked'), findsOneWidget);
   });
 }

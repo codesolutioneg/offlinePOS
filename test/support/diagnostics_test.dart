@@ -155,11 +155,13 @@ void main() {
   });
 
   testWidgets('work that nothing can deliver is named', (t) async {
-    await store.append('order.push', 'a', {});
+    // Sales wait for the shift close; the tick drains the rest, and that is what
+    // finds a kind with nowhere to go.
+    await store.append('audit.push', 'a', {});
     await sync.tick();
     await t.pumpWidget(app());
     expect(t.widget<Text>(find.byKey(const Key('diag-undeliverable'))).data,
-        contains('order.push'));
+        contains('audit.push'));
   });
 
   testWidgets('a build with no update channel says so', (t) async {

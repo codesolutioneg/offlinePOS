@@ -28,7 +28,23 @@ enum LanDayClosePolicy {
   }
 }
 
-/// One till saying its day is over.
+/// Open or close of the shop trading session, carried on [LanEventKind.shiftLifecycle].
+enum LanShiftAction {
+  open,
+  close;
+
+  /// Legacy notices omit [action] and used `state: closed` only — treat as close.
+  static LanShiftAction fromPayload(Map<String, dynamic> m) {
+    final action = m['action']?.toString();
+    if (action == open.name) return open;
+    if (action == close.name) return close;
+    final state = m['state']?.toString();
+    if (state == 'open') return open;
+    return close;
+  }
+}
+
+/// One till saying the shop shift opened or the trading day closed.
 class LanShiftNotice {
   const LanShiftNotice({
     required this.deviceId,
@@ -36,6 +52,7 @@ class LanShiftNotice {
     required this.businessDate,
     required this.at,
     this.cashierId,
+    this.action = LanShiftAction.close,
   });
 
   final String deviceId;
@@ -44,29 +61,30 @@ class LanShiftNotice {
   /// to rather than a uuid.
   final String deviceName;
 
-  /// The trading day that was closed, which is what makes the notice expire on its
-  /// own: tomorrow it is about yesterday and nobody is nudged.
+  /// The trading day that was closed (or opened), which is what makes a close
+  /// notice expire on its own: tomorrow it is about yesterday and nobody is nudged.
   final String businessDate;
   final DateTime at;
   final String? cashierId;
+  final LanShiftAction action;
 
   Map<String, dynamic> toMap() => {
         'device': deviceId,
         'name': deviceName,
-        'state': 'closed',
+        'action': action.name,
+        'state': action == LanShiftAction.open ? 'open' : 'closed',
         'business_date': businessDate,
         'at': at.toIso8601String(),
         'cashier': cashierId,
       };
 
-  /// Throws on anything that is not a close notice, so the applier refuses it
-  /// rather than storing half a fact.
   factory LanShiftNotice.fromMap(Map<String, dynamic> m) => LanShiftNotice(
         deviceId: m['device'] as String,
         deviceName: (m['name'] as String?) ?? m['device'] as String,
         businessDate: m['business_date'] as String,
         at: DateTime.parse(m['at'] as String).toUtc(),
         cashierId: m['cashier'] as String?,
+        action: LanShiftAction.fromPayload(m),
       );
 }
 
@@ -94,8 +112,9 @@ class LanShiftBoard {
   set policy(LanDayClosePolicy p) => _settings.setString(
       _policyKey, p == LanDayClosePolicy.off ? null : p.name);
 
-  /// The last thing each till said, by device id. Unreadable data reads as nothing,
-  /// so a corrupt value is a shop with no nudge rather than a floor that crashes.
+  /// The last close (or open) each till said, by device id. Unreadable data reads
+  /// as nothing, so a corrupt value is a shop with no nudge rather than a floor
+  /// that crashes.
   Map<String, LanShiftNotice> notices() {
     final raw = _settings.getString(_noticesKey);
     if (raw == null) return const {};
@@ -118,13 +137,29 @@ class LanShiftBoard {
     _settings.setString(_noticesKey, jsonEncode(all));
   }
 
+  /// Drop close notices for [businessDate] so a fresh shop open clears the nudge.
+  void forgetClosed(String businessDate) {
+    final kept = <String, Map<String, dynamic>>{};
+    for (final e in notices().entries) {
+      final n = e.value;
+      if (n.action == LanShiftAction.close && n.businessDate == businessDate) {
+        continue;
+      }
+      kept[e.key] = n.toMap();
+    }
+    _settings.setString(_noticesKey, kept.isEmpty ? null : jsonEncode(kept));
+  }
+
   /// The first till that has closed [businessDate], or null when none has.
   ///
   /// Scoped to the day on purpose: yesterday's close is not today's business, so
   /// the nudge lets itself go at the cutover instead of needing to be cleared.
+  /// Open notices never count.
   LanShiftNotice? closedOn(String businessDate) {
     for (final n in notices().values) {
-      if (n.businessDate == businessDate) return n;
+      if (n.action == LanShiftAction.close && n.businessDate == businessDate) {
+        return n;
+      }
     }
     return null;
   }

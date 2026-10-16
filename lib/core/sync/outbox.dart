@@ -36,7 +36,11 @@ class PermanentlyRejected implements Exception {
 /// Where entries live between being written and being accepted by the server.
 abstract class OutboxStore {
   Future<void> append(String kind, String payloadUuid, Map<String, dynamic> payload);
-  Future<List<OutboxEntry>> pending({int limit});
+
+  /// Pending rows, oldest first. When [kinds] is set, only those kinds are
+  /// returned, so a read-only timer can drain the owner mirror without touching
+  /// Odoo sales that wait for shift close.
+  Future<List<OutboxEntry>> pending({int limit, Set<String>? kinds});
   Future<void> markSent(int id);
   Future<void> markFailed(int id, String error);
 
@@ -83,6 +87,9 @@ class Outbox {
 
   void unregister(String kind) => _senders.remove(kind);
 
+  /// Whether a sender is registered for [kind].
+  bool hasSenderFor(String kind) => _senders.containsKey(kind);
+
   bool _draining = false;
 
   /// Queue something for delivery. Returns as soon as it is durable.
@@ -95,13 +102,16 @@ class Outbox {
   /// After a week offline there can be thousands of entries, so this keeps going
   /// rather than doing one batch per tick, which would be over an hour of pure
   /// pacing. [maxBatches] bounds a single call so the caller stays responsive.
-  Future<int> drain({int maxBatches = 1000}) async {
+  ///
+  /// [kinds] limits the drain to those kinds. The 20s loop uses this to push the
+  /// Dishflow owner mirror without booking Odoo mid-shift.
+  Future<int> drain({int maxBatches = 1000, Set<String>? kinds}) async {
     if (_draining) return 0;
     _draining = true;
     var sent = 0;
     try {
       for (var i = 0; i < maxBatches; i++) {
-        final batch = await _store.pending(limit: batchSize);
+        final batch = await _store.pending(limit: batchSize, kinds: kinds);
         if (batch.isEmpty) break;
         final result = await _drainBatch(batch);
         sent += result.sent;

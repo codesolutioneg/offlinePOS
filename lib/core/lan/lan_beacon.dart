@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../db/schema.dart';
+import '../../domain/table_section_config.dart';
 import 'lan_peer.dart';
 import 'lan_transport.dart';
 
@@ -25,6 +26,8 @@ class LanBeacon {
     required this.onPeer,
     this.port = 45334,
     this.interval = const Duration(seconds: 10),
+    this.role,
+    this.serving,
     LanLog? log,
     Future<RawDatagramSocket> Function(InternetAddress address, int port)? bind,
     Future<List<String>> Function()? localAddresses,
@@ -51,6 +54,13 @@ class LanBeacon {
   /// on the network.
   final Duration interval;
 
+  /// Optional primary/secondary role so secondaries can see the master is up.
+  final DeviceRole? Function()? role;
+
+  /// Whether this device's HTTP server is up. Announced only when it is not, so
+  /// a peer does not ask a device that will refuse the connection.
+  final bool Function()? serving;
+
   /// Called for every peer heard from. Wired to the peer directory, which is what
   /// decides whether the peer is compatible.
   final void Function(LanPeer peer) onPeer;
@@ -64,6 +74,9 @@ class LanBeacon {
   List<InternetAddress> _targets = const [];
 
   bool get isRunning => _socket != null;
+
+  /// The broadcast addresses the next announcement goes to.
+  List<InternetAddress> get targets => List.unmodifiable(_targets);
 
   /// Binds, announces once immediately so a new device is seen without waiting a
   /// full interval, then keeps announcing.
@@ -88,7 +101,7 @@ class LanBeacon {
         onError: (Object e) => _log?.call('lan.beacon.error', '$e'),
       );
       announce();
-      _timer = Timer.periodic(interval, (_) => announce());
+      _timer = Timer.periodic(interval, (_) => unawaited(_refreshAndAnnounce()));
       return true;
     } catch (e) {
       _log?.call('lan.beacon.unavailable', 'cannot listen on $port: $e');
@@ -100,11 +113,16 @@ class LanBeacon {
   void announce() {
     final socket = _socket;
     if (socket == null) return;
+    final r = role?.call();
     final datagram = utf8.encode(jsonEncode({
       'device_id': deviceId,
       'name': name,
       'port': httpPort,
       'schema': Schema.version,
+      if (r != null && r != DeviceRole.unset) 'role': r.wire,
+      if (serving?.call() == false) 'serving': false,
+      // So the others can see how far apart the clocks are; see LanPeer.clockOffset.
+      'sent_at': DateTime.now().toUtc().millisecondsSinceEpoch,
     }));
     for (final target in _targets) {
       try {
@@ -115,6 +133,19 @@ class LanBeacon {
         _log?.call('lan.beacon.error', 'announce to ${target.address}: $e');
       }
     }
+  }
+
+  /// The subnets are read again before every announcement: a till that opened
+  /// before its Wi-Fi joined would otherwise broadcast only on the adapter it had
+  /// at launch, hearing the others while none of them ever heard it.
+  Future<void> _refreshAndAnnounce() async {
+    try {
+      final targets = await _broadcastTargets();
+      if (targets.isNotEmpty) _targets = targets;
+    } catch (e) {
+      _log?.call('lan.beacon.error', 'listing interfaces: $e');
+    }
+    announce();
   }
 
   Future<void> stop() async {

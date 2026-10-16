@@ -20,7 +20,7 @@ void main() {
     final o = Order(
       deviceId: 'till-1',
       cashierId: 'sara',
-      type: delivery > 0 ? OrderType.delivery : OrderType.dineIn,
+      type: delivery > 0 ? OrderType.storeDelivery : OrderType.dineIn,
       deliveryCost: delivery,
       tip: tip,
       serviceChargePercent: service,

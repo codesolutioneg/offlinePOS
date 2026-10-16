@@ -50,7 +50,6 @@ List<ProductMargin> productMargins(List<Order> orders, Map<int, double> costs) {
   final units = <int, double>{};
   final revenue = <int, double>{};
   for (final order in orders) {
-    final orderFactor = order.discountFactor;
     for (final line in order.lines) {
       names[line.productId] = line.name;
       units[line.productId] = (units[line.productId] ?? 0) + line.quantity;
@@ -58,8 +57,9 @@ List<ProductMargin> productMargins(List<Order> orders, Map<int, double> costs) {
       // state's money, not the shop's, so it never enters a margin. Dividing it back
       // out here (as this did when prices were tax-inclusive) would take 14% off the
       // revenue twice and understate every margin in the report.
-      revenue[line.productId] =
-          (revenue[line.productId] ?? 0) + line.total * orderFactor;
+      // The whole-check discount stays with the check, as item sales and menu
+      // engineering count it, so a dish reads the same revenue in all three.
+      revenue[line.productId] = (revenue[line.productId] ?? 0) + line.total;
     }
   }
   final out = [

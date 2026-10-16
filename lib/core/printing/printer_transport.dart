@@ -172,6 +172,15 @@ class SpooledPrinter implements PrinterTransport {
     }
   }
 
+  /// Queue without trying the printer, behind what is already held, so a printer
+  /// that is still off costs no second timeout and tickets keep their order.
+  Future<void> hold(Uint8List bytes, {String? reference}) async {
+    await _spool.add(await rasteriseEscPos(bytes), reference: reference);
+    for (final dropped in await _spool.trimTo(maxSpool)) {
+      onDropped?.call(dropped);
+    }
+  }
+
   /// Send immediately, bypassing the spool: on failure it throws and queues
   /// nothing. For payloads that must not be replayed later, above all a cash-drawer
   /// kick, which would pop the till open unexpectedly when the backlog flushes.
@@ -203,4 +212,8 @@ class SpooledPrinter implements PrinterTransport {
       _flushing = false;
     }
   }
+
+  /// Discard every held job without printing. Stops a reconnect flood after a
+  /// long outage when the paper is no longer wanted.
+  Future<int> clearHeld() => _spool.clearAll();
 }

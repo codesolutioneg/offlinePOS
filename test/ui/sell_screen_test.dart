@@ -11,6 +11,7 @@ import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
+import 'pay_button.dart';
 
 void main() {
   late Db db;
@@ -137,12 +138,10 @@ void main() {
     await t.tap(find.byKey(const Key('product-20')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('mod-2000')));
-    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('mod-2001')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
-    await t.pumpAndSettle();
     expect(session.current.lines.single.modifiers.length, 1);
+    expect(session.current.lines.single.modifiers.single.name, 'L');
     expect(session.total, 105);
   });
 
@@ -187,12 +186,10 @@ void main() {
         isNull);
 
     await t.tap(find.byKey(const Key('mod-3001-plus')));
-    await t.pumpAndSettle();
-    // The box is full at three, so every plus is now frozen.
+    // Cap filled → Dishflow auto-adds on the last step; settle after checking freeze.
+    await t.pump();
     expect(t.widget<IconButton>(find.byKey(const Key('mod-3001-plus'))).onPressed,
         isNull);
-
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
     await t.pumpAndSettle();
     final mods = session.current.lines.single.modifiers;
     expect(mods.firstWhere((m) => m.name == 'Chicken').quantity, 2);
@@ -219,13 +216,11 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('mod-4000')));
     await t.tap(find.byKey(const Key('mod-4001')));
-    await t.pumpAndSettle();
+    await t.pump();
     // The cap is reached; the third option cannot be added at all.
     expect(t.widget<IconButton>(find.byKey(const Key('mod-4002-plus'))).onPressed,
         isNull);
     await t.tap(find.byKey(const Key('mod-4002')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
     await t.pumpAndSettle();
     final mods = session.current.lines.single.modifiers;
     expect(mods.length, 2);
@@ -236,7 +231,7 @@ void main() {
     await t.pumpWidget(app());
     await t.tap(find.byKey(const Key('product-11')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     // The tender sheet opens; the sale completes only on confirmation.
     expect(find.byKey(const Key('confirm-payment')), findsOneWidget);
@@ -248,7 +243,7 @@ void main() {
 
   testWidgets('pay is disabled with an empty order', (t) async {
     await t.pumpWidget(app());
-    final button = t.widget<FilledButton>(find.byKey(const Key('pay')));
+    final button = t.widget<FilledButton>(findPay());
     expect(button.onPressed, isNull);
   });
 
@@ -349,11 +344,9 @@ void main() {
     session.addProduct(const Product(id: 10, name: 'Margherita', price: 250, categoryId: 1));
     final line = session.current.lines.single;
 
-    // Before firing: free inline controls, plain trash.
+    // Before firing: changed from the cart controls, with no void on the line.
     await t.pumpWidget(app());
     await t.pumpAndSettle();
-    expect(find.byIcon(Icons.add_circle_outline), findsWidgets);
-    expect(find.byIcon(Icons.delete_outline), findsOneWidget);
     expect(find.byKey(Key('line-void-inline-${line.uuid}')), findsNothing);
 
     // Once the kitchen holds it, the +/- and free trash are gone; the only removal

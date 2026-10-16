@@ -1,10 +1,11 @@
+import '../../domain/report_sources.dart';
 import '../db/database.dart';
 
 /// Append-only record of who did what on this till.
 ///
 /// Written locally first so an action taken during an outage is still accountable;
 /// synced later like everything else.
-class AuditLog {
+class AuditLog implements ReportAudit {
   AuditLog(this._db, {DateTime Function()? now}) : _now = now ?? DateTime.now;
 
   final Db _db;
@@ -39,6 +40,7 @@ class AuditLog {
   /// time window. Backs the manager's audit viewer and the activity report. Times
   /// are compared as UTC ISO strings, which sort lexically the same as
   /// chronologically.
+  @override
   List<Map<String, Object?>> recent({
     int limit = 500,
     String? event,

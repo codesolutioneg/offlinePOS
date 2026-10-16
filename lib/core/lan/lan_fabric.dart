@@ -4,6 +4,7 @@ import 'lan_applier.dart';
 import 'lan_event.dart';
 import 'lan_event_log.dart';
 import 'lan_peer.dart';
+import 'lan_traffic.dart';
 import 'lan_transport.dart';
 
 /// Keeps this till's shared state and its peers' in step, on the shop LAN and
@@ -29,6 +30,7 @@ class LanFabric {
     LanFetch? fetch,
     LanNotify? notify,
     LanLog? onError,
+    this.traffic,
     this.pullInterval = const Duration(seconds: 5),
     this.pageSize = 200,
     DateTime Function()? now,
@@ -54,6 +56,9 @@ class LanFabric {
   final LanNotify? _notify;
   final LanLog? _onError;
   final DateTime Function() _now;
+
+  /// Where each pull and push is counted and timed, for the shop network screen.
+  final LanTraffic? traffic;
 
   /// How often this till asks its peers what it missed. Fast enough that a table
   /// opened on the other till colours in while a waiter is still walking, slow
@@ -116,20 +121,69 @@ class LanFabric {
     final fetch = _fetch;
     if (fetch == null) return;
     for (final peer in peers.active) {
-      try {
-        // A page at a time until the peer has nothing newer, bounded so one very
-        // stale peer cannot own this pass forever.
-        for (var page = 0; page < maxPagesPerPass; page++) {
-          final since = _log.cursorFor(peer.deviceId);
-          final reply = await fetch(peer, since);
-          _applier.applyAll(peer.deviceId, reply.events, highSeq: reply.highSeq);
-          if (reply.events.isEmpty) break;
-        }
-        lastError = null;
-      } catch (e) {
-        lastError = '${peer.name}: $e';
-        _onError?.call('lan.pull.failed', '${peer.deviceId} (${peer.name}): $e');
+      final error = await _pull(peer, fetch, maxPagesPerPass);
+      lastError = error == null ? null : '${peer.name}: $error';
+    }
+  }
+
+  /// Read each of [targets] to the end of its log now, and answer which could not
+  /// be, by device id, with why. Used before a shift closes, where "probably caught
+  /// up on the next pass" is not good enough.
+  ///
+  /// Waits for a pass already running rather than racing it for the same cursors.
+  /// [onProgress] is called with a short status as each peer is pulled, for the
+  /// close-ceremony progress dialog.
+  Future<Map<String, String>> catchUp(
+    Iterable<LanPeer> targets, {
+    void Function(String status)? onProgress,
+  }) async {
+    final failed = <String, String>{};
+    final fetch = _fetch;
+    if (fetch == null) return failed;
+    while (_passing) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    _passing = true;
+    try {
+      final list = targets.toList();
+      if (list.isEmpty) {
+        onProgress?.call('No other tills to collect from');
+        return failed;
       }
+      onProgress?.call('Looking for ${list.length} till(s)...');
+      for (var i = 0; i < list.length; i++) {
+        final peer = list[i];
+        final who = peer.name.isEmpty ? peer.deviceId : peer.name;
+        onProgress?.call('Pulling from $who (${i + 1}/${list.length})...');
+        final error = await _pull(peer, fetch, maxPagesPerCatchUp);
+        if (error != null) failed[peer.deviceId] = error;
+      }
+      onProgress?.call('Finished collecting from other tills');
+    } finally {
+      _passing = false;
+    }
+    return failed;
+  }
+
+  /// A page at a time until [peer] has nothing newer, bounded so one very stale
+  /// peer cannot own a pass forever. Returns why it stopped short, or null once
+  /// the peer had nothing left to give.
+  Future<String?> _pull(LanPeer peer, LanFetch fetch, int maxPages) async {
+    try {
+      for (var page = 0; page < maxPages; page++) {
+        final since = _log.cursorFor(peer.deviceId);
+        final clock = Stopwatch()..start();
+        final reply = await fetch(peer, since);
+        clock.stop();
+        _applier.applyAll(peer.deviceId, reply.events, highSeq: reply.highSeq);
+        traffic?.pulled(peer.deviceId, reply.events, clock.elapsed);
+        if (reply.events.isEmpty) return null;
+      }
+      return 'still catching up after $maxPages pages';
+    } catch (e) {
+      _onError?.call('lan.pull.failed', '${peer.deviceId} (${peer.name}): $e');
+      traffic?.failed(peer.deviceId, '$e');
+      return '$e';
     }
   }
 
@@ -147,9 +201,12 @@ class LanFabric {
     if (events.isEmpty) return;
     for (final peer in targets) {
       try {
+        final clock = Stopwatch()..start();
         await notify(peer, events);
+        traffic?.pushed(peer.deviceId, events.length, clock.elapsed);
       } catch (e) {
         _onError?.call('lan.notify.failed', '${peer.deviceId} (${peer.name}): $e');
+        traffic?.failed(peer.deviceId, '$e');
       }
     }
     _notifiedUpTo = events.last.seq;
@@ -173,4 +230,8 @@ class LanFabric {
   /// Pages one peer may take in a single pass. A till back from a week away is
   /// caught up over a few passes rather than one long run.
   static const int maxPagesPerPass = 10;
+
+  /// Pages one peer may take when a close is waiting on it: enough for a whole
+  /// day's log, so a slow peer is read through rather than reported.
+  static const int maxPagesPerCatchUp = 200;
 }

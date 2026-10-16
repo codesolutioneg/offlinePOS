@@ -48,6 +48,11 @@ class OpenOrdersScreen extends StatefulWidget {
   /// bill to the table straight from this list. Absent hides the action.
   final void Function(Order order)? onPrintBill;
 
+  /// Whether the kitchen holds any line of [order], even fired to one station of
+  /// several. Such an order is never discarded from this list.
+  static bool sentToKitchen(Order order) => order.lines
+      .any((l) => l.printedToKitchen || l.firedStations.isNotEmpty);
+
   @override
   State<OpenOrdersScreen> createState() => _OpenOrdersScreenState();
 }
@@ -63,6 +68,43 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
 
   String get _noShiftMessage => tr(context,
       'No shift is open. Open one before you pick a tab back up.');
+  /// Food may be cooking, so the order is opened instead and its lines voided
+  /// inside: a manager PIN every time, a reason, the kitchen's cancel slip, and
+  /// voided lines the reports still count. Discarding it whole from here did none
+  /// of that.
+  Future<void> _refuseSentOrder(Order order) async {
+    final open = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('cancel-sent-order-refused'),
+        title: Text(tr(ctx, 'This order was sent to the kitchen')),
+        content: Text(tr(
+            ctx,
+            'It cannot be deleted from this list. Open it and void the '
+                'items from inside: that asks for a manager PIN and a '
+                'reason, tells the kitchen to stop, and keeps the void '
+                'in the reports.')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(tr(ctx, 'Close')),
+          ),
+          FilledButton(
+            key: const Key('cancel-sent-order-open'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr(ctx, 'Open order')),
+          ),
+        ],
+      ),
+    );
+    if (open != true || !mounted) return;
+    if (_noShift) {
+      showToast(context, _noShiftMessage, kind: ToastKind.error);
+      return;
+    }
+    widget.onRecall(order);
+    Navigator.of(context).pop();
+  }
 
   /// Why a parked tab cannot be picked up right now, said on the list instead of on
   /// the counter the recall used to land on. The list underneath stays readable and
@@ -104,12 +146,12 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
     // how long they have been waiting, and who is carrying them. Not a dispatch
     // board, and it holds no state of its own; it is a view of the same tabs.
     final anyDelivery =
-        widget.orders.any((o) => o.type == OrderType.delivery);
+        widget.orders.any((o) => o.type.isDelivery);
     // The filter is dropped the moment the last delivery leaves the list: a cashier
     // must never be left staring at an empty screen whose only way back has just
     // disappeared with it.
     final shown = _deliveryOnly && anyDelivery
-        ? widget.orders.where((o) => o.type == OrderType.delivery).toList()
+        ? widget.orders.where((o) => o.type.isDelivery).toList()
         : widget.orders;
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Open orders'))),
@@ -167,6 +209,9 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
                     onCancel: widget.onCancel == null
                         ? null
                         : () async {
+                            if (OpenOrdersScreen.sentToKitchen(shown[i])) {
+                              return _refuseSentOrder(shown[i]);
+                            }
                             final ok = await showDialog<bool>(
                               context: context,
                               builder: (ctx) => AlertDialog(
@@ -213,7 +258,7 @@ class _OpenOrderCard extends StatelessWidget {
 
   String _label(BuildContext context) =>
       order.tableLabel ??
-      (order.type == OrderType.delivery && order.customerName != null
+      (order.type.isDelivery && order.customerName != null
           ? order.customerName!
           : '${tr(context, 'Tab')} ${order.displayNo}');
 
@@ -252,7 +297,7 @@ class _OpenOrderCard extends StatelessWidget {
     final label = _label(context);
     final (statusLabel, statusColor, statusIcon) = _status(context);
     final hasUnsent = order.lines.any((l) => !l.printedToKitchen);
-    final delivery = order.type == OrderType.delivery;
+    final delivery = order.type.isDelivery;
     final subtitleParts = <String>[
       tr(context, order.type.label),
       if (order.guestCount != null) '${order.guestCount} guests',

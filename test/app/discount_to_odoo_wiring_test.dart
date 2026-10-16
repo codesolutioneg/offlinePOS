@@ -32,6 +32,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -64,6 +65,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     outboxStore = SqliteOutboxStore(db);
     audit = AuditLog(db);
     calls = [];
@@ -168,6 +170,8 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-settings')));
     await t.pumpAndSettle();
+    await t.scrollUntilVisible(find.byKey(const Key('set-server')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-server')));
     await t.pumpAndSettle();
     expect(find.byType(ServerSettingsScreen), findsOneWidget);
@@ -188,7 +192,7 @@ void main() {
   }
 
   Future<void> ringItUp(WidgetTester t) async {
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('confirm-payment')));
     await t.pumpAndSettle();

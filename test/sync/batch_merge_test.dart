@@ -35,7 +35,7 @@ void main() {
       deviceId: 'till-1',
       cashierId: cashier,
       createdAt: at,
-      type: delivery > 0 ? OrderType.delivery : OrderType.dineIn,
+      type: delivery > 0 ? OrderType.storeDelivery : OrderType.dineIn,
       deliveryCost: delivery,
       tip: tip,
     )..lines.add(
@@ -193,10 +193,38 @@ void main() {
         reason: 'the refund row must stay queued for the ordinary drain');
   });
 
-  test('one sale is not merged: it is already its own payload', () {
+  test('one sale is not merged without a session partner', () {
     final outcome = mergeOrderPushes([entryFor(paidSale())], batchUuid: 'shift');
     expect(outcome.batch, isNull);
     expect(outcome.notMerged!.reason, contains('fewer than two'));
+  });
+
+  test('one sale merges when a session partner is set', () {
+    final sale = paidSale();
+    final batch = mergeOrderPushes(
+      [entryFor(sale)],
+      batchUuid: 'shift',
+      partnerId: 42,
+      partnerName: 'Brisk Strip Madinaty',
+    ).batch!;
+
+    expect(batch.payload['order_count'], 1);
+    expect(batch.payload['partner_id'], 42);
+    expect(batch.payload['customer_name'], 'Brisk Strip Madinaty');
+    expect(batch.orderUuids, [sale.uuid]);
+    expect(payloadBalances(batch.payload), isTrue);
+  });
+
+  test('a merged batch carries the session partner on the payload', () {
+    final batch = mergeOrderPushes(
+      [entryFor(paidSale()), entryFor(paidSale(price: 250))],
+      batchUuid: 'shift',
+      partnerId: 7,
+      partnerName: 'Session Customer',
+    ).batch!;
+
+    expect(batch.payload['partner_id'], 7);
+    expect(batch.payload['customer_name'], 'Session Customer');
   });
 
   test('a batch that states its discount two ways is not merged', () {
@@ -230,6 +258,38 @@ void main() {
     final outcome = mergeOrderPushes([good, broken], batchUuid: 'shift');
     expect(outcome.batch, isNull);
     expect(outcome.notMerged!.reason, contains('does not add up'));
+  });
+
+  test('a night of taxed tickets still merges: piastre rounding does not refuse it',
+      () {
+    // Each sale is paid at Order.total (tax to the piastre). Recomputing tax on
+    // the merged lines without that rounding used to drift by ~0.17 on a shift
+    // like this and park Sync now with "payload does not add up".
+    final sales = <OutboxEntry>[
+      for (var i = 0; i < 50; i++)
+        entryFor(() {
+          final o = Order(
+            deviceId: 'till-1',
+            cashierId: 'sara',
+            type: OrderType.takeaway,
+          )..lines.add(OrderLine(
+              productId: 10,
+              odooProductId: 10,
+              name: 'Tea',
+              quantity: 1,
+              unitPrice: 33.33,
+              taxRate: 14,
+            ));
+          o.payments = [
+            OrderPayment(methodId: 1, amount: o.total, label: 'Cash')
+          ];
+          o.state = OrderState.paid;
+          return o;
+        }()),
+    ];
+    final outcome = mergeOrderPushes(sales, batchUuid: 'shift-tax');
+    expect(outcome.notMerged, isNull, reason: outcome.notMerged?.reason);
+    expect(payloadBalances(outcome.batch!.payload), isTrue);
   });
 
   test('the same shift merges to the same key every time', () {

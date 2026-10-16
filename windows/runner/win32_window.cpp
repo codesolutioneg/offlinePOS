@@ -135,7 +135,8 @@ bool Win32Window::Create(const std::wstring& title,
   double scale_factor = dpi / 96.0;
 
   HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+      window_class, title.c_str(),
+      kiosk_ ? WS_POPUP : WS_OVERLAPPEDWINDOW,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
       nullptr, nullptr, GetModuleHandle(nullptr), this);
@@ -145,8 +146,26 @@ bool Win32Window::Create(const std::wstring& title,
   }
 
   UpdateTheme(window);
+  if (kiosk_) {
+    FitToMonitor(window);
+  }
 
   return OnCreate();
+}
+
+void Win32Window::SetKiosk(bool kiosk) {
+  kiosk_ = kiosk;
+}
+
+void Win32Window::FitToMonitor(HWND const window) {
+  MONITORINFO info = {sizeof(MONITORINFO)};
+  if (!GetMonitorInfo(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                      &info)) {
+    return;
+  }
+  const RECT& r = info.rcMonitor;
+  SetWindowPos(window, nullptr, r.left, r.top, r.right - r.left,
+               r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 bool Win32Window::Show() {
@@ -179,6 +198,29 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_CLOSE:
+      if (kiosk_) {
+        return 0;
+      }
+      break;
+
+    case WM_SYSCOMMAND:
+      if (kiosk_) {
+        const WPARAM command = wparam & 0xFFF0;
+        if (command == SC_CLOSE || command == SC_MOVE || command == SC_SIZE ||
+            command == SC_MINIMIZE || command == SC_MAXIMIZE ||
+            command == SC_RESTORE) {
+          return 0;
+        }
+      }
+      break;
+
+    case WM_DISPLAYCHANGE:
+      if (kiosk_) {
+        FitToMonitor(hwnd);
+      }
+      break;
+
     case WM_DESTROY:
       window_handle_ = nullptr;
       Destroy();
@@ -188,6 +230,10 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
 
     case WM_DPICHANGED: {
+      if (kiosk_) {
+        FitToMonitor(hwnd);
+        return 0;
+      }
       auto newRectSize = reinterpret_cast<RECT*>(lparam);
       LONG newWidth = newRectSize->right - newRectSize->left;
       LONG newHeight = newRectSize->bottom - newRectSize->top;

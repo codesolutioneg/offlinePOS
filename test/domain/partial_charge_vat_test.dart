@@ -52,8 +52,9 @@ void main() {
   test('the discount and the service both reach a part charge', () {
     final o = bill(service: 12, discount: 10);
     // 20 -> 18 after the discount -> 20.16 with service; the tax stays on the
-    // undiscounted 22.40 of serviced food: 20.16 + 3.136 = 23.296.
-    expect(o.chargeFor([o.lines.last]), closeTo(23.296, 0.0001));
+    // undiscounted 22.40 of serviced food: 20.16 + 3.136 = 23.296. Booked the
+    // way Odoo books it, the line goes at 20.44 and its tax at 2.86: 23.30.
+    expect(o.chargeFor([o.lines.last]), closeTo(23.30, 0.0001));
   });
 
   test('a zero-quantity line is worth nothing', () {

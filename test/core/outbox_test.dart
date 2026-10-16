@@ -13,10 +13,13 @@ class FakeStore implements OutboxStore {
   }
 
   @override
-  Future<List<OutboxEntry>> pending({int limit = 20}) async => entries
-      .where((e) => !sent.contains(e.id) && !deadIds.contains(e.id))
-      .take(limit)
-      .toList();
+  Future<List<OutboxEntry>> pending({int limit = 20, Set<String>? kinds}) async {
+    var list = entries.where((e) => !sent.contains(e.id) && !deadIds.contains(e.id));
+    if (kinds != null && kinds.isNotEmpty) {
+      list = list.where((e) => kinds.contains(e.kind));
+    }
+    return list.take(limit).toList();
+  }
 
   @override
   Future<void> markSent(int id) async => sent.add(id);
