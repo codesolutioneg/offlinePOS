@@ -19,9 +19,12 @@ class LanTallyAnswer {
         outdated = true;
 
   /// The answer for a request to [peer] that threw [error]. An older build
-  /// answers 404 for a path it does not know.
+  /// answers 404 with `unknown path` for a path it does not know; any other 404
+  /// keeps its own words.
   factory LanTallyAnswer.fromError(LanPeer peer, Object error) =>
-      error is HttpException && error.message.startsWith('404 ')
+      error is HttpException &&
+              error.message.startsWith('404 ') &&
+              error.message.contains('unknown path')
           ? LanTallyAnswer.outdated(peer)
           : LanTallyAnswer.failed(peer, '$error');
 

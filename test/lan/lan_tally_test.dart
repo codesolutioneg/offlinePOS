@@ -305,6 +305,15 @@ void main() {
       expect(answer.error, isNull);
     });
 
+    test('a 404 that is not the unknown path keeps its own words', () {
+      final answer = LanTallyAnswer.fromError(
+          _peer('till-b'),
+          const HttpException(
+              '404 from http://127.0.0.1:45333/lan/tally: {"error":"no such shift"}'));
+      expect(answer.outdated, isFalse);
+      expect(answer.error, contains('no such shift'));
+    });
+
     test('any other failure keeps its own words', () {
       final refused = LanTallyAnswer.fromError(_peer('till-b'),
           const HttpException('409 from http://127.0.0.1:45333/lan/tally: no'));
