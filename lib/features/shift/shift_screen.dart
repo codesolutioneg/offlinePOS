@@ -827,6 +827,10 @@ class _ShiftScreenState extends State<ShiftScreen> {
     // must leave the shift open.
     if (widget.authorizeClose != null && !await widget.authorizeClose!()) return;
     if (!mounted) return;
+    // Asked once more at the last moment: the count takes minutes, and a sale
+    // rung on another till meanwhile would otherwise miss this close.
+    if (!await _catchUpOtherTills()) return;
+    if (!mounted) return;
 
     final closed = widget.store.closeShift(countedCash: counted);
     _handOverZ(closed);

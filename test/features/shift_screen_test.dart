@@ -232,5 +232,61 @@ void main() {
           ['shift.close.override.tills_unreachable: Bar: unreachable']);
       expect(find.text('Counted cash'), findsOneWidget);
     });
+
+    Future<void> countAndConfirm(WidgetTester t, String digits) async {
+      for (final d in digits.split('')) {
+        await t.tap(find.byKey(Key('key-$d')));
+        await t.pump();
+      }
+      await t.tap(find.byKey(const Key('keypad-ok')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('confirm-close-shift')));
+      await t.pumpAndSettle();
+    }
+
+    testWidgets('the tills are asked again just before the session closes',
+        (t) async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      var calls = 0;
+      await t.pumpWidget(closing((s, {onProgress}) async {
+        calls++;
+        return const [];
+      }));
+      await t.pumpAndSettle();
+      expect(calls, 1);
+
+      await countAndConfirm(t, '0');
+
+      expect(calls, 2);
+      expect(shifts.currentOpenShift(), isNull);
+      expect(find.byKey(const Key('session-done')), findsOneWidget);
+    });
+
+    testWidgets('a sale rung on another till during the count holds the close',
+        (t) async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      final blocked = <String>[];
+      var calls = 0;
+      await t.pumpWidget(closing((s, {onProgress}) async {
+        calls++;
+        return calls == 2
+            ? ['Bar: 1 sale rung there is not on this till yet']
+            : const [];
+      }, blocked: blocked));
+      await t.pumpAndSettle();
+
+      await countAndConfirm(t, '0');
+
+      expect(find.byKey(const Key('tills-unreachable')), findsOneWidget);
+      expect(find.text('• Bar: 1 sale rung there is not on this till yet'),
+          findsOneWidget);
+      expect(blocked, ['shift.close.blocked.tills_unreachable']);
+      expect(shifts.currentOpenShift(), isNotNull);
+
+      await t.tap(find.byKey(const Key('tills-unreachable-cancel')));
+      await t.pumpAndSettle();
+      expect(shifts.currentOpenShift(), isNotNull);
+      expect(find.byKey(const Key('session-done')), findsNothing);
+    });
   });
 }
