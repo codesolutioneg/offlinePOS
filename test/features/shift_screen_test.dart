@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/shift_store.dart';
+import 'package:offline_pos/core/i18n/l10n.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/shift/shift_screen.dart';
 
@@ -184,6 +188,39 @@ void main() {
       expect(bounded, isFalse, reason: 'before the count the tills are read up to now');
       expect(find.byKey(const Key('tills-unreachable')), findsNothing);
       expect(find.text('Counted cash'), findsOneWidget);
+    });
+
+    testWidgets('the progress a till reports reads in the cashier\'s language',
+        (t) async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      final answer = Completer<List<String>>();
+      await t.pumpWidget(MaterialApp(
+        locale: const Locale('ar'),
+        supportedLocales: kSupportedLocales,
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        home: ShiftScreen(
+          store: shifts,
+          cashierId: 'sara',
+          formatAmount: (v) => v.toStringAsFixed(2),
+          startCloseOnOpen: true,
+          catchUpOtherTills: (s, {until, onProgress}) {
+            onProgress?.call('Checking every till handed over its sales...');
+            return answer.future;
+          },
+        ),
+      ));
+      await t.pump();
+      await t.pump();
+
+      expect(find.text('Checking every till handed over its sales...'), findsNothing);
+      expect(find.text('جاري التأكد من أن كل الأجهزة سلّمت مبيعاتها...'),
+          findsOneWidget);
+      answer.complete(const []);
+      await t.pumpAndSettle();
     });
 
     testWidgets('a silent till stops the close, and is asked again', (t) async {

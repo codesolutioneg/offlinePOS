@@ -65,6 +65,23 @@ void main() {
     expect(out[3], endsWith(': timed out'));
   });
 
+  testWidgets('the progress shown while the tills are collected reads in Arabic',
+      (t) async {
+    const statuses = [
+      'Collecting sales from the other tills...',
+      'Handing over this till\'s sales...',
+      'Checking every till handed over its sales...',
+    ];
+    late List<String> out;
+    await t.pumpWidget(host(const Locale('ar'), Builder(builder: (c) {
+      out = [for (final s in statuses) tr(c, s)];
+      return const SizedBox();
+    })));
+    for (final text in out) {
+      expect(text, isNot(contains(RegExp('[a-z]{3}'))), reason: text);
+    }
+  });
+
   test('the locale controller toggles and reports the choice', () {
     String? saved;
     final c = LocaleController(const Locale('en'), onChanged: (code) => saved = code);

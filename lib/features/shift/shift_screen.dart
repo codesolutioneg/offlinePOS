@@ -883,7 +883,10 @@ class _ShiftScreenState extends State<ShiftScreen> {
       final gaps = await _withProgress(
         tr(context, 'Collecting sales from the other tills...'),
         (setStatus) => catchUp(shift.openedAt,
-            until: freeze ? cutoff : null, onProgress: setStatus),
+            until: freeze ? cutoff : null,
+            onProgress: (s) {
+              if (mounted) setStatus(tr(context, s));
+            }),
       );
       if (!mounted) return null;
       if (gaps.isEmpty) return cutoff;

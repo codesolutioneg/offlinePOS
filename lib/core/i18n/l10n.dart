@@ -2412,6 +2412,9 @@ const Map<String, String> _ar = {
       'فعّل "ضبط الوقت تلقائياً" في ويندوز على الجهازين.',
   // Collecting the other tills' sales before a shift closes.
   'Collecting sales from the other tills...': 'جاري تجميع المبيعات من الأجهزة الأخرى...',
+  'Handing over this till\'s sales...': 'جاري تسليم مبيعات هذا الجهاز...',
+  'Checking every till handed over its sales...':
+      'جاري التأكد من أن كل الأجهزة سلّمت مبيعاتها...',
   'Some tills did not hand over their sales': 'بعض الأجهزة لم تسلّم مبيعاتها',
   'Turn those tills on and connect them to the network, then try again. Closing anyway leaves their sales out of this Z.':
       'شغّل هذه الأجهزة ووصّلها بالشبكة ثم حاول مرة أخرى. الإغلاق رغم ذلك يترك مبيعاتها خارج تقرير Z هذا.',
