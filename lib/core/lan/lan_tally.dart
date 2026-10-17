@@ -1,15 +1,37 @@
+import 'dart:io';
+
 import 'lan_peer.dart';
 
 /// What one till answered when asked which sales it holds: its uuids, or why it
 /// could not be asked.
 class LanTallyAnswer {
-  const LanTallyAnswer.counted(this.peer, Set<String> this.uuids) : error = null;
-  const LanTallyAnswer.failed(this.peer, String this.error) : uuids = null;
+  const LanTallyAnswer.counted(this.peer, Set<String> this.uuids)
+      : error = null,
+        outdated = false;
+  const LanTallyAnswer.failed(this.peer, String this.error)
+      : uuids = null,
+        outdated = false;
+
+  /// [peer] runs a build from before the tally and does not know the request.
+  const LanTallyAnswer.outdated(this.peer)
+      : uuids = null,
+        error = null,
+        outdated = true;
+
+  /// The answer for a request to [peer] that threw [error]. An older build
+  /// answers 404 for a path it does not know.
+  factory LanTallyAnswer.fromError(LanPeer peer, Object error) =>
+      error is HttpException && error.message.startsWith('404 ')
+          ? LanTallyAnswer.outdated(peer)
+          : LanTallyAnswer.failed(peer, '$error');
 
   final LanPeer peer;
   final Set<String>? uuids;
   final String? error;
+  final bool outdated;
 }
+
+const String _outdated = 'runs an older version and has to be updated';
 
 /// The tills whose sales this one does not hold, one gap per till.
 ///
@@ -25,7 +47,14 @@ List<LanTillGap> tallyGaps({
 }) =>
     [
       for (final answer in answers)
-        if (answer.error case final error?)
+        if (answer.outdated)
+          LanTillGap(
+            deviceId: answer.peer.deviceId,
+            name: answer.peer.name,
+            reason: _outdated,
+            lastSeenAt: answer.peer.lastSeenAt,
+          )
+        else if (answer.error case final error?)
           LanTillGap(
             deviceId: answer.peer.deviceId,
             name: answer.peer.name,
@@ -47,7 +76,9 @@ List<LanTillGap> tallyGaps({
 /// A [LanTillGap.reason], which is English on the wire, run through [tr] for
 /// the cashier's language. Reasons it does not know are returned as they came.
 String gapReasonIn(String reason, String Function(String en) tr) {
-  if (reason == 'the primary is not on the network') return tr(reason);
+  if (reason == 'the primary is not on the network' || reason == _outdated) {
+    return tr(reason);
+  }
   if (RegExp(r'^(\d+) sales? held there (?:is|are) not on this till yet$')
           .firstMatch(reason)
       case final m?) {

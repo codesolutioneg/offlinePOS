@@ -2422,6 +2422,7 @@ const Map<String, String> _ar = {
   '1 sale held there is not on this till yet': 'بيع واحد موجود هناك ولم يصل إلى هذا الجهاز بعد',
   '{n} sales held there are not on this till yet': '{n} مبيعات موجودة هناك ولم تصل إلى هذا الجهاز بعد',
   'could not list its sales': 'تعذّر عرض مبيعاته',
+  'runs an older version and has to be updated': 'يعمل بإصدار أقدم ويجب تحديثه',
   // Deleting from the open orders list.
   'This order was sent to the kitchen': 'هذا الطلب أُرسل إلى المطبخ',
   'It cannot be deleted from this list. Open it and void the items from inside: that asks for a manager PIN and a reason, tells the kitchen to stop, and keeps the void in the reports.':

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/audit/audit_log.dart';
 import 'package:offline_pos/core/auth/user_store.dart';
@@ -39,6 +41,7 @@ class _Peers extends LanHttpClient {
 
   final Map<String, List<String>> holds = {};
   final Set<String> broken = {};
+  final Set<String> outdated = {};
   final List<String> asked = [];
   final List<DateTime> windows = [];
   void Function()? onAsk;
@@ -61,6 +64,11 @@ class _Peers extends LanHttpClient {
     onAsk?.call();
     if (broken.contains(peer.deviceId)) {
       throw StateError('${peer.deviceId} timed out');
+    }
+    if (outdated.contains(peer.deviceId)) {
+      // What the client throws when a build without the tally answers.
+      throw HttpException(
+          '404 from ${peer.baseUrl}/lan/tally: {"error":"unknown path"}');
     }
     return holds[peer.deviceId] ?? const [];
   }
@@ -111,6 +119,14 @@ void main() {
         answers: [LanTallyAnswer.failed(_peer('till-b'), 'timed out')],
       );
       expect(gaps.single.reason, 'could not list its sales: timed out');
+    });
+
+    test('a till on an older build is told to be updated', () {
+      final gaps = tallyGaps(
+        local: {'a'},
+        answers: [LanTallyAnswer.outdated(_peer('till-b'))],
+      );
+      expect(gaps.single.reason, 'runs an older version and has to be updated');
     });
 
     test('sales only this till holds are not a gap anywhere', () {
@@ -218,6 +234,16 @@ void main() {
       expect(gaps.single.reason, startsWith('could not list its sales:'));
     });
 
+    test('a till on an older build holds the close and is named to be updated',
+        () async {
+      node.peers.seen(_peer('till-b'));
+      peers.outdated.add('till-b');
+
+      final gaps = await node.catchUpBeforeClose(since: since);
+      expect(gaps.single.deviceId, 'till-b');
+      expect(gaps.single.reason, 'runs an older version and has to be updated');
+    });
+
     test('a till last seen before the window opened is not asked', () async {
       node.peers.seen(_peer('till-b'));
       final later = DateTime.now().toUtc().add(const Duration(hours: 1));
@@ -269,6 +295,29 @@ void main() {
     });
   });
 
+  group('LanTallyAnswer.fromError', () {
+    test('a 404 from the tally path means the till predates it', () {
+      final answer = LanTallyAnswer.fromError(
+          _peer('till-b'),
+          const HttpException(
+              '404 from http://127.0.0.1:45333/lan/tally: {"error":"unknown path"}'));
+      expect(answer.outdated, isTrue);
+      expect(answer.error, isNull);
+    });
+
+    test('any other failure keeps its own words', () {
+      final refused = LanTallyAnswer.fromError(_peer('till-b'),
+          const HttpException('409 from http://127.0.0.1:45333/lan/tally: no'));
+      expect(refused.outdated, isFalse);
+      expect(refused.error, startsWith('HttpException: 409'));
+
+      final silent =
+          LanTallyAnswer.fromError(_peer('till-b'), StateError('timed out'));
+      expect(silent.outdated, isFalse);
+      expect(silent.error, contains('timed out'));
+    });
+  });
+
   group('gapReasonIn', () {
     String upper(String en) => en.toUpperCase();
 
@@ -300,6 +349,11 @@ void main() {
     test('a failed listing keeps the error after the translated text', () {
       expect(gapReasonIn('could not list its sales: timed out', upper),
           'COULD NOT LIST ITS SALES: timed out');
+    });
+
+    test('an outdated till is translated', () {
+      expect(gapReasonIn('runs an older version and has to be updated', upper),
+          'RUNS AN OLDER VERSION AND HAS TO BE UPDATED');
     });
 
     test('the primary missing is translated, anything else is left alone', () {

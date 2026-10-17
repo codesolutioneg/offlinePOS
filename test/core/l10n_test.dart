@@ -49,6 +49,7 @@ void main() {
       'the primary is not on the network',
       '1 sale held there is not on this till yet',
       '4 sales held there are not on this till yet',
+      'runs an older version and has to be updated',
       'could not list its sales: timed out',
     ];
     late List<String> out;
@@ -57,12 +58,12 @@ void main() {
       return const SizedBox();
     })));
     // The error after the colon comes from the network layer and stays as is.
-    final translated = [...out.take(3), out[3].split(':').first];
+    final translated = [...out.take(4), out[4].split(':').first];
     for (final text in translated) {
       expect(text, isNot(contains(RegExp('[a-z]{3}'))), reason: text);
     }
     expect(out[2], contains('4'));
-    expect(out[3], endsWith(': timed out'));
+    expect(out[4], endsWith(': timed out'));
   });
 
   testWidgets('the progress shown while the tills are collected reads in Arabic',

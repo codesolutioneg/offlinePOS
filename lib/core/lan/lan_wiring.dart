@@ -592,7 +592,7 @@ class LanNode {
         answers.add(LanTallyAnswer.counted(peer, uuids.toSet()));
       } catch (e) {
         _report('lan.tally.failed', '${peer.deviceId} (${peer.name}): $e');
-        answers.add(LanTallyAnswer.failed(peer, '$e'));
+        answers.add(LanTallyAnswer.fromError(peer, e));
       }
     }
     // Read after the answers, so a sale that arrived while they were being
