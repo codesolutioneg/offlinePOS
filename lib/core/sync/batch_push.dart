@@ -79,12 +79,17 @@ class BatchPush {
   /// [lastAck] holds the server's status dict for that push (`name`, `id`), so
   /// End of Day can show the cashier the Odoo document number.
   /// [lastSkipReason] explains why nothing was merged when [run] returns false.
+  /// [lastAlreadyBooked] lists the tickets the server says it already held when
+  /// the ack carries a per-ticket `tickets` map; an older module answers without
+  /// one and the list stays empty.
   Map<String, dynamic>? lastAck;
   String? lastSkipReason;
+  List<String> lastAlreadyBooked = const [];
 
   Future<bool> run({Set<String>? onlyUuids, String? batchKey}) async {
     lastAck = null;
     lastSkipReason = null;
+    lastAlreadyBooked = const [];
     if (!enabled()) {
       lastSkipReason = 'merge not enabled';
       return false;
@@ -123,8 +128,22 @@ class BatchPush {
     // Nothing is marked until the server has it, so a failure anywhere above
     // leaves the night queued rather than half booked and half forgotten.
     final ack = lastAck = await send(batch.uuid, batch.payload);
+    lastAlreadyBooked = alreadyBooked(ack);
     _recordBooked(batch.entryIds, batch.orderUuids, ack);
     return true;
+  }
+
+  /// The ticket uuids an ack reports as `duplicate`. A server that settles the
+  /// batch per ticket answers `tickets: {uuid: 'created' | 'duplicate'}` beside
+  /// the order; every ticket in the batch is booked either way, so this only
+  /// tells the cashier which ones another till had already sent.
+  static List<String> alreadyBooked(Map<String, dynamic>? ack) {
+    final tickets = ack?['tickets'];
+    if (tickets is! Map) return const [];
+    return [
+      for (final entry in tickets.entries)
+        if ('${entry.value}' == 'duplicate') '${entry.key}',
+    ];
   }
 
   /// Mark the queue rows sent and the sales synced as one write. Apart, a crash
