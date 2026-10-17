@@ -109,11 +109,7 @@ Future<ShiftFlushResult> sendClosedShiftBacklog(
     tried.add(backlog.batchKey);
     result = await flush(backlog);
     if (result.merged) {
-      for (final o in backlog.orders) {
-        if (orders.byUuid(o.uuid)?.state == OrderState.synced) {
-          orders.tellShopSynced(o.uuid);
-        }
-      }
+      orders.tellShopBooked(backlog.orders.map((o) => o.uuid));
       continue;
     }
     if (!result.refused) return result;

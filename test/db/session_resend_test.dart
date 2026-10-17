@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
+import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/sync/batch_merge.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/domain/order.dart';
@@ -209,5 +210,25 @@ void main() {
 
     final uuids = orders.saleUuidsBetween(day, day.add(const Duration(days: 1)));
     expect(uuids, [sale.uuid, refund.uuid]);
+  });
+
+  test('after a booking only the sales it marked synced are told to the shop', () {
+    final at = DateTime.utc(2026, 10, 15, 12);
+    final booked = paid(device: 'secondary', price: 10, at: at);
+    final left = paid(device: 'secondary', price: 20, at: at);
+    final told = <String>[];
+    final announcing = OrderStore(db,
+        ownDeviceId: 'primary',
+        publish: (kind, uuid, payload) {
+          if (kind == LanEventKind.orderUpsert) told.add(uuid);
+        });
+    announcing.markSynced(booked.uuid, 1);
+
+    announcing.tellShopBooked([booked.uuid, left.uuid]);
+
+    expect(told, contains(booked.uuid));
+    expect(told, isNot(contains(left.uuid)));
+    expect(announcing.byUuid(left.uuid)?.state, OrderState.paid,
+        reason: 'a sale the batch left out stays owed');
   });
 }

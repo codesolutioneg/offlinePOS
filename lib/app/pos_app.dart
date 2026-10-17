@@ -6898,9 +6898,7 @@ class _PosAppState extends State<PosApp> {
                   },
                 );
                 if (result.merged) {
-                  for (final o in shiftOrders) {
-                    widget.orders.tellShopSynced(o.uuid);
-                  }
+                  widget.orders.tellShopBooked(shiftOrders.map((o) => o.uuid));
                   var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
                   // Anything older still owed goes now, not on the next failure.
                   // After the read above: a backlog push clears the last ref.
@@ -7094,9 +7092,7 @@ class _PosAppState extends State<PosApp> {
       },
     );
     if (result.merged) {
-      for (final o in sales) {
-        widget.orders.tellShopSynced(o.uuid);
-      }
+      widget.orders.tellShopBooked(sales.map((o) => o.uuid));
       var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
       if (odooRef == null || odooRef.isEmpty || odooRef.startsWith('#')) {
         final resolved = await _resolveOdooSaleName(odooRef);

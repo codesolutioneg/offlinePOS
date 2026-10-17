@@ -352,6 +352,14 @@ class OrderStore {
     });
   }
 
+  /// [tellShopSynced] for each of [uuids] a booking actually marked synced. A
+  /// sale the batch left out stays owed and is not announced.
+  void tellShopBooked(Iterable<String> uuids) {
+    for (final uuid in uuids) {
+      if (byUuid(uuid)?.state == OrderState.synced) tellShopSynced(uuid);
+    }
+  }
+
   /// Completed sales, newest first, for the history / reprint browser and the
   /// reports. Includes both paid-not-yet-synced and synced, so a sale shows up the
   /// instant it is taken, not only after the server confirms. This till's own: a
