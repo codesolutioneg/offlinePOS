@@ -34,7 +34,7 @@ void main() {
     final o = Order(
       deviceId: device,
       cashierId: 'sara',
-      createdAt: at.toUtc(),
+      createdAt: at,
       type: OrderType.takeaway,
     )..lines.add(OrderLine(
         productId: 1,
@@ -335,10 +335,16 @@ void main() {
     });
 
     test('a sale rung with a local clock is filed by its instant', () {
+      // 18:30 at +02:00 is 16:30 UTC: inside the window, though its wall clock
+      // is past the close.
       final s = paid(
           device: 'till-b',
           price: 10,
-          at: open.add(const Duration(hours: 1)).toLocal());
+          at: DateTime.parse('2026-03-01T18:30:00+02:00').toLocal());
+      expect(
+          db.raw.select('SELECT created_at FROM orders WHERE uuid = ?', [s.uuid])
+              .single['created_at'],
+          '2026-03-01T16:30:00.000Z');
       expect(orders.saleUuidsBetween(open, close), [s.uuid]);
     });
   });
