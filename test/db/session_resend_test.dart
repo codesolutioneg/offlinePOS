@@ -273,6 +273,67 @@ void main() {
       expect(orders.salesInShift(shift(), anyDevice: true), isEmpty);
     });
 
+    test('sales a few microseconds outside either end stay out', () {
+      final opened = DateTime.utc(2026, 3, 1, 9, 0, 0, 0, 900);
+      final closed = DateTime.utc(2026, 3, 1, 17, 0, 0, 0, 900);
+      final edges = Shift(
+          id: '2',
+          openedAt: opened,
+          closedAt: closed,
+          openingFloat: 0,
+          cashierId: 'sara');
+      paid(device: 'till-b', price: 10, at: DateTime.utc(2026, 3, 1, 9, 0, 0, 0, 100));
+      paid(device: 'till-b', price: 10, at: DateTime.utc(2026, 3, 1, 17, 0, 0, 0, 999));
+      expect(orders.saleUuidsBetween(opened, closed), isEmpty);
+      expect(orders.salesInShift(edges, anyDevice: true), isEmpty);
+      expect(orders.awaitingSyncInShift(edges, anyDevice: true), isEmpty);
+    });
+
+    test('sales at the exact open and close are inside', () {
+      final opened = DateTime.utc(2026, 3, 1, 9, 0, 0, 0, 900);
+      final closed = DateTime.utc(2026, 3, 1, 17, 0, 0, 0, 900);
+      final edges = Shift(
+          id: '2',
+          openedAt: opened,
+          closedAt: closed,
+          openingFloat: 0,
+          cashierId: 'sara');
+      final first = paid(device: 'till-b', price: 10, at: opened);
+      final last = paid(device: 'till-b', price: 10, at: closed);
+      expect(orders.saleUuidsBetween(opened, closed), [first.uuid, last.uuid]);
+      expect(orders.salesInShift(edges, anyDevice: true).map((o) => o.uuid),
+          [first.uuid, last.uuid]);
+      expect(orders.awaitingSyncInShift(edges, anyDevice: true).map((o) => o.uuid),
+          [first.uuid, last.uuid]);
+    });
+
+    test('stamps written with or without a fraction or zone letter compare by instant',
+        () {
+      final opened = DateTime.utc(2026, 3, 1, 9, 0, 0, 0, 900);
+      final closed = DateTime.utc(2026, 3, 1, 17, 0, 0, 0, 900);
+      String stamped(String createdAt) {
+        final o = paid(device: 'till-b', price: 10, at: opened);
+        db.raw.execute(
+            'UPDATE orders SET created_at = ? WHERE uuid = ?', [createdAt, o.uuid]);
+        return o.uuid;
+      }
+
+      final inside = {
+        stamped('2026-03-01T09:00:00.000900'),
+        stamped('2026-03-01T09:00:01Z'),
+        stamped('2026-03-01T09:00:01'),
+        stamped('2026-03-01T12:00:00.000Z'),
+        stamped('2026-03-01T17:00:00.000900Z'),
+        stamped('2026-03-01T17:00:00.000Z'),
+      };
+      stamped('2026-03-01T09:00:00Z');
+      stamped('2026-03-01T09:00:00.000');
+      stamped('2026-03-01T09:00:00.000899Z');
+      stamped('2026-03-01T17:00:00.000901');
+      stamped('2026-03-01T17:00:00.001Z');
+      expect(orders.saleUuidsBetween(opened, closed).toSet(), inside);
+    });
+
     test('a sale rung with a local clock is filed by its instant', () {
       final s = paid(
           device: 'till-b',

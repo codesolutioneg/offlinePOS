@@ -227,13 +227,12 @@ class ShiftStore implements ReportShifts {
   /// because the cash they handed back has left the drawer even though no sales
   /// row carries it.
   _ShiftWindow _salesIn(Shift shift) {
+    final w = createdWithin(
+        from: shift.openedAt, to: shift.closedAt ?? DateTime.now().toUtc());
     final rows = _db.raw.select(
       "SELECT cashier_id, total, payload FROM orders "
-      "WHERE state IN ('paid', 'synced') AND created_at >= ? AND created_at < ?",
-      [
-        createdFrom(shift.openedAt),
-        createdThrough(shift.closedAt ?? DateTime.now().toUtc()),
-      ],
+      "WHERE state IN ('paid', 'synced') AND ${w.sql}",
+      w.args,
     );
     final rowByUuid = <String, Map<String, dynamic>>{};
     final decoded = <Order>[];

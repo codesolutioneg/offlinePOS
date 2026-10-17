@@ -81,6 +81,24 @@ void main() {
     expect(shifts.summary(closed).salesCount, 1);
   });
 
+  test('the Z leaves out a sale microseconds either side of the shift', () {
+    final opened = DateTime.utc(2026, 3, 1, 9, 0, 0, 0, 900);
+    shifts.openShift(openingFloat: 0, cashierId: 'c1', at: opened);
+    for (final at in [
+      DateTime.utc(2026, 3, 1, 9, 0, 0, 0, 100),
+      opened,
+      DateTime.utc(2026, 3, 1, 17, 0, 0, 0, 900),
+      DateTime.utc(2026, 3, 1, 17, 0, 0, 0, 999),
+    ]) {
+      orders.save(Order(deviceId: 'd', cashierId: 'c1', createdAt: at)
+        ..lines.add(line(40))
+        ..state = OrderState.paid);
+    }
+    final closed = shifts.closeShift(
+        countedCash: 80, at: DateTime.utc(2026, 3, 1, 17, 0, 0, 0, 900));
+    expect(shifts.summary(closed).salesCount, 2);
+  });
+
   test('card sales are takings but not drawer cash', () {
     shifts.openShift(openingFloat: 100, cashierId: 'c1');
     // A cash sale, tendered to the cash method (id 1).

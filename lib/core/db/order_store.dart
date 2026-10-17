@@ -14,16 +14,43 @@ import 'database.dart';
 /// nothing about the queue they are delivered through.
 typedef WithdrawPush = bool Function(String uuid);
 
-/// [at] as a lower bound on `orders.created_at`, for `created_at >= ?`.
-///
-/// Stamps are stored in UTC with three or six fractional digits, and the two
-/// widths do not compare right as text. Cut at the millisecond and without the
-/// zone letter, the bound sorts before every stamp in its millisecond either way.
-String createdFrom(DateTime at) => at.toUtc().toIso8601String().substring(0, 23);
+/// `orders.created_at` at a fixed width, `YYYY-MM-DDTHH:MM:SS.ffffff`, without
+/// the zone letter, whatever width the stamp was written with.
+const _createdExact = "substr(created_at, 1, 19) || '.' || "
+    "substr(substr(rtrim(created_at, 'Z'), 21) || '000000', 1, 6)";
 
-/// The end of a window that takes in [at], for `created_at < ?`.
-String createdThrough(DateTime at) =>
-    createdFrom(at.add(const Duration(milliseconds: 1)));
+/// [at] in UTC at the width of [_createdExact].
+String _exactStamp(DateTime at) {
+  final iso = at.toUtc().toIso8601String();
+  final bare = iso.endsWith('Z') ? iso.substring(0, iso.length - 1) : iso;
+  final fraction = bare.length > 20 ? bare.substring(20) : '';
+  return '${bare.substring(0, 19)}.${fraction.padRight(6, '0')}';
+}
+
+/// A `WHERE` fragment and its arguments keeping `orders.created_at` from [from]
+/// through [to], both inclusive to the microsecond, or up to [to] exclusive when
+/// [toExclusive] is set. Null ends are open.
+///
+/// Stamps are UTC with three or six fractional digits, and the two widths do not
+/// compare right as text, so both sides are compared at one width. The whole
+/// seconds around the window are tested first so the index still narrows the scan.
+({String sql, List<Object> args}) createdWithin(
+    {DateTime? from, DateTime? to, bool toExclusive = false}) {
+  final sql = <String>[];
+  final args = <Object>[];
+  if (from != null) {
+    sql.add('created_at >= ? AND $_createdExact >= ?');
+    args.addAll([_exactStamp(from).substring(0, 19), _exactStamp(from)]);
+  }
+  if (to != null) {
+    sql.add('created_at < ? AND $_createdExact ${toExclusive ? '<' : '<='} ?');
+    args.addAll([
+      _exactStamp(to.add(const Duration(seconds: 1))).substring(0, 19),
+      _exactStamp(to),
+    ]);
+  }
+  return (sql: sql.isEmpty ? '1' : sql.join(' AND '), args: args);
+}
 
 /// Orders on disk. Every mutation is written immediately, not at payment, so a
 /// half-rung sale survives the app being killed.
@@ -296,11 +323,10 @@ class OrderStore {
   /// rows are loaded only to detect the pair, then stripped so Odoo never sees
   /// a complimentary / officer ticket the cashier already voided.
   List<Order> awaitingSyncInShift(Shift shift, {bool anyDevice = false}) {
-    final from = createdFrom(shift.openedAt);
-    final to = createdThrough(shift.closedAt ?? DateTime.now().toUtc());
-    const where = "state = 'paid' AND created_at >= ? AND created_at < ?";
-    return salesForOdoo(
-        anyDevice ? _query(where, [from, to]) : _mine(where, [from, to]));
+    final w = createdWithin(
+        from: shift.openedAt, to: shift.closedAt ?? DateTime.now().toUtc());
+    final where = "state = 'paid' AND ${w.sql}";
+    return salesForOdoo(anyDevice ? _query(where, w.args) : _mine(where, w.args));
   }
 
   /// Every completed sale in [shift]'s window: this till's own by default, and
@@ -315,15 +341,15 @@ class OrderStore {
   /// [awaitingSyncInShift] so another till's tickets are not booked twice by
   /// accident. The deliberate "resend closed session" action is the caller.
   List<Order> salesInShift(Shift shift, {bool anyDevice = false}) {
-    final from = createdFrom(shift.openedAt);
-    final to = createdThrough(shift.closedAt ?? DateTime.now().toUtc());
+    final w = createdWithin(
+        from: shift.openedAt, to: shift.closedAt ?? DateTime.now().toUtc());
     final own = anyDevice ? null : ownDeviceId;
     final raw = _db.raw
         .select(
           "SELECT payload FROM orders WHERE state IN ('paid','synced') "
           "${own == null ? '' : 'AND device_id = ? '}"
-          'AND created_at >= ? AND created_at < ? ORDER BY created_at ASC',
-          [?own, from, to],
+          'AND ${w.sql} ORDER BY created_at ASC',
+          [?own, ...w.args],
         )
         .map((r) =>
             Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
@@ -335,14 +361,17 @@ class OrderStore {
   /// any device, refunds included. What a till answers when another is about to
   /// close and wants proof it holds the same sales; the comparison is on uuids
   /// because two tills that agree on totals can still hold different tickets.
-  List<String> saleUuidsBetween(DateTime since, DateTime until) => [
-        for (final r in _db.raw.select(
-          "SELECT uuid FROM orders WHERE state IN ('paid','synced') "
-          'AND created_at >= ? AND created_at < ? ORDER BY created_at ASC',
-          [createdFrom(since), createdThrough(until)],
-        ))
-          r['uuid'] as String,
-      ];
+  List<String> saleUuidsBetween(DateTime since, DateTime until) {
+    final w = createdWithin(from: since, to: until);
+    return [
+      for (final r in _db.raw.select(
+        "SELECT uuid FROM orders WHERE state IN ('paid','synced') "
+        'AND ${w.sql} ORDER BY created_at ASC',
+        w.args,
+      ))
+        r['uuid'] as String,
+    ];
+  }
 
   /// Mark [uuid] synced and tell every till on the fabric, including when the
   /// sale was rung on another device. Ordinary [markSynced] will not announce a
@@ -406,18 +435,15 @@ class OrderStore {
   /// thousand. Null ends are open. This till's own unless [anyDevice].
   List<Order> paidBetween({DateTime? from, DateTime? to, bool anyDevice = false}) {
     final own = anyDevice ? null : ownDeviceId;
+    final w = createdWithin(from: from, to: to, toExclusive: true);
     final where = [
       "state IN ('paid','synced')",
       if (own != null) 'device_id = ?',
-      if (from != null) 'created_at >= ?',
-      if (to != null) 'created_at < ?',
+      w.sql,
     ].join(' AND ');
     return _db.raw
-        .select('SELECT payload FROM orders WHERE $where ORDER BY created_at DESC', [
-          ?own,
-          if (from != null) createdFrom(from),
-          if (to != null) createdFrom(to),
-        ])
+        .select('SELECT payload FROM orders WHERE $where ORDER BY created_at DESC',
+            [?own, ...w.args])
         .map((r) =>
             Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
         .toList();
@@ -453,10 +479,11 @@ class OrderStore {
   /// they came to. One aggregate over indexed columns, so the floor can read it on
   /// every build without decoding a single payload.
   ({int count, double total}) paidAnywhereSince(DateTime since) {
+    final w = createdWithin(from: since);
     final row = _db.raw.select(
         "SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS t FROM orders "
-        "WHERE state IN ('paid','synced') AND created_at >= ?",
-        [createdFrom(since)]).first;
+        "WHERE state IN ('paid','synced') AND ${w.sql}",
+        w.args).first;
     return (count: row['n'] as int, total: (row['t'] as num).toDouble());
   }
 
