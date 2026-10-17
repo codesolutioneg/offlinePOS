@@ -56,6 +56,38 @@ void main() {
     expect(find.text('140.00'), findsOneWidget);
   });
 
+  testWidgets('a cash refund shows on the drawer and lowers the expected cash',
+      (t) async {
+    shifts.openShift(openingFloat: 100, cashierId: 'sara');
+    sale(40, const [OrderPayment(methodId: 1, amount: 40, label: 'Cash')]);
+    final sold = orders.recent().first;
+    orders.save(Order(
+      deviceId: 'till-1',
+      cashierId: 'sara',
+      lines: [OrderLine(productId: 1, name: 'Pizza', quantity: -1, unitPrice: 15)],
+      payments: const [OrderPayment(methodId: 1, amount: -15, label: 'Cash')],
+    )
+      ..refundOfUuid = sold.uuid
+      ..state = OrderState.paid);
+
+    await t.pumpWidget(app());
+
+    expect(find.text('Cash refunds'), findsOneWidget);
+    expect(find.text('-15.00'), findsOneWidget);
+    // 100 float + 40 cash - 15 refunded.
+    expect(find.text('125.00'), findsOneWidget);
+    expect(find.text('140.00'), findsNothing);
+  });
+
+  testWidgets('a shift with no refunds shows no refund row', (t) async {
+    shifts.openShift(openingFloat: 100, cashierId: 'sara');
+    sale(40, const [OrderPayment(methodId: 1, amount: 40, label: 'Cash')]);
+
+    await t.pumpWidget(app());
+
+    expect(find.text('Cash refunds'), findsNothing);
+  });
+
   testWidgets('a shift with no sales shows no tender section', (t) async {
     shifts.openShift(openingFloat: 100, cashierId: 'sara');
 

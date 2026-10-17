@@ -200,6 +200,7 @@ const Map<String, String> _ar = {
   'Close shift (Z)': 'إغلاق الوردية (Z)',
   'Cash in': 'إيداع نقدي',
   'Cash out': 'سحب نقدي',
+  'Cash refunds': 'مرتجعات نقدية',
   'Counted cash': 'النقد المحسوب',
   'Z report': 'تقرير Z',
   'Variance': 'الفرق',

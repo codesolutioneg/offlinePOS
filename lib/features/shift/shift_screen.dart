@@ -552,6 +552,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
           const SizedBox(height: 6),
           _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),
           _row(tr(context, 'Cash sales'), widget.formatAmount(sum.cashSales)),
+          if (sum.refundsCash != 0)
+            _row(tr(context, 'Cash refunds'), widget.formatAmount(-sum.refundsCash)),
           _row(tr(context, 'Cash in'), widget.formatAmount(sum.cashIn)),
           _row(tr(context, 'Cash out'), widget.formatAmount(sum.cashOut)),
           _row(tr(context, 'Expected in drawer'), widget.formatAmount(sum.expectedCash),
@@ -765,6 +767,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
               for (final t in sum.tenders)
                 _row('  ${tr(context, t.label)}', widget.formatAmount(t.amount)),
               _row(tr(context, 'Cash sales'), widget.formatAmount(sum.cashSales)),
+              if (sum.refundsCash != 0)
+                _row(tr(context, 'Cash refunds'),
+                    widget.formatAmount(-sum.refundsCash)),
               _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),
               _row(tr(context, 'Cash in'), widget.formatAmount(sum.cashIn)),
               _row(tr(context, 'Cash out'), widget.formatAmount(sum.cashOut)),
@@ -1229,6 +1234,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
         ('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
         for (final t in sum.tenders) ('  ${t.label}', widget.formatAmount(t.amount)),
         ('Cash sales', widget.formatAmount(sum.cashSales)),
+        if (sum.refundsCash != 0)
+          ('Cash refunds', widget.formatAmount(-sum.refundsCash)),
         ('Opening float', widget.formatAmount(sum.openingFloat)),
         ('Cash in', widget.formatAmount(sum.cashIn)),
         ('Cash out', widget.formatAmount(sum.cashOut)),
@@ -1269,6 +1276,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
         ('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
         for (final t in sum.tenders) ('  ${t.label}', widget.formatAmount(t.amount)),
         ('Cash sales', widget.formatAmount(sum.cashSales)),
+        if (sum.refundsCash != 0)
+          ('Cash refunds', widget.formatAmount(-sum.refundsCash)),
       ];
 
   Future<void> _printCashierFlash() async {
