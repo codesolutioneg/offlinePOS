@@ -60,6 +60,7 @@ import '../core/printing/receipt_builder.dart';
 import '../core/printing/registry_printer.dart';
 import '../core/printing/raster_line.dart';
 import '../core/printing/spool_store.dart';
+import '../core/sync/closed_shift_backlog.dart';
 import '../core/sync/dishflow_mirror.dart';
 import '../core/sync/dishflow_wiring.dart';
 import '../core/sync/ecommerce_orders_client.dart';
@@ -6882,23 +6883,14 @@ class _PosAppState extends State<PosApp> {
                     (widget.settings.odooSessionPartnerId == null
                         ? null
                         : '#${widget.settings.odooSessionPartnerId}');
-                final result = await widget.sync.flushClosedShift(
-                  orderUuids: {for (final o in shiftOrders) o.uuid},
-                  batchKey: shift.uuid,
-                  enqueueOrders: () async {
-                    for (final o in shiftOrders) {
-                      await widget.outbox.enqueue(
-                        'order.push',
-                        o.uuid,
-                        o.toServerPayload(),
-                      );
-                      // A refuse from a partial push left dead_at; revive like resend.
-                      widget.outboxStore.reviveByKey('order.push', o.uuid);
-                    }
-                  },
-                );
+                final result = await bookSessionSales(
+                    widget.sync,
+                    widget.outbox,
+                    widget.outboxStore,
+                    widget.orders,
+                    shiftOrders,
+                    shift.uuid);
                 if (result.merged) {
-                  widget.orders.tellShopBooked(shiftOrders.map((o) => o.uuid));
                   var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
                   // Anything older still owed goes now, not on the next failure.
                   // After the read above: a backlog push clears the last ref.
@@ -7076,23 +7068,9 @@ class _PosAppState extends State<PosApp> {
             ? null
             : '#${widget.settings.odooSessionPartnerId}');
     final total = sales.fold<double>(0, (s, o) => s + o.total);
-    final result = await widget.sync.flushClosedShift(
-      orderUuids: {for (final o in sales) o.uuid},
-      batchKey: shift.uuid,
-      enqueueOrders: () async {
-        for (final o in sales) {
-          await widget.outbox.enqueue(
-            'order.push',
-            o.uuid,
-            o.toServerPayload(),
-          );
-          // A refuse from the partial push left dead_at set; append keeps it.
-          widget.outboxStore.reviveByKey('order.push', o.uuid);
-        }
-      },
-    );
+    final result = await bookSessionSales(widget.sync, widget.outbox,
+        widget.outboxStore, widget.orders, sales, shift.uuid);
     if (result.merged) {
-      widget.orders.tellShopBooked(sales.map((o) => o.uuid));
       var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
       if (odooRef == null || odooRef.isEmpty || odooRef.startsWith('#')) {
         final resolved = await _resolveOdooSaleName(odooRef);

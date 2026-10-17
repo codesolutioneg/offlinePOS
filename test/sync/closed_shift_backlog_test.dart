@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:offline_pos/core/audit/audit_log.dart';
+import 'package:offline_pos/core/db/catalogue_store.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/shift_store.dart';
@@ -6,6 +8,7 @@ import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
 import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/sync/batch_push.dart';
 import 'package:offline_pos/core/sync/closed_shift_backlog.dart';
+import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/domain/shift.dart';
@@ -403,6 +406,43 @@ void main() {
       expect(nextClosedShiftBacklog(shifts, orders, held: held), isNull);
       expect(nextClosedShiftBacklog(shifts, orders)?.batchKey, 'backlog-${stray.uuid}',
           reason: 'without the check it would be sent');
+    });
+  });
+
+  group('a session close', () {
+    test('tells the shop only the sales its batch booked', () async {
+      final store = SqliteOutboxStore(db);
+      final told = <String>[];
+      final announcing = OrderStore(db,
+          ownDeviceId: 'till-1',
+          publish: (kind, uuid, payload) {
+            if (kind == LanEventKind.orderUpsert) told.add(uuid);
+          });
+      final booked = sale(t0, device: 'till-2');
+      final left = sale(t0.add(const Duration(minutes: 5)), device: 'till-2');
+      final outbox = Outbox(store: store, senders: const {});
+      final sync = SyncService(
+        outbox: outbox,
+        catalogue: CatalogueStore(db),
+        outboxStore: store,
+        audit: AuditLog(db),
+        deviceId: 'till-1',
+        appVersion: 'test',
+        // The server books one of the two and leaves the other out.
+        mergeBatch: ({onlyUuids, batchKey}) async {
+          announcing.markSynced(booked.uuid, 1);
+          return true;
+        },
+      );
+
+      final result = await bookSessionSales(
+          sync, outbox, store, announcing, [booked, left], 'shift-a');
+
+      expect(result.merged, isTrue);
+      expect(told, contains(booked.uuid));
+      expect(told, isNot(contains(left.uuid)));
+      expect(announcing.byUuid(left.uuid)?.state, OrderState.paid,
+          reason: 'a sale the batch left out stays owed');
     });
   });
 

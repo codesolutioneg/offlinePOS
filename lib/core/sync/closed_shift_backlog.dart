@@ -2,6 +2,7 @@ import '../../domain/order.dart';
 import '../db/order_store.dart';
 import '../db/shift_store.dart';
 import '../db/sqlite_outbox_store.dart';
+import 'outbox.dart';
 import 'sync_service.dart';
 
 /// Paid sales still owed to Odoo from one closed shift, with the key they must be
@@ -129,4 +130,30 @@ Future<ShiftFlushResult> sendClosedShiftBacklog(
     refused ??= result;
   }
   return refused ?? result;
+}
+
+/// Book [sales] as one sale order under [batchKey], as a session close and its
+/// resend do: each is queued again (a refused row from a partial push is
+/// revived), and only the sales the booking marked synced are told to the shop.
+Future<ShiftFlushResult> bookSessionSales(
+  SyncService sync,
+  Outbox outbox,
+  SqliteOutboxStore store,
+  OrderStore orders,
+  List<Order> sales,
+  String batchKey,
+) async {
+  final result = await sync.flushClosedShift(
+    orderUuids: {for (final o in sales) o.uuid},
+    batchKey: batchKey,
+    enqueueOrders: () async {
+      for (final o in sales) {
+        await outbox.enqueue(
+            SqliteOutboxStore.orderPush, o.uuid, o.toServerPayload());
+        store.reviveByKey(SqliteOutboxStore.orderPush, o.uuid);
+      }
+    },
+  );
+  if (result.merged) orders.tellShopBooked(sales.map((o) => o.uuid));
+  return result;
 }
