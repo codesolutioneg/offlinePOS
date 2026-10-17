@@ -38,8 +38,29 @@ List<LanTillGap> tallyGaps({
             deviceId: answer.peer.deviceId,
             name: answer.peer.name,
             reason: short == 1
-                ? '1 sale rung there is not on this till yet'
-                : '$short sales rung there are not on this till yet',
+                ? '1 sale held there is not on this till yet'
+                : '$short sales held there are not on this till yet',
             lastSeenAt: answer.peer.lastSeenAt,
           ),
     ];
+
+/// A [LanTillGap.reason], which is English on the wire, run through [tr] for
+/// the cashier's language. Reasons it does not know are returned as they came.
+String gapReasonIn(String reason, String Function(String en) tr) {
+  if (reason == 'the primary is not on the network') return tr(reason);
+  if (RegExp(r'^(\d+) sales? held there (?:is|are) not on this till yet$')
+          .firstMatch(reason)
+      case final m?) {
+    final n = m.group(1)!;
+    return n == '1'
+        ? tr('1 sale held there is not on this till yet')
+        : tr('{n} sales held there are not on this till yet')
+            .replaceAll('{n}', n);
+  }
+  const unlisted = 'could not list its sales: ';
+  if (reason.startsWith(unlisted)) {
+    return '${tr('could not list its sales')}: '
+        '${reason.substring(unlisted.length)}';
+  }
+  return reason;
+}

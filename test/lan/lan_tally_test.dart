@@ -94,7 +94,7 @@ void main() {
       );
       expect(gaps.single.deviceId, 'till-b');
       expect(gaps.single.name, 'TILL-B');
-      expect(gaps.single.reason, '1 sale rung there is not on this till yet');
+      expect(gaps.single.reason, '1 sale held there is not on this till yet');
     });
 
     test('several missing sales are counted in the reason', () {
@@ -102,7 +102,7 @@ void main() {
         local: const {},
         answers: [LanTallyAnswer.counted(_peer('till-b'), {'a', 'b', 'c'})],
       );
-      expect(gaps.single.reason, '3 sales rung there are not on this till yet');
+      expect(gaps.single.reason, '3 sales held there are not on this till yet');
     });
 
     test('a till that could not be asked is a gap in its own words', () {
@@ -206,7 +206,7 @@ void main() {
 
       final gaps = await node.catchUpBeforeClose(since: since);
       expect(gaps.single.deviceId, 'till-b');
-      expect(gaps.single.reason, '1 sale rung there is not on this till yet');
+      expect(gaps.single.reason, '1 sale held there is not on this till yet');
     });
 
     test('a till that cannot answer is named, not assumed level', () async {
@@ -266,6 +266,46 @@ void main() {
 
       await node.catchUpBeforeClose(since: since, onProgress: seen.add);
       expect(seen, contains('Checking every till handed over its sales...'));
+    });
+  });
+
+  group('gapReasonIn', () {
+    String upper(String en) => en.toUpperCase();
+
+    test('every reason the tally gives is translated', () {
+      final failed = tallyGaps(local: {}, answers: [
+        LanTallyAnswer.failed(_peer('till-b'), 'timed out'),
+      ]).single;
+      expect(gapReasonIn(failed.reason, upper), isNot(failed.reason));
+      for (final short in [1, 3]) {
+        final gap = tallyGaps(local: {}, answers: [
+          LanTallyAnswer.counted(
+              _peer('till-b'), {for (var i = 0; i < short; i++) 's$i'}),
+        ]).single;
+        expect(gapReasonIn(gap.reason, upper), isNot(gap.reason),
+            reason: gap.reason);
+      }
+    });
+
+    test('a count is kept and put in the translated sentence', () {
+      final ar = {
+        '{n} sales held there are not on this till yet': '{n} مبيعات',
+      };
+      expect(gapReasonIn('3 sales held there are not on this till yet',
+          (en) => ar[en] ?? en), '3 مبيعات');
+      expect(gapReasonIn('1 sale held there is not on this till yet', upper),
+          '1 SALE HELD THERE IS NOT ON THIS TILL YET');
+    });
+
+    test('a failed listing keeps the error after the translated text', () {
+      expect(gapReasonIn('could not list its sales: timed out', upper),
+          'COULD NOT LIST ITS SALES: timed out');
+    });
+
+    test('the primary missing is translated, anything else is left alone', () {
+      expect(gapReasonIn('the primary is not on the network', upper),
+          'THE PRIMARY IS NOT ON THE NETWORK');
+      expect(gapReasonIn('something new', upper), 'something new');
     });
   });
 }

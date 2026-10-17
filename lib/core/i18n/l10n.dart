@@ -2416,6 +2416,9 @@ const Map<String, String> _ar = {
   'Turn those tills on and connect them to the network, then try again. Closing anyway leaves their sales out of this Z.':
       'شغّل هذه الأجهزة ووصّلها بالشبكة ثم حاول مرة أخرى. الإغلاق رغم ذلك يترك مبيعاتها خارج تقرير Z هذا.',
   'the primary is not on the network': 'الجهاز الرئيسي غير موجود على الشبكة',
+  '1 sale held there is not on this till yet': 'بيع واحد موجود هناك ولم يصل إلى هذا الجهاز بعد',
+  '{n} sales held there are not on this till yet': '{n} مبيعات موجودة هناك ولم تصل إلى هذا الجهاز بعد',
+  'could not list its sales': 'تعذّر عرض مبيعاته',
   // Deleting from the open orders list.
   'This order was sent to the kitchen': 'هذا الطلب أُرسل إلى المطبخ',
   'It cannot be deleted from this list. Open it and void the items from inside: that asks for a manager PIN and a reason, tells the kitchen to stop, and keeps the void in the reports.':

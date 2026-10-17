@@ -40,6 +40,7 @@ import '../core/lan/lan_credential.dart';
 import '../core/lan/lan_peer.dart';
 import '../core/lan/lan_seat_desk.dart';
 import '../core/lan/lan_shift_board.dart';
+import '../core/lan/lan_tally.dart';
 import '../core/lan/lan_wiring.dart';
 import '../core/onboarding/setup_checklist.dart';
 import '../core/onboarding/wizard_id.dart';
@@ -6711,7 +6712,6 @@ class _PosAppState extends State<PosApp> {
   }) async {
     final lan = widget.lan;
     if (lan == null) return const [];
-    final notOnNetwork = tr(context, 'the primary is not on the network');
     final lastSeen = tr(context, 'last seen');
     final thisTill = tr(context, 'This till');
     List<LanTillGap> gaps;
@@ -6730,9 +6730,7 @@ class _PosAppState extends State<PosApp> {
         [
           gap.name.isEmpty ? gap.deviceId : gap.name,
           ': ',
-          gap.reason == 'the primary is not on the network'
-              ? notOnNetwork
-              : gap.reason,
+          gapReasonIn(gap.reason, (en) => tr(context, en)),
           if (gap.lastSeenAt case final at?)
             ' ($lastSeen ${two(at.toLocal().hour)}:${two(at.toLocal().minute)})',
         ].join(),

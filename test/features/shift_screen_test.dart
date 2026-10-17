@@ -279,7 +279,7 @@ void main() {
       await t.pumpWidget(closing((s, {until, onProgress}) async {
         calls++;
         return calls == 2
-            ? ['Bar: 1 sale rung there is not on this till yet']
+            ? ['Bar: 1 sale held there is not on this till yet']
             : const [];
       }, blocked: blocked));
       await t.pumpAndSettle();
@@ -287,7 +287,7 @@ void main() {
       await countAndConfirm(t, '0');
 
       expect(find.byKey(const Key('tills-unreachable')), findsOneWidget);
-      expect(find.text('• Bar: 1 sale rung there is not on this till yet'),
+      expect(find.text('• Bar: 1 sale held there is not on this till yet'),
           findsOneWidget);
       expect(blocked, ['shift.close.blocked.tills_unreachable']);
       expect(shifts.currentOpenShift(), isNotNull);
