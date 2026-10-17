@@ -305,6 +305,15 @@ void main() {
         reason: 'a sale outside every session must not wait for a failure');
   });
 
+  test('a backlog send that fails is recorded, never thrown at the close', () async {
+    final s = serviceWith(
+        closedShiftRetry: () async => throw StateError('database is locked'));
+
+    await s.sendBacklog();
+
+    expect(s.lastError, contains('database is locked'));
+  });
+
   test('a backlog send while one is running joins it instead of sending twice', () async {
     var ran = 0;
     final gate = Completer<void>();

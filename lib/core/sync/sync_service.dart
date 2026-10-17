@@ -802,7 +802,17 @@ class SyncService {
   /// The retry timer only starts when a close fails, so without this a sale that
   /// fell outside every session (a till clock that was behind) or an older
   /// session left half sent would wait for a failure that may never come.
-  Future<void> sendBacklog() => _runBacklog();
+  ///
+  /// Never throws: a close starts it without waiting, so a failure is kept in
+  /// [lastError] for diagnostics rather than lost as an unhandled error.
+  Future<void> sendBacklog() async {
+    try {
+      await _runBacklog();
+    } catch (e) {
+      lastError = e.toString();
+      debugPrint('sync: closed session backlog failed (${e.runtimeType})');
+    }
+  }
 
   /// [closedShiftRetry], joined by any caller that asks while it runs, so a
   /// close and the retry timer never send the backlog side by side.
