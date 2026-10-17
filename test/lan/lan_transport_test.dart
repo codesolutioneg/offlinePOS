@@ -124,6 +124,104 @@ void main() {
     expect(till.orders.byUuid(theirs.uuid)!.state, OrderState.held);
   }, timeout: const Timeout(Duration(minutes: 2)));
 
+  group('sales tally', () {
+    final since = DateTime.utc(2026, 3, 1, 8);
+    final until = DateTime.utc(2026, 3, 1, 23);
+
+    Order rung(String device, DateTime at, {String? uuid}) {
+      final o = Order(
+        uuid: uuid,
+        deviceId: device,
+        cashierId: 'ana',
+        createdAt: at,
+      )..lines.add(OrderLine(productId: 1, name: 'Tea', quantity: 1, unitPrice: 10));
+      o.payments = [OrderPayment(methodId: 1, amount: o.total, label: 'Cash')];
+      o.state = OrderState.paid;
+      return o;
+    }
+
+    test('a till answers the uuids of the sales it holds in the window', () async {
+      final other = shop.add('till-b');
+      final inside = rung('till-b', DateTime.utc(2026, 3, 1, 12));
+      final replicated = rung('till-c', DateTime.utc(2026, 3, 1, 13));
+      final before = rung('till-b', DateTime.utc(2026, 3, 1, 7));
+      final after = rung('till-b', DateTime.utc(2026, 3, 2, 1));
+      for (final o in [inside, replicated, before, after]) {
+        other.orders.save(o, announce: false);
+      }
+      other.orders.save(heldOrder('till-b'), announce: false);
+
+      final uuids = await shop.tally('till-a', shop.peerFor(other),
+          since: since, until: until);
+      // Any device's sales, held tabs and other days left out.
+      expect(uuids, [inside.uuid, replicated.uuid]);
+    });
+
+    test('a tally without the shop key is refused', () {
+      final body = jsonEncode({
+        'device_id': 'b',
+        'schema': Schema.version,
+        'since': since.toIso8601String(),
+        'until': until.toIso8601String(),
+      });
+      expect(till.protocol.handlePost(LanProtocol.tallyPath, body).status, 401);
+    });
+
+    test('a tally without its window is refused', () {
+      final body = jsonEncode({'device_id': 'b', 'schema': Schema.version});
+      expect(push(LanProtocol.tallyPath, body).status, 400);
+      final halfOpen = jsonEncode({
+        'device_id': 'b',
+        'schema': Schema.version,
+        'since': since.toIso8601String(),
+      });
+      expect(push(LanProtocol.tallyPath, halfOpen).status, 400);
+    });
+
+    test('a till with no tally wired says so rather than answering empty', () async {
+      // An empty list would read as "nothing rung here" and wave the close through.
+      final older = shop.add('till-old', tallies: false);
+      await expectLater(
+        shop.tally('till-a', shop.peerFor(older), since: since, until: until),
+        throwsA(isA<StateError>().having((e) => e.message, 'status',
+            contains('409'))),
+      );
+    });
+
+    test('the client reads a tally over a real socket', () async {
+      final sale = rung('till-a', DateTime.utc(2026, 3, 1, 12));
+      till.orders.save(sale, announce: false);
+      final host = LanHost(
+        protocol: till.protocol,
+        port: 0,
+        localAddresses: () async => ['127.0.0.1'],
+      );
+      expect(await host.start(), isTrue);
+      addTearDown(host.stop);
+      final client = LanHttpClient(
+          credential: till.credential, timeout: const Duration(seconds: 30));
+      addTearDown(client.close);
+      final self = LanPeer(
+        deviceId: 'till-a',
+        name: 'Front',
+        host: host.host!,
+        port: host.boundPort!,
+        schemaVersion: Schema.version,
+        lastSeenAt: DateTime.utc(2026),
+      );
+
+      final uuids = await client.tally(self,
+          deviceId: 'till-b', since: since, until: until);
+      expect(uuids, [sale.uuid]);
+
+      final none = await client.tally(self,
+          deviceId: 'till-b',
+          since: DateTime.utc(2026, 3, 2),
+          until: DateTime.utc(2026, 3, 3));
+      expect(none, isEmpty);
+    }, timeout: const Timeout(Duration(minutes: 2)));
+  });
+
   test('a request from another schema version is refused over the socket', () async {
     final host = LanHost(
       protocol: till.protocol,

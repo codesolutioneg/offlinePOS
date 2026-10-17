@@ -79,7 +79,6 @@ import '../domain/business_day.dart';
 import '../domain/catalogue.dart';
 import '../domain/floor_bulletin.dart';
 import '../domain/order.dart';
-import '../domain/session_close_check.dart';
 import '../domain/table_floor_info.dart';
 import '../domain/table_section_config.dart';
 import '../domain/shift.dart';
@@ -6837,8 +6836,6 @@ class _PosAppState extends State<PosApp> {
                   ? (since, {onProgress}) =>
                       _catchUpOtherTills(context, since, onProgress: onProgress)
                   : null,
-              sessionSalesForClose: (shift) =>
-                  widget.orders.salesInShift(shift, anyDevice: true),
               onCloseOverride: (reason, detail) =>
                   widget.audit.record(session.cashierId, reason, detail: detail),
               // Gated BEFORE the shift closes, since the close is irreversible: the
@@ -7032,26 +7029,24 @@ class _PosAppState extends State<PosApp> {
     }
     final lan = widget.lan;
     if (lan?.isRunning == true) {
+      // The other tills have to be in before the night is booked again, or the
+      // resend is as short as the close it is meant to repair. A till that
+      // cannot be read, or holds a sale this one does not, stops the resend.
+      List<LanTillGap> gaps;
       try {
-        await lan!.catchUpBeforeClose(since: shift.openedAt);
-      } catch (_) {
-        // Still try with whatever this till already holds.
+        gaps = await lan!.catchUpBeforeClose(since: shift.openedAt);
+      } catch (e) {
+        return 'Could not collect sales from the other tills: $e';
+      }
+      if (gaps.isNotEmpty) {
+        return 'Not every till has handed over its sales. Bring them on the '
+            'network and try again.\n'
+            '${[for (final g in gaps) '${g.name.isEmpty ? g.deviceId : g.name}: ${g.reason}'].join('\n')}';
       }
     }
     final sales = widget.orders.salesInShift(shift, anyDevice: true);
     if (sales.isEmpty) {
       return 'No sales in the last closed session.';
-    }
-    final screen =
-        widget.shifts.summary(shift, cashMethodIds: {
-      for (final m in widget.catalogue.paymentMethods())
-        if (m.isCash) m.id,
-    });
-    final match = matchSessionClose(screen: screen, sendOrders: sales);
-    if (!match.ok) {
-      return 'Orders on this till do not match the session card — '
-          'collect sales from the other tills and try again.\n'
-          '${match.lines.join('\n')}';
     }
     final stress = stressOrderCount(widget.outboxStore.db,
         deviceId: widget.deviceId);

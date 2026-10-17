@@ -6,8 +6,6 @@ import '../../core/db/shift_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/numeric_keypad.dart';
-import '../../domain/order.dart';
-import '../../domain/session_close_check.dart';
 import '../../domain/shift.dart';
 
 /// Open a shift with a float, record cash in/out, and close with an End-of-Day
@@ -34,7 +32,6 @@ class ShiftScreen extends StatefulWidget {
     this.sessionPartnerName,
     this.onPrepareCloseSync,
     this.catchUpOtherTills,
-    this.sessionSalesForClose,
     this.onCloseOverride,
     this.startCloseOnOpen = false,
     this.startMovement,
@@ -77,10 +74,6 @@ class ShiftScreen extends StatefulWidget {
     DateTime since, {
     void Function(String status)? onProgress,
   })? catchUpOtherTills;
-
-  /// Shop-wide sales that close will push to Odoo (every till that replicated
-  /// here). Used to match the End of Day card before counting the drawer.
-  final List<Order> Function(Shift shift)? sessionSalesForClose;
 
   /// A close went ahead over something it would normally stop for, with the reason
   /// as a short event name and what was skipped, for the audit trail.
@@ -809,9 +802,6 @@ class _ShiftScreenState extends State<ShiftScreen> {
     // judged or anything is counted, or the Z comes out short.
     if (!await _catchUpOtherTills()) return;
     if (!mounted) return;
-    // Screen totals must match the shop-wide set that will go to Odoo.
-    if (!await _verifySessionTotals()) return;
-    if (!mounted) return;
     // Before anything else, including the cash count: a tab still on a table
     // is a reason not to be closing at all, and finding that out after
     // counting the drawer wastes the count.
@@ -941,77 +931,6 @@ class _ShiftScreenState extends State<ShiftScreen> {
         default:
           return false;
       }
-    }
-  }
-
-  /// End of Day card vs the shop-wide set close will send. Mismatch means a
-  /// peer's tickets are still missing — retry catch-up, do not send a short SO.
-  Future<bool> _verifySessionTotals() async {
-    final salesOf = widget.sessionSalesForClose;
-    final shift = _shift;
-    if (salesOf == null || shift == null) return true;
-    while (true) {
-      if (!mounted) return false;
-      await _withProgress(
-        tr(context, 'Checking totals against other tills...'),
-        (setStatus) async {
-          setStatus(tr(context, 'Checking totals against other tills...'));
-          await Future<void>.delayed(Duration.zero);
-        },
-      );
-      if (!mounted) return false;
-      final screen =
-          widget.store.summary(shift, cashMethodIds: widget.cashMethodIds);
-      final send = salesOf(shift);
-      final match =
-          matchSessionClose(screen: screen, sendOrders: send);
-      if (match.ok) return true;
-      widget.onCloseBlocked?.call('shift.close.blocked.totals_mismatch');
-      final choice = await showDialog<String>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          key: const Key('session-totals-mismatch'),
-          title: Text(tr(ctx, 'Orders do not match the screen')),
-          content: SizedBox(
-            width: 460,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(tr(
-                    ctx,
-                    'The End of Day totals do not match what this till would '
-                    'send to Odoo. Collect sales from the other tills and try again.',
-                  )),
-                  const SizedBox(height: 12),
-                  for (final line in match.lines)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Text('• $line'),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              key: const Key('session-totals-cancel'),
-              onPressed: () => Navigator.pop(ctx, 'cancel'),
-              child: Text(tr(ctx, 'Cancel')),
-            ),
-            FilledButton(
-              key: const Key('session-totals-retry'),
-              onPressed: () => Navigator.pop(ctx, 'retry'),
-              child: Text(tr(ctx, 'Try again')),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) return false;
-      if (choice != 'retry') return false;
-      if (!await _catchUpOtherTills()) return false;
     }
   }
 

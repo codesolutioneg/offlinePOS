@@ -2412,10 +2412,6 @@ const Map<String, String> _ar = {
       'فعّل "ضبط الوقت تلقائياً" في ويندوز على الجهازين.',
   // Collecting the other tills' sales before a shift closes.
   'Collecting sales from the other tills...': 'جاري تجميع المبيعات من الأجهزة الأخرى...',
-  'Checking totals against other tills...': 'جاري مطابقة الإجماليات مع الأجهزة الأخرى...',
-  'Orders do not match the screen': 'الأوردرات غير مطابقة للشاشة',
-  'The End of Day totals do not match what this till would send to Odoo. Collect sales from the other tills and try again.':
-      'إجمالي نهاية اليوم مش مطابق اللي الجهاز ده هيبعته لأودو. جمّع المبيعات من الأجهزة التانية وحاول تاني.',
   'Some tills did not hand over their sales': 'بعض الأجهزة لم تسلّم مبيعاتها',
   'Turn those tills on and connect them to the network, then try again. Closing anyway leaves their sales out of this Z.':
       'شغّل هذه الأجهزة ووصّلها بالشبكة ثم حاول مرة أخرى. الإغلاق رغم ذلك يترك مبيعاتها خارج تقرير Z هذا.',

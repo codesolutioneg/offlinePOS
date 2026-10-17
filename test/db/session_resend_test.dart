@@ -168,4 +168,46 @@ void main() {
             .first['c'],
         0);
   });
+
+  test('saleUuidsBetween lists every device\'s paid and synced sales in the window',
+      () {
+    final day = DateTime.utc(2026, 3, 1);
+    final mine = paid(device: 'primary', price: 10, at: day.add(const Duration(hours: 9)));
+    final theirs = paid(
+        device: 'till-b',
+        price: 20,
+        at: day.add(const Duration(hours: 10)),
+        state: OrderState.synced);
+    paid(device: 'till-b', price: 30, at: day.add(const Duration(hours: 7)));
+    paid(device: 'primary', price: 40, at: day.add(const Duration(hours: 23, minutes: 1)));
+    final held = Order(deviceId: 'primary', cashierId: 'sara',
+        createdAt: day.add(const Duration(hours: 11)))
+      ..state = OrderState.held;
+    orders.save(held, announce: false);
+
+    final uuids = orders.saleUuidsBetween(
+        day.add(const Duration(hours: 8)), day.add(const Duration(hours: 23)));
+    expect(uuids, [mine.uuid, theirs.uuid]);
+  });
+
+  test('saleUuidsBetween keeps refunds: a refund is a ticket the other till rang too',
+      () {
+    final day = DateTime.utc(2026, 3, 1);
+    final sale = paid(device: 'till-b', price: 50, at: day.add(const Duration(hours: 9)));
+    final refund = Order(
+      deviceId: 'till-b',
+      cashierId: 'sara',
+      createdAt: day.add(const Duration(hours: 10)),
+      type: OrderType.takeaway,
+    )
+      ..refundOfUuid = sale.uuid
+      ..lines.add(OrderLine(
+          productId: 1, odooProductId: 1, name: 'Tea', quantity: -1, unitPrice: 50,
+          taxRate: 14))
+      ..state = OrderState.paid;
+    orders.save(refund, announce: false);
+
+    final uuids = orders.saleUuidsBetween(day, day.add(const Duration(days: 1)));
+    expect(uuids, [sale.uuid, refund.uuid]);
+  });
 }

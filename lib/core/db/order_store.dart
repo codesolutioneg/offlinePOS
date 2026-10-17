@@ -290,8 +290,9 @@ class OrderStore {
     ));
   }
 
-  /// Every completed sale in [shift]'s window — this till and every peer that
-  /// replicated here. Paid and already-synced both: a manager who deleted the
+  /// Every completed sale in [shift]'s window: this till's own by default, and
+  /// every peer that replicated here when [anyDevice] is set (the session close
+  /// and its resend). Paid and already-synced both: a manager who deleted the
   /// Odoo sale order and wants the whole session sent again needs the ones that
   /// were marked synced after a partial push, not only what is still owed.
   ///
@@ -316,6 +317,19 @@ class OrderStore {
         .toList();
     return salesForOdoo(raw);
   }
+
+  /// The uuids of every paid or synced order rung between [since] and [until] on
+  /// any device, refunds included. What a till answers when another is about to
+  /// close and wants proof it holds the same sales; the comparison is on uuids
+  /// because two tills that agree on totals can still hold different tickets.
+  List<String> saleUuidsBetween(DateTime since, DateTime until) => [
+        for (final r in _db.raw.select(
+          "SELECT uuid FROM orders WHERE state IN ('paid','synced') "
+          'AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC',
+          [since.toUtc().toIso8601String(), until.toUtc().toIso8601String()],
+        ))
+          r['uuid'] as String,
+      ];
 
   /// Mark [uuid] synced and tell every till on the fabric, including when the
   /// sale was rung on another device. Ordinary [markSynced] will not announce a
