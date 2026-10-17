@@ -280,12 +280,14 @@ void main() {
     final refused = await close();
     expect(refused.merged, isFalse);
     expect(refused.refused, isTrue);
+    expect(refused.rejected, isTrue);
     expect(store.pendingSalesCount, 1, reason: 'a refused sale stays owed');
 
     failure = Exception('connection reset');
     final offline = await close();
     expect(offline.merged, isFalse);
     expect(offline.refused, isFalse);
+    expect(offline.rejected, isFalse);
     expect(store.pendingSalesCount, 1);
   });
 

@@ -161,6 +161,21 @@ class SqliteOutboxStore implements OutboxStore {
     return _db.raw.updatedRows;
   }
 
+  /// Park the sales in [uuids] still owed to Odoo, with [reason], as
+  /// [holdPendingSales] does for every one. Returns how many were held.
+  int holdSales(Iterable<String> uuids, String reason) {
+    final at = DateTime.now().toUtc().toIso8601String();
+    var held = 0;
+    for (final uuid in uuids) {
+      _db.raw.execute(
+          "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$_order' "
+          'AND payload_uuid = ? AND sent_at IS NULL AND dead_at IS NULL',
+          [at, reason, uuid]);
+      held += _db.raw.updatedRows;
+    }
+    return held;
+  }
+
   /// Close out refund pushes queued before refunds stopped going to Odoo. Nothing
   /// sends them (the merge leaves credits out), so left alone they would sit in the
   /// pending count forever. Returns how many were closed.

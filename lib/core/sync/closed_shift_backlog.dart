@@ -81,7 +81,9 @@ ClosedShiftBacklog? nextClosedShiftBacklog(ShiftStore shifts, OrderStore orders,
 /// Stops at the first batch that could not be sent, since the next one would
 /// fail the same way. A batch the server refused is different: it needs a
 /// person, and the batches behind it are passed to [flush] all the same. The
-/// refused one stays queued and its result is what is returned.
+/// refused one stays owed and its result is what is returned. One the server
+/// itself rejected is parked, so it is not sent again on every retry until a
+/// manager sends it on purpose.
 ///
 /// What a booked batch carried is told to the whole shop: some of its sales may
 /// be another till's, and that till would otherwise send them again at its own
@@ -115,6 +117,10 @@ Future<ShiftFlushResult> sendClosedShiftBacklog(
       continue;
     }
     if (!result.refused) return result;
+    if (result.rejected) {
+      outbox.holdSales(backlog.orders.map((o) => o.uuid),
+          result.skipReason ?? 'batch refused by the server');
+    }
     refused ??= result;
   }
   return refused ?? result;

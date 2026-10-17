@@ -615,6 +615,7 @@ class SyncService {
         orderCount: orderUuids.length,
         skipReason: e.toString(),
         refused: e is PermanentlyRejected,
+        rejected: e is PermanentlyRejected,
       );
     } finally {
       if (!done.isCompleted) done.complete();
@@ -846,6 +847,7 @@ class ShiftFlushResult {
     this.skipReason,
     this.alreadyBooked = const [],
     this.refused = false,
+    this.rejected = false,
   });
 
   final bool merged;
@@ -854,6 +856,10 @@ class ShiftFlushResult {
   /// gives the same answer, so a backlog moves on to the next batch instead of
   /// stopping here.
   final bool refused;
+
+  /// The server answered and refused the batch, as opposed to the merge
+  /// declining it before anything was sent.
+  final bool rejected;
   final int orderCount;
   final String? odooRef;
   final String? skipReason;

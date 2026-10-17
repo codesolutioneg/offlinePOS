@@ -279,6 +279,54 @@ void main() {
       expect(held([parked.uuid]), {parked.uuid}, reason: 'still parked for a manager');
     });
 
+    test('a batch the server rejects is parked, not sent again on every retry', () async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+      final rejected = sale(t0.add(const Duration(hours: 1)));
+      shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+      var sends = 0;
+      Future<ShiftFlushResult> reject(ClosedShiftBacklog b) async {
+        sends++;
+        for (final o in b.orders) {
+          await outbox.append('order.push', o.uuid, o.toServerPayload());
+        }
+        return ShiftFlushResult(
+            merged: false,
+            orderCount: b.orders.length,
+            skipReason: 'unknown product',
+            refused: true,
+            rejected: true);
+      }
+
+      final first = await sendClosedShiftBacklog(shifts, orders, reject, outbox: outbox);
+      await sendClosedShiftBacklog(shifts, orders, reject, outbox: outbox);
+
+      expect(first.refused, isTrue);
+      expect(sends, 1, reason: 'the server gave its answer; a manager has to act');
+      expect(held([rejected.uuid]), {rejected.uuid});
+      expect(orders.byUuid(rejected.uuid)?.state, OrderState.paid,
+          reason: 'still owed, only parked');
+    });
+
+    test('a batch the merge declines is not parked', () async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+      final declined = sale(t0.add(const Duration(hours: 1)));
+      shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+
+      await sendClosedShiftBacklog(shifts, orders, (b) async {
+        for (final o in b.orders) {
+          await outbox.append('order.push', o.uuid, o.toServerPayload());
+        }
+        return ShiftFlushResult(
+            merged: false,
+            orderCount: b.orders.length,
+            skipReason: 'more than 500 sales queued',
+            refused: true);
+      }, outbox: outbox);
+
+      expect(held([declined.uuid]), isEmpty,
+          reason: 'nothing reached the server, so nothing was answered');
+    });
+
     test('a parked sale in no shift does not become a batch of its own', () async {
       shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
       shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
