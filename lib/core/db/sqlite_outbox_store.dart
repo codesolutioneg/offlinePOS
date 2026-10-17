@@ -173,6 +173,60 @@ class SqliteOutboxStore implements OutboxStore {
     }
   }
 
+  /// Park the sales in [uuids] because the server rejected the batch booked
+  /// under [batchKey]. They come back only together, through [reviveSession],
+  /// so the session is never booked in parts.
+  void holdSession(String batchKey, Iterable<String> uuids, String reason) =>
+      holdSales(uuids, '$_sessionHold$batchKey: $reason');
+
+  /// Which of [uuids] are parked by [holdSession].
+  Set<String> sessionHeldOf(Iterable<String> uuids) {
+    final wanted = uuids.toSet();
+    if (wanted.isEmpty) return const {};
+    return {
+      for (final r in _db.raw.select(
+          'SELECT payload_uuid FROM outbox WHERE kind = ? AND dead_at IS NOT NULL '
+          'AND substr(dead_reason, 1, ?) = ?',
+          [orderPush, _sessionHold.length, _sessionHold]))
+        if (wanted.contains(r['payload_uuid'])) r['payload_uuid'] as String,
+    };
+  }
+
+  /// Every session parked by [holdSession]: its key, how many sales it holds,
+  /// and why the server refused it.
+  List<({String batchKey, int count, String reason})> heldSessions() {
+    final found = <String, ({String batchKey, int count, String reason})>{};
+    for (final r in _db.raw.select(
+        'SELECT dead_reason FROM outbox WHERE kind = ? AND dead_at IS NOT NULL '
+        'AND substr(dead_reason, 1, ?) = ? ORDER BY id',
+        [orderPush, _sessionHold.length, _sessionHold])) {
+      final text = (r['dead_reason'] as String).substring(_sessionHold.length);
+      final colon = text.indexOf(': ');
+      final key = colon < 0 ? text : text.substring(0, colon);
+      final reason = colon < 0 ? '' : text.substring(colon + 2);
+      final seen = found[key];
+      found[key] = (
+        batchKey: key,
+        count: (seen?.count ?? 0) + 1,
+        reason: seen?.reason ?? reason,
+      );
+    }
+    return found.values.toList();
+  }
+
+  /// Put every sale [holdSession] parked under [batchKey] back in the queue.
+  void reviveSession(String batchKey) {
+    final prefix = '$_sessionHold$batchKey: ';
+    _db.raw.execute(
+        'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 '
+        'WHERE kind = ? AND dead_at IS NOT NULL AND substr(dead_reason, 1, ?) = ?',
+        [orderPush, prefix.length, prefix]);
+  }
+
+  /// Whether [reason] is one [holdSession] wrote.
+  static bool isSessionHold(String? reason) =>
+      reason != null && reason.startsWith(_sessionHold);
+
   /// Close out refund pushes queued before refunds stopped going to Odoo. Nothing
   /// sends them (the merge leaves credits out), so left alone they would sit in the
   /// pending count forever. Returns how many were closed.
@@ -292,6 +346,7 @@ class SqliteOutboxStore implements OutboxStore {
   /// Kinds are part of the on-disk contract; see docs/ODOO_SYNC.md.
   static const String _heartbeat = 'device.status';
   static const String orderPush = 'order.push';
+  static const String _sessionHold = 'session ';
   static const String _dishflow = 'dishflow.sale.push';
   static const String _driver = 'dishflow.driver.order.push';
 }

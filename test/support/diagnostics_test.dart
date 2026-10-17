@@ -121,6 +121,74 @@ void main() {
     expect(store.pendingCount, 1);
   });
 
+  group('a session the server rejected whole', () {
+    late List<Permission> asked;
+    late int sends;
+
+    Widget heldApp({required bool approve}) {
+      final wired = SyncService(
+        outbox: Outbox(store: store, senders: const {}),
+        catalogue: CatalogueStore(db),
+        outboxStore: store,
+        audit: audit,
+        deviceId: 'till-7',
+        appVersion: '1.2.3',
+        closedShiftRetry: () async {
+          sends++;
+          return null;
+        },
+      );
+      return MaterialApp(
+        home: DiagnosticsScreen(
+          sync: wired,
+          outboxStore: store,
+          authorize: (p) async {
+            asked.add(p);
+            return approve;
+          },
+        ),
+      );
+    }
+
+    setUp(() async {
+      asked = [];
+      sends = 0;
+      for (final uuid in ['a', 'b', 'c']) {
+        await store.append('order.push', uuid, {});
+      }
+      store.holdSession('night-1', ['a', 'b', 'c'], 'unknown product');
+    });
+
+    testWidgets('is one row with no Retry for each of its sales', (t) async {
+      await t.pumpWidget(heldApp(approve: true));
+      expect(find.byKey(const Key('held-session-night-1')), findsOneWidget);
+      expect(find.textContaining('3'), findsWidgets);
+      expect(find.text('unknown product'), findsOneWidget);
+      expect(find.text('Retry'), findsNothing);
+    });
+
+    testWidgets('goes again whole, in one send, once a manager approves',
+        (t) async {
+      await t.pumpWidget(heldApp(approve: true));
+      await t.tap(find.byKey(const Key('resend-session-night-1')));
+      await t.pumpAndSettle();
+      expect(asked, [Permission.openSettings]);
+      expect(store.deadCount, 0);
+      expect(store.sessionHeldOf(['a', 'b', 'c']), isEmpty);
+      expect(sends, 1);
+      expect(find.byKey(const Key('held-session-night-1')), findsNothing);
+    });
+
+    testWidgets('stays parked without a manager', (t) async {
+      await t.pumpWidget(heldApp(approve: false));
+      await t.tap(find.byKey(const Key('resend-session-night-1')));
+      await t.pumpAndSettle();
+      expect(asked, [Permission.openSettings]);
+      expect(store.sessionHeldOf(['a', 'b', 'c']), {'a', 'b', 'c'});
+      expect(sends, 0);
+    });
+  });
+
   testWidgets('a till needing attention says so at the top', (t) async {
     await store.append('order.push', 'bad', {});
     await store.markDead(1, 'rejected');

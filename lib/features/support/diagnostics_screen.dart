@@ -121,6 +121,18 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     }
   }
 
+  /// Send a session the server rejected again, whole, as one batch. Manager
+  /// only: it re-books a night in Odoo.
+  Future<void> _resendHeldSession(String batchKey) async {
+    final authorize = widget.authorize;
+    if (authorize == null || !await authorize(Permission.openSettings)) return;
+    if (!mounted) return;
+    setState(() => _syncing = true);
+    widget.outboxStore.reviveSession(batchKey);
+    await widget.sync.sendBacklog();
+    if (mounted) setState(() => _syncing = false);
+  }
+
   /// Sweeps the subnet ignoring the address we last used, for when support already
   /// knows the printer moved. Also the signal that clears the cooling-off period a
   /// failed sweep imposes.
@@ -269,6 +281,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   Widget build(BuildContext context) {
     final s = widget.sync.status();
     final dead = widget.outboxStore.dead(limit: 20);
+    final heldSessions = widget.outboxStore.heldSessions();
     final undeliverable = widget.sync.undeliverableKinds;
 
     return Scaffold(
@@ -301,24 +314,47 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
             ),
           // First, because every one of these is money that never reached the
           // books. Nothing else on this screen outranks that.
-          if (dead.isNotEmpty) ...[
+          if (dead.isNotEmpty || heldSessions.isNotEmpty) ...[
             Text(tr(context, 'Rejected sales'),
                 style: const TextStyle(fontWeight: FontWeight.bold)),
             Text(
               tr(context, 'These never reached the server. Fix the cause, then retry.'),
               style: const TextStyle(fontSize: 12, color: Colors.black54),
             ),
-            for (final e in dead)
+            // A rejected session goes again whole or not at all, so its sales
+            // have no Retry of their own.
+            for (final h in heldSessions)
               ListTile(
-                key: Key('dead-${e.id}'),
+                key: Key('held-session-${h.batchKey}'),
                 dense: true,
-                title: Text(e.payloadUuid),
-                subtitle: Text(e.lastError ?? tr(context, 'unknown reason')),
-                trailing: TextButton(
-                  child: Text(tr(context, 'Retry')),
-                  onPressed: () => setState(() => widget.outboxStore.revive(e.id)),
-                ),
+                title: Text('${tr(context, 'Rejected session')}: '
+                    '${h.count} ${tr(context, 'sale(s)')}'),
+                subtitle: Text(h.reason.isEmpty
+                    ? tr(context, 'unknown reason')
+                    : h.reason),
+                trailing: widget.authorize == null
+                    ? null
+                    : TextButton(
+                        key: Key('resend-session-${h.batchKey}'),
+                        onPressed: _syncing || _resendingSession
+                            ? null
+                            : () => _resendHeldSession(h.batchKey),
+                        child: Text(tr(context, 'Resend this session')),
+                      ),
               ),
+            for (final e in dead)
+              if (!SqliteOutboxStore.isSessionHold(e.lastError))
+                ListTile(
+                  key: Key('dead-${e.id}'),
+                  dense: true,
+                  title: Text(e.payloadUuid),
+                  subtitle: Text(e.lastError ?? tr(context, 'unknown reason')),
+                  trailing: TextButton(
+                    child: Text(tr(context, 'Retry')),
+                    onPressed: () =>
+                        setState(() => widget.outboxStore.revive(e.id)),
+                  ),
+                ),
             const Divider(),
           ],
           _row(tr(context, 'Device'), s.deviceId, keyName: 'device'),

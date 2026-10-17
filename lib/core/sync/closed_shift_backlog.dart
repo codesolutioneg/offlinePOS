@@ -38,8 +38,14 @@ const int kBacklogShiftLookback = 30;
 ///
 /// Sales [held] names (parked in the queue, such as those held when the server
 /// changed) are left out: they wait for a manager, and stay owed meanwhile.
+/// A batch with any sale [sessionHeld] names is not sent at all: the server
+/// rejected it whole, and it goes again whole once a manager revives it.
 ClosedShiftBacklog? nextClosedShiftBacklog(ShiftStore shifts, OrderStore orders,
-    {Set<String> skip = const {}, Set<String> Function(Iterable<String>)? held}) {
+    {Set<String> skip = const {},
+    Set<String> Function(Iterable<String>)? held,
+    Set<String> Function(Iterable<String>)? sessionHeld}) {
+  bool parkedWhole(List<Order> owed) =>
+      sessionHeld != null && sessionHeld(owed.map((o) => o.uuid)).isNotEmpty;
   List<Order> sendable(List<Order> owed) {
     if (held == null || owed.isEmpty) return owed;
     final parked = held(owed.map((o) => o.uuid));
@@ -54,6 +60,7 @@ ClosedShiftBacklog? nextClosedShiftBacklog(ShiftStore shifts, OrderStore orders,
     if (at != null && (lastClose == null || at.isAfter(lastClose))) lastClose = at;
     final owed = orders.awaitingSyncInShift(shift, anyDevice: true);
     claimed.addAll(owed.map((o) => o.uuid));
+    if (parkedWhole(owed)) continue;
     final send = sendable(owed);
     if (send.isNotEmpty && !skip.contains(shift.uuid)) {
       return ClosedShiftBacklog(batchKey: shift.uuid, orders: send);
@@ -65,10 +72,12 @@ ClosedShiftBacklog? nextClosedShiftBacklog(ShiftStore shifts, OrderStore orders,
         orders.awaitingSyncInShift(open, anyDevice: true).map((o) => o.uuid));
   }
   if (lastClose == null) return null;
-  final orphans = sendable(orders
+  final strays = orders
       .awaitingSync(anyDevice: true)
       .where((o) => !claimed.contains(o.uuid) && o.createdAt.isBefore(lastClose!))
-      .toList())
+      .toList();
+  if (parkedWhole(strays)) return null;
+  final orphans = sendable(strays)
     ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
   if (orphans.isEmpty) return null;
   final key = 'backlog-${orphans.first.uuid}';
@@ -82,8 +91,8 @@ ClosedShiftBacklog? nextClosedShiftBacklog(ShiftStore shifts, OrderStore orders,
 /// fail the same way. A batch the server refused is different: it needs a
 /// person, and the batches behind it are passed to [flush] all the same. The
 /// refused one stays owed and its result is what is returned. One the server
-/// itself rejected is parked, so it is not sent again on every retry until a
-/// manager sends it on purpose.
+/// itself rejected is parked whole, so it is not sent again on every retry
+/// until a manager sends it again as one batch.
 ///
 /// What a booked batch carried is told to the whole shop: some of its sales may
 /// be another till's, and that till would otherwise send them again at its own
@@ -103,8 +112,8 @@ Future<ShiftFlushResult> sendClosedShiftBacklog(
   ShiftFlushResult? refused;
   final tried = <String>{};
   for (var i = 0; i < kBacklogShiftLookback; i++) {
-    final backlog =
-        nextClosedShiftBacklog(shifts, orders, skip: tried, held: held);
+    final backlog = nextClosedShiftBacklog(shifts, orders,
+        skip: tried, held: held, sessionHeld: outbox.sessionHeldOf);
     if (backlog == null) break;
     tried.add(backlog.batchKey);
     result = await flush(backlog);
@@ -114,7 +123,7 @@ Future<ShiftFlushResult> sendClosedShiftBacklog(
     }
     if (!result.refused) return result;
     if (result.rejected) {
-      outbox.holdSales(backlog.orders.map((o) => o.uuid),
+      outbox.holdSession(backlog.batchKey, backlog.orders.map((o) => o.uuid),
           result.skipReason ?? 'batch refused by the server');
     }
     refused ??= result;

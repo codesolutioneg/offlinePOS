@@ -307,6 +307,72 @@ void main() {
           reason: 'still owed, only parked');
     });
 
+    group('a rejected session revived by a manager', () {
+      late Shift night;
+      late List<Order> sales;
+      late List<List<String>> sent;
+
+      Future<ShiftFlushResult> flush(ClosedShiftBacklog b, {required bool ok}) async {
+        sent.add([for (final o in b.orders) o.uuid]);
+        for (final o in b.orders) {
+          await outbox.append('order.push', o.uuid, o.toServerPayload());
+          if (ok) orders.markSynced(o.uuid, 1);
+        }
+        return ok
+            ? ShiftFlushResult(merged: true, orderCount: b.orders.length)
+            : ShiftFlushResult(
+                merged: false,
+                orderCount: b.orders.length,
+                skipReason: 'unknown product',
+                refused: true,
+                rejected: true);
+      }
+
+      setUp(() async {
+        sent = [];
+        night = shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+        sales = [
+          sale(t0.add(const Duration(hours: 1))),
+          sale(t0.add(const Duration(hours: 2)), device: 'till-2'),
+          sale(t0.add(const Duration(hours: 3))),
+        ];
+        shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+        await sendClosedShiftBacklog(shifts, orders, (b) => flush(b, ok: false),
+            outbox: outbox);
+        sent.clear();
+      });
+
+      test('goes again whole, as one batch under the night\'s key', () async {
+        expect(outbox.heldSessions().single.batchKey, night.uuid);
+        expect(outbox.heldSessions().single.count, 3);
+
+        outbox.reviveSession(night.uuid);
+        final keys = <String>[];
+        await sendClosedShiftBacklog(shifts, orders, (b) {
+          keys.add(b.batchKey);
+          return flush(b, ok: true);
+        }, outbox: outbox);
+
+        expect(keys, [night.uuid]);
+        expect(sent, [
+          [for (final o in sales) o.uuid]
+        ]);
+        expect(orders.awaitingSync(anyDevice: true), isEmpty);
+      });
+
+      test('is not booked in parts while some of it is still parked', () async {
+        // One sale brought back on its own, as a per-sale retry would.
+        final one = outbox.dead().firstWhere((e) => e.payloadUuid == sales[1].uuid);
+        outbox.revive(one.id);
+
+        await sendClosedShiftBacklog(shifts, orders, (b) => flush(b, ok: true),
+            outbox: outbox);
+
+        expect(sent, isEmpty);
+        expect(orders.byUuid(sales[1].uuid)?.state, OrderState.paid);
+      });
+    });
+
     test('a batch the merge declines is not parked', () async {
       shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
       final declined = sale(t0.add(const Duration(hours: 1)));
