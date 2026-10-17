@@ -867,8 +867,8 @@ class ShiftFlushResult {
   /// stopping here.
   final bool refused;
 
-  /// The server answered and refused the batch, as opposed to the merge
-  /// declining it before anything was sent.
+  /// Refused with a permanent rejection (by the server, or by the till's own
+  /// pre-send check), as opposed to the merge declining it.
   final bool rejected;
   final int orderCount;
   final String? odooRef;
