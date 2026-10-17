@@ -59,8 +59,7 @@ class BatchPush {
       onOrderBooked;
 
   /// Session-report customer (Dishflow): the merged invoice books under this
-  /// Odoo partner. Null leaves each ticket's own partner on the nested headers
-  /// and requires two or more sales before a merge runs.
+  /// Odoo partner. Null leaves each ticket's own partner on the nested headers.
   final int? Function()? partnerId;
   final String? Function()? partnerName;
 
