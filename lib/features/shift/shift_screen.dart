@@ -70,8 +70,10 @@ class ShiftScreen extends StatefulWidget {
   /// anything is counted. Answers one line per till that could not be reached; an
   /// empty list means every till seen this shift is in. [onProgress] updates the
   /// close progress dialog as each peer is pulled.
+  /// [until] closes the window the tills are compared over; null means now.
   final Future<List<String>> Function(
     DateTime since, {
+    DateTime? until,
     void Function(String status)? onProgress,
   })? catchUpOtherTills;
 
@@ -800,7 +802,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
   Future<void> _runCloseCeremony() async {
     // First of all: the other tills' sales have to be here before open work is
     // judged or anything is counted, or the Z comes out short.
-    if (!await _catchUpOtherTills()) return;
+    if (await _catchUpOtherTills() == null) return;
     if (!mounted) return;
     // Before anything else, including the cash count: a tab still on a table
     // is a reason not to be closing at all, and finding that out after
@@ -828,11 +830,14 @@ class _ShiftScreenState extends State<ShiftScreen> {
     if (widget.authorizeClose != null && !await widget.authorizeClose!()) return;
     if (!mounted) return;
     // Asked once more at the last moment: the count takes minutes, and a sale
-    // rung on another till meanwhile would otherwise miss this close.
-    if (!await _catchUpOtherTills()) return;
+    // rung on another till meanwhile would otherwise miss this close. The
+    // shift closes at the instant the tills were compared up to, so what they
+    // answered and what the close covers are one and the same window.
+    final cutoff = await _catchUpOtherTills(freeze: true);
+    if (cutoff == null) return;
     if (!mounted) return;
 
-    final closed = widget.store.closeShift(countedCash: counted);
+    final closed = widget.store.closeShift(countedCash: counted, at: cutoff);
     _handOverZ(closed);
     setState(() {
       _closed = closed;
@@ -861,20 +866,27 @@ class _ShiftScreenState extends State<ShiftScreen> {
     return (ref == null || ref.isEmpty) ? null : ref;
   }
 
-  /// Whether every till seen this shift has handed over its sales. Asked again
-  /// until they have, or until a cashier closes over the gap knowingly: a till
-  /// that is switched off for good must not be able to hold the close forever.
-  Future<bool> _catchUpOtherTills() async {
+  /// The moment up to which every till seen this shift has handed over its
+  /// sales, or null when the cashier gave up. Asked again until they have, or
+  /// until a cashier closes over the gap knowingly: a till that is switched off
+  /// for good must not be able to hold the close forever.
+  ///
+  /// With [freeze] each attempt is bounded at the instant it starts, so the
+  /// shift can be closed at exactly that instant; otherwise the tills are
+  /// compared up to now and the time returned is only a marker.
+  Future<DateTime?> _catchUpOtherTills({bool freeze = false}) async {
     final catchUp = widget.catchUpOtherTills;
     final shift = _shift;
-    if (catchUp == null || shift == null) return true;
+    if (catchUp == null || shift == null) return DateTime.now().toUtc();
     while (true) {
+      final cutoff = DateTime.now().toUtc();
       final gaps = await _withProgress(
         tr(context, 'Collecting sales from the other tills...'),
-        (setStatus) => catchUp(shift.openedAt, onProgress: setStatus),
+        (setStatus) => catchUp(shift.openedAt,
+            until: freeze ? cutoff : null, onProgress: setStatus),
       );
-      if (!mounted) return false;
-      if (gaps.isEmpty) return true;
+      if (!mounted) return null;
+      if (gaps.isEmpty) return cutoff;
       widget.onCloseBlocked?.call('shift.close.blocked.tills_unreachable');
       final choice = await showDialog<String>(
         context: context,
@@ -924,16 +936,16 @@ class _ShiftScreenState extends State<ShiftScreen> {
           ],
         ),
       );
-      if (!mounted) return false;
+      if (!mounted) return null;
       switch (choice) {
         case 'retry':
           continue;
         case 'override':
           widget.onCloseOverride
               ?.call('shift.close.override.tills_unreachable', gaps.join('; '));
-          return true;
+          return cutoff;
         default:
-          return false;
+          return null;
       }
     }
   }

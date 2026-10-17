@@ -151,7 +151,7 @@ void main() {
   group('collecting the other tills\' sales before the count', () {
     Widget closing(
       Future<List<String>> Function(DateTime since,
-              {void Function(String status)? onProgress})
+              {DateTime? until, void Function(String status)? onProgress})
           catchUp, {
       List<String>? blocked,
       List<String>? overrides,
@@ -172,13 +172,16 @@ void main() {
         (t) async {
       final opened = shifts.openShift(openingFloat: 0, cashierId: 'sara');
       DateTime? since;
-      await t.pumpWidget(closing((s, {onProgress}) async {
+      var bounded = false;
+      await t.pumpWidget(closing((s, {until, onProgress}) async {
         since = s;
+        bounded = until != null;
         return const [];
       }));
       await t.pumpAndSettle();
 
       expect(since, opened.openedAt);
+      expect(bounded, isFalse, reason: 'before the count the tills are read up to now');
       expect(find.byKey(const Key('tills-unreachable')), findsNothing);
       expect(find.text('Counted cash'), findsOneWidget);
     });
@@ -187,7 +190,7 @@ void main() {
       shifts.openShift(openingFloat: 0, cashierId: 'sara');
       final blocked = <String>[];
       var calls = 0;
-      await t.pumpWidget(closing((s, {onProgress}) async {
+      await t.pumpWidget(closing((s, {until, onProgress}) async {
         calls++;
         return calls == 1 ? ['Bar: unreachable'] : const [];
       }, blocked: blocked));
@@ -207,7 +210,7 @@ void main() {
     testWidgets('cancel leaves the shift open', (t) async {
       shifts.openShift(openingFloat: 0, cashierId: 'sara');
       await t.pumpWidget(
-          closing((s, {onProgress}) async => ['Bar: unreachable']));
+          closing((s, {until, onProgress}) async => ['Bar: unreachable']));
       await t.pumpAndSettle();
 
       await t.tap(find.byKey(const Key('tills-unreachable-cancel')));
@@ -221,7 +224,7 @@ void main() {
         (t) async {
       shifts.openShift(openingFloat: 0, cashierId: 'sara');
       final overrides = <String>[];
-      await t.pumpWidget(closing((s, {onProgress}) async => ['Bar: unreachable'],
+      await t.pumpWidget(closing((s, {until, onProgress}) async => ['Bar: unreachable'],
           overrides: overrides));
       await t.pumpAndSettle();
 
@@ -247,19 +250,25 @@ void main() {
     testWidgets('the tills are asked again just before the session closes',
         (t) async {
       shifts.openShift(openingFloat: 0, cashierId: 'sara');
-      var calls = 0;
-      await t.pumpWidget(closing((s, {onProgress}) async {
-        calls++;
+      final bounds = <DateTime?>[];
+      await t.pumpWidget(closing((s, {until, onProgress}) async {
+        bounds.add(until);
         return const [];
       }));
       await t.pumpAndSettle();
-      expect(calls, 1);
+      expect(bounds, [null]);
 
+      final before = DateTime.now().toUtc();
       await countAndConfirm(t, '0');
 
-      expect(calls, 2);
+      expect(bounds, hasLength(2));
       expect(shifts.currentOpenShift(), isNull);
       expect(find.byKey(const Key('session-done')), findsOneWidget);
+      // The shift closes at the instant the tills were compared up to, so the
+      // close covers exactly the sales they answered for.
+      final closedAt = shifts.recentClosed(limit: 1).single.closedAt;
+      expect(closedAt, bounds.last);
+      expect(closedAt!.isBefore(before), isFalse);
     });
 
     testWidgets('a sale rung on another till during the count holds the close',
@@ -267,7 +276,7 @@ void main() {
       shifts.openShift(openingFloat: 0, cashierId: 'sara');
       final blocked = <String>[];
       var calls = 0;
-      await t.pumpWidget(closing((s, {onProgress}) async {
+      await t.pumpWidget(closing((s, {until, onProgress}) async {
         calls++;
         return calls == 2
             ? ['Bar: 1 sale rung there is not on this till yet']
@@ -287,6 +296,26 @@ void main() {
       await t.pumpAndSettle();
       expect(shifts.currentOpenShift(), isNotNull);
       expect(find.byKey(const Key('session-done')), findsNothing);
+    });
+
+    testWidgets('a retry at the last check moves the close to that attempt',
+        (t) async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      final bounds = <DateTime?>[];
+      await t.pumpWidget(closing((s, {until, onProgress}) async {
+        bounds.add(until);
+        return bounds.length == 2 ? ['Bar: unreachable'] : const [];
+      }));
+      await t.pumpAndSettle();
+
+      await countAndConfirm(t, '0');
+      expect(find.byKey(const Key('tills-unreachable')), findsOneWidget);
+      await t.tap(find.byKey(const Key('tills-unreachable-retry')));
+      await t.pumpAndSettle();
+
+      expect(bounds, hasLength(3));
+      expect(bounds[2]!.isBefore(bounds[1]!), isFalse);
+      expect(shifts.recentClosed(limit: 1).single.closedAt, bounds[2]);
     });
   });
 }

@@ -6706,6 +6706,7 @@ class _PosAppState extends State<PosApp> {
   Future<List<String>> _catchUpOtherTills(
     BuildContext context,
     DateTime since, {
+    DateTime? until,
     void Function(String status)? onProgress,
   }) async {
     final lan = widget.lan;
@@ -6717,6 +6718,7 @@ class _PosAppState extends State<PosApp> {
     try {
       gaps = await lan.catchUpBeforeClose(
         since: since,
+        until: until,
         onProgress: onProgress,
       );
     } catch (e) {
@@ -6833,8 +6835,8 @@ class _PosAppState extends State<PosApp> {
               // With the shop on the network, every till seen this shift hands its
               // sales over (through the primary, from a secondary) before the count.
               catchUpOtherTills: widget.lan?.isRunning == true
-                  ? (since, {onProgress}) =>
-                      _catchUpOtherTills(context, since, onProgress: onProgress)
+                  ? (since, {until, onProgress}) => _catchUpOtherTills(
+                      context, since, until: until, onProgress: onProgress)
                   : null,
               onCloseOverride: (reason, detail) =>
                   widget.audit.record(session.cashierId, reason, detail: detail),
