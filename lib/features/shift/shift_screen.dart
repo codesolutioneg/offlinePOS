@@ -6,8 +6,6 @@ import '../../core/db/shift_store.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/numeric_keypad.dart';
-import '../../domain/order.dart';
-import '../../domain/session_close_check.dart';
 import '../../domain/shift.dart';
 
 /// Open a shift with a float, record cash in/out, and close with an End-of-Day
@@ -34,7 +32,6 @@ class ShiftScreen extends StatefulWidget {
     this.sessionPartnerName,
     this.onPrepareCloseSync,
     this.catchUpOtherTills,
-    this.sessionSalesForClose,
     this.onCloseOverride,
     this.startCloseOnOpen = false,
     this.startMovement,
@@ -73,14 +70,12 @@ class ShiftScreen extends StatefulWidget {
   /// anything is counted. Answers one line per till that could not be reached; an
   /// empty list means every till seen this shift is in. [onProgress] updates the
   /// close progress dialog as each peer is pulled.
+  /// [until] closes the window the tills are compared over; null means now.
   final Future<List<String>> Function(
     DateTime since, {
+    DateTime? until,
     void Function(String status)? onProgress,
   })? catchUpOtherTills;
-
-  /// Shop-wide sales that close will push to Odoo (every till that replicated
-  /// here). Used to match the End of Day card before counting the drawer.
-  final List<Order> Function(Shift shift)? sessionSalesForClose;
 
   /// A close went ahead over something it would normally stop for, with the reason
   /// as a short event name and what was skipped, for the audit trail.
@@ -552,6 +547,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
           const SizedBox(height: 6),
           _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),
           _row(tr(context, 'Cash sales'), widget.formatAmount(sum.cashSales)),
+          if (sum.refundsCash != 0)
+            _row(tr(context, 'Cash refunds'), widget.formatAmount(-sum.refundsCash)),
           _row(tr(context, 'Cash in'), widget.formatAmount(sum.cashIn)),
           _row(tr(context, 'Cash out'), widget.formatAmount(sum.cashOut)),
           _row(tr(context, 'Expected in drawer'), widget.formatAmount(sum.expectedCash),
@@ -765,6 +762,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
               for (final t in sum.tenders)
                 _row('  ${tr(context, t.label)}', widget.formatAmount(t.amount)),
               _row(tr(context, 'Cash sales'), widget.formatAmount(sum.cashSales)),
+              if (sum.refundsCash != 0)
+                _row(tr(context, 'Cash refunds'),
+                    widget.formatAmount(-sum.refundsCash)),
               _row(tr(context, 'Opening float'), widget.formatAmount(sum.openingFloat)),
               _row(tr(context, 'Cash in'), widget.formatAmount(sum.cashIn)),
               _row(tr(context, 'Cash out'), widget.formatAmount(sum.cashOut)),
@@ -802,10 +802,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
   Future<void> _runCloseCeremony() async {
     // First of all: the other tills' sales have to be here before open work is
     // judged or anything is counted, or the Z comes out short.
-    if (!await _catchUpOtherTills()) return;
-    if (!mounted) return;
-    // Screen totals must match the shop-wide set that will go to Odoo.
-    if (!await _verifySessionTotals()) return;
+    if (await _catchUpOtherTills() == null) return;
     if (!mounted) return;
     // Before anything else, including the cash count: a tab still on a table
     // is a reason not to be closing at all, and finding that out after
@@ -832,8 +829,15 @@ class _ShiftScreenState extends State<ShiftScreen> {
     // must leave the shift open.
     if (widget.authorizeClose != null && !await widget.authorizeClose!()) return;
     if (!mounted) return;
+    // Asked once more at the last moment: the count takes minutes, and a sale
+    // rung on another till meanwhile would otherwise miss this close. The
+    // shift closes at the instant the tills were compared up to, so what they
+    // answered and what the close covers are one and the same window.
+    final cutoff = await _catchUpOtherTills(freeze: true);
+    if (cutoff == null) return;
+    if (!mounted) return;
 
-    final closed = widget.store.closeShift(countedCash: counted);
+    final closed = widget.store.closeShift(countedCash: counted, at: cutoff);
     _handOverZ(closed);
     setState(() {
       _closed = closed;
@@ -862,20 +866,27 @@ class _ShiftScreenState extends State<ShiftScreen> {
     return (ref == null || ref.isEmpty) ? null : ref;
   }
 
-  /// Whether every till seen this shift has handed over its sales. Asked again
-  /// until they have, or until a cashier closes over the gap knowingly: a till
-  /// that is switched off for good must not be able to hold the close forever.
-  Future<bool> _catchUpOtherTills() async {
+  /// The moment up to which every till seen this shift has handed over its
+  /// sales, or null when the cashier gave up. Asked again until they have, or
+  /// until a cashier closes over the gap knowingly: a till that is switched off
+  /// for good must not be able to hold the close forever.
+  ///
+  /// With [freeze] each attempt is bounded at the instant it starts, so the
+  /// shift can be closed at exactly that instant; otherwise the tills are
+  /// compared up to now and the time returned is only a marker.
+  Future<DateTime?> _catchUpOtherTills({bool freeze = false}) async {
     final catchUp = widget.catchUpOtherTills;
     final shift = _shift;
-    if (catchUp == null || shift == null) return true;
+    if (catchUp == null || shift == null) return DateTime.now().toUtc();
     while (true) {
+      final cutoff = DateTime.now().toUtc();
       final gaps = await _withProgress(
         tr(context, 'Collecting sales from the other tills...'),
-        (setStatus) => catchUp(shift.openedAt, onProgress: setStatus),
+        (setStatus) => catchUp(shift.openedAt,
+            until: freeze ? cutoff : null, onProgress: setStatus),
       );
-      if (!mounted) return false;
-      if (gaps.isEmpty) return true;
+      if (!mounted) return null;
+      if (gaps.isEmpty) return cutoff;
       widget.onCloseBlocked?.call('shift.close.blocked.tills_unreachable');
       final choice = await showDialog<String>(
         context: context,
@@ -925,88 +936,17 @@ class _ShiftScreenState extends State<ShiftScreen> {
           ],
         ),
       );
-      if (!mounted) return false;
+      if (!mounted) return null;
       switch (choice) {
         case 'retry':
           continue;
         case 'override':
           widget.onCloseOverride
               ?.call('shift.close.override.tills_unreachable', gaps.join('; '));
-          return true;
+          return cutoff;
         default:
-          return false;
+          return null;
       }
-    }
-  }
-
-  /// End of Day card vs the shop-wide set close will send. Mismatch means a
-  /// peer's tickets are still missing — retry catch-up, do not send a short SO.
-  Future<bool> _verifySessionTotals() async {
-    final salesOf = widget.sessionSalesForClose;
-    final shift = _shift;
-    if (salesOf == null || shift == null) return true;
-    while (true) {
-      if (!mounted) return false;
-      await _withProgress(
-        tr(context, 'Checking totals against other tills...'),
-        (setStatus) async {
-          setStatus(tr(context, 'Checking totals against other tills...'));
-          await Future<void>.delayed(Duration.zero);
-        },
-      );
-      if (!mounted) return false;
-      final screen =
-          widget.store.summary(shift, cashMethodIds: widget.cashMethodIds);
-      final send = salesOf(shift);
-      final match =
-          matchSessionClose(screen: screen, sendOrders: send);
-      if (match.ok) return true;
-      widget.onCloseBlocked?.call('shift.close.blocked.totals_mismatch');
-      final choice = await showDialog<String>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          key: const Key('session-totals-mismatch'),
-          title: Text(tr(ctx, 'Orders do not match the screen')),
-          content: SizedBox(
-            width: 460,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(tr(
-                    ctx,
-                    'The End of Day totals do not match what this till would '
-                    'send to Odoo. Collect sales from the other tills and try again.',
-                  )),
-                  const SizedBox(height: 12),
-                  for (final line in match.lines)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Text('• $line'),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              key: const Key('session-totals-cancel'),
-              onPressed: () => Navigator.pop(ctx, 'cancel'),
-              child: Text(tr(ctx, 'Cancel')),
-            ),
-            FilledButton(
-              key: const Key('session-totals-retry'),
-              onPressed: () => Navigator.pop(ctx, 'retry'),
-              child: Text(tr(ctx, 'Try again')),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) return false;
-      if (choice != 'retry') return false;
-      if (!await _catchUpOtherTills()) return false;
     }
   }
 
@@ -1229,6 +1169,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
         ('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
         for (final t in sum.tenders) ('  ${t.label}', widget.formatAmount(t.amount)),
         ('Cash sales', widget.formatAmount(sum.cashSales)),
+        if (sum.refundsCash != 0)
+          ('Cash refunds', widget.formatAmount(-sum.refundsCash)),
         ('Opening float', widget.formatAmount(sum.openingFloat)),
         ('Cash in', widget.formatAmount(sum.cashIn)),
         ('Cash out', widget.formatAmount(sum.cashOut)),
@@ -1269,6 +1211,8 @@ class _ShiftScreenState extends State<ShiftScreen> {
         ('Sales (${sum.salesCount})', widget.formatAmount(sum.salesTotal)),
         for (final t in sum.tenders) ('  ${t.label}', widget.formatAmount(t.amount)),
         ('Cash sales', widget.formatAmount(sum.cashSales)),
+        if (sum.refundsCash != 0)
+          ('Cash refunds', widget.formatAmount(-sum.refundsCash)),
       ];
 
   Future<void> _printCashierFlash() async {

@@ -28,6 +28,7 @@ import '../updates/download.dart';
 import '../../domain/table_section_config.dart';
 import 'lan_applier.dart';
 import 'lan_beacon.dart';
+import 'lan_tally.dart';
 import 'lan_claim.dart';
 import 'lan_event.dart';
 import 'lan_credential.dart';
@@ -107,9 +108,13 @@ class LanNode {
     required bool Function() isSecondary,
     required String? Function() primaryDeviceId,
     required LanLog report,
+    /// The paid sales this till holds in a window, any device, for the tally a
+    /// close runs against the other tills.
+    required List<String> Function(DateTime since, DateTime until) saleUuids,
     this.hostRetry = const Duration(seconds: 30),
   })  : traffic = traffic ?? LanTraffic(),
         _log = log,
+        _saleUuids = saleUuids,
         _isSecondary = isSecondary,
         _report = report,
         _fabric = fabric,
@@ -281,6 +286,7 @@ class LanNode {
         catchUp: (since) async => [
           for (final gap in await _catchUpPeers(fabric, peers, since)) gap.toMap(),
         ],
+        tally: orders.saleUuidsBetween,
         traffic: traffic,
         updates: () => settings.isLanPrimary ? updateOffer : null,
         onContact: (id, from, peerPort) =>
@@ -307,6 +313,7 @@ class LanNode {
       isSecondary: () => settings.deviceRole == DeviceRole.secondary,
       primaryDeviceId: () => settings.lanPrimaryDeviceId,
       report: log,
+      saleUuids: orders.saleUuidsBetween,
       hostRetry: hostRetry,
       host: host,
       beacon: LanBeacon(
@@ -346,6 +353,7 @@ class LanNode {
   final bool Function() _isSecondary;
   final String? Function() _primaryDeviceId;
   final LanLog _report;
+  final List<String> Function(DateTime since, DateTime until) _saleUuids;
 
   /// The start in flight, or the one that finished. Held so two callers cannot each
   /// bind the same port: the app shell starts the node, and the LAN switch can ask
@@ -535,7 +543,64 @@ class LanNode {
   /// to the end of its log, because the primary is where the shop's sales are
   /// meant to meet; a primary that cannot be asked is itself the gap. On the
   /// primary, or on a till with no primary at all, this till reads them itself.
+  ///
+  /// [until] closes the window the tills are compared over: the moment the
+  /// session closed when one is being sent again, otherwise now. Without it a
+  /// resend of last night would count this morning's sales on the other tills
+  /// as gaps and never go out.
   Future<List<LanTillGap>> catchUpBeforeClose({
+    required DateTime since,
+    DateTime? until,
+    void Function(String status)? onProgress,
+  }) async {
+    final gaps = await _collectBeforeClose(since: since, onProgress: onProgress);
+    // Reading the others is not the same as holding what they rang. Each till is
+    // asked for its own list and anything it has that this one does not is a gap,
+    // whether the read above failed, was cut short, or went through the primary.
+    return [
+      ...gaps,
+      ...await _tallyPeers(
+        since,
+        until: until?.toUtc() ?? DateTime.now().toUtc(),
+        skip: {for (final gap in gaps) gap.deviceId},
+        onProgress: onProgress,
+      ),
+    ];
+  }
+
+  /// A sale a peer completes after [until] is outside this check; it goes to
+  /// Odoo under that till's own close and the server books it once by its uuid.
+  Future<List<LanTillGap>> _tallyPeers(
+    DateTime since, {
+    required DateTime until,
+    required Set<String> skip,
+    void Function(String status)? onProgress,
+  }) async {
+    final targets = peers.all
+        .where((p) =>
+            p.deviceId != deviceId &&
+            !skip.contains(p.deviceId) &&
+            !p.lastSeenAt.isBefore(since.toUtc()))
+        .toList();
+    if (targets.isEmpty) return const [];
+    onProgress?.call('Checking every till handed over its sales...');
+    final answers = <LanTallyAnswer>[];
+    for (final peer in targets) {
+      try {
+        final uuids = await _client.tally(peer,
+            deviceId: deviceId, since: since, until: until);
+        answers.add(LanTallyAnswer.counted(peer, uuids.toSet()));
+      } catch (e) {
+        _report('lan.tally.failed', '${peer.deviceId} (${peer.name}): $e');
+        answers.add(LanTallyAnswer.failed(peer, '$e'));
+      }
+    }
+    // Read after the answers, so a sale that arrived while they were being
+    // collected counts as held.
+    return tallyGaps(local: _saleUuids(since, until).toSet(), answers: answers);
+  }
+
+  Future<List<LanTillGap>> _collectBeforeClose({
     required DateTime since,
     void Function(String status)? onProgress,
   }) async {

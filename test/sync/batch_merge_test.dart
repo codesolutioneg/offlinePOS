@@ -193,10 +193,21 @@ void main() {
         reason: 'the refund row must stay queued for the ordinary drain');
   });
 
-  test('one sale is not merged without a session partner', () {
-    final outcome = mergeOrderPushes([entryFor(paidSale())], batchUuid: 'shift');
+  test('one sale merges without a session partner', () {
+    final sale = paidSale();
+    final batch =
+        mergeOrderPushes([entryFor(sale)], batchUuid: 'shift').batch!;
+
+    expect(batch.payload['order_count'], 1,
+        reason: 'sales only reach Odoo inside a batch, so one alone must go too');
+    expect(batch.orderUuids, [sale.uuid]);
+    expect(payloadBalances(batch.payload), isTrue);
+  });
+
+  test('nothing to merge is not a batch', () {
+    final outcome = mergeOrderPushes(const [], batchUuid: 'shift');
     expect(outcome.batch, isNull);
-    expect(outcome.notMerged!.reason, contains('fewer than two'));
+    expect(outcome.notMerged!.reason, contains('no sales'));
   });
 
   test('one sale merges when a session partner is set', () {

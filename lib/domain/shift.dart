@@ -120,6 +120,7 @@ class ShiftSummary {
     required this.salesCount,
     required this.salesTotal,
     required this.cashSales,
+    this.refundsCash = 0,
     this.countedCash,
     this.tenders = const [],
   });
@@ -135,15 +136,22 @@ class ShiftSummary {
   /// The cash portion of those takings: what actually landed in the drawer. Card
   /// and other non-cash tenders are in [salesTotal] but never here.
   final double cashSales;
+
+  /// Cash handed back on refunds in the window, as a positive figure. Refunds
+  /// stay out of [salesCount], [salesTotal] and [tenders] (they are booked by
+  /// hand in Odoo), but the notes did leave the drawer.
+  final double refundsCash;
   final double? countedCash;
 
   /// The takings split by payment method, cash tenders first. A manager reconciles
   /// each method, not just the drawer, so the X/Z read shows both.
   final List<TenderTotal> tenders;
 
-  /// What the drawer should hold: the float, the cash taken, and any cash paid
-  /// in, less anything paid out. Card sales are deliberately excluded.
-  double get expectedCash => openingFloat + cashSales + cashIn - cashOut;
+  /// What the drawer should hold: the float, the cash taken less the cash
+  /// refunded, and any cash paid in, less anything paid out. Card sales are
+  /// deliberately excluded.
+  double get expectedCash =>
+      openingFloat + cashSales - refundsCash + cashIn - cashOut;
 
   /// Counted minus expected, once a count has been entered.
   double? get variance =>

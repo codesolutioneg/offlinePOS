@@ -40,6 +40,7 @@ import '../core/lan/lan_credential.dart';
 import '../core/lan/lan_peer.dart';
 import '../core/lan/lan_seat_desk.dart';
 import '../core/lan/lan_shift_board.dart';
+import '../core/lan/lan_tally.dart';
 import '../core/lan/lan_wiring.dart';
 import '../core/onboarding/setup_checklist.dart';
 import '../core/onboarding/wizard_id.dart';
@@ -79,7 +80,6 @@ import '../domain/business_day.dart';
 import '../domain/catalogue.dart';
 import '../domain/floor_bulletin.dart';
 import '../domain/order.dart';
-import '../domain/session_close_check.dart';
 import '../domain/table_floor_info.dart';
 import '../domain/table_section_config.dart';
 import '../domain/shift.dart';
@@ -6707,17 +6707,18 @@ class _PosAppState extends State<PosApp> {
   Future<List<String>> _catchUpOtherTills(
     BuildContext context,
     DateTime since, {
+    DateTime? until,
     void Function(String status)? onProgress,
   }) async {
     final lan = widget.lan;
     if (lan == null) return const [];
-    final notOnNetwork = tr(context, 'the primary is not on the network');
     final lastSeen = tr(context, 'last seen');
     final thisTill = tr(context, 'This till');
     List<LanTillGap> gaps;
     try {
       gaps = await lan.catchUpBeforeClose(
         since: since,
+        until: until,
         onProgress: onProgress,
       );
     } catch (e) {
@@ -6729,9 +6730,7 @@ class _PosAppState extends State<PosApp> {
         [
           gap.name.isEmpty ? gap.deviceId : gap.name,
           ': ',
-          gap.reason == 'the primary is not on the network'
-              ? notOnNetwork
-              : gap.reason,
+          gapReasonIn(gap.reason, (en) => tr(context, en)),
           if (gap.lastSeenAt case final at?)
             ' ($lastSeen ${two(at.toLocal().hour)}:${two(at.toLocal().minute)})',
         ].join(),
@@ -6834,11 +6833,9 @@ class _PosAppState extends State<PosApp> {
               // With the shop on the network, every till seen this shift hands its
               // sales over (through the primary, from a secondary) before the count.
               catchUpOtherTills: widget.lan?.isRunning == true
-                  ? (since, {onProgress}) =>
-                      _catchUpOtherTills(context, since, onProgress: onProgress)
+                  ? (since, {until, onProgress}) => _catchUpOtherTills(
+                      context, since, until: until, onProgress: onProgress)
                   : null,
-              sessionSalesForClose: (shift) =>
-                  widget.orders.salesInShift(shift, anyDevice: true),
               onCloseOverride: (reason, detail) =>
                   widget.audit.record(session.cashierId, reason, detail: detail),
               // Gated BEFORE the shift closes, since the close is irreversible: the
@@ -6871,6 +6868,8 @@ class _PosAppState extends State<PosApp> {
                   final existing =
                       widget.sync.lastOdooOrderRef ??
                       await _resolveOdooSaleName(null);
+                  // An empty session still owes nothing, but older ones may.
+                  unawaited(widget.sync.sendBacklog());
                   if (existing != null && existing.isNotEmpty) {
                     return 'No new orders in this shift.\nLast Odoo order: $existing';
                   }
@@ -6903,18 +6902,26 @@ class _PosAppState extends State<PosApp> {
                     widget.orders.tellShopSynced(o.uuid);
                   }
                   var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
+                  // Anything older still owed goes now, not on the next failure.
+                  // After the read above: a backlog push clears the last ref.
+                  unawaited(widget.sync.sendBacklog());
                   if (odooRef == null ||
                       odooRef.isEmpty ||
                       odooRef.startsWith('#')) {
                     final resolved = await _resolveOdooSaleName(odooRef);
                     if (resolved != null) odooRef = resolved;
                   }
+                  final already = result.alreadyBooked.length;
+                  final alreadyNote = already == 0
+                      ? ''
+                      : '\n$already of them ${already == 1 ? 'was' : 'were'} '
+                          'already in Odoo from an earlier push.';
                   if (odooRef != null && odooRef.isNotEmpty) {
                     widget.sync.lastOdooOrderRef = odooRef;
                     return 'Synced ${result.orderCount} order(s) from this shift '
                         'to Odoo as one sale order'
                         '${partner != null ? ' under $partner' : ''}.\n'
-                        'Odoo order: $odooRef';
+                        'Odoo order: $odooRef$alreadyNote';
                   }
                   return 'Sent ${result.orderCount} order(s) from this shift'
                       '${partner != null ? ' under $partner' : ''}, '
@@ -7032,26 +7039,25 @@ class _PosAppState extends State<PosApp> {
     }
     final lan = widget.lan;
     if (lan?.isRunning == true) {
+      // The other tills have to be in before the night is booked again, or the
+      // resend is as short as the close it is meant to repair. A till that
+      // cannot be read, or holds a sale this one does not, stops the resend.
+      List<LanTillGap> gaps;
       try {
-        await lan!.catchUpBeforeClose(since: shift.openedAt);
-      } catch (_) {
-        // Still try with whatever this till already holds.
+        gaps = await lan!.catchUpBeforeClose(
+            since: shift.openedAt, until: shift.closedAt);
+      } catch (e) {
+        return 'Could not collect sales from the other tills: $e';
+      }
+      if (gaps.isNotEmpty) {
+        return 'Not every till has handed over its sales. Bring them on the '
+            'network and try again.\n'
+            '${[for (final g in gaps) '${g.name.isEmpty ? g.deviceId : g.name}: ${g.reason}'].join('\n')}';
       }
     }
     final sales = widget.orders.salesInShift(shift, anyDevice: true);
     if (sales.isEmpty) {
       return 'No sales in the last closed session.';
-    }
-    final screen =
-        widget.shifts.summary(shift, cashMethodIds: {
-      for (final m in widget.catalogue.paymentMethods())
-        if (m.isCash) m.id,
-    });
-    final match = matchSessionClose(screen: screen, sendOrders: sales);
-    if (!match.ok) {
-      return 'Orders on this till do not match the session card — '
-          'collect sales from the other tills and try again.\n'
-          '${match.lines.join('\n')}';
     }
     final stress = stressOrderCount(widget.outboxStore.db,
         deviceId: widget.deviceId);

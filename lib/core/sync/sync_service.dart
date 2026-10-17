@@ -172,9 +172,15 @@ class SyncService {
   /// End-of-Day done screen. Cleared at the start of each sales flush.
   String? lastOdooOrderRef;
 
+  /// Tickets the last consolidated push found already booked on the server,
+  /// by uuid. Cleared with [lastOdooOrderRef].
+  List<String> lastAlreadyBooked = const [];
+
   /// Remember the SO number (or `#id`) from a module ack so Close session can
-  /// show it even when sales went out one-by-one instead of as a merge.
-  void noteOdooAck({String? name, int? id}) {
+  /// show it even when sales went out one-by-one instead of as a merge, and
+  /// which tickets the server says it already held.
+  void noteOdooAck({String? name, int? id, List<String> alreadyBooked = const []}) {
+    if (alreadyBooked.isNotEmpty) lastAlreadyBooked = alreadyBooked;
     if (name != null && name.isNotEmpty) {
       lastOdooOrderRef = name;
       return;
@@ -478,9 +484,11 @@ class SyncService {
   /// catalogue refresh. **Never** books `order.push` — sales leave only through
   /// [flushClosedShift] (Close session / Sync now retry of a closed shift).
   Future<void> tick() async {
-    if (_state == SyncState.working) {
+    // Loop, not once: another send can take the slot while this one waits.
+    while (_state == SyncState.working) {
       final wait = _flushDone;
-      if (wait != null) await wait.future;
+      if (wait == null) break;
+      await wait.future;
     }
     _state = SyncState.working;
     final done = Completer<void>();
@@ -538,15 +546,18 @@ class SyncService {
     required Future<void> Function() enqueueOrders,
     String? batchKey,
   }) async {
-    if (_state == SyncState.working) {
+    // Loop, not once: another send can take the slot while this one waits.
+    while (_state == SyncState.working) {
       final wait = _flushDone;
-      if (wait != null) await wait.future;
+      if (wait == null) break;
+      await wait.future;
     }
     _state = SyncState.working;
     final done = Completer<void>();
     _flushDone = done;
     lastOdooOrderRef = null;
     lastMergeSkipReason = null;
+    lastAlreadyBooked = const [];
     try {
       await enqueueOrders();
       await _queueAudit();
@@ -571,23 +582,28 @@ class SyncService {
           merged: true,
           orderCount: orderUuids.length,
           odooRef: lastOdooOrderRef,
+          alreadyBooked: lastAlreadyBooked,
         );
       }
       if (merged) {
-        // Module ack without a name — still treat as success for the queue.
+        // Module ack without a name: still a success for the queue.
         _disarmRetry('shift merge acknowledged');
         return ShiftFlushResult(
           merged: true,
           orderCount: orderUuids.length,
           odooRef: lastOdooOrderRef,
+          alreadyBooked: lastAlreadyBooked,
         );
       }
       _armRetryIfIncomplete(
           lastMergeSkipReason ?? 'shift merge did not complete');
+      // The merge declined on what it was given, not on the network: the same
+      // sales give the same answer next time.
       return ShiftFlushResult(
         merged: false,
         orderCount: orderUuids.length,
         skipReason: lastMergeSkipReason ?? lastError,
+        refused: true,
       );
     } catch (e) {
       lastError = e.toString();
@@ -598,6 +614,7 @@ class SyncService {
         merged: false,
         orderCount: orderUuids.length,
         skipReason: e.toString(),
+        refused: e is PermanentlyRejected,
       );
     } finally {
       if (!done.isCompleted) done.complete();
@@ -747,9 +764,8 @@ class SyncService {
       // Finish the same way Close session does: one merged SO for the shift's
       // tickets — never drain order.push one-by-one (that booked food without
       // delivery and lied about "one sale order").
-      final plan = closedShiftRetry;
-      if (plan != null) {
-        final result = await plan();
+      if (closedShiftRetry != null) {
+        final result = await _runBacklog();
         if (result != null && result.merged) {
           online.value = true;
           lastError = null;
@@ -780,6 +796,25 @@ class SyncService {
     }
   }
 
+  /// Send what earlier closes still owe, after a close went through.
+  ///
+  /// The retry timer only starts when a close fails, so without this a sale that
+  /// fell outside every session (a till clock that was behind) or an older
+  /// session left half sent would wait for a failure that may never come.
+  Future<void> sendBacklog() => _runBacklog();
+
+  /// [closedShiftRetry], joined by any caller that asks while it runs, so a
+  /// close and the retry timer never send the backlog side by side.
+  Future<ShiftFlushResult?> _runBacklog() {
+    final running = _backlogRun;
+    if (running != null) return running;
+    final plan = closedShiftRetry;
+    if (plan == null) return Future.value();
+    return _backlogRun = plan().whenComplete(() => _backlogRun = null);
+  }
+
+  Future<ShiftFlushResult?>? _backlogRun;
+
   Future<bool> _mergeBatchIfAsked({Set<String>? onlyUuids, String? batchKey}) async {
     final merge = mergeBatch;
     if (merge == null) return false;
@@ -809,10 +844,21 @@ class ShiftFlushResult {
     required this.orderCount,
     this.odooRef,
     this.skipReason,
+    this.alreadyBooked = const [],
+    this.refused = false,
   });
 
   final bool merged;
+
+  /// The server refused the batch, or the merge declined it. Trying it again
+  /// gives the same answer, so a backlog moves on to the next batch instead of
+  /// stopping here.
+  final bool refused;
   final int orderCount;
   final String? odooRef;
   final String? skipReason;
+
+  /// Tickets in this push the server had already booked under an earlier
+  /// one, by uuid. They count in [orderCount]; this says which were not new.
+  final List<String> alreadyBooked;
 }

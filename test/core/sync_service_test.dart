@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/db/catalogue_store.dart';
 import 'package:offline_pos/core/db/database.dart';
@@ -216,6 +218,108 @@ void main() {
     );
     expect(result.merged, isTrue);
     expect(store.pendingSalesCount, 0);
+  });
+
+  test('a close reports which tickets the server had already booked', () async {
+    final outbox = Outbox(store: store, senders: {
+      'order.push': (e) async {},
+      'audit.push': (_) async {},
+      'device.status': (_) async {},
+    });
+    var already = const <String>['lost-1'];
+    late final SyncService s;
+    s = serviceWith(
+      outbox: outbox,
+      mergeBatch: ({Set<String>? onlyUuids, String? batchKey}) async {
+        for (final e in await store.pending(kinds: const {'order.push'})) {
+          await store.markSent(e.id);
+        }
+        s.noteOdooAck(name: 'S1', alreadyBooked: already);
+        return true;
+      },
+    );
+    Future<ShiftFlushResult> close(Set<String> uuids) => s.flushClosedShift(
+          orderUuids: uuids,
+          enqueueOrders: () async {
+            for (final u in uuids) {
+              await outbox.enqueue('order.push', u, {'uuid': u});
+            }
+          },
+        );
+
+    final first = await close(const {'lost-1', 'new-1'});
+    expect(first.merged, isTrue);
+    expect(first.orderCount, 2);
+    expect(first.alreadyBooked, ['lost-1']);
+
+    // The next close starts clean: an ack without duplicates reports none.
+    already = const [];
+    final second = await close(const {'new-2'});
+    expect(second.alreadyBooked, isEmpty);
+    expect(s.lastAlreadyBooked, isEmpty);
+  });
+
+  test('a batch the server refuses is told apart from one that could not be sent', () async {
+    final outbox = Outbox(store: store, senders: {
+      'order.push': (e) async {},
+      'audit.push': (_) async {},
+      'device.status': (_) async {},
+    });
+    Object failure = PermanentlyRejected('unknown product');
+    final s = serviceWith(
+      outbox: outbox,
+      mergeBatch: ({Set<String>? onlyUuids, String? batchKey}) async =>
+          throw failure,
+    );
+    Future<ShiftFlushResult> close() => s.flushClosedShift(
+          orderUuids: const {'sale-1'},
+          enqueueOrders: () async =>
+              outbox.enqueue('order.push', 'sale-1', {'uuid': 'sale-1'}),
+        );
+
+    final refused = await close();
+    expect(refused.merged, isFalse);
+    expect(refused.refused, isTrue);
+    expect(store.pendingSalesCount, 1, reason: 'a refused sale stays owed');
+
+    failure = Exception('connection reset');
+    final offline = await close();
+    expect(offline.merged, isFalse);
+    expect(offline.refused, isFalse);
+    expect(store.pendingSalesCount, 1);
+  });
+
+  test('the backlog is sent after a close even when no retry is armed', () async {
+    var ran = 0;
+    final s = serviceWith(closedShiftRetry: () async {
+      ran++;
+      return const ShiftFlushResult(merged: true, orderCount: 0);
+    });
+    expect(s.retryArmed, isFalse);
+
+    await s.sendBacklog();
+
+    expect(ran, 1,
+        reason: 'a sale outside every session must not wait for a failure');
+  });
+
+  test('a backlog send while one is running joins it instead of sending twice', () async {
+    var ran = 0;
+    final gate = Completer<void>();
+    final s = serviceWith(closedShiftRetry: () async {
+      ran++;
+      await gate.future;
+      return const ShiftFlushResult(merged: true, orderCount: 0);
+    });
+
+    final first = s.sendBacklog();
+    final second = s.sendBacklog();
+    gate.complete();
+    await Future.wait([first, second]);
+    expect(ran, 1, reason: 'two runs would push the same session twice');
+
+    await s.sendBacklog();
+    expect(ran, 2, reason: 'a finished run does not block the next one');
   });
 
   test('reconcilePending runs the hook so pending counts can be read after it', () async {

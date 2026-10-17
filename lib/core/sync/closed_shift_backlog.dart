@@ -1,6 +1,7 @@
 import '../../domain/order.dart';
 import '../db/order_store.dart';
 import '../db/shift_store.dart';
+import 'sync_service.dart';
 
 /// Paid sales still owed to Odoo from one closed shift, with the key they must be
 /// booked under.
@@ -22,22 +23,93 @@ const int kBacklogShiftLookback = 30;
 /// The oldest closed shift that still has unsynced sales, or null when every
 /// closed shift is booked.
 ///
+/// Sales held here from every till count, the same set a session close sends:
+/// only the closing till sends sales, so a sale another till handed over is
+/// owed by this one. Batches whose key is in [skip] are passed over.
+///
 /// Sales inside the open shift are never picked: they belong to its own close.
-/// Sales that fall inside no shift at all (rung before this rule, or under a
-/// clock that has since been fixed) are batched under a key of their own, built
-/// from the oldest of them, rather than folded into a shift that has a key the
-/// server may already have seen.
-ClosedShiftBacklog? nextClosedShiftBacklog(ShiftStore shifts, OrderStore orders) {
+/// Nor are sales rung after the last close, such as another till still selling
+/// once this one closed: the next close takes them. Sales older than the last
+/// close that fall inside no shift (rung before this rule, or under a clock that
+/// has since been fixed) are batched under a key of their own, built from the
+/// oldest of them, rather than folded into a shift that has a key the server may
+/// already have seen.
+///
+/// Sales [held] names (parked in the queue, such as those held when the server
+/// changed) are left out: they wait for a manager, and stay owed meanwhile.
+ClosedShiftBacklog? nextClosedShiftBacklog(ShiftStore shifts, OrderStore orders,
+    {Set<String> skip = const {}, Set<String> Function(Iterable<String>)? held}) {
+  List<Order> sendable(List<Order> owed) {
+    if (held == null || owed.isEmpty) return owed;
+    final parked = held(owed.map((o) => o.uuid));
+    return owed.where((o) => !parked.contains(o.uuid)).toList();
+  }
+
   final closed = shifts.recentClosed(limit: kBacklogShiftLookback).reversed;
   final claimed = <String>{};
+  DateTime? lastClose;
   for (final shift in closed) {
-    final owed = orders.awaitingSyncInShift(shift);
-    if (owed.isNotEmpty) return ClosedShiftBacklog(batchKey: shift.uuid, orders: owed);
+    final at = shift.closedAt;
+    if (at != null && (lastClose == null || at.isAfter(lastClose))) lastClose = at;
+    final owed = orders.awaitingSyncInShift(shift, anyDevice: true);
+    claimed.addAll(owed.map((o) => o.uuid));
+    final send = sendable(owed);
+    if (send.isNotEmpty && !skip.contains(shift.uuid)) {
+      return ClosedShiftBacklog(batchKey: shift.uuid, orders: send);
+    }
   }
   final open = shifts.currentOpenShift();
-  if (open != null) claimed.addAll(orders.awaitingSyncInShift(open).map((o) => o.uuid));
-  final orphans = orders.awaitingSync().where((o) => !claimed.contains(o.uuid)).toList()
+  if (open != null) {
+    claimed.addAll(
+        orders.awaitingSyncInShift(open, anyDevice: true).map((o) => o.uuid));
+  }
+  if (lastClose == null) return null;
+  final orphans = sendable(orders
+      .awaitingSync(anyDevice: true)
+      .where((o) => !claimed.contains(o.uuid) && o.createdAt.isBefore(lastClose!))
+      .toList())
     ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
   if (orphans.isEmpty) return null;
-  return ClosedShiftBacklog(batchKey: 'backlog-${orphans.first.uuid}', orders: orphans);
+  final key = 'backlog-${orphans.first.uuid}';
+  if (skip.contains(key)) return null;
+  return ClosedShiftBacklog(batchKey: key, orders: orphans);
+}
+
+/// Send every batch [nextClosedShiftBacklog] finds, oldest first.
+///
+/// Stops at the first batch that could not be sent, since the next one would
+/// fail the same way. A batch the server refused is different: it needs a
+/// person, and the batches behind it are passed to [flush] all the same. The
+/// refused one stays queued and its result is what is returned.
+///
+/// What a booked batch carried is told to the whole shop: some of its sales may
+/// be another till's, and that till would otherwise send them again at its own
+/// close. Only sales the booking marked synced are told.
+Future<ShiftFlushResult> sendClosedShiftBacklog(
+  ShiftStore shifts,
+  OrderStore orders,
+  Future<ShiftFlushResult> Function(ClosedShiftBacklog backlog) flush, {
+  required Set<String> Function(Iterable<String>) held,
+}) async {
+  ShiftFlushResult result = const ShiftFlushResult(merged: true, orderCount: 0);
+  ShiftFlushResult? refused;
+  final tried = <String>{};
+  for (var i = 0; i < kBacklogShiftLookback; i++) {
+    final backlog =
+        nextClosedShiftBacklog(shifts, orders, skip: tried, held: held);
+    if (backlog == null) break;
+    tried.add(backlog.batchKey);
+    result = await flush(backlog);
+    if (result.merged) {
+      for (final o in backlog.orders) {
+        if (orders.byUuid(o.uuid)?.state == OrderState.synced) {
+          orders.tellShopSynced(o.uuid);
+        }
+      }
+      continue;
+    }
+    if (!result.refused) return result;
+    refused ??= result;
+  }
+  return refused ?? result;
 }

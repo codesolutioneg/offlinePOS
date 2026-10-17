@@ -69,6 +69,7 @@ class LanProtocol {
     this.seats,
     this.numbers,
     this.catchUp,
+    this.tally,
     this.traffic,
     this.updates,
     this.onContact,
@@ -110,6 +111,10 @@ class LanProtocol {
   /// other till to the end of its log now, and to say which it could not.
   static const String catchUpPath = '/lan/catchup';
 
+  /// A till about to close asking this one which sales it rang in a window, by
+  /// uuid, so the closer can prove it holds every one of them before the count.
+  static const String tallyPath = '/lan/tally';
+
   /// Which build this till (the primary) offers the others, and its digest.
   ///
   /// Not gated on the schema version, unlike everything else: a till one schema
@@ -141,6 +146,10 @@ class LanProtocol {
   /// Reads every till seen since the given moment to the end of its log, and
   /// answers the ones it could not as [LanTillGap] maps. Null refuses with 409.
   final Future<List<Map<String, dynamic>>> Function(DateTime since)? catchUp;
+
+  /// The uuids of the paid sales this till holds between two moments, any device.
+  /// Null refuses with 409.
+  final List<String> Function(DateTime since, DateTime until)? tally;
 
   /// Where events handed over by a peer are counted, for the shop network screen.
   final LanTraffic? traffic;
@@ -198,7 +207,8 @@ class LanProtocol {
     if (path != notifyPath &&
         path != claimPath &&
         path != seatPath &&
-        path != numberPath) {
+        path != numberPath &&
+        path != tallyPath) {
       return const LanReply(404, {'error': 'unknown path'});
     }
     // Before the body is even parsed: an unpaired device gets no say in what this
@@ -224,6 +234,7 @@ class LanProtocol {
     if (path == claimPath) return _handleClaim(decoded, peer);
     if (path == seatPath) return _handleSeat(decoded, peer);
     if (path == numberPath) return _handleNumber(decoded['count']);
+    if (path == tallyPath) return _handleTally(decoded);
     final raw = decoded['events'];
     if (raw is! List) return const LanReply(400, {'error': 'no events'});
     final events = <LanEvent>[];
@@ -271,6 +282,21 @@ class LanProtocol {
     final since = DateTime.tryParse('${decoded['since']}')?.toUtc() ??
         DateTime.now().toUtc().subtract(const Duration(days: 1));
     return LanReply(200, {'device_id': deviceId, 'missing': await run(since)});
+  }
+
+  /// Which sales this till holds in the asked window. The window is required:
+  /// a tally with no bounds would be the whole table.
+  LanReply _handleTally(Map<String, dynamic> decoded) {
+    final read = tally;
+    if (read == null) {
+      return const LanReply(409, {'error': 'this device does not tally sales'});
+    }
+    final since = DateTime.tryParse('${decoded['since']}')?.toUtc();
+    final until = DateTime.tryParse('${decoded['until']}')?.toUtc();
+    if (since == null || until == null) {
+      return const LanReply(400, {'error': 'tally needs since and until'});
+    }
+    return LanReply(200, {'device_id': deviceId, 'uuids': read(since, until)});
   }
 
   /// Admit a secondary with a one-time PIN; no shop-key stamp required.
@@ -792,6 +818,30 @@ class LanHttpClient {
         for (final m in missing)
           if (m is Map) LanTillGap.fromMap(m.cast<String, dynamic>()),
     ];
+  }
+
+  /// Ask [peer] which sales it holds between [since] and [until], by uuid.
+  Future<List<String>> tally(
+    LanPeer peer, {
+    required String deviceId,
+    required DateTime since,
+    required DateTime until,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'since': since.toUtc().toIso8601String(),
+      'until': until.toUtc().toIso8601String(),
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.tallyPath),
+      body,
+      _credential.stamp(method: 'POST', path: LanProtocol.tallyPath, body: body),
+    );
+    final uuids = (jsonDecode(text) as Map)['uuids'];
+    if (uuids is! List) throw FormatException('tally answered without uuids');
+    return [for (final u in uuids) '$u'];
   }
 
   /// Present a join PIN to [peer] (the primary). No shop-key stamp — the PIN is

@@ -258,21 +258,24 @@ class OrderStore {
 
   /// Paid but not yet confirmed by the server.
   ///
-  /// Scoped to this till, and that scoping is what keeps the books straight: this
-  /// is the list the sync reconcile sweeps into the outbox, so a sale replicated
-  /// from another till must never appear in it or the shop would book it twice.
+  /// Scoped to this till by default, and that scoping is what keeps the books
+  /// straight: this is the list the sync reconcile sweeps into the outbox, so a
+  /// sale replicated from another till must never appear in it or the shop would
+  /// book it twice. [anyDevice] is for the closed-session backlog, which runs on
+  /// the closing till and owes every till's sales because only it sends them.
   ///
   /// Fully cancelled pairs are omitted so a voided complimentary cannot re-enter
   /// the outbox on the next Sync now.
-  List<Order> awaitingSync() =>
-      salesForOdoo(_mine("state = 'paid'"));
+  List<Order> awaitingSync({bool anyDevice = false}) => salesForOdoo(
+      anyDevice ? _query("state = 'paid'") : _mine("state = 'paid'"));
 
   /// Refunds never go to Odoo, by the owner's decision: the shop books them there
   /// by hand. So they are never owed, never hold a close open, and never count as
   /// synced.
   static const String _notRefund = r"json_extract(payload, '$.refund_of_uuid') IS NULL";
 
-  /// Paid sales on this till that fall inside [shift]'s open→close window.
+  /// Paid sales that fall inside [shift]'s open→close window: this till's own by
+  /// default, every till's when [anyDevice] is set (the closed-session backlog).
   ///
   /// Close-shift sync uses this — not [awaitingSync] — so a backlog from an
   /// earlier shift cannot ride along under the new shift's uuid, and the Z and
@@ -281,17 +284,17 @@ class OrderStore {
   /// Fully cancelled sales (original + matching refund) are dropped: the refund
   /// rows are loaded only to detect the pair, then stripped so Odoo never sees
   /// a complimentary / officer ticket the cashier already voided.
-  List<Order> awaitingSyncInShift(Shift shift) {
+  List<Order> awaitingSyncInShift(Shift shift, {bool anyDevice = false}) {
     final from = shift.openedAt.toIso8601String();
     final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
-    return salesForOdoo(_mine(
-      "state = 'paid' AND created_at >= ? AND created_at <= ?",
-      [from, to],
-    ));
+    const where = "state = 'paid' AND created_at >= ? AND created_at <= ?";
+    return salesForOdoo(
+        anyDevice ? _query(where, [from, to]) : _mine(where, [from, to]));
   }
 
-  /// Every completed sale in [shift]'s window — this till and every peer that
-  /// replicated here. Paid and already-synced both: a manager who deleted the
+  /// Every completed sale in [shift]'s window: this till's own by default, and
+  /// every peer that replicated here when [anyDevice] is set (the session close
+  /// and its resend). Paid and already-synced both: a manager who deleted the
   /// Odoo sale order and wants the whole session sent again needs the ones that
   /// were marked synced after a partial push, not only what is still owed.
   ///
@@ -316,6 +319,19 @@ class OrderStore {
         .toList();
     return salesForOdoo(raw);
   }
+
+  /// The uuids of every paid or synced order rung between [since] and [until] on
+  /// any device, refunds included. What a till answers when another is about to
+  /// close and wants proof it holds the same sales; the comparison is on uuids
+  /// because two tills that agree on totals can still hold different tickets.
+  List<String> saleUuidsBetween(DateTime since, DateTime until) => [
+        for (final r in _db.raw.select(
+          "SELECT uuid FROM orders WHERE state IN ('paid','synced') "
+          'AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC',
+          [since.toUtc().toIso8601String(), until.toUtc().toIso8601String()],
+        ))
+          r['uuid'] as String,
+      ];
 
   /// Mark [uuid] synced and tell every till on the fabric, including when the
   /// sale was rung on another device. Ordinary [markSynced] will not announce a

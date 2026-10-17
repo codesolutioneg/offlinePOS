@@ -2112,8 +2112,8 @@ class SettingsStore {
       setBool('merge_batch_one_sale_order', v);
 
   /// Odoo partner the consolidated End-of-Day invoice books under (Dishflow's
-  /// session-report customer). Positive id only; unset means merge still needs
-  /// two or more sales and keeps each ticket's own partner on the nested headers.
+  /// session-report customer). Positive id only; unset keeps each ticket's own
+  /// partner on the nested headers.
   int? get odooSessionPartnerId => _positiveId('odoo_session_partner_id');
   set odooSessionPartnerId(int? v) => _setOdooId('odoo_session_partner_id', v);
 

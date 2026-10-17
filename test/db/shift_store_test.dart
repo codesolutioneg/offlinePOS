@@ -214,6 +214,118 @@ void main() {
     expect(shifts.summary(closed, cashMethodIds: {1}).variance, 0);
   });
 
+  group('cash refunds and the drawer', () {
+    Order cashSale(double amount, {String cashier = 'c1'}) =>
+        Order(deviceId: 'd', cashierId: cashier)
+          ..lines.add(line(amount))
+          ..payments = [OrderPayment(methodId: 1, amount: amount, label: 'Cash')]
+          ..state = OrderState.paid;
+
+    Order refundOf(Order sale, double amount,
+            {int methodId = 1, String label = 'Cash', String cashier = 'c1'}) =>
+        Order(
+          deviceId: 'd',
+          cashierId: cashier,
+          lines: [OrderLine(productId: 1, name: 'x', quantity: -1, unitPrice: amount)],
+          payments: [OrderPayment(methodId: methodId, amount: -amount, label: label)],
+        )
+          ..refundOfUuid = sale.uuid
+          ..state = OrderState.paid;
+
+    test('a partial cash refund leaves the Z alone but comes out of the drawer', () {
+      shifts.openShift(openingFloat: 100, cashierId: 'c1');
+      final sale = cashSale(60);
+      orders.save(sale);
+      orders.save(refundOf(sale, 20));
+
+      final sum = shifts.summary(shifts.currentOpenShift()!, cashMethodIds: {1});
+      expect(sum.salesCount, 1);
+      expect(sum.salesTotal, 60);
+      expect(sum.cashSales, 60);
+      expect(sum.tenders.single.amount, 60);
+      expect(sum.refundsCash, 20);
+      expect(sum.expectedCash, 140);
+      final closed = shifts.closeShift(countedCash: 140);
+      expect(shifts.summary(closed, cashMethodIds: {1}).variance, 0);
+    });
+
+    test('a card refund never touches the drawer', () {
+      shifts.openShift(openingFloat: 100, cashierId: 'c1');
+      final sale = cashSale(60);
+      orders.save(sale);
+      orders.save(refundOf(sale, 20, methodId: 2, label: 'Visa'));
+
+      final sum = shifts.summary(shifts.currentOpenShift()!, cashMethodIds: {1});
+      expect(sum.refundsCash, 0);
+      expect(sum.expectedCash, 160);
+    });
+
+    test('a refund with no tender recorded is cash, like a sale without one', () {
+      shifts.openShift(openingFloat: 100, cashierId: 'c1');
+      final sale = cashSale(60);
+      orders.save(sale);
+      orders.save(Order(
+        deviceId: 'd',
+        cashierId: 'c1',
+        lines: [OrderLine(productId: 1, name: 'x', quantity: -1, unitPrice: 15)],
+      )
+        ..refundOfUuid = sale.uuid
+        ..state = OrderState.paid);
+
+      final sum = shifts.summary(shifts.currentOpenShift()!, cashMethodIds: {1});
+      expect(sum.refundsCash, 15);
+      expect(sum.expectedCash, 145);
+    });
+
+    test('a fully cancelled cash sale drops out with its refund: nothing moved', () {
+      shifts.openShift(openingFloat: 100, cashierId: 'c1');
+      final sale = cashSale(60);
+      orders.save(sale);
+      orders.save(refundOf(sale, 60));
+
+      final sum = shifts.summary(shifts.currentOpenShift()!, cashMethodIds: {1});
+      expect(sum.salesCount, 0);
+      expect(sum.cashSales, 0);
+      expect(sum.refundsCash, 0);
+      expect(sum.expectedCash, 100);
+    });
+
+    test("refunding yesterday's sale today still takes cash out of today's drawer",
+        () {
+      final yesterday = DateTime.now().toUtc().subtract(const Duration(days: 1));
+      final sale = Order(deviceId: 'd', cashierId: 'c1', createdAt: yesterday)
+        ..lines.add(line(60))
+        ..payments = [const OrderPayment(methodId: 1, amount: 60, label: 'Cash')]
+        ..state = OrderState.synced;
+      orders.save(sale);
+      shifts.openShift(openingFloat: 100, cashierId: 'c1');
+      orders.save(refundOf(sale, 60));
+
+      final sum = shifts.summary(shifts.currentOpenShift()!, cashMethodIds: {1});
+      expect(sum.salesCount, 0);
+      expect(sum.refundsCash, 60);
+      expect(sum.expectedCash, 40);
+    });
+
+    test('the per-cashier split charges the refund to whoever handed the cash back',
+        () {
+      final shift = shifts.openShift(openingFloat: 100, cashierId: 'c1');
+      final sale = cashSale(80, cashier: 'c1');
+      orders.save(sale);
+      orders.save(refundOf(sale, 30, cashier: 'c2'));
+
+      final byCashier = shifts.summaryByCashier(shift, cashMethodIds: {1});
+      expect(byCashier['c1']!.cashSales, 80);
+      expect(byCashier['c1']!.refundsCash, 0);
+      expect(byCashier['c2']!.salesCount, 0);
+      expect(byCashier['c2']!.refundsCash, 30);
+      expect(byCashier['c2']!.expectedCash, -30);
+      final whole = shifts.summary(shift, cashMethodIds: {1});
+      expect(
+          byCashier.values.fold(0.0, (s, c) => s + c.refundsCash), whole.refundsCash);
+    });
+  });
+
   test('the shift splits by cashier and the rows add up to the whole', () {
     shifts.openShift(openingFloat: 100, cashierId: 'c1');
     // Two people sharing one till over a service, which is the whole reason a
