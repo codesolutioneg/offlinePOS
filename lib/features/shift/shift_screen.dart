@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/db/shift_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/lan/lan_tally.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/numeric_keypad.dart';
 import '../../domain/shift.dart';
@@ -885,7 +886,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
         (setStatus) => catchUp(shift.openedAt,
             until: freeze ? cutoff : null,
             onProgress: (s) {
-              if (mounted) setStatus(tr(context, s));
+              if (mounted) {
+                setStatus(closeProgressIn(s, (en) => tr(context, en)));
+              }
             }),
       );
       if (!mounted) return null;

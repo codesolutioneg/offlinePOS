@@ -68,19 +68,35 @@ void main() {
 
   testWidgets('the progress shown while the tills are collected reads in Arabic',
       (t) async {
+    // Every status the close's onProgress can report, with till names that
+    // stay as they came.
     const statuses = [
       'Collecting sales from the other tills...',
       'Handing over this till\'s sales...',
       'Checking every till handed over its sales...',
+      'No other tills to collect from',
+      'Looking for 3 till(s)...',
+      'Pulling from K2 (2/3)...',
+      'Finished collecting from other tills',
+      'Asking K1 to collect every till...',
     ];
     late List<String> out;
+    late List<String> english;
     await t.pumpWidget(host(const Locale('ar'), Builder(builder: (c) {
-      out = [for (final s in statuses) tr(c, s)];
+      out = [for (final s in statuses) closeProgressIn(s, (en) => tr(c, en))];
+      return const SizedBox();
+    })));
+    await t.pumpWidget(host(const Locale('en'), Builder(builder: (c) {
+      english = [for (final s in statuses) closeProgressIn(s, (en) => tr(c, en))];
       return const SizedBox();
     })));
     for (final text in out) {
       expect(text, isNot(contains(RegExp('[a-z]{3}'))), reason: text);
     }
+    expect(out[4], contains('3'));
+    expect(out[5], allOf(contains('K2'), contains('2/3')));
+    expect(out[7], contains('K1'));
+    expect(english, statuses);
   });
 
   test('the locale controller toggles and reports the choice', () {

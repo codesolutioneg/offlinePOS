@@ -73,6 +73,28 @@ List<LanTillGap> tallyGaps({
           ),
     ];
 
+/// A status the close reports while it collects the other tills, run through
+/// [tr] the way [gapReasonIn] runs a reason. Till names stay as they came.
+String closeProgressIn(String status, String Function(String en) tr) {
+  if (RegExp(r'^Looking for (\d+) till\(s\)\.\.\.$').firstMatch(status)
+      case final m?) {
+    return tr('Looking for {n} till(s)...').replaceAll('{n}', m.group(1)!);
+  }
+  if (RegExp(r'^Pulling from (.+) \((\d+)/(\d+)\)\.\.\.$').firstMatch(status)
+      case final m?) {
+    return tr('Pulling from {who} ({i}/{n})...')
+        .replaceAll('{i}', m.group(2)!)
+        .replaceAll('{n}', m.group(3)!)
+        .replaceAll('{who}', m.group(1)!);
+  }
+  if (RegExp(r'^Asking (.+) to collect every till\.\.\.$').firstMatch(status)
+      case final m?) {
+    return tr('Asking {who} to collect every till...')
+        .replaceAll('{who}', m.group(1)!);
+  }
+  return tr(status);
+}
+
 /// A [LanTillGap.reason], which is English on the wire, run through [tr] for
 /// the cashier's language. Reasons it does not know are returned as they came.
 String gapReasonIn(String reason, String Function(String en) tr) {

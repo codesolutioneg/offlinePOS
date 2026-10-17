@@ -2415,6 +2415,11 @@ const Map<String, String> _ar = {
   'Handing over this till\'s sales...': 'جاري تسليم مبيعات هذا الجهاز...',
   'Checking every till handed over its sales...':
       'جاري التأكد من أن كل الأجهزة سلّمت مبيعاتها...',
+  'No other tills to collect from': 'لا توجد أجهزة أخرى للتجميع منها',
+  'Looking for {n} till(s)...': 'جاري البحث عن الأجهزة ({n})...',
+  'Pulling from {who} ({i}/{n})...': 'جاري السحب من {who} ({i}/{n})...',
+  'Finished collecting from other tills': 'اكتمل التجميع من الأجهزة الأخرى',
+  'Asking {who} to collect every till...': 'جاري الطلب من {who} تجميع كل الأجهزة...',
   'Some tills did not hand over their sales': 'بعض الأجهزة لم تسلّم مبيعاتها',
   'Turn those tills on and connect them to the network, then try again. Closing anyway leaves their sales out of this Z.':
       'شغّل هذه الأجهزة ووصّلها بالشبكة ثم حاول مرة أخرى. الإغلاق رغم ذلك يترك مبيعاتها خارج تقرير Z هذا.',
