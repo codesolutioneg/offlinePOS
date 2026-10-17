@@ -67,6 +67,20 @@ void main() {
     expect(shifts.summary(closed).variance, 0);
   });
 
+  test('the Z counts a sale in the opening millisecond whatever its width', () {
+    final opened = DateTime.utc(2026, 3, 1, 9);
+    shifts.openShift(openingFloat: 0, cashierId: 'c1', at: opened);
+    orders.save(Order(
+        deviceId: 'd',
+        cashierId: 'c1',
+        createdAt: opened.add(const Duration(microseconds: 500)))
+      ..lines.add(line(40))
+      ..state = OrderState.paid);
+    final closed = shifts.closeShift(
+        countedCash: 40, at: DateTime.utc(2026, 3, 1, 17, 0, 0, 0, 900));
+    expect(shifts.summary(closed).salesCount, 1);
+  });
+
   test('card sales are takings but not drawer cash', () {
     shifts.openShift(openingFloat: 100, cashierId: 'c1');
     // A cash sale, tendered to the cash method (id 1).

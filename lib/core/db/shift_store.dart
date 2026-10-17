@@ -6,6 +6,7 @@ import '../../domain/report_sources.dart';
 import '../../domain/shift.dart';
 import '../../domain/shift_movement.dart';
 import 'database.dart';
+import 'order_store.dart';
 
 export '../../domain/shift_movement.dart';
 
@@ -228,10 +229,10 @@ class ShiftStore implements ReportShifts {
   _ShiftWindow _salesIn(Shift shift) {
     final rows = _db.raw.select(
       "SELECT cashier_id, total, payload FROM orders "
-      "WHERE state IN ('paid', 'synced') AND created_at >= ? AND created_at <= ?",
+      "WHERE state IN ('paid', 'synced') AND created_at >= ? AND created_at < ?",
       [
-        shift.openedAt.toIso8601String(),
-        (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String(),
+        createdFrom(shift.openedAt),
+        createdThrough(shift.closedAt ?? DateTime.now().toUtc()),
       ],
     );
     final rowByUuid = <String, Map<String, dynamic>>{};

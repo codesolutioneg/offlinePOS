@@ -14,6 +14,17 @@ import 'database.dart';
 /// nothing about the queue they are delivered through.
 typedef WithdrawPush = bool Function(String uuid);
 
+/// [at] as a lower bound on `orders.created_at`, for `created_at >= ?`.
+///
+/// Stamps are stored in UTC with three or six fractional digits, and the two
+/// widths do not compare right as text. Cut at the millisecond and without the
+/// zone letter, the bound sorts before every stamp in its millisecond either way.
+String createdFrom(DateTime at) => at.toUtc().toIso8601String().substring(0, 23);
+
+/// The end of a window that takes in [at], for `created_at < ?`.
+String createdThrough(DateTime at) =>
+    createdFrom(at.add(const Duration(milliseconds: 1)));
+
 /// Orders on disk. Every mutation is written immediately, not at payment, so a
 /// half-rung sale survives the app being killed.
 ///
@@ -198,7 +209,7 @@ class OrderStore {
         order.uuid,
         order.deviceId,
         order.cashierId,
-        order.createdAt.toIso8601String(),
+        order.createdAt.toUtc().toIso8601String(),
         order.state.name,
         order.serverId,
         order.total,
@@ -285,9 +296,9 @@ class OrderStore {
   /// rows are loaded only to detect the pair, then stripped so Odoo never sees
   /// a complimentary / officer ticket the cashier already voided.
   List<Order> awaitingSyncInShift(Shift shift, {bool anyDevice = false}) {
-    final from = shift.openedAt.toIso8601String();
-    final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
-    const where = "state = 'paid' AND created_at >= ? AND created_at <= ?";
+    final from = createdFrom(shift.openedAt);
+    final to = createdThrough(shift.closedAt ?? DateTime.now().toUtc());
+    const where = "state = 'paid' AND created_at >= ? AND created_at < ?";
     return salesForOdoo(
         anyDevice ? _query(where, [from, to]) : _mine(where, [from, to]));
   }
@@ -304,14 +315,14 @@ class OrderStore {
   /// [awaitingSyncInShift] so another till's tickets are not booked twice by
   /// accident. The deliberate "resend closed session" action is the caller.
   List<Order> salesInShift(Shift shift, {bool anyDevice = false}) {
-    final from = shift.openedAt.toIso8601String();
-    final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
+    final from = createdFrom(shift.openedAt);
+    final to = createdThrough(shift.closedAt ?? DateTime.now().toUtc());
     final own = anyDevice ? null : ownDeviceId;
     final raw = _db.raw
         .select(
           "SELECT payload FROM orders WHERE state IN ('paid','synced') "
           "${own == null ? '' : 'AND device_id = ? '}"
-          'AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC',
+          'AND created_at >= ? AND created_at < ? ORDER BY created_at ASC',
           [?own, from, to],
         )
         .map((r) =>
@@ -327,8 +338,8 @@ class OrderStore {
   List<String> saleUuidsBetween(DateTime since, DateTime until) => [
         for (final r in _db.raw.select(
           "SELECT uuid FROM orders WHERE state IN ('paid','synced') "
-          'AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC',
-          [since.toUtc().toIso8601String(), until.toUtc().toIso8601String()],
+          'AND created_at >= ? AND created_at < ? ORDER BY created_at ASC',
+          [createdFrom(since), createdThrough(until)],
         ))
           r['uuid'] as String,
       ];
@@ -404,8 +415,8 @@ class OrderStore {
     return _db.raw
         .select('SELECT payload FROM orders WHERE $where ORDER BY created_at DESC', [
           ?own,
-          if (from != null) from.toUtc().toIso8601String(),
-          if (to != null) to.toUtc().toIso8601String(),
+          if (from != null) createdFrom(from),
+          if (to != null) createdFrom(to),
         ])
         .map((r) =>
             Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
@@ -445,7 +456,7 @@ class OrderStore {
     final row = _db.raw.select(
         "SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS t FROM orders "
         "WHERE state IN ('paid','synced') AND created_at >= ?",
-        [since.toUtc().toIso8601String()]).first;
+        [createdFrom(since)]).first;
     return (count: row['n'] as int, total: (row['t'] as num).toDouble());
   }
 

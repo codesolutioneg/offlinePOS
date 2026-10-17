@@ -231,4 +231,54 @@ void main() {
     expect(announcing.byUuid(left.uuid)?.state, OrderState.paid,
         reason: 'a sale the batch left out stays owed');
   });
+
+  group('window bounds against stamps of either width', () {
+    // Dart writes six fractional digits only when the microseconds are not
+    // zero, so a window edge and a sale in the same millisecond can differ in
+    // width. As text "…00.000500Z" sorts before "…00.000Z".
+    final open = DateTime.utc(2026, 3, 1, 9);
+    final close = DateTime.utc(2026, 3, 1, 17, 0, 0, 0, 900);
+    Shift shift() => Shift(
+        id: '1', openedAt: open, closedAt: close, openingFloat: 0, cashierId: 'sara');
+
+    test('a sale just after the open, in its millisecond, is inside', () {
+      final s = paid(
+          device: 'till-b',
+          price: 10,
+          at: open.add(const Duration(microseconds: 500)));
+      expect(orders.saleUuidsBetween(open, close), [s.uuid]);
+      expect(orders.salesInShift(shift(), anyDevice: true).map((o) => o.uuid),
+          [s.uuid]);
+      expect(orders.awaitingSyncInShift(shift(), anyDevice: true).map((o) => o.uuid),
+          [s.uuid]);
+    });
+
+    test('a sale just before the close, in its millisecond, is inside', () {
+      final s = paid(device: 'till-b', price: 10, at: DateTime.utc(2026, 3, 1, 17));
+      expect(orders.saleUuidsBetween(open, close), [s.uuid]);
+      expect(orders.salesInShift(shift(), anyDevice: true).map((o) => o.uuid),
+          [s.uuid]);
+    });
+
+    test('sales a millisecond outside either end stay out', () {
+      paid(
+          device: 'till-b',
+          price: 10,
+          at: open.subtract(const Duration(milliseconds: 1)));
+      paid(
+          device: 'till-b',
+          price: 10,
+          at: close.add(const Duration(milliseconds: 1)));
+      expect(orders.saleUuidsBetween(open, close), isEmpty);
+      expect(orders.salesInShift(shift(), anyDevice: true), isEmpty);
+    });
+
+    test('a sale rung with a local clock is filed by its instant', () {
+      final s = paid(
+          device: 'till-b',
+          price: 10,
+          at: open.add(const Duration(hours: 1)).toLocal());
+      expect(orders.saleUuidsBetween(open, close), [s.uuid]);
+    });
+  });
 }
