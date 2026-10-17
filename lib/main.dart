@@ -412,9 +412,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
           }
         },
       ),
-      // A parked sale waits for a manager: sent here it could carry another
-      // server's product ids, and left in the batch it would be marked synced.
-      held: (uuids) => outboxStore.statesOf('order.push', uuids).refused,
+      outbox: outboxStore,
     ),
     // So a close that failed at midnight is still owed in the morning. start()
     // reads it back before the first tick.

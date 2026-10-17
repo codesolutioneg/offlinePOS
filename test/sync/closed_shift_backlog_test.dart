@@ -12,8 +12,6 @@ import 'package:offline_pos/domain/shift.dart';
 
 import '../db/sqlite_loader.dart';
 
-Set<String> noneHeld(Iterable<String> _) => const {};
-
 /// H1 in `docs/POS_TEST_INCIDENTS_VS_OFFLINEPOS.md`: a retry of a close that
 /// failed must book that shift's sales under that shift's key, never under the
 /// key of a shift opened since.
@@ -162,7 +160,7 @@ void main() {
       final result = await sendClosedShiftBacklog(shifts, orders, (b) {
         sent.add(b.batchKey);
         return book(b);
-      }, held: noneHeld);
+      }, outbox: SqliteOutboxStore(db));
 
       expect(sent, [first.uuid, second.uuid]);
       expect(result.merged, isTrue);
@@ -178,7 +176,7 @@ void main() {
               merged: false, orderCount: 0, skipReason: 'refused', refused: true);
         }
         return book(b);
-      }, held: noneHeld);
+      }, outbox: SqliteOutboxStore(db));
 
       expect(sent, [first.uuid, second.uuid]);
       expect(result.refused, isTrue,
@@ -200,7 +198,7 @@ void main() {
           announcing.markSynced(o.uuid, 1);
         }
         return ShiftFlushResult(merged: true, orderCount: b.orders.length);
-      }, held: noneHeld);
+      }, outbox: SqliteOutboxStore(db));
 
       expect(told[peer.uuid], OrderState.synced.name);
       expect(announcing.awaitingSync(anyDevice: true), isEmpty);
@@ -218,7 +216,7 @@ void main() {
           announcing.markSynced(o.uuid, 1);
         }
         return ShiftFlushResult(merged: true, orderCount: b.orders.length - 1);
-      }, held: noneHeld);
+      }, outbox: SqliteOutboxStore(db));
 
       expect(told, isNot(contains(parked.uuid)));
       expect(announcing.awaitingSync(anyDevice: true).map((o) => o.uuid), [parked.uuid]);
@@ -233,7 +231,7 @@ void main() {
               merged: false, orderCount: 1, skipReason: 'no sales to merge', refused: true);
         }
         return book(b);
-      }, held: noneHeld);
+      }, outbox: SqliteOutboxStore(db));
 
       expect(sent, [first.uuid, second.uuid]);
     });
@@ -243,7 +241,7 @@ void main() {
       final result = await sendClosedShiftBacklog(shifts, orders, (b) async {
         sent.add(b.batchKey);
         return const ShiftFlushResult(merged: false, orderCount: 0, skipReason: 'offline');
-      }, held: noneHeld);
+      }, outbox: SqliteOutboxStore(db));
 
       expect(sent, [first.uuid], reason: 'the next batch would fail the same way');
       expect(result.merged, isFalse);
@@ -273,7 +271,7 @@ void main() {
           orders.markSynced(o.uuid, 1);
         }
         return ShiftFlushResult(merged: true, orderCount: b.orders.length);
-      }, held: held);
+      }, outbox: outbox);
 
       expect(sent, {night.uuid: [live.uuid]},
           reason: 'it may carry another server\'s product ids');

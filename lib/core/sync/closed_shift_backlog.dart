@@ -1,6 +1,7 @@
 import '../../domain/order.dart';
 import '../db/order_store.dart';
 import '../db/shift_store.dart';
+import '../db/sqlite_outbox_store.dart';
 import 'sync_service.dart';
 
 /// Paid sales still owed to Odoo from one closed shift, with the key they must be
@@ -85,12 +86,17 @@ ClosedShiftBacklog? nextClosedShiftBacklog(ShiftStore shifts, OrderStore orders,
 /// What a booked batch carried is told to the whole shop: some of its sales may
 /// be another till's, and that till would otherwise send them again at its own
 /// close. Only sales the booking marked synced are told.
+///
+/// Sales parked in [outbox] are left out: sent here they could carry another
+/// server's product ids, and left in the batch they would be marked synced.
 Future<ShiftFlushResult> sendClosedShiftBacklog(
   ShiftStore shifts,
   OrderStore orders,
   Future<ShiftFlushResult> Function(ClosedShiftBacklog backlog) flush, {
-  required Set<String> Function(Iterable<String>) held,
+  required SqliteOutboxStore outbox,
 }) async {
+  Set<String> held(Iterable<String> uuids) =>
+      outbox.statesOf('order.push', uuids).refused;
   ShiftFlushResult result = const ShiftFlushResult(merged: true, orderCount: 0);
   ShiftFlushResult? refused;
   final tried = <String>{};
