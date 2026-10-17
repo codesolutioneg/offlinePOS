@@ -40,6 +40,7 @@ class _Peers extends LanHttpClient {
   final Map<String, List<String>> holds = {};
   final Set<String> broken = {};
   final List<String> asked = [];
+  final List<DateTime> windows = [];
   void Function()? onAsk;
 
   @override
@@ -56,6 +57,7 @@ class _Peers extends LanHttpClient {
     required DateTime until,
   }) async {
     asked.add(peer.deviceId);
+    windows.add(until);
     onAsk?.call();
     if (broken.contains(peer.deviceId)) {
       throw StateError('${peer.deviceId} timed out');
@@ -234,6 +236,27 @@ void main() {
           uuid: 'late-one', at: since.add(const Duration(hours: 1)));
 
       expect(await node.catchUpBeforeClose(since: since), isEmpty);
+    });
+
+    test('a close asks the tills up to now', () async {
+      node.peers.seen(_peer('till-b'));
+      final before = DateTime.now().toUtc();
+
+      await node.catchUpBeforeClose(since: since);
+      final after = DateTime.now().toUtc();
+      expect(peers.windows.single.isBefore(before), isFalse);
+      expect(peers.windows.single.isAfter(after), isFalse);
+    });
+
+    test('a resend asks the tills up to the moment the session closed',
+        () async {
+      // Last night's session sent again this morning: the other tills have
+      // rung new sales since, and those belong to today, not to the resend.
+      node.peers.seen(_peer('till-b'));
+      final closedAt = since.add(const Duration(hours: 7));
+
+      await node.catchUpBeforeClose(since: since, until: closedAt);
+      expect(peers.windows.single, closedAt);
     });
 
     test('the status line tells the cashier the tills are being checked',

@@ -543,8 +543,14 @@ class LanNode {
   /// to the end of its log, because the primary is where the shop's sales are
   /// meant to meet; a primary that cannot be asked is itself the gap. On the
   /// primary, or on a till with no primary at all, this till reads them itself.
+  ///
+  /// [until] closes the window the tills are compared over: the moment the
+  /// session closed when one is being sent again, otherwise now. Without it a
+  /// resend of last night would count this morning's sales on the other tills
+  /// as gaps and never go out.
   Future<List<LanTillGap>> catchUpBeforeClose({
     required DateTime since,
+    DateTime? until,
     void Function(String status)? onProgress,
   }) async {
     final gaps = await _collectBeforeClose(since: since, onProgress: onProgress);
@@ -555,18 +561,21 @@ class LanNode {
       ...gaps,
       ...await _tallyPeers(
         since,
+        until: until?.toUtc() ?? DateTime.now().toUtc(),
         skip: {for (final gap in gaps) gap.deviceId},
         onProgress: onProgress,
       ),
     ];
   }
 
+  /// A sale a peer completes after [until] is outside this check; it goes to
+  /// Odoo under that till's own close and the server books it once by its uuid.
   Future<List<LanTillGap>> _tallyPeers(
     DateTime since, {
+    required DateTime until,
     required Set<String> skip,
     void Function(String status)? onProgress,
   }) async {
-    final until = DateTime.now().toUtc();
     final targets = peers.all
         .where((p) =>
             p.deviceId != deviceId &&
