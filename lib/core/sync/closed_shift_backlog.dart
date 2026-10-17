@@ -98,7 +98,7 @@ Future<ShiftFlushResult> sendClosedShiftBacklog(
   required SqliteOutboxStore outbox,
 }) async {
   Set<String> held(Iterable<String> uuids) =>
-      outbox.statesOf('order.push', uuids).refused;
+      outbox.statesOf(SqliteOutboxStore.orderPush, uuids).refused;
   ShiftFlushResult result = const ShiftFlushResult(merged: true, orderCount: 0);
   ShiftFlushResult? refused;
   final tried = <String>{};

@@ -146,7 +146,7 @@ class SqliteOutboxStore implements OutboxStore {
   /// this till must not push it again under a second sale order.
   void forgetOrderPush(String payloadUuid) {
     _db.raw.execute(
-        "DELETE FROM outbox WHERE kind = '$_order' AND payload_uuid = ?",
+        "DELETE FROM outbox WHERE kind = '$orderPush' AND payload_uuid = ?",
         [payloadUuid]);
   }
 
@@ -155,25 +155,22 @@ class SqliteOutboxStore implements OutboxStore {
   /// how many were held.
   int holdPendingSales(String reason) {
     _db.raw.execute(
-        "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$_order' "
+        "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$orderPush' "
         'AND sent_at IS NULL AND dead_at IS NULL',
         [DateTime.now().toUtc().toIso8601String(), reason]);
     return _db.raw.updatedRows;
   }
 
   /// Park the sales in [uuids] still owed to Odoo, with [reason], as
-  /// [holdPendingSales] does for every one. Returns how many were held.
-  int holdSales(Iterable<String> uuids, String reason) {
+  /// [holdPendingSales] does for every one.
+  void holdSales(Iterable<String> uuids, String reason) {
     final at = DateTime.now().toUtc().toIso8601String();
-    var held = 0;
     for (final uuid in uuids) {
       _db.raw.execute(
-          "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$_order' "
+          "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$orderPush' "
           'AND payload_uuid = ? AND sent_at IS NULL AND dead_at IS NULL',
           [at, reason, uuid]);
-      held += _db.raw.updatedRows;
     }
-    return held;
   }
 
   /// Close out refund pushes queued before refunds stopped going to Odoo. Nothing
@@ -181,7 +178,7 @@ class SqliteOutboxStore implements OutboxStore {
   /// pending count forever. Returns how many were closed.
   int retireRefundPushes() {
     _db.raw.execute(
-        "UPDATE outbox SET sent_at = ? WHERE kind = '$_order' AND sent_at IS NULL "
+        "UPDATE outbox SET sent_at = ? WHERE kind = '$orderPush' AND sent_at IS NULL "
         r"AND json_extract(payload, '$.refund_of_uuid') IS NOT NULL",
         [DateTime.now().toUtc().toIso8601String()]);
     return _db.raw.updatedRows;
@@ -274,7 +271,7 @@ class SqliteOutboxStore implements OutboxStore {
   /// they are not takings.
   int get pendingSalesCount => _db.raw
       .select('SELECT COUNT(*) c FROM outbox WHERE sent_at IS NULL '
-          "AND dead_at IS NULL AND kind = '$_order'")
+          "AND dead_at IS NULL AND kind = '$orderPush'")
       .first['c'] as int;
 
   /// Paid sales still waiting to reach Dishflow's owner view, and the bags still
@@ -289,12 +286,12 @@ class SqliteOutboxStore implements OutboxStore {
   /// a refusal would read as delivered.
   int get refusedCount => _db.raw
       .select('SELECT COUNT(*) c FROM outbox WHERE dead_at IS NOT NULL '
-          "AND kind IN ('$_order', '$_dishflow', '$_driver')")
+          "AND kind IN ('$orderPush', '$_dishflow', '$_driver')")
       .first['c'] as int;
 
   /// Kinds are part of the on-disk contract; see docs/ODOO_SYNC.md.
   static const String _heartbeat = 'device.status';
-  static const String _order = 'order.push';
+  static const String orderPush = 'order.push';
   static const String _dishflow = 'dishflow.sale.push';
   static const String _driver = 'dishflow.driver.order.push';
 }
