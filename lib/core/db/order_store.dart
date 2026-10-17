@@ -258,21 +258,24 @@ class OrderStore {
 
   /// Paid but not yet confirmed by the server.
   ///
-  /// Scoped to this till, and that scoping is what keeps the books straight: this
-  /// is the list the sync reconcile sweeps into the outbox, so a sale replicated
-  /// from another till must never appear in it or the shop would book it twice.
+  /// Scoped to this till by default, and that scoping is what keeps the books
+  /// straight: this is the list the sync reconcile sweeps into the outbox, so a
+  /// sale replicated from another till must never appear in it or the shop would
+  /// book it twice. [anyDevice] is for the closed-session backlog, which runs on
+  /// the closing till and owes every till's sales because only it sends them.
   ///
   /// Fully cancelled pairs are omitted so a voided complimentary cannot re-enter
   /// the outbox on the next Sync now.
-  List<Order> awaitingSync() =>
-      salesForOdoo(_mine("state = 'paid'"));
+  List<Order> awaitingSync({bool anyDevice = false}) => salesForOdoo(
+      anyDevice ? _query("state = 'paid'") : _mine("state = 'paid'"));
 
   /// Refunds never go to Odoo, by the owner's decision: the shop books them there
   /// by hand. So they are never owed, never hold a close open, and never count as
   /// synced.
   static const String _notRefund = r"json_extract(payload, '$.refund_of_uuid') IS NULL";
 
-  /// Paid sales on this till that fall inside [shift]'s open→close window.
+  /// Paid sales that fall inside [shift]'s open→close window: this till's own by
+  /// default, every till's when [anyDevice] is set (the closed-session backlog).
   ///
   /// Close-shift sync uses this — not [awaitingSync] — so a backlog from an
   /// earlier shift cannot ride along under the new shift's uuid, and the Z and
@@ -281,13 +284,12 @@ class OrderStore {
   /// Fully cancelled sales (original + matching refund) are dropped: the refund
   /// rows are loaded only to detect the pair, then stripped so Odoo never sees
   /// a complimentary / officer ticket the cashier already voided.
-  List<Order> awaitingSyncInShift(Shift shift) {
+  List<Order> awaitingSyncInShift(Shift shift, {bool anyDevice = false}) {
     final from = shift.openedAt.toIso8601String();
     final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
-    return salesForOdoo(_mine(
-      "state = 'paid' AND created_at >= ? AND created_at <= ?",
-      [from, to],
-    ));
+    const where = "state = 'paid' AND created_at >= ? AND created_at <= ?";
+    return salesForOdoo(
+        anyDevice ? _query(where, [from, to]) : _mine(where, [from, to]));
   }
 
   /// Every completed sale in [shift]'s window: this till's own by default, and

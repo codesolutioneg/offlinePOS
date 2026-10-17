@@ -3,11 +3,16 @@ import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
+import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/sync/batch_push.dart';
 import 'package:offline_pos/core/sync/closed_shift_backlog.dart';
+import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/order.dart';
+import 'package:offline_pos/domain/shift.dart';
 
 import '../db/sqlite_loader.dart';
+
+Set<String> noneHeld(Iterable<String> _) => const {};
 
 /// H1 in `docs/POS_TEST_INCIDENTS_VS_OFFLINEPOS.md`: a retry of a close that
 /// failed must book that shift's sales under that shift's key, never under the
@@ -26,9 +31,9 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Order sale(DateTime at) {
+  Order sale(DateTime at, {String device = 'till-1'}) {
     final o = Order(
-      deviceId: 'till-1',
+      deviceId: device,
       cashierId: 'sara',
       createdAt: at,
       lines: [OrderLine(productId: 1, name: 'Item', quantity: 1, unitPrice: 50)],
@@ -69,6 +74,224 @@ void main() {
 
     expect(backlog?.batchKey, 'backlog-${stray.uuid}');
     expect(backlog?.batchKey, isNot(night.uuid));
+  });
+
+  test('a sale rung after the last close waits for the next close', () {
+    shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+    shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+    final after = sale(t0.add(const Duration(hours: 6, minutes: 1)), device: 'till-2');
+
+    expect(nextClosedShiftBacklog(shifts, orders), isNull,
+        reason: 'another till may still be selling into the next session');
+
+    final next = shifts.openShift(
+        openingFloat: 0, cashierId: 'sara', at: t0.add(const Duration(hours: 14)));
+    shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 20)));
+    final backlog = nextClosedShiftBacklog(shifts, orders);
+    expect(backlog?.batchKey, 'backlog-${after.uuid}',
+        reason: 'it fell between the sessions, and is sent after the next close');
+    expect(backlog?.batchKey, isNot(next.uuid));
+  });
+
+  test('a sale another till handed over is owed by its closed shift', () {
+    final night = shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+    final mine = sale(t0.add(const Duration(hours: 1)));
+    final peer = sale(t0.add(const Duration(hours: 2)), device: 'till-2');
+    shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+
+    final backlog = nextClosedShiftBacklog(shifts, orders);
+
+    expect(backlog?.batchKey, night.uuid);
+    expect(backlog?.orders.map((o) => o.uuid), unorderedEquals([mine.uuid, peer.uuid]),
+        reason: 'only the closing till sends, so a peer sale held here is owed here');
+  });
+
+  test('a peer sale in no shift is still picked up', () {
+    shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+    shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+    final stray = sale(t0.subtract(const Duration(days: 1)), device: 'till-2');
+
+    final backlog = nextClosedShiftBacklog(shifts, orders);
+
+    expect(backlog?.batchKey, 'backlog-${stray.uuid}');
+    expect(backlog?.orders.map((o) => o.uuid), [stray.uuid]);
+  });
+
+  test('a skipped shift moves on to the next one and keeps its sales out of the orphans', () {
+    final first = shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+    final early = sale(t0.add(const Duration(hours: 1)));
+    shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+    final second = shifts.openShift(
+        openingFloat: 0, cashierId: 'sara', at: t0.add(const Duration(hours: 14)));
+    final late = sale(t0.add(const Duration(hours: 15)));
+    shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 20)));
+
+    final backlog = nextClosedShiftBacklog(shifts, orders, skip: {first.uuid});
+
+    expect(backlog?.batchKey, second.uuid);
+    expect(backlog?.orders.map((o) => o.uuid), [late.uuid]);
+    expect(
+        nextClosedShiftBacklog(shifts, orders, skip: {first.uuid, second.uuid}),
+        isNull,
+        reason: '${early.uuid} belongs to a skipped shift, not to a new orphan batch');
+  });
+
+  group('sending the backlog', () {
+    late Shift first;
+    late Shift second;
+
+    setUp(() {
+      first = shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+      sale(t0.add(const Duration(hours: 1)));
+      shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+      second = shifts.openShift(
+          openingFloat: 0, cashierId: 'sara', at: t0.add(const Duration(hours: 14)));
+      sale(t0.add(const Duration(hours: 15)));
+      shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 20)));
+    });
+
+    Future<ShiftFlushResult> book(ClosedShiftBacklog backlog) async {
+      for (final o in backlog.orders) {
+        orders.markSynced(o.uuid, 1);
+      }
+      return ShiftFlushResult(merged: true, orderCount: backlog.orders.length);
+    }
+
+    test('every owed shift goes, oldest first', () async {
+      final sent = <String>[];
+      final result = await sendClosedShiftBacklog(shifts, orders, (b) {
+        sent.add(b.batchKey);
+        return book(b);
+      }, held: noneHeld);
+
+      expect(sent, [first.uuid, second.uuid]);
+      expect(result.merged, isTrue);
+      expect(orders.awaitingSync(anyDevice: true), isEmpty);
+    });
+
+    test('a refused batch does not hold back the ones behind it', () async {
+      final sent = <String>[];
+      final result = await sendClosedShiftBacklog(shifts, orders, (b) async {
+        sent.add(b.batchKey);
+        if (b.batchKey == first.uuid) {
+          return const ShiftFlushResult(
+              merged: false, orderCount: 0, skipReason: 'refused', refused: true);
+        }
+        return book(b);
+      }, held: noneHeld);
+
+      expect(sent, [first.uuid, second.uuid]);
+      expect(result.refused, isTrue,
+          reason: 'the refused batch is still owed and must be reported');
+      expect(orders.awaitingSync(anyDevice: true), hasLength(1));
+    });
+
+    test('a booked peer sale is told to the shop so its till does not send it again', () async {
+      final peer = sale(t0.add(const Duration(hours: 16)), device: 'till-2');
+      final told = <String, Object?>{};
+      final announcing = OrderStore(db,
+          ownDeviceId: 'till-1',
+          publish: (kind, uuid, payload) {
+            if (kind == LanEventKind.orderUpsert) told[uuid] = payload['state'];
+          });
+
+      await sendClosedShiftBacklog(shifts, announcing, (b) async {
+        for (final o in b.orders) {
+          announcing.markSynced(o.uuid, 1);
+        }
+        return ShiftFlushResult(merged: true, orderCount: b.orders.length);
+      }, held: noneHeld);
+
+      expect(told[peer.uuid], OrderState.synced.name);
+      expect(announcing.awaitingSync(anyDevice: true), isEmpty);
+    });
+
+    test('a sale the batch left out is not told synced and stays owed', () async {
+      final parked = sale(t0.add(const Duration(hours: 16)), device: 'till-2');
+      final told = <String>{};
+      final announcing = OrderStore(db,
+          ownDeviceId: 'till-1',
+          publish: (kind, uuid, payload) => told.add(uuid));
+
+      await sendClosedShiftBacklog(shifts, announcing, (b) async {
+        for (final o in b.orders.where((o) => o.uuid != parked.uuid)) {
+          announcing.markSynced(o.uuid, 1);
+        }
+        return ShiftFlushResult(merged: true, orderCount: b.orders.length - 1);
+      }, held: noneHeld);
+
+      expect(told, isNot(contains(parked.uuid)));
+      expect(announcing.awaitingSync(anyDevice: true).map((o) => o.uuid), [parked.uuid]);
+    });
+
+    test('a batch the merge declines does not hold back the ones behind it', () async {
+      final sent = <String>[];
+      await sendClosedShiftBacklog(shifts, orders, (b) async {
+        sent.add(b.batchKey);
+        if (b.batchKey == first.uuid) {
+          return const ShiftFlushResult(
+              merged: false, orderCount: 1, skipReason: 'no sales to merge', refused: true);
+        }
+        return book(b);
+      }, held: noneHeld);
+
+      expect(sent, [first.uuid, second.uuid]);
+    });
+
+    test('a batch that could not be sent stops the run', () async {
+      final sent = <String>[];
+      final result = await sendClosedShiftBacklog(shifts, orders, (b) async {
+        sent.add(b.batchKey);
+        return const ShiftFlushResult(merged: false, orderCount: 0, skipReason: 'offline');
+      }, held: noneHeld);
+
+      expect(sent, [first.uuid], reason: 'the next batch would fail the same way');
+      expect(result.merged, isFalse);
+      expect(result.refused, isFalse);
+      expect(orders.awaitingSync(anyDevice: true), hasLength(2));
+    });
+  });
+
+  group('parked sales', () {
+    late SqliteOutboxStore outbox;
+    setUp(() => outbox = SqliteOutboxStore(db));
+    Set<String> held(Iterable<String> uuids) =>
+        outbox.statesOf('order.push', uuids).refused;
+
+    test('a sale held on a server change is left out and stays owed', () async {
+      final night = shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+      final parked = sale(t0.add(const Duration(hours: 1)));
+      await outbox.append('order.push', parked.uuid, parked.toServerPayload());
+      outbox.holdPendingSales('held: server changed');
+      final live = sale(t0.add(const Duration(hours: 2)), device: 'till-2');
+      shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+
+      final sent = <String, List<String>>{};
+      await sendClosedShiftBacklog(shifts, orders, (b) async {
+        sent[b.batchKey] = [for (final o in b.orders) o.uuid];
+        for (final o in b.orders) {
+          orders.markSynced(o.uuid, 1);
+        }
+        return ShiftFlushResult(merged: true, orderCount: b.orders.length);
+      }, held: held);
+
+      expect(sent, {night.uuid: [live.uuid]},
+          reason: 'it may carry another server\'s product ids');
+      expect(orders.byUuid(parked.uuid)?.state, OrderState.paid);
+      expect(held([parked.uuid]), {parked.uuid}, reason: 'still parked for a manager');
+    });
+
+    test('a parked sale in no shift does not become a batch of its own', () async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara', at: t0);
+      shifts.closeShift(countedCash: 0, at: t0.add(const Duration(hours: 6)));
+      final stray = sale(t0.subtract(const Duration(days: 2)));
+      await outbox.append('order.push', stray.uuid, stray.toServerPayload());
+      outbox.holdPendingSales('held: server changed');
+
+      expect(nextClosedShiftBacklog(shifts, orders, held: held), isNull);
+      expect(nextClosedShiftBacklog(shifts, orders)?.batchKey, 'backlog-${stray.uuid}',
+          reason: 'without the check it would be sent');
+    });
   });
 
   group('booking is one write', () {

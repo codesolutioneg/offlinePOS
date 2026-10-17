@@ -400,25 +400,22 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     // than a pile of per-sale bookings without delivery lines.
     // Each closed shift still owed is booked under its own key, oldest first, and
     // the open shift's sales are left for its own close.
-    closedShiftRetry: () async {
-      ShiftFlushResult result = const ShiftFlushResult(merged: true, orderCount: 0);
-      final tried = <String>{};
-      for (var i = 0; i < kBacklogShiftLookback; i++) {
-        final backlog = nextClosedShiftBacklog(ShiftStore(db), orders);
-        if (backlog == null || !tried.add(backlog.batchKey)) return result;
-        result = await sync.flushClosedShift(
-          orderUuids: {for (final o in backlog.orders) o.uuid},
-          batchKey: backlog.batchKey,
-          enqueueOrders: () async {
-            for (final o in backlog.orders) {
-              await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
-            }
-          },
-        );
-        if (!result.merged) return result;
-      }
-      return result;
-    },
+    closedShiftRetry: () => sendClosedShiftBacklog(
+      ShiftStore(db),
+      orders,
+      (backlog) => sync.flushClosedShift(
+        orderUuids: {for (final o in backlog.orders) o.uuid},
+        batchKey: backlog.batchKey,
+        enqueueOrders: () async {
+          for (final o in backlog.orders) {
+            await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
+          }
+        },
+      ),
+      // A parked sale waits for a manager: sent here it could carry another
+      // server's product ids, and left in the batch it would be marked synced.
+      held: (uuids) => outboxStore.statesOf('order.push', uuids).refused,
+    ),
     // So a close that failed at midnight is still owed in the morning. start()
     // reads it back before the first tick.
     arming: SettingsRetryArming(settings),

@@ -6868,6 +6868,8 @@ class _PosAppState extends State<PosApp> {
                   final existing =
                       widget.sync.lastOdooOrderRef ??
                       await _resolveOdooSaleName(null);
+                  // An empty session still owes nothing, but older ones may.
+                  unawaited(widget.sync.sendBacklog());
                   if (existing != null && existing.isNotEmpty) {
                     return 'No new orders in this shift.\nLast Odoo order: $existing';
                   }
@@ -6900,6 +6902,9 @@ class _PosAppState extends State<PosApp> {
                     widget.orders.tellShopSynced(o.uuid);
                   }
                   var odooRef = result.odooRef ?? widget.sync.lastOdooOrderRef;
+                  // Anything older still owed goes now, not on the next failure.
+                  // After the read above: a backlog push clears the last ref.
+                  unawaited(widget.sync.sendBacklog());
                   if (odooRef == null ||
                       odooRef.isEmpty ||
                       odooRef.startsWith('#')) {

@@ -97,9 +97,8 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
 
   Future<void> _syncNow() async {
     setState(() => _syncing = true);
-    final retry = widget.sync.closedShiftRetry;
-    if (retry != null) {
-      await retry();
+    if (widget.sync.closedShiftRetry != null) {
+      await widget.sync.sendBacklog();
     } else {
       await widget.sync.tick();
     }
