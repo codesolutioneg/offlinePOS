@@ -218,6 +218,45 @@ void main() {
     expect(store.pendingSalesCount, 0);
   });
 
+  test('a close reports which tickets the server had already booked', () async {
+    final outbox = Outbox(store: store, senders: {
+      'order.push': (e) async {},
+      'audit.push': (_) async {},
+      'device.status': (_) async {},
+    });
+    var already = const <String>['lost-1'];
+    late final SyncService s;
+    s = serviceWith(
+      outbox: outbox,
+      mergeBatch: ({Set<String>? onlyUuids, String? batchKey}) async {
+        for (final e in await store.pending(kinds: const {'order.push'})) {
+          await store.markSent(e.id);
+        }
+        s.noteOdooAck(name: 'S1', alreadyBooked: already);
+        return true;
+      },
+    );
+    Future<ShiftFlushResult> close(Set<String> uuids) => s.flushClosedShift(
+          orderUuids: uuids,
+          enqueueOrders: () async {
+            for (final u in uuids) {
+              await outbox.enqueue('order.push', u, {'uuid': u});
+            }
+          },
+        );
+
+    final first = await close(const {'lost-1', 'new-1'});
+    expect(first.merged, isTrue);
+    expect(first.orderCount, 2);
+    expect(first.alreadyBooked, ['lost-1']);
+
+    // The next close starts clean: an ack without duplicates reports none.
+    already = const [];
+    final second = await close(const {'new-2'});
+    expect(second.alreadyBooked, isEmpty);
+    expect(s.lastAlreadyBooked, isEmpty);
+  });
+
   test('reconcilePending runs the hook so pending counts can be read after it', () async {
     var ran = 0;
     final s = serviceWith(reconcile: () async => ran++);

@@ -172,9 +172,15 @@ class SyncService {
   /// End-of-Day done screen. Cleared at the start of each sales flush.
   String? lastOdooOrderRef;
 
+  /// Tickets the last consolidated push found already booked on the server,
+  /// by uuid. Cleared with [lastOdooOrderRef].
+  List<String> lastAlreadyBooked = const [];
+
   /// Remember the SO number (or `#id`) from a module ack so Close session can
-  /// show it even when sales went out one-by-one instead of as a merge.
-  void noteOdooAck({String? name, int? id}) {
+  /// show it even when sales went out one-by-one instead of as a merge, and
+  /// which tickets the server says it already held.
+  void noteOdooAck({String? name, int? id, List<String> alreadyBooked = const []}) {
+    if (alreadyBooked.isNotEmpty) lastAlreadyBooked = alreadyBooked;
     if (name != null && name.isNotEmpty) {
       lastOdooOrderRef = name;
       return;
@@ -547,6 +553,7 @@ class SyncService {
     _flushDone = done;
     lastOdooOrderRef = null;
     lastMergeSkipReason = null;
+    lastAlreadyBooked = const [];
     try {
       await enqueueOrders();
       await _queueAudit();
@@ -571,15 +578,17 @@ class SyncService {
           merged: true,
           orderCount: orderUuids.length,
           odooRef: lastOdooOrderRef,
+          alreadyBooked: lastAlreadyBooked,
         );
       }
       if (merged) {
-        // Module ack without a name — still treat as success for the queue.
+        // Module ack without a name: still a success for the queue.
         _disarmRetry('shift merge acknowledged');
         return ShiftFlushResult(
           merged: true,
           orderCount: orderUuids.length,
           odooRef: lastOdooOrderRef,
+          alreadyBooked: lastAlreadyBooked,
         );
       }
       _armRetryIfIncomplete(
@@ -809,10 +818,15 @@ class ShiftFlushResult {
     required this.orderCount,
     this.odooRef,
     this.skipReason,
+    this.alreadyBooked = const [],
   });
 
   final bool merged;
   final int orderCount;
   final String? odooRef;
   final String? skipReason;
+
+  /// Tickets in this push the server had already booked under an earlier
+  /// one, by uuid. They count in [orderCount]; this says which were not new.
+  final List<String> alreadyBooked;
 }

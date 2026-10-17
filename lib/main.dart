@@ -391,6 +391,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
         sync.noteOdooAck(
           name: ack?['name']?.toString(),
           id: (ack?['id'] as num?)?.toInt(),
+          alreadyBooked: batchPush.lastAlreadyBooked,
         );
       }
       return ok;

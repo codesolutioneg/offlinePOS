@@ -6906,12 +6906,17 @@ class _PosAppState extends State<PosApp> {
                     final resolved = await _resolveOdooSaleName(odooRef);
                     if (resolved != null) odooRef = resolved;
                   }
+                  final already = result.alreadyBooked.length;
+                  final alreadyNote = already == 0
+                      ? ''
+                      : '\n$already of them ${already == 1 ? 'was' : 'were'} '
+                          'already in Odoo from an earlier push.';
                   if (odooRef != null && odooRef.isNotEmpty) {
                     widget.sync.lastOdooOrderRef = odooRef;
                     return 'Synced ${result.orderCount} order(s) from this shift '
                         'to Odoo as one sale order'
                         '${partner != null ? ' under $partner' : ''}.\n'
-                        'Odoo order: $odooRef';
+                        'Odoo order: $odooRef$alreadyNote';
                   }
                   return 'Sent ${result.orderCount} order(s) from this shift'
                       '${partner != null ? ' under $partner' : ''}, '
@@ -7034,7 +7039,8 @@ class _PosAppState extends State<PosApp> {
       // cannot be read, or holds a sale this one does not, stops the resend.
       List<LanTillGap> gaps;
       try {
-        gaps = await lan!.catchUpBeforeClose(since: shift.openedAt);
+        gaps = await lan!.catchUpBeforeClose(
+            since: shift.openedAt, until: shift.closedAt);
       } catch (e) {
         return 'Could not collect sales from the other tills: $e';
       }
