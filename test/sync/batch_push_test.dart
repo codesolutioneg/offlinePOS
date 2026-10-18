@@ -138,6 +138,41 @@ void main() {
     expect(marked, [a.uuid]);
   });
 
+  test('an ack that settles the batch per ticket names the ones already booked',
+      () async {
+    final a = await queueASale();
+    final b = await queueASale(price: 250);
+    final perTicket = BatchPush(
+      outboxStore: store,
+      send: (uuid, payload) async => {
+        'status': 'created',
+        'id': 7,
+        'name': 'S0007',
+        'tickets': {a.uuid: 'duplicate', b.uuid: 'created'},
+      },
+      enabled: () => true,
+      batchUuid: () => 'shift-1',
+      onOrderBooked: (u, [id, name]) => marked.add(u),
+    );
+
+    expect(await perTicket.run(), isTrue);
+    expect(perTicket.lastAlreadyBooked, [a.uuid]);
+    // Booked either way: the duplicate is on the server under another push.
+    expect(marked, [a.uuid, b.uuid]);
+    expect(await store.pending(), isEmpty);
+  });
+
+  test('an ack from a module that only knows the batch key names nothing',
+      () async {
+    await queueASale();
+    await queueASale(price: 250);
+    final push = pusher();
+    expect(await push.run(), isTrue);
+    expect(push.lastAlreadyBooked, isEmpty);
+    expect(BatchPush.alreadyBooked({'tickets': 'not a map'}), isEmpty);
+    expect(BatchPush.alreadyBooked(null), isEmpty);
+  });
+
   test('a retry after a lost acknowledgement rebuilds the same key', () async {
     await queueASale();
     await queueASale(price: 250);

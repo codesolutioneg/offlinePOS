@@ -53,6 +53,7 @@ class TestTill {
     required this.shopKey,
     String? name,
     StepClock? clock,
+    this.tallies = true,
   })  : name = name ?? deviceId,
         clock = clock ?? StepClock() {
     db = Db.open(':memory:');
@@ -118,6 +119,7 @@ class TestTill {
       credential: credential,
       claims: claims,
       updates: () => updateOffer,
+      tally: tallies ? orders.saleUuidsBetween : null,
       onContact: (id, from, port) => peers.heard(id, host: from, port: port),
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
@@ -136,6 +138,10 @@ class TestTill {
   final String name;
   final TestShop shop;
   final StepClock clock;
+
+  /// Whether this till answers a sales tally; off models an older build that has
+  /// no handler for it.
+  final bool tallies;
 
   /// The key this till is paired on. Writable because a manager rotates it on the
   /// settings screen while the till is up, and a test has to be able to do the same
@@ -204,9 +210,14 @@ class TestShop {
   /// whose fabric is broken.
   final Set<String> throwing = {};
 
-  TestTill add(String deviceId, {String? name, StepClock? clock, String? shopKey}) {
+  TestTill add(String deviceId,
+      {String? name, StepClock? clock, String? shopKey, bool tallies = true}) {
     final till = TestTill(deviceId,
-        shop: this, name: name, clock: clock, shopKey: shopKey ?? this.shopKey);
+        shop: this,
+        name: name,
+        clock: clock,
+        shopKey: shopKey ?? this.shopKey,
+        tallies: tallies);
     tills[deviceId] = till;
     return till;
   }
@@ -252,6 +263,36 @@ class TestShop {
       ],
       highSeq: body['high_seq'] as int,
     );
+  }
+
+  /// Ask [peer] which sales it holds in the window, the way the closing till does.
+  Future<List<String>> tally(String from, LanPeer peer,
+          {required DateTime since, required DateTime until}) async =>
+      [
+        for (final u in (await tallyReply(from, peer,
+                since: since, until: until))['uuids'] as List)
+          '$u'
+      ];
+
+  /// The whole answer [peer] gives a tally from [from], as it came off the wire.
+  Future<Map<String, dynamic>> tallyReply(String from, LanPeer peer,
+      {required DateTime since, required DateTime until}) async {
+    final till = _reach(from, peer);
+    final body = jsonEncode({
+      'device_id': from,
+      'schema': Schema.version,
+      'since': since.toUtc().toIso8601String(),
+      'until': until.toUtc().toIso8601String(),
+    });
+    final reply = till.protocol.handlePost(
+      LanProtocol.tallyPath,
+      body,
+      auth: _stamp(from, method: 'POST', path: LanProtocol.tallyPath, body: body),
+    );
+    if (reply.status != 200) {
+      throw StateError('${peer.deviceId} answered ${reply.status}');
+    }
+    return _overTheWire(reply.body);
   }
 
   Future<void> notify(String from, LanPeer peer, List<LanEvent> events) async {

@@ -67,10 +67,10 @@ class MergeOutcome {
 /// already carries a uuid nothing else consumes, so the merged sale gets a key
 /// that is stable across every retry of the same close.
 ///
-/// When [partnerId] is set (Dishflow's session-report customer), even a single
-/// sale is wrapped so the night books as one invoice under that partner. Without
-/// a partner, two or more sales are still required — a lone ticket is already
-/// its own payload.
+/// A single sale is wrapped as well: sales only reach Odoo inside a batch, so a
+/// shift with one sale that declined to merge would never be sent. With
+/// [partnerId] set (Dishflow's session-report customer) the night books under
+/// that partner.
 MergeOutcome mergeOrderPushes(
   List<OutboxEntry> entries, {
   required String batchUuid,
@@ -87,11 +87,8 @@ MergeOutcome mergeOrderPushes(
     if (isStressPayload(e.payload)) continue;
     sales.add(e);
   }
-  final minSales = partnerId != null ? 1 : 2;
-  if (sales.length < minSales) {
-    return MergeOutcome.skipped(BatchNotMerged(partnerId == null
-        ? 'fewer than two sales to merge'
-        : 'no sales to merge'));
+  if (sales.isEmpty) {
+    return const MergeOutcome.skipped(BatchNotMerged('no sales to merge'));
   }
   // Whether the prices already have the discount in them is a shop setting read
   // when each sale was turned into a payload, so a batch spanning a change to it

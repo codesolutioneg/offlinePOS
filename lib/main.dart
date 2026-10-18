@@ -198,6 +198,10 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   if (retired > 0) {
     audit.record('system', 'outbox.refunds.retired', detail: '$retired');
   }
+  final revived = outboxStore.reviveGivenUpSales();
+  if (revived > 0) {
+    audit.record('system', 'outbox.sales.revived', detail: '$revived');
+  }
   final devices = DeviceStore(db);
 
   // Generated on this device on first launch. A constant would make every till in
@@ -391,6 +395,7 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
         sync.noteOdooAck(
           name: ack?['name']?.toString(),
           id: (ack?['id'] as num?)?.toInt(),
+          alreadyBooked: batchPush.lastAlreadyBooked,
         );
       }
       return ok;
@@ -399,25 +404,20 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
     // than a pile of per-sale bookings without delivery lines.
     // Each closed shift still owed is booked under its own key, oldest first, and
     // the open shift's sales are left for its own close.
-    closedShiftRetry: () async {
-      ShiftFlushResult result = const ShiftFlushResult(merged: true, orderCount: 0);
-      final tried = <String>{};
-      for (var i = 0; i < kBacklogShiftLookback; i++) {
-        final backlog = nextClosedShiftBacklog(ShiftStore(db), orders);
-        if (backlog == null || !tried.add(backlog.batchKey)) return result;
-        result = await sync.flushClosedShift(
-          orderUuids: {for (final o in backlog.orders) o.uuid},
-          batchKey: backlog.batchKey,
-          enqueueOrders: () async {
-            for (final o in backlog.orders) {
-              await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
-            }
-          },
-        );
-        if (!result.merged) return result;
-      }
-      return result;
-    },
+    closedShiftRetry: () => sendClosedShiftBacklog(
+      ShiftStore(db),
+      orders,
+      (backlog) => sync.flushClosedShift(
+        orderUuids: {for (final o in backlog.orders) o.uuid},
+        batchKey: backlog.batchKey,
+        enqueueOrders: () async {
+          for (final o in backlog.orders) {
+            await outbox.enqueue('order.push', o.uuid, o.toServerPayload());
+          }
+        },
+      ),
+      outbox: outboxStore,
+    ),
     // So a close that failed at midnight is still owed in the morning. start()
     // reads it back before the first tick.
     arming: SettingsRetryArming(settings),

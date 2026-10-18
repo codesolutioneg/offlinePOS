@@ -93,10 +93,17 @@ class SqliteOutboxStore implements OutboxStore {
 
   /// Parked entries. Each one is money that never reached the books, so this is
   /// surfaced on the till and in the heartbeat rather than quietly counted.
-  List<OutboxEntry> dead({int limit = 100}) => _db.raw
+  /// [withoutSessionHolds] leaves out sales [holdSession] parked, so a large
+  /// rejected session does not use up the [limit].
+  List<OutboxEntry> dead({int limit = 100, bool withoutSessionHolds = false}) => _db.raw
       .select(
           'SELECT id, kind, payload_uuid, payload, attempts, dead_reason '
-          'FROM outbox WHERE dead_at IS NOT NULL ORDER BY id LIMIT ?', [limit])
+          'FROM outbox WHERE dead_at IS NOT NULL '
+          '${withoutSessionHolds ? 'AND (kind <> ? OR dead_reason IS NULL OR substr(dead_reason, 1, ?) <> ?) ' : ''}'
+          'ORDER BY id LIMIT ?', [
+        if (withoutSessionHolds) ...[orderPush, _sessionHold.length, _sessionHold],
+        limit,
+      ])
       .map((r) => OutboxEntry(
             id: r['id'] as int,
             kind: r['kind'] as String,
@@ -146,7 +153,7 @@ class SqliteOutboxStore implements OutboxStore {
   /// this till must not push it again under a second sale order.
   void forgetOrderPush(String payloadUuid) {
     _db.raw.execute(
-        "DELETE FROM outbox WHERE kind = '$_order' AND payload_uuid = ?",
+        "DELETE FROM outbox WHERE kind = '$orderPush' AND payload_uuid = ?",
         [payloadUuid]);
   }
 
@@ -155,10 +162,72 @@ class SqliteOutboxStore implements OutboxStore {
   /// how many were held.
   int holdPendingSales(String reason) {
     _db.raw.execute(
-        "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$_order' "
+        "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$orderPush' "
         'AND sent_at IS NULL AND dead_at IS NULL',
         [DateTime.now().toUtc().toIso8601String(), reason]);
     return _db.raw.updatedRows;
+  }
+
+  /// Park the sales in [uuids] still owed to Odoo, with [reason], as
+  /// [holdPendingSales] does for every one.
+  void holdSales(Iterable<String> uuids, String reason) {
+    final at = DateTime.now().toUtc().toIso8601String();
+    for (final uuid in uuids) {
+      _db.raw.execute(
+          "UPDATE outbox SET dead_at = ?, dead_reason = ? WHERE kind = '$orderPush' "
+          'AND payload_uuid = ? AND sent_at IS NULL AND dead_at IS NULL',
+          [at, reason, uuid]);
+    }
+  }
+
+  /// Park the sales in [uuids] because the server rejected the batch booked
+  /// under [batchKey]. They come back only together, through [reviveSession],
+  /// so the session is never booked in parts.
+  void holdSession(String batchKey, Iterable<String> uuids, String reason) =>
+      holdSales(uuids, '$_sessionHold$batchKey: $reason');
+
+  /// Which of [uuids] are parked by [holdSession].
+  Set<String> sessionHeldOf(Iterable<String> uuids) {
+    final wanted = uuids.toSet();
+    if (wanted.isEmpty) return const {};
+    return {
+      for (final r in _db.raw.select(
+          'SELECT payload_uuid FROM outbox WHERE kind = ? AND dead_at IS NOT NULL '
+          'AND substr(dead_reason, 1, ?) = ?',
+          [orderPush, _sessionHold.length, _sessionHold]))
+        if (wanted.contains(r['payload_uuid'])) r['payload_uuid'] as String,
+    };
+  }
+
+  /// Every session parked by [holdSession]: its key, how many sales it holds,
+  /// and why the server refused it.
+  List<({String batchKey, int count, String reason})> heldSessions() {
+    final found = <String, ({String batchKey, int count, String reason})>{};
+    for (final r in _db.raw.select(
+        'SELECT dead_reason FROM outbox WHERE kind = ? AND dead_at IS NOT NULL '
+        'AND substr(dead_reason, 1, ?) = ? ORDER BY id',
+        [orderPush, _sessionHold.length, _sessionHold])) {
+      final text = (r['dead_reason'] as String).substring(_sessionHold.length);
+      final colon = text.indexOf(': ');
+      final key = colon < 0 ? text : text.substring(0, colon);
+      final reason = colon < 0 ? '' : text.substring(colon + 2);
+      final seen = found[key];
+      found[key] = (
+        batchKey: key,
+        count: (seen?.count ?? 0) + 1,
+        reason: seen?.reason ?? reason,
+      );
+    }
+    return found.values.toList();
+  }
+
+  /// Put every sale [holdSession] parked under [batchKey] back in the queue.
+  void reviveSession(String batchKey) {
+    final prefix = '$_sessionHold$batchKey: ';
+    _db.raw.execute(
+        'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 '
+        'WHERE kind = ? AND dead_at IS NOT NULL AND substr(dead_reason, 1, ?) = ?',
+        [orderPush, prefix.length, prefix]);
   }
 
   /// Close out refund pushes queued before refunds stopped going to Odoo. Nothing
@@ -166,9 +235,25 @@ class SqliteOutboxStore implements OutboxStore {
   /// pending count forever. Returns how many were closed.
   int retireRefundPushes() {
     _db.raw.execute(
-        "UPDATE outbox SET sent_at = ? WHERE kind = '$_order' AND sent_at IS NULL "
+        "UPDATE outbox SET sent_at = ? WHERE kind = '$orderPush' AND sent_at IS NULL "
         r"AND json_extract(payload, '$.refund_of_uuid') IS NOT NULL",
         [DateTime.now().toUtc().toIso8601String()]);
+    return _db.raw.updatedRows;
+  }
+
+  /// Put back in the queue the sales an older build parked after too many failed
+  /// sends; sales no longer go through [Outbox.drain], so this build parks none.
+  /// Those were never refused by the server, and the close used to revive them;
+  /// now every parked sale waits for a manager, so left alone they would stay
+  /// owed for good. The server answers a ticket it already booked as a
+  /// duplicate, so sending one again cannot book it twice. Returns how many came
+  /// back.
+  int reviveGivenUpSales() {
+    _db.raw.execute(
+        'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 '
+        "WHERE kind = '$orderPush' AND sent_at IS NULL AND dead_at IS NOT NULL "
+        'AND substr(dead_reason, 1, ?) = ?',
+        [_gaveUp.length, _gaveUp]);
     return _db.raw.updatedRows;
   }
 
@@ -259,7 +344,7 @@ class SqliteOutboxStore implements OutboxStore {
   /// they are not takings.
   int get pendingSalesCount => _db.raw
       .select('SELECT COUNT(*) c FROM outbox WHERE sent_at IS NULL '
-          "AND dead_at IS NULL AND kind = '$_order'")
+          "AND dead_at IS NULL AND kind = '$orderPush'")
       .first['c'] as int;
 
   /// Paid sales still waiting to reach Dishflow's owner view, and the bags still
@@ -274,12 +359,14 @@ class SqliteOutboxStore implements OutboxStore {
   /// a refusal would read as delivered.
   int get refusedCount => _db.raw
       .select('SELECT COUNT(*) c FROM outbox WHERE dead_at IS NOT NULL '
-          "AND kind IN ('$_order', '$_dishflow', '$_driver')")
+          "AND kind IN ('$orderPush', '$_dishflow', '$_driver')")
       .first['c'] as int;
 
   /// Kinds are part of the on-disk contract; see docs/ODOO_SYNC.md.
   static const String _heartbeat = 'device.status';
-  static const String _order = 'order.push';
+  static const String orderPush = 'order.push';
+  static const String _sessionHold = 'held session ';
+  static const String _gaveUp = 'gave up after ';
   static const String _dishflow = 'dishflow.sale.push';
   static const String _driver = 'dishflow.driver.order.push';
 }

@@ -6,6 +6,7 @@ import '../../domain/report_sources.dart';
 import '../../domain/shift.dart';
 import '../../domain/shift_movement.dart';
 import 'database.dart';
+import 'order_store.dart';
 
 export '../../domain/shift_movement.dart';
 
@@ -159,8 +160,12 @@ class ShiftStore implements ReportShifts {
   /// other non-cash tenders are takings but never cash on hand.
   ShiftSummary summary(Shift shift, {Set<int> cashMethodIds = const {}}) {
     final takings = _Takings();
-    for (final r in _salesIn(shift)) {
+    final window = _salesIn(shift);
+    for (final r in window.sales) {
       _fold(takings, r, cashMethodIds);
+    }
+    for (final r in window.refunds) {
+      _foldRefund(takings, r, cashMethodIds);
     }
     return ShiftSummary(
       openingFloat: shift.openingFloat,
@@ -169,6 +174,7 @@ class ShiftStore implements ReportShifts {
       salesCount: takings.count,
       salesTotal: takings.salesTotal,
       cashSales: takings.cashSales,
+      refundsCash: takings.refundsCash,
       countedCash: shift.closingCounted,
       tenders: _sorted(takings.byTender),
     );
@@ -183,9 +189,14 @@ class ShiftStore implements ReportShifts {
   Map<String, ShiftSummary> summaryByCashier(Shift shift,
       {Set<int> cashMethodIds = const {}}) {
     final byCashier = <String, _Takings>{};
-    for (final r in _salesIn(shift)) {
+    final window = _salesIn(shift);
+    for (final r in window.sales) {
       _fold(byCashier.putIfAbsent(r['cashier_id'] as String, _Takings.new), r,
           cashMethodIds);
+    }
+    for (final r in window.refunds) {
+      _foldRefund(byCashier.putIfAbsent(r['cashier_id'] as String, _Takings.new),
+          r, cashMethodIds);
     }
     final entries = byCashier.entries.toList()
       ..sort((a, b) {
@@ -201,23 +212,27 @@ class ShiftStore implements ReportShifts {
           salesCount: e.value.count,
           salesTotal: e.value.salesTotal,
           cashSales: e.value.cashSales,
+          refundsCash: e.value.refundsCash,
           tenders: _sorted(e.value.byTender),
         ),
     };
   }
 
-  /// The sales taken in [shift]'s window: paid or already synced, so a close after
-  /// a sync still counts them. Full cancel pairs and refunds are dropped the same
-  /// way as Flash / the Odoo session merge, so the End of Day card matches what
-  /// close will send.
-  List<Map<String, dynamic>> _salesIn(Shift shift) {
+  /// The orders taken in [shift]'s window: paid or already synced, so a close
+  /// after a sync still counts them.
+  ///
+  /// [_ShiftWindow.sales] follows Flash / the Odoo session merge: full cancel
+  /// pairs and refund rows are dropped, so the End of Day card matches what close
+  /// will send. [_ShiftWindow.refunds] keeps the refunds that survive that rule,
+  /// because the cash they handed back has left the drawer even though no sales
+  /// row carries it.
+  _ShiftWindow _salesIn(Shift shift) {
+    final w = createdWithin(
+        from: shift.openedAt, to: shift.closedAt ?? DateTime.now().toUtc());
     final rows = _db.raw.select(
       "SELECT cashier_id, total, payload FROM orders "
-      "WHERE state IN ('paid', 'synced') AND created_at >= ? AND created_at <= ?",
-      [
-        shift.openedAt.toIso8601String(),
-        (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String(),
-      ],
+      "WHERE state IN ('paid', 'synced') AND ${w.sql}",
+      w.args,
     );
     final rowByUuid = <String, Map<String, dynamic>>{};
     final decoded = <Order>[];
@@ -227,9 +242,17 @@ class ShiftStore implements ReportShifts {
       decoded.add(o);
       rowByUuid[o.uuid] = r;
     }
-    return [
-      for (final o in salesForOdoo(decoded)) rowByUuid[o.uuid]!,
-    ];
+    final kept = withoutFullyCancelled(decoded);
+    return _ShiftWindow(
+      sales: [
+        for (final o in kept)
+          if (!o.isRefund) rowByUuid[o.uuid]!,
+      ],
+      refunds: [
+        for (final o in kept)
+          if (o.isRefund) rowByUuid[o.uuid]!,
+      ],
+    );
   }
 
   /// The payments recorded on one order payload, empty when none were.
@@ -306,6 +329,15 @@ class ShiftStore implements ReportShifts {
     _addTenders(payments, total, cashMethodIds, into.byTender);
   }
 
+  /// Fold one refund row into [into]: only the cash it handed back, as a positive
+  /// figure. The sale it credits keeps its full tender on the Z, so the refund
+  /// stays off the count, the turnover and the tender rows.
+  void _foldRefund(_Takings into, Map<String, dynamic> row, Set<int> cashMethodIds) {
+    final total = (row['total'] as num).toDouble();
+    final payments = _payments(row['payload'] as String);
+    into.refundsCash -= _cashPortion(payments, total, cashMethodIds);
+  }
+
   Shift _row(Map<String, dynamic> r) => shiftFromRow(r);
 }
 
@@ -316,9 +348,17 @@ class _Takings {
   int count = 0;
   double salesTotal = 0;
   double cashSales = 0;
+  double refundsCash = 0;
 
   /// Keyed on (label, is-cash) rather than on the label alone, so a tender named
   /// like a cash one but not configured as cash cannot be folded into the cash row
   /// and silently break the drawer reconciliation.
   final Map<(String, bool), double> byTender = {};
+}
+
+/// One shift's paid orders, split the way the Z needs them.
+class _ShiftWindow {
+  const _ShiftWindow({required this.sales, required this.refunds});
+  final List<Map<String, dynamic>> sales;
+  final List<Map<String, dynamic>> refunds;
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/i18n/l10n.dart';
+import 'package:offline_pos/core/lan/lan_tally.dart';
 
 void main() {
   Widget host(Locale locale, Widget child) => MaterialApp(
@@ -40,6 +41,65 @@ void main() {
     await t.pumpWidget(host(const Locale('ar'),
         Builder(builder: (c) => Text(out = tr(c, 'Some brand-new label')))));
     expect(out, 'Some brand-new label');
+  });
+
+  testWidgets('every reason a till gives for holding a close reads in Arabic',
+      (t) async {
+    const reasons = [
+      'the primary is not on the network',
+      '1 sale held there is not on this till yet',
+      '4 sales held there are not on this till yet',
+      'runs an older version and has to be updated',
+      'its clock is more than a minute out',
+      'its clock had not reached the close yet',
+      'its clock ran ahead of the close',
+      'could not list its sales: timed out',
+    ];
+    late List<String> out;
+    await t.pumpWidget(host(const Locale('ar'), Builder(builder: (c) {
+      out = [for (final r in reasons) gapReasonIn(r, (en) => tr(c, en))];
+      return const SizedBox();
+    })));
+    // The error after the colon comes from the network layer and stays as is.
+    final translated = [...out.take(7), out[7].split(':').first];
+    for (final text in translated) {
+      expect(text, isNot(contains(RegExp('[a-z]{3}'))), reason: text);
+    }
+    expect(out[2], contains('4'));
+    expect(out[7], endsWith(': timed out'));
+  });
+
+  testWidgets('the progress shown while the tills are collected reads in Arabic',
+      (t) async {
+    // Every status the close's onProgress can report, with till names that
+    // stay as they came.
+    const statuses = [
+      'Collecting sales from the other tills...',
+      'Handing over this till\'s sales...',
+      'Checking every till handed over its sales...',
+      'No other tills to collect from',
+      'Looking for 3 till(s)...',
+      'Pulling from K2 (2/3)...',
+      'Finished collecting from other tills',
+      'Asking K1 to collect every till...',
+    ];
+    late List<String> out;
+    late List<String> english;
+    await t.pumpWidget(host(const Locale('ar'), Builder(builder: (c) {
+      out = [for (final s in statuses) closeProgressIn(s, (en) => tr(c, en))];
+      return const SizedBox();
+    })));
+    await t.pumpWidget(host(const Locale('en'), Builder(builder: (c) {
+      english = [for (final s in statuses) closeProgressIn(s, (en) => tr(c, en))];
+      return const SizedBox();
+    })));
+    for (final text in out) {
+      expect(text, isNot(contains(RegExp('[a-z]{3}'))), reason: text);
+    }
+    expect(out[4], contains('3'));
+    expect(out[5], allOf(contains('K2'), contains('2/3')));
+    expect(out[7], contains('K1'));
+    expect(english, statuses);
   });
 
   test('the locale controller toggles and reports the choice', () {
