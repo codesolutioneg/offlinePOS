@@ -6918,9 +6918,12 @@ class _PosAppState extends State<PosApp> {
                       'but Odoo did not return the sale number yet.\n'
                       'Check Sales orders for today under the session customer.';
                 }
-                final why = result.skipReason ?? widget.sync.lastError;
+                // A held batch was not sent: its reason is the earlier rejection.
+                final why = result.held
+                    ? null
+                    : result.skipReason ?? widget.sync.lastError;
                 final reason = why != null && why.isNotEmpty ? ': $why' : '.';
-                if (result.rejected) {
+                if (result.rejected || result.held) {
                   return 'The server rejected this shift as one sale order$reason\n'
                       '${result.orderCount} order(s) are held on this till. '
                       'A manager can send them again from Support ▸ Diagnostics.';
@@ -7093,10 +7096,10 @@ class _PosAppState extends State<PosApp> {
       if (partner != null) buf.write('\n$partner');
       return buf.toString();
     }
-    final why = result.skipReason ?? widget.sync.lastError;
+    final why = result.held ? null : result.skipReason ?? widget.sync.lastError;
     final reason = why != null && why.isNotEmpty ? ': $why' : '.';
-    if (result.rejected) {
-      return 'The server rejected the session again$reason\n'
+    if (result.rejected || result.held) {
+      return 'The server rejected the session$reason\n'
           'Its orders are held on this till. A manager can send them again '
           'from Support ▸ Diagnostics.';
     }

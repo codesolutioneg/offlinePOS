@@ -450,6 +450,7 @@ void main() {
       final a = sale(t0);
       final b = sale(t0.add(const Duration(minutes: 5)));
       final outbox = Outbox(store: store, senders: const {});
+      var sends = 0;
       final sync = SyncService(
         outbox: outbox,
         catalogue: CatalogueStore(db),
@@ -457,8 +458,10 @@ void main() {
         audit: AuditLog(db),
         deviceId: 'till-1',
         appVersion: 'test',
-        mergeBatch: ({onlyUuids, batchKey}) async =>
-            throw PermanentlyRejected('unknown product'),
+        mergeBatch: ({onlyUuids, batchKey}) async {
+          sends++;
+          throw PermanentlyRejected('unknown product');
+        },
       );
 
       final result = await bookSessionSales(
@@ -468,6 +471,14 @@ void main() {
       expect(store.sessionHeldOf([a.uuid, b.uuid]), {a.uuid, b.uuid},
           reason: 'left pending, the retry would send it again');
       expect(store.heldSessions().single.batchKey, 'shift-a');
+
+      final again = await bookSessionSales(
+          sync, outbox, store, orders, [a, b], 'shift-a');
+      expect(again.held, isTrue);
+      expect(again.rejected, isFalse);
+      expect(sends, 1, reason: 'a resend without a manager must not reach the server');
+      expect(store.sessionHeldOf([a.uuid, b.uuid]), {a.uuid, b.uuid},
+          reason: 'a resend without a manager must not revive a parked session');
     });
   });
 

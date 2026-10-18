@@ -136,7 +136,8 @@ Future<ShiftFlushResult> sendClosedShiftBacklog(
 /// resend do: each is queued again (a refused row from a partial push is
 /// revived), and only the sales the booking marked synced are told to the shop.
 /// A batch the server rejected is parked whole, as [sendClosedShiftBacklog]
-/// parks one, so no retry sends it until a manager does.
+/// parks one, so no retry sends it until a manager does. A batch already parked
+/// is refused here: only the manager's resend on Diagnostics revives it.
 Future<ShiftFlushResult> bookSessionSales(
   SyncService sync,
   Outbox outbox,
@@ -145,6 +146,15 @@ Future<ShiftFlushResult> bookSessionSales(
   List<Order> sales,
   String batchKey,
 ) async {
+  if (store.sessionHeldOf(sales.map((o) => o.uuid)).isNotEmpty) {
+    return ShiftFlushResult(
+      merged: false,
+      orderCount: sales.length,
+      skipReason: 'the server rejected it before',
+      refused: true,
+      held: true,
+    );
+  }
   final result = await sync.flushClosedShift(
     orderUuids: {for (final o in sales) o.uuid},
     batchKey: batchKey,

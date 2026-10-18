@@ -863,6 +863,7 @@ class ShiftFlushResult {
     this.alreadyBooked = const [],
     this.refused = false,
     this.rejected = false,
+    this.held = false,
   });
 
   final bool merged;
@@ -875,6 +876,10 @@ class ShiftFlushResult {
   /// Refused with a permanent rejection (by the server, or by the till's own
   /// pre-send check), as opposed to the merge declining it.
   final bool rejected;
+
+  /// Not sent: the server rejected these sales before and they are parked for
+  /// a manager to send again.
+  final bool held;
   final int orderCount;
   final String? odooRef;
   final String? skipReason;
