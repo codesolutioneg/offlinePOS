@@ -183,6 +183,15 @@ void main() {
       expect(find.text('Retry'), findsOneWidget);
     });
 
+    test('leaves a rejected sale with no reason on the list', () async {
+      await store.append('order.push', 'bare', {});
+      db.raw.execute(
+          "UPDATE outbox SET dead_at = '2026-10-18T00:00:00Z', dead_reason = NULL "
+          "WHERE payload_uuid = 'bare'");
+      expect(store.dead(withoutSessionHolds: true).map((e) => e.payloadUuid),
+          ['bare']);
+    });
+
     testWidgets('goes again whole, in one send, once a manager approves',
         (t) async {
       await t.pumpWidget(heldApp(approve: true));

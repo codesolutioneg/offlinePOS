@@ -99,7 +99,7 @@ class SqliteOutboxStore implements OutboxStore {
       .select(
           'SELECT id, kind, payload_uuid, payload, attempts, dead_reason '
           'FROM outbox WHERE dead_at IS NOT NULL '
-          '${withoutSessionHolds ? 'AND NOT (kind = ? AND substr(dead_reason, 1, ?) = ?) ' : ''}'
+          '${withoutSessionHolds ? 'AND (kind <> ? OR dead_reason IS NULL OR substr(dead_reason, 1, ?) <> ?) ' : ''}'
           'ORDER BY id LIMIT ?', [
         if (withoutSessionHolds) ...[orderPush, _sessionHold.length, _sessionHold],
         limit,
