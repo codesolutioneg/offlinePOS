@@ -135,6 +135,8 @@ Future<ShiftFlushResult> sendClosedShiftBacklog(
 /// Book [sales] as one sale order under [batchKey], as a session close and its
 /// resend do: each is queued again (a refused row from a partial push is
 /// revived), and only the sales the booking marked synced are told to the shop.
+/// A batch the server rejected is parked whole, as [sendClosedShiftBacklog]
+/// parks one, so no retry sends it until a manager does.
 Future<ShiftFlushResult> bookSessionSales(
   SyncService sync,
   Outbox outbox,
@@ -155,5 +157,9 @@ Future<ShiftFlushResult> bookSessionSales(
     },
   );
   if (result.merged) orders.tellShopBooked(sales.map((o) => o.uuid));
+  if (result.rejected) {
+    store.holdSession(batchKey, sales.map((o) => o.uuid),
+        result.skipReason ?? 'batch refused by the server');
+  }
   return result;
 }

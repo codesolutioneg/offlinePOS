@@ -444,6 +444,31 @@ void main() {
       expect(announcing.byUuid(left.uuid)?.state, OrderState.paid,
           reason: 'a sale the batch left out stays owed');
     });
+
+    test('parks the whole batch when the server rejects it', () async {
+      final store = SqliteOutboxStore(db);
+      final a = sale(t0);
+      final b = sale(t0.add(const Duration(minutes: 5)));
+      final outbox = Outbox(store: store, senders: const {});
+      final sync = SyncService(
+        outbox: outbox,
+        catalogue: CatalogueStore(db),
+        outboxStore: store,
+        audit: AuditLog(db),
+        deviceId: 'till-1',
+        appVersion: 'test',
+        mergeBatch: ({onlyUuids, batchKey}) async =>
+            throw PermanentlyRejected('unknown product'),
+      );
+
+      final result = await bookSessionSales(
+          sync, outbox, store, orders, [a, b], 'shift-a');
+
+      expect(result.rejected, isTrue);
+      expect(store.sessionHeldOf([a.uuid, b.uuid]), {a.uuid, b.uuid},
+          reason: 'left pending, the retry would send it again');
+      expect(store.heldSessions().single.batchKey, 'shift-a');
+    });
   });
 
   group('booking is one write', () {
