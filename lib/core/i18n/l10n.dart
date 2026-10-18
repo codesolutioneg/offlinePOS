@@ -2422,7 +2422,7 @@ const Map<String, String> _ar = {
   'Asking {who} to collect every till...': 'جاري الطلب من {who} تجميع كل الأجهزة...',
   // A closed session the server rejected whole, on Diagnostics.
   'Rejected session': 'جلسة مرفوضة',
-  'sale(s)': 'عملية بيع',
+  '{n} sale(s)': 'عدد المبيعات: {n}',
   'Resend this session': 'إعادة إرسال هذه الجلسة',
   'Some tills did not hand over their sales': 'بعض الأجهزة لم تسلّم مبيعاتها',
   'Turn those tills on and connect them to the network, then try again. Closing anyway leaves their sales out of this Z.':

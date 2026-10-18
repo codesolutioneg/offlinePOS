@@ -167,6 +167,22 @@ void main() {
       expect(find.text('Retry'), findsNothing);
     });
 
+    testWidgets('does not push other rejected sales off the list', (t) async {
+      final night = [for (var i = 0; i < 25; i++) 'n$i'];
+      for (final uuid in night) {
+        await store.append('order.push', uuid, {});
+      }
+      store.holdSession('night-2', night, 'unknown product');
+      await store.append('order.push', 'lone', {});
+      store.holdSales(['lone'], 'rejected');
+
+      await t.pumpWidget(heldApp(approve: true));
+      await t.scrollUntilVisible(find.text('lone'), 200,
+          scrollable: find.byType(Scrollable).first);
+      expect(find.text('lone'), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+    });
+
     testWidgets('goes again whole, in one send, once a manager approves',
         (t) async {
       await t.pumpWidget(heldApp(approve: true));

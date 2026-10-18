@@ -93,10 +93,17 @@ class SqliteOutboxStore implements OutboxStore {
 
   /// Parked entries. Each one is money that never reached the books, so this is
   /// surfaced on the till and in the heartbeat rather than quietly counted.
-  List<OutboxEntry> dead({int limit = 100}) => _db.raw
+  /// [withoutSessionHolds] leaves out sales [holdSession] parked, so a large
+  /// rejected session does not use up the [limit].
+  List<OutboxEntry> dead({int limit = 100, bool withoutSessionHolds = false}) => _db.raw
       .select(
           'SELECT id, kind, payload_uuid, payload, attempts, dead_reason '
-          'FROM outbox WHERE dead_at IS NOT NULL ORDER BY id LIMIT ?', [limit])
+          'FROM outbox WHERE dead_at IS NOT NULL '
+          '${withoutSessionHolds ? 'AND NOT (kind = ? AND substr(dead_reason, 1, ?) = ?) ' : ''}'
+          'ORDER BY id LIMIT ?', [
+        if (withoutSessionHolds) ...[orderPush, _sessionHold.length, _sessionHold],
+        limit,
+      ])
       .map((r) => OutboxEntry(
             id: r['id'] as int,
             kind: r['kind'] as String,
@@ -223,10 +230,6 @@ class SqliteOutboxStore implements OutboxStore {
         [orderPush, prefix.length, prefix]);
   }
 
-  /// Whether [reason] is one [holdSession] wrote.
-  static bool isSessionHold(String? reason) =>
-      reason != null && reason.startsWith(_sessionHold);
-
   /// Close out refund pushes queued before refunds stopped going to Odoo. Nothing
   /// sends them (the merge leaves credits out), so left alone they would sit in the
   /// pending count forever. Returns how many were closed.
@@ -346,7 +349,7 @@ class SqliteOutboxStore implements OutboxStore {
   /// Kinds are part of the on-disk contract; see docs/ODOO_SYNC.md.
   static const String _heartbeat = 'device.status';
   static const String orderPush = 'order.push';
-  static const String _sessionHold = 'session ';
+  static const String _sessionHold = 'held session ';
   static const String _dishflow = 'dishflow.sale.push';
   static const String _driver = 'dishflow.driver.order.push';
 }

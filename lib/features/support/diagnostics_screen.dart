@@ -280,7 +280,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   @override
   Widget build(BuildContext context) {
     final s = widget.sync.status();
-    final dead = widget.outboxStore.dead(limit: 20);
+    final dead = widget.outboxStore.dead(limit: 20, withoutSessionHolds: true);
     final heldSessions = widget.outboxStore.heldSessions();
     final undeliverable = widget.sync.undeliverableKinds;
 
@@ -328,7 +328,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                 key: Key('held-session-${h.batchKey}'),
                 dense: true,
                 title: Text('${tr(context, 'Rejected session')}: '
-                    '${h.count} ${tr(context, 'sale(s)')}'),
+                    '${tr(context, '{n} sale(s)').replaceAll('{n}', '${h.count}')}'),
                 subtitle: Text(h.reason.isEmpty
                     ? tr(context, 'unknown reason')
                     : h.reason),
@@ -343,18 +343,17 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                       ),
               ),
             for (final e in dead)
-              if (!SqliteOutboxStore.isSessionHold(e.lastError))
-                ListTile(
-                  key: Key('dead-${e.id}'),
-                  dense: true,
-                  title: Text(e.payloadUuid),
-                  subtitle: Text(e.lastError ?? tr(context, 'unknown reason')),
-                  trailing: TextButton(
-                    child: Text(tr(context, 'Retry')),
-                    onPressed: () =>
-                        setState(() => widget.outboxStore.revive(e.id)),
-                  ),
+              ListTile(
+                key: Key('dead-${e.id}'),
+                dense: true,
+                title: Text(e.payloadUuid),
+                subtitle: Text(e.lastError ?? tr(context, 'unknown reason')),
+                trailing: TextButton(
+                  child: Text(tr(context, 'Retry')),
+                  onPressed: () =>
+                      setState(() => widget.outboxStore.revive(e.id)),
                 ),
+              ),
             const Divider(),
           ],
           _row(tr(context, 'Device'), s.deviceId, keyName: 'device'),
