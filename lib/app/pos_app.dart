@@ -6919,9 +6919,14 @@ class _PosAppState extends State<PosApp> {
                       'Check Sales orders for today under the session customer.';
                 }
                 final why = result.skipReason ?? widget.sync.lastError;
-                return 'Could not book this shift as one sale order'
-                    '${why != null && why.isNotEmpty ? ': $why' : '.'}\n'
-                    '${result.orderCount} order(s) stay on this till — '
+                final reason = why != null && why.isNotEmpty ? ': $why' : '.';
+                if (result.rejected) {
+                  return 'The server rejected this shift as one sale order$reason\n'
+                      '${result.orderCount} order(s) are held on this till. '
+                      'A manager can send them again from Support ▸ Diagnostics.';
+                }
+                return 'Could not book this shift as one sale order$reason\n'
+                    '${result.orderCount} order(s) stay on this till and '
                     'will retry in the background, or use Support ▸ Sync now.';
               },
             ),
@@ -7089,8 +7094,13 @@ class _PosAppState extends State<PosApp> {
       return buf.toString();
     }
     final why = result.skipReason ?? widget.sync.lastError;
-    return 'Could not resend the session'
-        '${why != null && why.isNotEmpty ? ': $why' : '.'}';
+    final reason = why != null && why.isNotEmpty ? ': $why' : '.';
+    if (result.rejected) {
+      return 'The server rejected the session again$reason\n'
+          'Its orders are held on this till. A manager can send them again '
+          'from Support ▸ Diagnostics.';
+    }
+    return 'Could not resend the session$reason';
   }
 
   /// Load the branch's Session-close customer onto this till if missing.
