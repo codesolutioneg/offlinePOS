@@ -141,7 +141,9 @@ void main() {
           isNull);
       expect(clockShortGap(till, now, now)!.reason,
           'its clock had not reached the close yet');
-      expect(clockShortGap(till, null, now), isNotNull);
+      expect(clockShortGap(till, null, now)!.reason,
+          'runs an older version and has to be updated',
+          reason: 'only a build from before the clock was sent says nothing');
     });
 
     test('a till is named when it ran further ahead than the bound allowed '
@@ -348,8 +350,8 @@ void main() {
           isEmpty);
     });
 
-    test('a till whose clock had not reached the close as it answered is named',
-        () async {
+    test('a till whose clock had not reached the close as it answered is named, '
+        'and one that sent no clock is named outdated', () async {
       node.peers.seen(_peer('till-b'));
       node.peers.seen(_peer('till-c'));
       final until = DateTime.now().toUtc();
@@ -360,7 +362,7 @@ void main() {
           since: since, until: until, closing: true);
       expect({for (final g in gaps) g.deviceId: g.reason}, {
         'till-b': 'its clock had not reached the close yet',
-        'till-c': 'its clock had not reached the close yet',
+        'till-c': 'runs an older version and has to be updated',
       });
     });
 
@@ -610,7 +612,8 @@ void main() {
       final far = clockGaps([_peer('till-b', clock: const Duration(hours: 1))],
               (p) => p.clockOffset)
           .single;
-      final short = clockShortGap(_peer('till-b'), null, DateTime.utc(2026))!;
+      final short = clockShortGap(
+          _peer('till-b'), DateTime.utc(2026), DateTime.utc(2026))!;
       final ahead = clockAheadGap(
           _peer('till-b'), const Duration(seconds: 5), Duration.zero)!;
       for (final gap in [far, short, ahead]) {

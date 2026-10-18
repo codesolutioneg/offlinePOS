@@ -87,15 +87,15 @@ List<LanTillGap> clockGaps(
     ];
 
 /// The gap for [peer] when its [clock], read as it listed its sales, was not
-/// past [until]: it could still ring a sale stamped inside the window. Null
-/// when the clock was past it.
+/// past [until]: it could still ring a sale stamped inside the window. A till
+/// that sent no clock is named outdated. Null when the clock was past it.
 LanTillGap? clockShortGap(LanPeer peer, DateTime? clock, DateTime until) =>
     clock != null && clock.isAfter(until)
         ? null
         : LanTillGap(
             deviceId: peer.deviceId,
             name: peer.name,
-            reason: _clockShort,
+            reason: clock == null ? _outdated : _clockShort,
             lastSeenAt: peer.lastSeenAt,
           );
 
