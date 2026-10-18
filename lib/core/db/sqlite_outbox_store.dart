@@ -241,6 +241,22 @@ class SqliteOutboxStore implements OutboxStore {
     return _db.raw.updatedRows;
   }
 
+  /// Put back in the queue the sales an older build parked after too many failed
+  /// sends; sales no longer go through [Outbox.drain], so this build parks none.
+  /// Those were never refused by the server, and the close used to revive them;
+  /// now every parked sale waits for a manager, so left alone they would stay
+  /// owed for good. The server answers a ticket it already booked as a
+  /// duplicate, so sending one again cannot book it twice. Returns how many came
+  /// back.
+  int reviveGivenUpSales() {
+    _db.raw.execute(
+        'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 '
+        "WHERE kind = '$orderPush' AND sent_at IS NULL AND dead_at IS NOT NULL "
+        'AND substr(dead_reason, 1, ?) = ?',
+        [_gaveUp.length, _gaveUp]);
+    return _db.raw.updatedRows;
+  }
+
   /// Put a parked entry back in the queue, once whatever caused it is fixed.
   void revive(int id) => _db.raw.execute(
       'UPDATE outbox SET dead_at = NULL, dead_reason = NULL, attempts = 0 WHERE id = ?',
@@ -350,6 +366,7 @@ class SqliteOutboxStore implements OutboxStore {
   static const String _heartbeat = 'device.status';
   static const String orderPush = 'order.push';
   static const String _sessionHold = 'held session ';
+  static const String _gaveUp = 'gave up after ';
   static const String _dishflow = 'dishflow.sale.push';
   static const String _driver = 'dishflow.driver.order.push';
 }

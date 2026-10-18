@@ -198,6 +198,10 @@ Future<void> _openTheTill(StartupLog log, StartupUnwind unwind) async {
   if (retired > 0) {
     audit.record('system', 'outbox.refunds.retired', detail: '$retired');
   }
+  final revived = outboxStore.reviveGivenUpSales();
+  if (revived > 0) {
+    audit.record('system', 'outbox.sales.revived', detail: '$revived');
+  }
   final devices = DeviceStore(db);
 
   // Generated on this device on first launch. A constant would make every till in

@@ -182,6 +182,23 @@ void main() {
       expect(till.outboxStore.pendingSalesCount, 1,
           reason: 'only the real sale is still owed');
     });
+
+    test('sales an older build gave up on are queued again, refusals are not', () async {
+      final store = till.outboxStore;
+      await store.append('order.push', 's-1', {'uuid': 's-1'});
+      await store.append('order.push', 's-2', {'uuid': 's-2'});
+      await store.append('order.push', 's-3', {'uuid': 's-3'});
+      final rows = await store.pending();
+      final id = {for (final e in rows) e.payloadUuid: e.id};
+      await store.markDead(id['s-1']!, 'gave up after 25: SocketException');
+      await store.markDead(id['s-2']!, 'no result for s-2');
+      store.holdSales(['s-3'], 'held: server changed from a');
+
+      expect(store.reviveGivenUpSales(), 1);
+      expect((await store.pending()).map((e) => e.payloadUuid), ['s-1']);
+      expect(store.deadCount, 2,
+          reason: 'a refusal and a server change still wait for a manager');
+    });
   });
 
   group('C5 · a sale books on the day the money came in', () {
