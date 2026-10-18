@@ -129,7 +129,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     if (!mounted) return;
     setState(() => _syncing = true);
     widget.outboxStore.reviveSession(batchKey);
-    await widget.sync.sendBacklog();
+    await widget.sync.sendBacklog(fresh: true);
     if (mounted) setState(() => _syncing = false);
   }
 

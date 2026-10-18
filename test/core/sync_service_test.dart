@@ -333,6 +333,22 @@ void main() {
     expect(ran, 2, reason: 'a finished run does not block the next one');
   });
 
+  test('a fresh backlog send runs again after the one already going', () async {
+    var ran = 0;
+    final gate = Completer<void>();
+    final s = serviceWith(closedShiftRetry: () async {
+      ran++;
+      if (ran == 1) await gate.future;
+      return const ShiftFlushResult(merged: true, orderCount: 0);
+    });
+
+    final first = s.sendBacklog();
+    final fresh = s.sendBacklog(fresh: true);
+    gate.complete();
+    await Future.wait([first, fresh]);
+    expect(ran, 2, reason: 'the running one may have passed over a revived session');
+  });
+
   test('reconcilePending runs the hook so pending counts can be read after it', () async {
     var ran = 0;
     final s = serviceWith(reconcile: () async => ran++);

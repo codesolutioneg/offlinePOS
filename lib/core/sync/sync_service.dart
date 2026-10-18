@@ -805,8 +805,13 @@ class SyncService {
   ///
   /// Never throws: a close starts it without waiting, so a failure is kept in
   /// [lastError] for diagnostics rather than lost as an unhandled error.
-  Future<void> sendBacklog() async {
+  ///
+  /// With [fresh], a run already going is let finish and a new one started, for
+  /// a caller that just changed what is owed (the running one may have passed
+  /// it over).
+  Future<void> sendBacklog({bool fresh = false}) async {
     try {
+      if (fresh) await _backlogRun?.catchError((Object _) => null);
       await _runBacklog();
     } catch (e) {
       lastError = e.toString();
