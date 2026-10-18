@@ -81,8 +81,11 @@ class ShiftScreen extends StatefulWidget {
 
   /// Where the last check before a close is bounded, after waiting out the
   /// tills' clock differences, for a shift opened at the time given. Null
-  /// bounds it at now.
-  final Future<DateTime> Function(DateTime since)? settleCloseCutoff;
+  /// bounds it at now. It reports through [onWait] when the wait will end, and
+  /// returns null, closing nothing, once [cancelled] completes.
+  final Future<DateTime?> Function(DateTime since,
+      {void Function(DateTime readyAt)? onWait,
+      Future<void>? cancelled})? settleCloseCutoff;
 
   /// A close went ahead over something it would normally stop for, with the reason
   /// as a short event name and what was skipped, for the audit trail.
@@ -888,14 +891,18 @@ class _ShiftScreenState extends State<ShiftScreen> {
     if (catchUp == null || shift == null) return DateTime.now().toUtc();
     while (true) {
       var cutoff = DateTime.now().toUtc();
+      var stopped = false;
       final gaps = await _withProgress(
         tr(context, 'Collecting sales from the other tills...'),
         (setStatus) async {
           final settle = widget.settleCloseCutoff;
           if (freeze && settle != null) {
-            setStatus(tr(
-                context, "Waiting for every till's clock to pass the close..."));
-            cutoff = await settle(shift.openedAt);
+            final settled = await _settleWithCountdown(settle, shift.openedAt, setStatus);
+            if (settled == null) {
+              stopped = true;
+              return const <String>[];
+            }
+            cutoff = settled;
           }
           return catchUp(shift.openedAt,
               until: freeze ? cutoff : null, onProgress: (s) {
@@ -905,7 +912,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
           });
         },
       );
-      if (!mounted) return null;
+      if (!mounted || stopped) return null;
       if (gaps.isEmpty) return cutoff;
       widget.onCloseBlocked?.call('shift.close.blocked.tills_unreachable');
       final choice = await showDialog<String>(
@@ -970,6 +977,46 @@ class _ShiftScreenState extends State<ShiftScreen> {
     }
   }
 
+  /// Waits out [settle], showing the seconds left and a Cancel button, since the
+  /// wait can run to about two minutes with a till's clock far out. Null when
+  /// the cashier cancelled.
+  Future<DateTime?> _settleWithCountdown(
+    Future<DateTime?> Function(DateTime since,
+            {void Function(DateTime readyAt)? onWait, Future<void>? cancelled})
+        settle,
+    DateTime since,
+    void Function(String status) setStatus,
+  ) async {
+    final stop = Completer<void>();
+    Timer? tick;
+    void show(DateTime readyAt) {
+      if (!mounted) return;
+      final ms = readyAt.difference(DateTime.now().toUtc()).inMilliseconds;
+      final left = ms <= 0 ? 0 : (ms + 999) ~/ 1000;
+      setStatus(tr(context, "Waiting for every till's clock to pass the close ({n}s left)...")
+          .replaceAll('{n}', '$left'));
+    }
+
+    setStatus(tr(context, "Waiting for every till's clock to pass the close..."));
+    _progressCancel?.value = () {
+      if (!stop.isCompleted) stop.complete();
+    };
+    try {
+      return await settle(since, cancelled: stop.future, onWait: (readyAt) {
+        show(readyAt);
+        tick?.cancel();
+        tick = Timer.periodic(const Duration(seconds: 1), (_) => show(readyAt));
+      });
+    } finally {
+      tick?.cancel();
+      _progressCancel?.value = null;
+    }
+  }
+
+  /// The Cancel action of the progress dialog while it is up, or null to show
+  /// none.
+  ValueNotifier<VoidCallback?>? _progressCancel;
+
   /// Runs [work] behind a dialog that cannot be dismissed, so nothing else is
   /// started on the till while it waits on the network. [work] may call
   /// [setStatus] to update the label as peers are pulled.
@@ -979,6 +1026,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
   ) async {
     final nav = Navigator.of(context, rootNavigator: true);
     final status = ValueNotifier<String>(label);
+    final cancel = _progressCancel = ValueNotifier<VoidCallback?>(null);
     var shown = true;
     unawaited(showDialog<void>(
       context: context,
@@ -997,6 +1045,18 @@ class _ShiftScreenState extends State<ShiftScreen> {
               Expanded(child: Text(text)),
             ]),
           ),
+          actions: [
+            ValueListenableBuilder<VoidCallback?>(
+              valueListenable: cancel,
+              builder: (_, onCancel, _) => onCancel == null
+                  ? const SizedBox.shrink()
+                  : TextButton(
+                      key: const Key('close-progress-cancel'),
+                      onPressed: onCancel,
+                      child: Text(tr(ctx, 'Cancel')),
+                    ),
+            ),
+          ],
         ),
       ),
     ).whenComplete(() => shown = false));
@@ -1005,7 +1065,9 @@ class _ShiftScreenState extends State<ShiftScreen> {
         status.value = s;
       });
     } finally {
+      _progressCancel = null;
       status.dispose();
+      cancel.dispose();
       if (shown) nav.pop();
     }
   }

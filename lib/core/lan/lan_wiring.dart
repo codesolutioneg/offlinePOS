@@ -586,7 +586,12 @@ class LanNode {
 
   /// Where a close since [since] can be bounded so the tills' clocks agree on
   /// it, after waiting until they have all passed it. See [closeCutoffFor].
-  Future<DateTime> settleCloseCutoff(DateTime since) async {
+  /// [onWait] is told when the wait ends; once [cancelled] completes the wait
+  /// stops and null is returned.
+  Future<DateTime?> settleCloseCutoff(DateTime since,
+      {void Function(DateTime readyAt)? onWait, Future<void>? cancelled}) async {
+    var stop = false;
+    cancelled?.whenComplete(() => stop = true).ignore();
     final now = DateTime.now().toUtc();
     final targets = _tallyTargets(since, const {});
     if (targets.isEmpty) {
@@ -595,11 +600,23 @@ class LanNode {
     }
     final cutoff = closeCutoffFor(now, targets.map(_offsetOf));
     _settled = (at: cutoff.at, cover: cutoff.at.difference(now));
+    onWait?.call(cutoff.askAfter);
     // A timer can fire a little early, so check the clock again after it.
     var wait = cutoff.askAfter.difference(DateTime.now().toUtc());
-    while (wait > Duration.zero) {
-      await Future<void>.delayed(wait);
+    while (wait > Duration.zero && !stop) {
+      final woke = Completer<void>();
+      void wake() {
+        if (!woke.isCompleted) woke.complete();
+      }
+      final timer = Timer(wait, wake);
+      cancelled?.whenComplete(wake).ignore();
+      await woke.future;
+      timer.cancel();
       wait = cutoff.askAfter.difference(DateTime.now().toUtc());
+    }
+    if (stop) {
+      _settled = null;
+      return null;
     }
     return cutoff.at;
   }

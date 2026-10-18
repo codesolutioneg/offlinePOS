@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -396,7 +397,7 @@ void main() {
       expect(
           await node.catchUpBeforeClose(
               since: since,
-              until: settled.subtract(const Duration(seconds: 1)),
+              until: settled!.subtract(const Duration(seconds: 1)),
               closing: true),
           isEmpty);
     });
@@ -421,7 +422,7 @@ void main() {
       await node.catchUpBeforeClose(since: since);
 
       final started = DateTime.now().toUtc();
-      final at = await node.settleCloseCutoff(since);
+      final at = (await node.settleCloseCutoff(since))!;
       expect(
         at.isBefore(started
             .add(const Duration(milliseconds: 400))
@@ -430,9 +431,29 @@ void main() {
       );
     });
 
+    test('the wait says when it ends, and a cancel stops it with no bound',
+        () async {
+      node.peers.seen(_peer('till-b', clock: const Duration(seconds: 20)));
+      final cancel = Completer<void>();
+      DateTime? readyAt;
+      final started = DateTime.now().toUtc();
+
+      final settling = node.settleCloseCutoff(since,
+          onWait: (at) => readyAt = at, cancelled: cancel.future);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      cancel.complete();
+
+      expect(await settling, isNull);
+      expect(
+          DateTime.now().toUtc().difference(started) < const Duration(seconds: 2),
+          isTrue,
+          reason: 'a cancel must not sit out the 20s wait');
+      expect(readyAt!.isAfter(started.add(const Duration(seconds: 20))), isTrue);
+    });
+
     test('with no other till on the network a close does not wait', () async {
       final started = DateTime.now().toUtc();
-      final at = await node.settleCloseCutoff(since);
+      final at = (await node.settleCloseCutoff(since))!;
       expect(at.difference(started) < const Duration(milliseconds: 500), isTrue);
     });
 
@@ -445,7 +466,7 @@ void main() {
       );
       final started = DateTime.now().toUtc();
 
-      final at = await node.settleCloseCutoff(since);
+      final at = (await node.settleCloseCutoff(since))!;
 
       final done = DateTime.now().toUtc();
       expect(
