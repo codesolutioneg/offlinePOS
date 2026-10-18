@@ -33,6 +33,7 @@ class ShiftScreen extends StatefulWidget {
     this.sessionPartnerName,
     this.onPrepareCloseSync,
     this.catchUpOtherTills,
+    this.settleCloseCutoff,
     this.onCloseOverride,
     this.startCloseOnOpen = false,
     this.startMovement,
@@ -77,6 +78,11 @@ class ShiftScreen extends StatefulWidget {
     DateTime? until,
     void Function(String status)? onProgress,
   })? catchUpOtherTills;
+
+  /// Where the last check before a close is bounded, after waiting out the
+  /// tills' clock differences, for a shift opened at the time given. Null
+  /// bounds it at now.
+  final Future<DateTime> Function(DateTime since)? settleCloseCutoff;
 
   /// A close went ahead over something it would normally stop for, with the reason
   /// as a short event name and what was skipped, for the audit trail.
@@ -872,24 +878,32 @@ class _ShiftScreenState extends State<ShiftScreen> {
   /// until a cashier closes over the gap knowingly: a till that is switched off
   /// for good must not be able to hold the close forever.
   ///
-  /// With [freeze] each attempt is bounded at the instant it starts, so the
-  /// shift can be closed at exactly that instant; otherwise the tills are
-  /// compared up to now and the time returned is only a marker.
+  /// With [freeze] each attempt is bounded where [ShiftScreen.settleCloseCutoff]
+  /// places it (or at the instant it starts), so the shift can be closed at
+  /// exactly that bound; otherwise the tills are compared up to now and the time
+  /// returned is only a marker.
   Future<DateTime?> _catchUpOtherTills({bool freeze = false}) async {
     final catchUp = widget.catchUpOtherTills;
     final shift = _shift;
     if (catchUp == null || shift == null) return DateTime.now().toUtc();
     while (true) {
-      final cutoff = DateTime.now().toUtc();
+      var cutoff = DateTime.now().toUtc();
       final gaps = await _withProgress(
         tr(context, 'Collecting sales from the other tills...'),
-        (setStatus) => catchUp(shift.openedAt,
-            until: freeze ? cutoff : null,
-            onProgress: (s) {
-              if (mounted) {
-                setStatus(closeProgressIn(s, (en) => tr(context, en)));
-              }
-            }),
+        (setStatus) async {
+          final settle = widget.settleCloseCutoff;
+          if (freeze && settle != null) {
+            setStatus(tr(
+                context, "Waiting for every till's clock to pass the close..."));
+            cutoff = await settle(shift.openedAt);
+          }
+          return catchUp(shift.openedAt,
+              until: freeze ? cutoff : null, onProgress: (s) {
+            if (mounted) {
+              setStatus(closeProgressIn(s, (en) => tr(context, en)));
+            }
+          });
+        },
       );
       if (!mounted) return null;
       if (gaps.isEmpty) return cutoff;

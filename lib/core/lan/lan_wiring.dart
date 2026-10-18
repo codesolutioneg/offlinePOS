@@ -548,9 +548,13 @@ class LanNode {
   /// session closed when one is being sent again, otherwise now. Without it a
   /// resend of last night would count this morning's sales on the other tills
   /// as gaps and never go out.
+  ///
+  /// [closing] marks [until] as the bound a shift is about to close at, which
+  /// holds the tills' clocks to it as well (see [_tallyPeers]).
   Future<List<LanTillGap>> catchUpBeforeClose({
     required DateTime since,
     DateTime? until,
+    bool closing = false,
     void Function(String status)? onProgress,
   }) async {
     final gaps = await _collectBeforeClose(since: since, onProgress: onProgress);
@@ -562,34 +566,93 @@ class LanNode {
       ...await _tallyPeers(
         since,
         until: until?.toUtc() ?? DateTime.now().toUtc(),
+        closing: closing && until != null,
         skip: {for (final gap in gaps) gap.deviceId},
         onProgress: onProgress,
       ),
     ];
   }
 
+  /// Each till's clock offset as its last tally answer measured it, for a till
+  /// whose beacon does not reach this one and so carries none.
+  final Map<String, Duration> _answeredOffsets = {};
+
+  Duration? _offsetOf(LanPeer peer) =>
+      peer.clockOffset ?? _answeredOffsets[peer.deviceId];
+
+  /// The last bound [settleCloseCutoff] chose, and how far ahead of this
+  /// till's clock it allowed a till to run.
+  ({DateTime at, Duration cover})? _settled;
+
+  /// Where a close since [since] can be bounded so the tills' clocks agree on
+  /// it, after waiting until they have all passed it. See [closeCutoffFor].
+  Future<DateTime> settleCloseCutoff(DateTime since) async {
+    final now = DateTime.now().toUtc();
+    final targets = _tallyTargets(since, const {});
+    if (targets.isEmpty) {
+      _settled = (at: now, cover: kCloseClockMargin);
+      return now;
+    }
+    final cutoff = closeCutoffFor(now, targets.map(_offsetOf));
+    _settled = (at: cutoff.at, cover: cutoff.at.difference(now));
+    // A timer can fire a little early, so check the clock again after it.
+    var wait = cutoff.askAfter.difference(DateTime.now().toUtc());
+    while (wait > Duration.zero) {
+      await Future<void>.delayed(wait);
+      wait = cutoff.askAfter.difference(DateTime.now().toUtc());
+    }
+    return cutoff.at;
+  }
+
+  List<LanPeer> _tallyTargets(DateTime since, Set<String> skip) => peers.all
+      .where((p) =>
+          p.deviceId != deviceId &&
+          !skip.contains(p.deviceId) &&
+          !p.lastSeenAt.isBefore(since.toUtc()))
+      .toList();
+
   /// A sale a peer completes after [until] is outside this check; it goes to
-  /// Odoo under that till's own close and the server books it once by its uuid.
+  /// Odoo under the next close and the server books it once by its uuid.
+  /// When [closing], [until] is where the shift closes, and a till is also named
+  /// when its clock is too far out to wait for, or had not passed [until] when
+  /// it answered: either way it could still ring a sale inside the window. So is
+  /// a till found further ahead than the bound allowed for, whose sales rung
+  /// before the close are stamped past it.
   Future<List<LanTillGap>> _tallyPeers(
     DateTime since, {
     required DateTime until,
     required Set<String> skip,
+    bool closing = false,
     void Function(String status)? onProgress,
   }) async {
-    final targets = peers.all
-        .where((p) =>
-            p.deviceId != deviceId &&
-            !skip.contains(p.deviceId) &&
-            !p.lastSeenAt.isBefore(since.toUtc()))
-        .toList();
+    final targets = _tallyTargets(since, skip);
     if (targets.isEmpty) return const [];
+    final offClock = closing ? clockGaps(targets, _offsetOf) : <LanTillGap>[];
+    final farOff = {for (final gap in offClock) gap.deviceId};
+    final settled = _settled;
+    final cover = settled != null && settled.at == until ? settled.cover : null;
     onProgress?.call('Checking every till handed over its sales...');
     final answers = <LanTallyAnswer>[];
+    final short = <LanTillGap>[];
     for (final peer in targets) {
       try {
-        final uuids = await _client.tally(peer,
+        final reply = await _client.tally(peer,
             deviceId: deviceId, since: since, until: until);
-        answers.add(LanTallyAnswer.counted(peer, uuids.toSet()));
+        if (reply.clockOffset case final offset?) {
+          _answeredOffsets[peer.deviceId] = offset;
+        }
+        if (closing && !farOff.contains(peer.deviceId)) {
+          if (clockShortGap(peer, reply.clock, until) case final gap?) {
+            short.add(gap);
+          } else if (cover != null) {
+            if (clockAheadGap(peer, reply.clockOffset, cover,
+                    spread: reply.clockSpread)
+                case final gap?) {
+              short.add(gap);
+            }
+          }
+        }
+        answers.add(LanTallyAnswer.counted(peer, reply.uuids.toSet()));
       } catch (e) {
         _report('lan.tally.failed', '${peer.deviceId} (${peer.name}): $e');
         answers.add(LanTallyAnswer.fromError(peer, e));
@@ -597,7 +660,11 @@ class LanNode {
     }
     // Read after the answers, so a sale that arrived while they were being
     // collected counts as held.
-    return tallyGaps(local: _saleUuids(since, until).toSet(), answers: answers);
+    return [
+      ...offClock,
+      ...short,
+      ...tallyGaps(local: _saleUuids(since, until).toSet(), answers: answers),
+    ];
   }
 
   Future<List<LanTillGap>> _collectBeforeClose({

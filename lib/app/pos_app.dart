@@ -6717,9 +6717,11 @@ class _PosAppState extends State<PosApp> {
     final thisTill = tr(context, 'This till');
     List<LanTillGap> gaps;
     try {
+      // The shift screen bounds only the last check before a close.
       gaps = await lan.catchUpBeforeClose(
         since: since,
         until: until,
+        closing: until != null,
         onProgress: onProgress,
       );
     } catch (e) {
@@ -6836,6 +6838,9 @@ class _PosAppState extends State<PosApp> {
               catchUpOtherTills: widget.lan?.isRunning == true
                   ? (since, {until, onProgress}) => _catchUpOtherTills(
                       context, since, until: until, onProgress: onProgress)
+                  : null,
+              settleCloseCutoff: widget.lan?.isRunning == true
+                  ? widget.lan!.settleCloseCutoff
                   : null,
               onCloseOverride: (reason, detail) =>
                   widget.audit.record(session.cashierId, reason, detail: detail),

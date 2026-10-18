@@ -267,6 +267,15 @@ class TestShop {
 
   /// Ask [peer] which sales it holds in the window, the way the closing till does.
   Future<List<String>> tally(String from, LanPeer peer,
+          {required DateTime since, required DateTime until}) async =>
+      [
+        for (final u in (await tallyReply(from, peer,
+                since: since, until: until))['uuids'] as List)
+          '$u'
+      ];
+
+  /// The whole answer [peer] gives a tally from [from], as it came off the wire.
+  Future<Map<String, dynamic>> tallyReply(String from, LanPeer peer,
       {required DateTime since, required DateTime until}) async {
     final till = _reach(from, peer);
     final body = jsonEncode({
@@ -283,7 +292,7 @@ class TestShop {
     if (reply.status != 200) {
       throw StateError('${peer.deviceId} answered ${reply.status}');
     }
-    return [for (final u in _overTheWire(reply.body)['uuids'] as List) '$u'];
+    return _overTheWire(reply.body);
   }
 
   Future<void> notify(String from, LanPeer peer, List<LanEvent> events) async {

@@ -296,7 +296,11 @@ class LanProtocol {
     if (since == null || until == null) {
       return const LanReply(400, {'error': 'tally needs since and until'});
     }
-    return LanReply(200, {'device_id': deviceId, 'uuids': read(since, until)});
+    // The clock is read before the sales: anything rung after it is stamped
+    // later, so a clock past `until` proves nothing more can land in the window.
+    final clock = DateTime.now().toUtc().millisecondsSinceEpoch;
+    return LanReply(200,
+        {'device_id': deviceId, 'clock': clock, 'uuids': read(since, until)});
   }
 
   /// Admit a secondary with a one-time PIN; no shop-key stamp required.
@@ -623,6 +627,21 @@ class LanHost {
   }
 }
 
+/// What a till answered to a tally: the sales it holds, its clock when it read
+/// them, and how far that clock is from this till's, give or take
+/// [clockSpread]. A build that does not send its clock leaves them null.
+class LanTallyReply {
+  const LanTallyReply(this.uuids,
+      {this.clock, this.clockOffset, this.clockSpread = Duration.zero});
+
+  final List<String> uuids;
+  final DateTime? clock;
+  final Duration? clockOffset;
+
+  /// Half the round trip: how far [clockOffset] can be from the real offset.
+  final Duration clockSpread;
+}
+
 /// Talks to peers over HTTP. One short timeout for everything: this runs on a
 /// background timer, and a till that fell off the switch must cost seconds, not a
 /// stalled pass.
@@ -821,7 +840,7 @@ class LanHttpClient {
   }
 
   /// Ask [peer] which sales it holds between [since] and [until], by uuid.
-  Future<List<String>> tally(
+  Future<LanTallyReply> tally(
     LanPeer peer, {
     required String deviceId,
     required DateTime since,
@@ -833,15 +852,32 @@ class LanHttpClient {
       'since': since.toUtc().toIso8601String(),
       'until': until.toUtc().toIso8601String(),
     });
+    final asked = DateTime.now().toUtc();
     final text = await _send(
       'POST',
       peer.baseUrl.replace(path: LanProtocol.tallyPath),
       body,
       _credential.stamp(method: 'POST', path: LanProtocol.tallyPath, body: body),
     );
-    final uuids = (jsonDecode(text) as Map)['uuids'];
+    final answered = DateTime.now().toUtc();
+    final reply = jsonDecode(text) as Map;
+    final uuids = reply['uuids'];
     if (uuids is! List) throw FormatException('tally answered without uuids');
-    return [for (final u in uuids) '$u'];
+    final clock = reply['clock'];
+    final spread = answered.difference(asked) ~/ 2;
+    return LanTallyReply(
+      [for (final u in uuids) '$u'],
+      clock: clock is int
+          ? DateTime.fromMillisecondsSinceEpoch(clock, isUtc: true)
+          : null,
+      // The till read its clock somewhere between asking and the answer.
+      clockOffset: clock is int
+          ? Duration(
+              milliseconds:
+                  clock - asked.add(spread).millisecondsSinceEpoch)
+          : null,
+      clockSpread: spread,
+    );
   }
 
   /// Present a join PIN to [peer] (the primary). No shop-key stamp — the PIN is

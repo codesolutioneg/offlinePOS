@@ -159,6 +159,7 @@ void main() {
           catchUp, {
       List<String>? blocked,
       List<String>? overrides,
+      Future<DateTime> Function(DateTime since)? settle,
     }) =>
         MaterialApp(
           home: ShiftScreen(
@@ -167,6 +168,7 @@ void main() {
             formatAmount: (v) => v.toStringAsFixed(2),
             startCloseOnOpen: true,
             catchUpOtherTills: catchUp,
+            settleCloseCutoff: settle,
             onCloseBlocked: (r) => blocked?.add(r),
             onCloseOverride: (r, d) => overrides?.add('$r: $d'),
           ),
@@ -308,6 +310,30 @@ void main() {
       expect(closedAt!.isBefore(before), isFalse);
     });
 
+    testWidgets('the last check and the close land on the bound the clocks '
+        'settle on', (t) async {
+      final shift = shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      final settled = DateTime.now().toUtc().add(const Duration(seconds: 4));
+      final bounds = <DateTime?>[];
+      final settledFor = <DateTime>[];
+      await t.pumpWidget(closing((s, {until, onProgress}) async {
+        bounds.add(until);
+        return const [];
+      }, settle: (since) async {
+        settledFor.add(since);
+        return settled;
+      }));
+      await t.pumpAndSettle();
+      expect(settledFor, isEmpty,
+          reason: 'the check before the count is not bounded');
+
+      await countAndConfirm(t, '0');
+
+      expect(settledFor, [shift.openedAt]);
+      expect(bounds.last, settled);
+      expect(shifts.recentClosed(limit: 1).single.closedAt, settled);
+    });
+
     testWidgets('a sale rung on another till during the count holds the close',
         (t) async {
       shifts.openShift(openingFloat: 0, cashierId: 'sara');
@@ -353,6 +379,31 @@ void main() {
       expect(bounds, hasLength(3));
       expect(bounds[2]!.isBefore(bounds[1]!), isFalse);
       expect(shifts.recentClosed(limit: 1).single.closedAt, bounds[2]);
+    });
+
+    testWidgets('a retry at the last check settles the clocks again and closes '
+        'at the new bound', (t) async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      final now = DateTime.now().toUtc();
+      final settled = [
+        now.add(const Duration(seconds: 3)),
+        now.add(const Duration(seconds: 9)),
+      ];
+      var settles = 0;
+      final bounds = <DateTime?>[];
+      await t.pumpWidget(closing((s, {until, onProgress}) async {
+        bounds.add(until);
+        return bounds.length == 2 ? ['Bar: unreachable'] : const [];
+      }, settle: (since) async => settled[settles++]));
+      await t.pumpAndSettle();
+
+      await countAndConfirm(t, '0');
+      await t.tap(find.byKey(const Key('tills-unreachable-retry')));
+      await t.pumpAndSettle();
+
+      expect(settles, 2);
+      expect(bounds.sublist(1), settled);
+      expect(shifts.recentClosed(limit: 1).single.closedAt, settled[1]);
     });
   });
 }

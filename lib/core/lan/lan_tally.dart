@@ -35,6 +35,84 @@ class LanTallyAnswer {
 }
 
 const String _outdated = 'runs an older version and has to be updated';
+const String _clockOff = 'its clock is more than a minute out';
+const String _clockShort = 'its clock had not reached the close yet';
+const String _clockAhead = 'its clock ran ahead of the close';
+
+/// How far apart two clocks may be for a close to wait them out. Well inside
+/// the request signature's tolerance, and short enough that a close never
+/// waits much over two minutes.
+const Duration kCloseClockLimit = Duration(minutes: 1);
+
+/// Safety margin on each side of the bound, chiefly for the time a beacon spent
+/// on the wire, which the offset it measured leaves out.
+const Duration kCloseClockMargin = Duration(seconds: 2);
+
+/// Whether a clock [offset] from this till's is too far for a close to wait out.
+bool clockTooFar(Duration? offset) =>
+    (offset?.abs() ?? Duration.zero) > kCloseClockLimit;
+
+/// Where a close is bounded, given each till's clock [offsets] from this one.
+///
+/// [at] is past the stamp the fastest till gives a sale rung now. By [askAfter]
+/// the slowest till's clock is past [at] too, so nothing can still be stamped
+/// inside the window when the tills are asked. A till whose offset is not known
+/// is not waited for; [clockShortGap] names it if its answer shows it was short.
+({DateTime at, DateTime askAfter}) closeCutoffFor(
+    DateTime now, Iterable<Duration?> offsets) {
+  var ahead = Duration.zero;
+  var behind = Duration.zero;
+  for (final offset in offsets) {
+    if (offset == null || clockTooFar(offset)) continue;
+    if (offset > ahead) ahead = offset;
+    if (-offset > behind) behind = -offset;
+  }
+  final at = now.toUtc().add(ahead + kCloseClockMargin);
+  return (at: at, askAfter: at.add(behind + kCloseClockMargin));
+}
+
+/// The tills whose clock, by [offsetOf], is too far out for a close to wait
+/// for, one gap each.
+List<LanTillGap> clockGaps(
+        Iterable<LanPeer> peers, Duration? Function(LanPeer) offsetOf) =>
+    [
+      for (final peer in peers)
+        if (clockTooFar(offsetOf(peer)))
+          LanTillGap(
+            deviceId: peer.deviceId,
+            name: peer.name,
+            reason: _clockOff,
+            lastSeenAt: peer.lastSeenAt,
+          ),
+    ];
+
+/// The gap for [peer] when its [clock], read as it listed its sales, was not
+/// past [until]: it could still ring a sale stamped inside the window. Null
+/// when the clock was past it.
+LanTillGap? clockShortGap(LanPeer peer, DateTime? clock, DateTime until) =>
+    clock != null && clock.isAfter(until)
+        ? null
+        : LanTillGap(
+            deviceId: peer.deviceId,
+            name: peer.name,
+            reason: _clockShort,
+            lastSeenAt: peer.lastSeenAt,
+          );
+
+/// The gap for [peer] when its clock, measured [offset] ahead of this till's as
+/// it answered, give or take [spread], may have run further ahead than the
+/// [cover] the close was bounded for: a sale it rang before the close would be
+/// stamped past it. Null otherwise.
+LanTillGap? clockAheadGap(LanPeer peer, Duration? offset, Duration cover,
+        {Duration spread = Duration.zero}) =>
+    offset == null || offset + spread <= cover
+        ? null
+        : LanTillGap(
+            deviceId: peer.deviceId,
+            name: peer.name,
+            reason: _clockAhead,
+            lastSeenAt: peer.lastSeenAt,
+          );
 
 /// The tills whose sales this one does not hold, one gap per till.
 ///
@@ -101,7 +179,11 @@ String closeProgressIn(String status, String Function(String en) tr) {
 /// A [LanTillGap.reason], which is English on the wire, run through [tr] for
 /// the cashier's language. Reasons it does not know are returned as they came.
 String gapReasonIn(String reason, String Function(String en) tr) {
-  if (reason == 'the primary is not on the network' || reason == _outdated) {
+  if (reason == 'the primary is not on the network' ||
+      reason == _outdated ||
+      reason == _clockOff ||
+      reason == _clockShort ||
+      reason == _clockAhead) {
     return tr(reason);
   }
   if (RegExp(r'^(\d+) sales? held there (?:is|are) not on this till yet$')

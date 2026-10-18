@@ -46,6 +46,12 @@ class _Peers extends LanHttpClient {
   final List<DateTime> windows = [];
   void Function()? onAsk;
 
+  /// What each till reads on its clock as it answers; a day ahead when not set,
+  /// past any bound a test asks for. A null entry is a build that sends none.
+  final Map<String, DateTime?> clocks = {};
+  final Map<String, Duration> offsets = {};
+  final Map<String, Duration> spreads = {};
+
   @override
   Future<LanPage> fetch(LanPeer peer, int since) async => LanPage.empty;
 
@@ -53,7 +59,7 @@ class _Peers extends LanHttpClient {
   Future<void> notify(LanPeer peer, List<LanEvent> events, String deviceId) async {}
 
   @override
-  Future<List<String>> tally(
+  Future<LanTallyReply> tally(
     LanPeer peer, {
     required String deviceId,
     required DateTime since,
@@ -70,21 +76,90 @@ class _Peers extends LanHttpClient {
       throw HttpException(
           '404 from ${peer.baseUrl}/lan/tally: {"error":"unknown path"}');
     }
-    return holds[peer.deviceId] ?? const [];
+    return LanTallyReply(
+      holds[peer.deviceId] ?? const [],
+      clock: clocks.containsKey(peer.deviceId)
+          ? clocks[peer.deviceId]
+          : DateTime.now().toUtc().add(const Duration(days: 1)),
+      clockOffset: offsets[peer.deviceId],
+      clockSpread: spreads[peer.deviceId] ?? Duration.zero,
+    );
   }
 }
 
-LanPeer _peer(String id, {DateTime? seen}) => LanPeer(
+LanPeer _peer(String id, {DateTime? seen, Duration? clock}) => LanPeer(
       deviceId: id,
       name: id.toUpperCase(),
       host: '127.0.0.1',
       port: 45333,
       schemaVersion: Schema.version,
       lastSeenAt: seen ?? DateTime.now().toUtc(),
+      clockOffset: clock,
     );
 
 void main() {
   setUpAll(useSystemSqlite);
+
+  group('a close bounded on every till\'s clock', () {
+    final now = DateTime.utc(2026, 10, 17, 22);
+
+    test('with the clocks in step it waits only the margin', () {
+      final cut = closeCutoffFor(now, [Duration.zero]);
+      expect(cut.at, now.add(kCloseClockMargin));
+      expect(cut.askAfter, cut.at.add(kCloseClockMargin));
+    });
+
+    test('a sale rung now on a till ahead is inside, and every till has passed '
+        'the bound when they are asked', () {
+      const ahead = Duration(seconds: 5);
+      const behind = Duration(seconds: 3);
+      final cut = closeCutoffFor(now, [ahead, -behind, null]);
+
+      // The sale is rung at this till's now; the till ahead stamps it 5s later.
+      expect(now.add(ahead).isAfter(cut.at), isFalse);
+      // When this till's clock reads askAfter, the slowest till reads 3s less,
+      // and that is still past the bound: nothing can be stamped inside it.
+      expect(cut.askAfter.subtract(behind).isAfter(cut.at), isTrue);
+    });
+
+    test('a till more than a minute out is named and not waited for', () {
+      final far = _peer('till-b', clock: const Duration(minutes: 3));
+      final cut = closeCutoffFor(now, [far.clockOffset]);
+      expect(cut.at, now.add(kCloseClockMargin));
+      final gaps = clockGaps(
+          [far, _peer('till-c', clock: const Duration(seconds: 10))],
+          (p) => p.clockOffset);
+      expect(gaps.single.deviceId, 'till-b');
+      expect(gaps.single.reason, 'its clock is more than a minute out');
+    });
+
+    test('a till is named when its clock had not passed the bound as it '
+        'listed its sales, or did not say', () {
+      final till = _peer('till-b');
+      expect(clockShortGap(till, now.add(const Duration(milliseconds: 1)), now),
+          isNull);
+      expect(clockShortGap(till, now, now)!.reason,
+          'its clock had not reached the close yet');
+      expect(clockShortGap(till, null, now), isNotNull);
+    });
+
+    test('a till is named when it ran further ahead than the bound allowed '
+        'for, and not when its offset was unknown', () {
+      final till = _peer('till-b');
+      const cover = Duration(seconds: 2);
+      expect(clockAheadGap(till, cover, cover), isNull);
+      expect(clockAheadGap(till, null, cover), isNull);
+      // Half a slow round trip either way could put it past the bound.
+      expect(
+          clockAheadGap(till, const Duration(seconds: 1), cover,
+              spread: const Duration(milliseconds: 1001)),
+          isNotNull);
+      expect(
+          clockAheadGap(till, cover + const Duration(milliseconds: 1), cover)!
+              .reason,
+          'its clock ran ahead of the close');
+    });
+  });
 
   group('tallyGaps', () {
     test('a till whose every sale is held here is not a gap', () {
@@ -244,6 +319,151 @@ void main() {
       expect(gaps.single.reason, 'runs an older version and has to be updated');
     });
 
+    test('at the close a till more than a minute out is named and still '
+        'asked, so what it holds is not hidden', () async {
+      node.peers.seen(_peer('till-b', clock: const Duration(minutes: -2)));
+      peers.holds['till-b'] = ['s1', 's2'];
+      final until = DateTime.now().toUtc();
+
+      final gaps = await node.catchUpBeforeClose(
+          since: since, until: until, closing: true);
+      expect([for (final g in gaps) g.reason], [
+        'its clock is more than a minute out',
+        '2 sales held there are not on this till yet',
+      ]);
+      expect(peers.asked, ['till-b']);
+    });
+
+    test('a check that is not the close does not hold on a till\'s clock',
+        () async {
+      node.peers.seen(_peer('till-b', clock: const Duration(minutes: 3)));
+      peers.clocks['till-b'] = since;
+
+      // The check before the count, and a resend of a session long closed.
+      expect(await node.catchUpBeforeClose(since: since), isEmpty);
+      expect(
+          await node.catchUpBeforeClose(
+              since: since, until: since.add(const Duration(hours: 7))),
+          isEmpty);
+    });
+
+    test('a till whose clock had not reached the close as it answered is named',
+        () async {
+      node.peers.seen(_peer('till-b'));
+      node.peers.seen(_peer('till-c'));
+      final until = DateTime.now().toUtc();
+      peers.clocks['till-b'] = until.subtract(const Duration(seconds: 1));
+      peers.clocks['till-c'] = null;
+
+      final gaps = await node.catchUpBeforeClose(
+          since: since, until: until, closing: true);
+      expect({for (final g in gaps) g.deviceId: g.reason}, {
+        'till-b': 'its clock had not reached the close yet',
+        'till-c': 'its clock had not reached the close yet',
+      });
+    });
+
+    test('a till found at the close further ahead than the bound allowed for '
+        'is named', () async {
+      // Heard only from its requests, so the bound was chosen without it.
+      node.peers.heard('till-b', host: '127.0.0.1', port: 45333);
+      final until = await node.settleCloseCutoff(since);
+      peers.offsets['till-b'] = const Duration(seconds: 5);
+
+      final gaps = await node.catchUpBeforeClose(
+          since: since, until: until, closing: true);
+      expect(gaps.single.reason, 'its clock ran ahead of the close');
+    });
+
+    test('a till that may be past the bound once a slow answer is allowed for '
+        'is named', () async {
+      node.peers.heard('till-b', host: '127.0.0.1', port: 45333);
+      final until = await node.settleCloseCutoff(since);
+      peers.offsets['till-b'] = const Duration(seconds: 1);
+      peers.spreads['till-b'] = const Duration(milliseconds: 1500);
+
+      final gaps = await node.catchUpBeforeClose(
+          since: since, until: until, closing: true);
+      expect(gaps.single.reason, 'its clock ran ahead of the close');
+    });
+
+    test('a close not at the settled bound does not hold on how far ahead a '
+        'till is', () async {
+      node.peers.heard('till-b', host: '127.0.0.1', port: 45333);
+      final settled = await node.settleCloseCutoff(since);
+      peers.offsets['till-b'] = const Duration(seconds: 5);
+
+      expect(
+          await node.catchUpBeforeClose(
+              since: since,
+              until: settled.subtract(const Duration(seconds: 1)),
+              closing: true),
+          isEmpty);
+    });
+
+    test('a till inside the bound it was settled for is not named', () async {
+      node.peers.seen(_peer('till-b', clock: const Duration(milliseconds: 300)));
+      final until = await node.settleCloseCutoff(since);
+      peers.offsets['till-b'] = const Duration(milliseconds: 500);
+
+      expect(
+          await node.catchUpBeforeClose(
+              since: since, until: until, closing: true),
+          isEmpty);
+    });
+
+    test('a till whose beacon does not reach here is waited for by the offset '
+        'its last answer showed', () async {
+      // Heard only from its requests, so it carries no offset of its own.
+      node.peers.heard('till-b', host: '127.0.0.1', port: 45333);
+      expect(node.peers.all.single.clockOffset, isNull);
+      peers.offsets['till-b'] = const Duration(milliseconds: 400);
+      await node.catchUpBeforeClose(since: since);
+
+      final started = DateTime.now().toUtc();
+      final at = await node.settleCloseCutoff(since);
+      expect(
+        at.isBefore(started
+            .add(const Duration(milliseconds: 400))
+            .add(kCloseClockMargin)),
+        isFalse,
+      );
+    });
+
+    test('with no other till on the network a close does not wait', () async {
+      final started = DateTime.now().toUtc();
+      final at = await node.settleCloseCutoff(since);
+      expect(at.difference(started) < const Duration(milliseconds: 500), isTrue);
+    });
+
+    test('the bound a close settles on is past every till\'s clock', () async {
+      node.peers.seen(
+        _peer('till-b', clock: const Duration(milliseconds: 300)),
+      );
+      node.peers.seen(
+        _peer('till-c', clock: const Duration(milliseconds: -200)),
+      );
+      final started = DateTime.now().toUtc();
+
+      final at = await node.settleCloseCutoff(since);
+
+      final done = DateTime.now().toUtc();
+      expect(
+        at.isBefore(started
+            .add(const Duration(milliseconds: 300))
+            .add(kCloseClockMargin)),
+        isFalse,
+      );
+      // till-c, 200ms behind, is past the bound and the margin by then.
+      expect(
+        done
+            .subtract(const Duration(milliseconds: 200))
+            .subtract(kCloseClockMargin)
+            .isBefore(at),
+        isFalse,
+      );
+    });
+
     test('a till last seen before the window opened is not asked', () async {
       node.peers.seen(_peer('till-b'));
       final later = DateTime.now().toUtc().add(const Duration(hours: 1));
@@ -363,6 +583,18 @@ void main() {
     test('an outdated till is translated', () {
       expect(gapReasonIn('runs an older version and has to be updated', upper),
           'RUNS AN OLDER VERSION AND HAS TO BE UPDATED');
+    });
+
+    test('the reasons a till\'s clock gives are translated', () {
+      final far = clockGaps([_peer('till-b', clock: const Duration(hours: 1))],
+              (p) => p.clockOffset)
+          .single;
+      final short = clockShortGap(_peer('till-b'), null, DateTime.utc(2026))!;
+      final ahead = clockAheadGap(
+          _peer('till-b'), const Duration(seconds: 5), Duration.zero)!;
+      for (final gap in [far, short, ahead]) {
+        expect(gapReasonIn(gap.reason, upper), gap.reason.toUpperCase());
+      }
     });
 
     test('the primary missing is translated, anything else is left alone', () {

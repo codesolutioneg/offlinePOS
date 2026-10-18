@@ -157,6 +157,15 @@ void main() {
       expect(uuids, [inside.uuid, replicated.uuid]);
     });
 
+    test('a till answers with its clock as it reads its sales', () async {
+      final other = shop.add('till-b');
+      final before = DateTime.now().toUtc().millisecondsSinceEpoch;
+      final reply = await shop.tallyReply('till-a', shop.peerFor(other),
+          since: since, until: until);
+      final after = DateTime.now().toUtc().millisecondsSinceEpoch;
+      expect(reply['clock'], inInclusiveRange(before, after));
+    });
+
     test('a tally without the shop key is refused', () {
       final body = jsonEncode({
         'device_id': 'b',
@@ -210,15 +219,23 @@ void main() {
         lastSeenAt: DateTime.utc(2026),
       );
 
-      final uuids = await client.tally(self,
+      final before = DateTime.now().toUtc();
+      final reply = await client.tally(self,
           deviceId: 'till-b', since: since, until: until);
-      expect(uuids, [sale.uuid]);
+      expect(reply.uuids, [sale.uuid]);
+      expect(reply.clock!.isBefore(before), isFalse);
+      // Both ends read the same clock here, so the offset is within the trip.
+      expect(reply.clockOffset!.abs() < const Duration(seconds: 5), isTrue);
+      expect(
+          reply.clockOffset!.abs() <=
+              reply.clockSpread + const Duration(milliseconds: 1),
+          isTrue);
 
       final none = await client.tally(self,
           deviceId: 'till-b',
           since: DateTime.utc(2026, 3, 2),
           until: DateTime.utc(2026, 3, 3));
-      expect(none, isEmpty);
+      expect(none.uuids, isEmpty);
     }, timeout: const Timeout(Duration(minutes: 2)));
   });
 

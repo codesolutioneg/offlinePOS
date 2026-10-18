@@ -2432,6 +2432,10 @@ const Map<String, String> _ar = {
   '{n} sales held there are not on this till yet': '{n} مبيعات موجودة هناك ولم تصل إلى هذا الجهاز بعد',
   'could not list its sales': 'تعذّر عرض مبيعاته',
   'runs an older version and has to be updated': 'يعمل بإصدار أقدم ويجب تحديثه',
+  'its clock is more than a minute out': 'ساعته مختلفة بأكثر من دقيقة',
+  'its clock had not reached the close yet': 'ساعته لم تصل إلى وقت الإغلاق بعد',
+  'its clock ran ahead of the close': 'ساعته سبقت وقت الإغلاق',
+  "Waiting for every till's clock to pass the close...": 'انتظار أن تتجاوز ساعة كل جهاز وقت الإغلاق...',
   // Deleting from the open orders list.
   'This order was sent to the kitchen': 'هذا الطلب أُرسل إلى المطبخ',
   'It cannot be deleted from this list. Open it and void the items from inside: that asks for a manager PIN and a reason, tells the kitchen to stop, and keeps the void in the reports.':
