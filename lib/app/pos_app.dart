@@ -3265,6 +3265,8 @@ class _PosAppState extends State<PosApp> {
         ordersIn: (from, to) => widget.orders.paidBetween(from: from, to: to),
         shopOrdersIn: (from, to) =>
             widget.orders.paidBetween(from: from, to: to, anyDevice: true),
+        // Fresh held bags each time a driver report opens (not a snapshot at hub push).
+        heldOrders: () => widget.orders.heldAnywhere(),
         categories: widget.catalogue.categories(),
         formatAmount: PosApp.money,
         audit: widget.audit,
@@ -3534,6 +3536,11 @@ class _PosAppState extends State<PosApp> {
           bulletin: widget.settings.floorBulletinEnabled
               ? _deliveryBulletin()
               : null,
+          drivers: widget.delivery?.drivers() ?? const [],
+          onAssignDriver: (order, driver) {
+            session.assignDriverTo(order, driver);
+            setState(() {});
+          },
           onBack: only ? null : () => setState(() => _deliveryHome = false),
           onShiftOrders: () => _openShiftOrders(context, delivery: true),
           onOpenType: (t) => unawaited(_openDeliveryType(context, session, t)),

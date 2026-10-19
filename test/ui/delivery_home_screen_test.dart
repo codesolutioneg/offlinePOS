@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:offline_pos/domain/delivery.dart';
 import 'package:offline_pos/domain/delivery_bulletin.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/orders/delivery_home_screen.dart';
@@ -23,6 +24,8 @@ void main() {
     VoidCallback? onBack,
     VoidCallback? onShiftOrders,
     List<FloorAction> actions = const [],
+    List<Driver> drivers = const [],
+    void Function(Order, Driver?)? onAssignDriver,
   }) async {
     t.view.physicalSize = const Size(1366, 768);
     t.view.devicePixelRatio = 1;
@@ -42,6 +45,8 @@ void main() {
         onBack: onBack,
         onShiftOrders: onShiftOrders,
         actions: actions,
+        drivers: drivers,
+        onAssignDriver: onAssignDriver,
       ),
     ));
   }
@@ -140,5 +145,57 @@ void main() {
     ]);
     await t.tap(find.byKey(const Key('delivery-action-session')));
     expect(taps, 1);
+  });
+
+  testWidgets('Driver on a waiting card opens the assign sheet without resume',
+      (t) async {
+    final a = bag(OrderType.storeDelivery, 'Nadia');
+    final driver = Driver(id: 'd1', name: 'mostafa', phone: '01000000');
+    Order? assignedOrder;
+    Driver? assignedDriver;
+    var resumed = 0;
+    await pump(
+      t,
+      parked: [a],
+      drivers: [driver],
+      onResume: (_) => resumed++,
+      onAssignDriver: (o, d) {
+        assignedOrder = o;
+        assignedDriver = d;
+      },
+    );
+    await t.tap(find.byKey(Key('delivery-home-assign-driver-${a.uuid}')));
+    await t.pumpAndSettle();
+    expect(resumed, 0);
+    expect(find.byKey(const Key('delivery-home-driver-dialog')), findsOneWidget);
+    expect(find.text('mostafa'), findsWidgets);
+    await t.tap(find.byKey(Key('delivery-home-driver-${driver.id}')));
+    await t.pumpAndSettle();
+    expect(assignedOrder, a);
+    expect(assignedDriver?.id, 'd1');
+  });
+
+  testWidgets('driver dialog search filters by name', (t) async {
+    final a = bag(OrderType.storeDelivery, 'Nadia');
+    final mostafa = Driver(id: 'd1', name: 'mostafa', phone: '01000000');
+    final yaser = Driver(id: 'd2', name: 'yaser');
+    Driver? picked;
+    await pump(
+      t,
+      parked: [a],
+      drivers: [mostafa, yaser],
+      onAssignDriver: (_, d) => picked = d,
+    );
+    await t.tap(find.byKey(Key('delivery-home-assign-driver-${a.uuid}')));
+    await t.pumpAndSettle();
+    await t.enterText(
+        find.byKey(const Key('delivery-home-driver-search')), 'yas');
+    await t.pumpAndSettle();
+    expect(find.byKey(Key('delivery-home-driver-${yaser.id}')), findsOneWidget);
+    expect(
+        find.byKey(Key('delivery-home-driver-${mostafa.id}')), findsNothing);
+    await t.tap(find.byKey(Key('delivery-home-driver-${yaser.id}')));
+    await t.pumpAndSettle();
+    expect(picked?.id, 'd2');
   });
 }

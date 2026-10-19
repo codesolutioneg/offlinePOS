@@ -1,5 +1,18 @@
 import 'shift.dart';
 
+/// An open drawer left on a till for more than [maxAge] with no close — usually
+/// a quiet LAN peer open or a test that never traded. The reports site would
+/// otherwise keep showing "14 Oct Eazz (Open)" beside real 15/16 sessions.
+bool isAbandonedOpenShift(
+  Shift shift, {
+  DateTime? now,
+  Duration maxAge = const Duration(hours: 18),
+}) {
+  if (shift.closedAt != null) return false;
+  final at = (now ?? DateTime.now()).toUtc();
+  return at.difference(shift.openedAt.toUtc()) > maxAge;
+}
+
 /// Collapse LAN "quiet open" clones of the same shop open into one session row.
 ///
 /// When till A opens, peers open a local drawer with the same cashier — often a
@@ -7,10 +20,17 @@ import 'shift.dart';
 /// site those look like three Emad sessions (08:35, 08:35, 08:47). Prefer the
 /// drawer with the higher opening float (the till that really counted cash in);
 /// otherwise keep the earliest / longest-lived row.
+///
+/// Abandoned open drawers ([isAbandonedOpenShift]) are dropped so a stale peer
+/// open cannot sit in the Sessions list forever.
 List<Shift> collapseShopShiftClones(List<Shift> shifts,
-    {Duration window = const Duration(minutes: 3)}) {
-  if (shifts.length <= 1) return List.of(shifts);
-  final sorted = [...shifts]..sort((a, b) => a.openedAt.compareTo(b.openedAt));
+    {Duration window = const Duration(minutes: 3), DateTime? now}) {
+  final live = [
+    for (final s in shifts)
+      if (!isAbandonedOpenShift(s, now: now)) s,
+  ];
+  if (live.length <= 1) return List.of(live);
+  final sorted = [...live]..sort((a, b) => a.openedAt.compareTo(b.openedAt));
   final kept = <Shift>[];
   for (final s in sorted) {
     final i = kept.indexWhere((k) => _sameShopOpen(k, s, window));

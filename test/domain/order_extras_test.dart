@@ -5,13 +5,16 @@ void main() {
   OrderLine line(double p, [double q = 1]) =>
       OrderLine(productId: 1, name: 'x', quantity: q, unitPrice: p);
 
-  test('discount reduces total and is folded into the server payload only', () {
+  test('discount reduces total; server payload keeps menu price and states the amount', () {
     final o = Order(deviceId: 'd', cashierId: 'c', discountPercent: 10)..lines.add(line(100));
     expect(o.subtotal, 100);
     expect(o.total, 90);
     expect((o.toMap()['lines'][0]['unit_price'] as num), 100); // raw stays full
     expect(o.toMap()['discount_percent'], 10);
-    expect((o.toServerPayload()['lines'][0]['unit_price'] as num), 90); // discounted for Odoo
+    final sent = o.toServerPayload();
+    expect((sent['lines'][0]['unit_price'] as num), 100); // menu price for Odoo
+    expect(sent['discount_amount'], 10);
+    expect(sent['prices_include_discount'], isFalse);
   });
 
   test('customer and payments are carried in the payload', () {

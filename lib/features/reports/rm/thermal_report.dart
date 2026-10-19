@@ -179,3 +179,28 @@ List<ThermalLine> thermalTableLines(
   }
   return out;
 }
+
+/// Full slip lines for screen preview — same content `_printReportPage` sends.
+List<ThermalLine> thermalReportSlipLines(
+  ThermalReport report, {
+  required String shopName,
+  int columns = 42,
+  DateTime? at,
+}) {
+  final now = at ?? DateTime.now();
+  String two(int n) => n.toString().padLeft(2, '0');
+  final shop = shopName.trim().isEmpty ? 'Shop' : shopName.trim();
+  return [
+    ThermalLine(shop, bold: true, center: true),
+    ThermalLine(report.title, bold: true, center: true),
+    if (report.period.trim().isNotEmpty)
+      ThermalLine(report.period, center: true),
+    const ThermalLine(''),
+    ThermalLine('${report.dateLabel}: ${now.year}-${two(now.month)}-'
+        '${two(now.day)} ${two(now.hour)}:${two(now.minute)}'),
+    if (report.filter.trim().isNotEmpty)
+      ThermalLine('${report.filterLabel}: ${report.filter}'),
+    const ThermalLine(''),
+    ...thermalTableLines(report.header, report.rows, columns),
+  ];
+}

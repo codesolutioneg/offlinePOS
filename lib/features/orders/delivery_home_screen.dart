@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/dishflow_brand.dart';
+import '../../domain/delivery.dart';
 import '../../domain/order.dart';
 import '../../domain/delivery_bulletin.dart';
 import '../tables/floor_action_bar.dart';
@@ -28,6 +29,8 @@ class DeliveryHomeScreen extends StatelessWidget {
     this.bulletin,
     this.ownDeviceId,
     this.onShiftOrders,
+    this.drivers = const [],
+    this.onAssignDriver,
   });
 
   /// Opens this shift's paid deliveries. Null hides the button.
@@ -52,6 +55,12 @@ class DeliveryHomeScreen extends StatelessWidget {
 
   /// The shop's delivery numbers for the Bulletin board; null draws no board.
   final DeliveryBulletin? bulletin;
+
+  /// Active drivers for the assign sheet on each waiting card.
+  final List<Driver> drivers;
+
+  /// Assign / clear a driver without opening the bag. Null hides the control.
+  final void Function(Order order, Driver? driver)? onAssignDriver;
 
   static const List<BulletinRow> bulletinRows = [
     (
@@ -264,7 +273,7 @@ class DeliveryHomeScreen extends StatelessWidget {
                       crossAxisCount: cols,
                       mainAxisSpacing: gap,
                       crossAxisSpacing: gap,
-                      mainAxisExtent: 128,
+                      mainAxisExtent: onAssignDriver == null ? 128 : 152,
                     ),
                     itemCount: waiting.length,
                     itemBuilder: (ctx, i) => _card(ctx, waiting[i]),
@@ -274,6 +283,19 @@ class DeliveryHomeScreen extends StatelessWidget {
       ),
     ],
   );
+
+  Future<void> _pickDriver(BuildContext context, Order o) async {
+    final assign = onAssignDriver;
+    if (assign == null) return;
+    final active = drivers.where((d) => d.active).toList(growable: false);
+    final chosen = await showDialog<Object?>(
+      context: context,
+      barrierColor: const Color(0x99000000),
+      builder: (ctx) => _DriverPickDialog(drivers: active),
+    );
+    if (chosen == null) return;
+    assign(o, chosen == 'clear' ? null : chosen as Driver);
+  }
 
   Widget _typeTile(BuildContext context, OrderType t, List<Order> waiting) {
     final count = waiting.where((o) => o.type == t).length;
@@ -415,7 +437,7 @@ class DeliveryHomeScreen extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (o.driverName != null) ...[
+                  if (onAssignDriver == null && o.driverName != null) ...[
                     const Text('  ·  ', style: TextStyle(fontSize: 12)),
                     const Icon(Icons.two_wheeler, size: 14),
                     const SizedBox(width: 3),
@@ -429,8 +451,162 @@ class DeliveryHomeScreen extends StatelessWidget {
                   ],
                 ],
               ),
+              if (onAssignDriver != null) ...[
+                const SizedBox(height: 4),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton.icon(
+                    key: Key('delivery-home-assign-driver-${o.uuid}'),
+                    onPressed: () => _pickDriver(context, o),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      foregroundColor: AppColors.primary,
+                      textStyle: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                    icon: Icon(
+                      o.driverName == null
+                          ? Icons.person_off_outlined
+                          : Icons.two_wheeler,
+                      size: 16,
+                    ),
+                    label: Text(
+                      o.driverName ?? tr(context, 'Driver'),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Centered driver picker with name/phone search — used from delivery home.
+class _DriverPickDialog extends StatefulWidget {
+  const _DriverPickDialog({required this.drivers});
+
+  final List<Driver> drivers;
+
+  @override
+  State<_DriverPickDialog> createState() => _DriverPickDialogState();
+}
+
+class _DriverPickDialogState extends State<_DriverPickDialog> {
+  String _query = '';
+
+  List<Driver> get _filtered {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return widget.drivers;
+    return [
+      for (final d in widget.drivers)
+        if (d.name.toLowerCase().contains(q) ||
+            (d.phone?.toLowerCase().contains(q) ?? false))
+          d,
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = _filtered;
+    return Dialog(
+      key: const Key('delivery-home-driver-dialog'),
+      backgroundColor: Colors.white,
+      elevation: 12,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 40),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 480,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.75,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 12, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      tr(context, 'Driver'),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 20,
+                        color: AppColors.brandNavy,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    key: const Key('delivery-home-driver-dialog-close'),
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: TextField(
+                key: const Key('delivery-home-driver-search'),
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: tr(context, 'Search name or phone'),
+                  prefixIcon: const Icon(Icons.search),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  isDense: true,
+                ),
+                onChanged: (v) => setState(() => _query = v),
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: [
+                  if (widget.drivers.isEmpty)
+                    ListTile(
+                      key: const Key('delivery-home-no-drivers'),
+                      title: Text(
+                          tr(context, 'No drivers yet. Add them in Settings.')),
+                    )
+                  else if (shown.isEmpty)
+                    ListTile(
+                      key: const Key('delivery-home-driver-search-empty'),
+                      title: Text(tr(context, 'No matching drivers')),
+                    )
+                  else
+                    for (final d in shown)
+                      ListTile(
+                        key: Key('delivery-home-driver-${d.id}'),
+                        leading: const Icon(Icons.delivery_dining,
+                            color: AppColors.primary),
+                        title: Text(d.name,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w700)),
+                        subtitle: d.phone == null ? null : Text(d.phone!),
+                        onTap: () => Navigator.pop(context, d),
+                      ),
+                  ListTile(
+                    key: const Key('delivery-home-driver-clear'),
+                    leading: const Icon(Icons.person_off_outlined),
+                    title: Text(tr(context, 'No driver yet')),
+                    onTap: () => Navigator.pop(context, 'clear'),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -80,4 +80,30 @@ void main() {
     expect(all.where((t) => t.startsWith('Table')), hasLength(1));
     expect(all.where((t) => t == '-' * 40), hasLength(2));
   });
+
+  test('slip preview includes shop, title, filter, then the table', () {
+    final lines = thermalReportSlipLines(
+      const ThermalReport(
+        title: 'Driver account',
+        period: 'Today',
+        filter: 'All drivers',
+        header: ['Driver', 'Orders', 'Total'],
+        rows: [
+          ['Ali', '2', '100.00'],
+        ],
+        dateLabel: 'Date/time',
+        filterLabel: 'Report filter',
+      ),
+      shopName: 'Test Shop',
+      columns: 40,
+      at: DateTime(2026, 10, 19, 15, 30),
+    );
+    final all = texts(lines);
+    expect(all.first, 'Test Shop');
+    expect(lines.first.center, isTrue);
+    expect(all, contains('Driver account'));
+    expect(all, contains('Date/time: 2026-10-19 15:30'));
+    expect(all, contains('Report filter: All drivers'));
+    expect(all.any((t) => t.startsWith('Ali') && t.contains('100.00')), isTrue);
+  });
 }

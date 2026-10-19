@@ -21,6 +21,7 @@ import 'daily_sales_report_screen.dart';
 import 'detailed_discounts_report_screen.dart';
 import 'discounts_report_screen.dart';
 import 'driver_delivery_report_screen.dart';
+import 'driver_sales_analysis_report_screen.dart';
 import 'expenses_report_screen.dart';
 import 'flash/flash_flow.dart';
 import 'flash/flash_report_data.dart';
@@ -64,6 +65,7 @@ class ReportsHubScreen extends StatefulWidget {
     this.shopOrders,
     this.ordersIn,
     this.shopOrdersIn,
+    this.heldOrders,
     this.cashTenderIds = const {},
     required this.categories,
     required this.formatAmount,
@@ -128,6 +130,10 @@ class ReportsHubScreen extends StatefulWidget {
 
   /// The same across every till on the LAN, for Flash; ahead of [shopOrders].
   final List<Order> Function(DateTime? from, DateTime? to)? shopOrdersIn;
+
+  /// Parked delivery bags (any till), read when the driver report opens so an
+  /// assign made after the hub was pushed still lands. Null = none.
+  final List<Order> Function()? heldOrders;
   final List<Category> categories;
   final String Function(double) formatAmount;
 
@@ -354,7 +360,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   bool _inPeriod(Order o, ReportPeriodChoice period) =>
       period.contains(o.createdAt, shiftOpenedAt: _shiftOpenedAt);
 
-  List<Order> _applyStaffType(Iterable<Order> source) {
+  List<Order> _applyStaffType(Iterable<Order> source,
+      {bool ignoreDriverFilter = false}) {
     bool has(String? value, String wanted) =>
         (value ?? '').toLowerCase().contains(wanted);
     final table = _table.text.trim().toLowerCase();
@@ -369,7 +376,13 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
             customer.isEmpty ||
             has(o.customerName, customer) ||
             has(o.customerPhone, customer))
-        .where((o) => _driver == null || o.driverName == _driver)
+        // Exact name used to drop rows when the hub filter said "yaser" but the
+        // order only had driverId (or a different spelling). Driver reports pick
+        // the rider themselves — skip the hub filter there.
+        .where((o) =>
+            ignoreDriverFilter ||
+            _driver == null ||
+            _driverNameMatches(o.driverName, _driver))
         // An untendered sale is booked to cash, as the payment reports read it.
         .where((o) =>
             _tender == null ||
@@ -377,6 +390,11 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                 ? _tender == 'Cash'
                 : o.payments.any((p) => (p.label ?? 'Cash') == _tender)))
         .toList();
+  }
+
+  static bool _driverNameMatches(String? onOrder, String? wanted) {
+    if (wanted == null) return true;
+    return (onOrder ?? '').trim().toLowerCase() == wanted.trim().toLowerCase();
   }
 
   /// This till's sales in a window, read from the store when it can be asked
@@ -412,9 +430,39 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   /// Sales reports drop fully cancelled pairs and strip refunds — same books as
   /// Flash / Odoo session close. Refunds & voids keep the raw set.
   List<Order> _filteredFor(ReportPeriodChoice period, {String? reportKey}) {
+    if (reportKey == 'rep-driver' || reportKey == 'rep-driver-account') {
+      return _driverAccountOrders(period);
+    }
     final raw = _localPeriodOrders(period);
     if (reportKey != null && _refundReportKeys.contains(reportKey)) return raw;
     return salesForOdoo(raw);
+  }
+
+  /// Paid deliveries plus held bags that already have a driver — حساب الطيار.
+  ///
+  /// Hub "Driver" filter is ignored here: the report's own picker is the source
+  /// of truth (filtering by name in the hub made totals flip depending on
+  /// whether a favourite filter was left on).
+  List<Order> _driverAccountOrders(ReportPeriodChoice period) {
+    final (from, to) = _windowOf(period);
+    final paidSource = widget.shopOrdersIn?.call(from, to) ??
+        widget.shopOrders ??
+        _localIn(from, to);
+    final paid = _applyStaffType(
+      paidSource.where((o) => _inPeriod(o, period)),
+      ignoreDriverFilter: true,
+    );
+    final heldSource = widget.heldOrders?.call() ?? const <Order>[];
+    final held = _applyStaffType(
+      heldSource.where((o) => o.type.isDelivery && _inPeriod(o, period)),
+      ignoreDriverFilter: true,
+    );
+    final byUuid = <String, Order>{
+      for (final o in paid) o.uuid: o,
+      for (final o in held) o.uuid: o,
+    };
+    return byUuid.values.toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
 
   /// Every till on the LAN in [period] (Flash and shop-wide sales).
@@ -635,14 +683,25 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                     (o, _) => CashierReportScreen(
                         orders: o, formatAmount: widget.formatAmount)),
                 _tile(
-                    tr(context, 'Driver account'),
+                    tr(context, 'Driver sales analysis'),
                     Icons.delivery_dining,
                     'rep-driver',
                     const Color(0xFF10B981),
+                    (o, _) => DriverSalesAnalysisReportScreen(
+                        orders: o,
+                        drivers: widget.drivers,
+                        categories: widget.categories,
+                        formatAmount: widget.formatAmount)),
+                _tile(
+                    tr(context, 'Driver account'),
+                    Icons.person_pin_circle_outlined,
+                    'rep-driver-account',
+                    const Color(0xFF059669),
                     (o, _) => DriverDeliveryReportScreen(
                         orders: o,
                         drivers: widget.drivers,
-                        formatAmount: widget.formatAmount)),
+                        formatAmount: widget.formatAmount,
+                        onPrint: widget.onPrintReport)),
                 _tile(
                     tr(context, 'Cancelled, voided & refunded'),
                     Icons.gpp_bad,
@@ -776,6 +835,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
         'rep-refunds',
         'rep-activity',
         'rep-driver',
+        'rep-driver-account',
         'rep-payment',
       ]
     ),
@@ -1601,8 +1661,9 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   Widget _sessions(BuildContext context) {
     final store = widget.shifts;
     final closed = collapseShopShiftClones(store?.recentClosed(limit: 50) ?? const []);
+    final open = store?.currentOpenShift();
     final shifts = <Shift>[
-      ?store?.currentOpenShift(),
+      if (open != null && !isAbandonedOpenShift(open)) open,
       ...closed,
     ];
     return Padding(

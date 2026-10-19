@@ -177,15 +177,17 @@ double discountPercentForAmount(double amount, double base) {
 class DiscountBooking {
   /// The Odoo product a discount is booked against, or null.
   ///
-  /// Null keeps the discount inside the line prices: the money and the tax are
-  /// right, but Odoo is handed a cheaper item rather than a discount, so nothing
-  /// there can report on it. Naming a product instead sends the full menu prices
-  /// and one negative line, which is how Odoo writes a discount itself and the only
-  /// way it shows as one without the module learning a new field.
+  /// Order-level discount always travels as its own negative line (menu prices
+  /// stay full on the items). When this id is set the till sends that product on
+  /// the wire; when null, Odoo books its `OFFLINE_DISCOUNT` service product from
+  /// `discount_amount` instead.
   ///
   /// It must be a **service** product: a negative line on a storable one would put
   /// stock back on the shelf.
   static int? productId;
+
+  /// Order discount is always a separate line on the Odoo document.
+  static bool get separateOrderDiscount => true;
 }
 
 /// What a product created on the till books against in Odoo.
@@ -672,7 +674,6 @@ class Order {
   double chargeFor(Iterable<OrderLine> subset,
       {double Function(OrderLine line)? quantityOf}) {
     final s = serviceChargeFactor;
-    final separateDiscount = DiscountBooking.productId != null;
     var charge = 0.0;
     for (final l in subset) {
       // Each line at what Odoo books it for, so the parts of a split bill add up
@@ -680,7 +681,9 @@ class Order {
       // the tax is not, exactly as [taxTotal] charges the whole bill, so a guest
       // paying their share pays their share of the undiscounted tax too.
       var value = _bookedLine(l);
-      if (separateDiscount) value -= l.total * s * (1 - discountFactor);
+      if (DiscountBooking.separateOrderDiscount) {
+        value -= l.total * s * (1 - discountFactor);
+      }
       if (quantityOf != null) {
         value = value / (l.quantity == 0 ? 1 : l.quantity) * quantityOf(l);
       }
@@ -739,7 +742,7 @@ class Order {
     for (final l in lines) {
       sum += _bookedLine(l);
     }
-    if (DiscountBooking.productId != null && discountMoney.abs() > 0.005) {
+    if (DiscountBooking.separateOrderDiscount && discountMoney.abs() > 0.005) {
       sum -= roundMoney(discountMoney);
     }
     return sum;
@@ -748,12 +751,10 @@ class Order {
   /// One line as Odoo books it, tax included: the line itself and each modifier
   /// that is a product of its own, at the price [toServerPayload] sends.
   double _bookedLine(OrderLine l) {
-    final f = discountFactor;
     final s = serviceChargeFactor;
     final r = l.taxRate > 0 ? l.taxRate / 100 : 0.0;
-    final lf = DiscountBooking.productId != null
-        ? l.lineDiscountFactor * s
-        : l.lineDiscountFactor * s * ((f + r) / (1 + r));
+    // Order discount leaves as its own line; only line discount + service scale.
+    final lf = l.lineDiscountFactor * s;
     double book(double price, double qty) {
       final base = roundMoney(roundMoney(price) * qty);
       return base + roundMoney(base * r);
@@ -852,36 +853,28 @@ class Order {
     return off;
   }
 
-  /// The payload sent to the server: like [toMap] but with the per-line discount, the
-  /// whole-order discount and the service charge folded into each line price, so Odoo
-  /// (which totals from the line prices) books what the customer actually paid.
+  /// The payload sent to the server: like [toMap] but with per-line discounts and
+  /// the service charge folded into each line price. The whole-order discount
+  /// stays out of the prices and travels as `discount_amount` (and optionally a
+  /// negative line when [DiscountBooking.productId] is set) so Odoo shows the
+  /// menu price on every item and the discount as its own line.
   /// [toMap] itself stays raw, so a draft restored from disk is not adjusted twice.
-  ///
-  /// When the shop has named a discount product the discount comes back out of the
-  /// prices and travels as its own negative line instead, so Odoo shows the menu
-  /// price on every item and the discount as a discount. The sale totals the same
-  /// either way; only how it reads on the Odoo document changes.
   Map<String, dynamic> toServerPayload() {
-    final f = discountFactor;
     // The service charge is a percentage of the discounted food, so scaling every line
     // by it books the same total the till printed and taxes the service at each item's
     // own rate. It travels in the prices rather than as a field of its own because the
     // module books lines, and the wire contract is fixed.
     final s = serviceChargeFactor;
     final m = toMap();
-    // Which of the two ways this sale states its discount. Null is the old one, and
-    // the only one a shop that has named no product can have.
     final discountProduct = DiscountBooking.productId;
-    // The discount is now baked into the prices below, so the percentage fields are
+    // The order discount is not baked into unit_price, so the percentage fields are
     // zeroed on the wire. Leaving them set would let a server that also reads them
-    // discount an already-discounted price a second time.
+    // discount an already-stated discount a second time.
     m['discount_percent'] = 0;
-    // What was taken off, in money, and whether the prices already have it. Without
-    // these the payload says nothing about a discount at all: the prices are simply
-    // lower, so nothing on the Odoo side can report on one. Stated rather than
-    // re-applied, and the flag is what makes double-applying impossible.
+    // What was taken off, in money, and whether the prices already have it. The
+    // flag is what makes double-applying impossible on the module side.
     m['discount_amount'] = discountMoney;
-    m['prices_include_discount'] = discountProduct == null;
+    m['prices_include_discount'] = !DiscountBooking.separateOrderDiscount;
     // Local-only, and for the same reason: the charge is already inside the prices, and
     // a field the module does not read could only ever be billed twice.
     m.remove('service_charge_percent');
@@ -921,19 +914,10 @@ class Order {
     // phone still travel so the server can match or create the partner itself.
     if (partnerId != null && partnerId! < 0) m['partner_id'] = null;
     m['lines'] = lines.map((l) {
-      // With a discount product the prices stay whole and the discount leaves as a
-      // line of its own; without one it is folded in here. The fold on a taxed
-      // line is (f + r) / (1 + r) rather than a flat f: the server applies the
-      // line's tax to the very price it is sent, and this is the one price whose
-      // tax-inclusive value equals the discounted food plus the UNdiscounted tax,
-      // which is what the till now charges. A tax-free line reduces to the flat
-      // fold, exactly as before.
-      final r = l.taxRate / 100;
-      final lf = discountProduct == null
-          ? l.lineDiscountFactor * s * ((f + r) / (1 + r))
-          // The line's own discount stays in its price either way: only the
-          // order discount leaves as the separate line.
-          : l.lineDiscountFactor * s;
+      // Menu prices stay whole for the order discount; only a per-line discount
+      // and the service charge scale the unit price. The order discount leaves as
+      // discount_amount / a negative line so Odoo can show it.
+      final lf = l.lineDiscountFactor * s;
       final lm = l.toMap();
       // What this line books against, stated rather than assumed. See
       // [LocalProductBooking]: the link the product had when it was rung, then the
@@ -957,9 +941,9 @@ class Order {
       }).toList();
       return lm;
     }).toList();
-    // One line for every discount on the bill, so the sale still totals what the
-    // customer paid. Skipped when nothing was given away, and never rounded to
-    // nothing: a fraction of a piastre is not a discount.
+    // When the shop named a discount product, send it as a line so the document
+    // uses that product. Otherwise Odoo creates OFFLINE_DISCOUNT from
+    // discount_amount (prices_include_discount is false).
     if (discountProduct != null && discountMoney.abs() > 0.005) {
       (m['lines'] as List).add({
         'product_id': discountProduct,

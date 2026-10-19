@@ -46,4 +46,18 @@ void main() {
     expect(collapsed.single.id, 'a');
     expect(collapsed.single.openingFloat, 200);
   });
+
+  test('abandoned open from a prior day is dropped', () {
+    final now = DateTime.utc(2026, 10, 17, 0, 15);
+    final ghost = Shift(
+      id: 'ghost',
+      openedAt: DateTime.utc(2026, 10, 14, 11, 30),
+      openingFloat: 0,
+      cashierId: 'eazz',
+    );
+    final real = shift('real', DateTime.utc(2026, 10, 15, 8, 35), float: 200);
+    expect(isAbandonedOpenShift(ghost, now: now), isTrue);
+    final collapsed = collapseShopShiftClones([ghost, real], now: now);
+    expect(collapsed.map((s) => s.id), ['real']);
+  });
 }

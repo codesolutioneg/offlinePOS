@@ -228,13 +228,14 @@ void main() {
   });
 
   test('a batch that states its discount two ways is not merged', () {
-    final withoutProduct = entryFor(paidSale());
-    DiscountBooking.productId = 900;
-    addTearDown(() => DiscountBooking.productId = null);
-    final withProduct = entryFor(paidSale(price: 250));
+    // Legacy folded payloads and current separate-line ones must not mix.
+    final folded = entryFor(paidSale());
+    folded.payload['prices_include_discount'] = true;
+    final separate = entryFor(paidSale(price: 250));
+    separate.payload['prices_include_discount'] = false;
 
     final outcome =
-        mergeOrderPushes([withoutProduct, withProduct], batchUuid: 'shift');
+        mergeOrderPushes([folded, separate], batchUuid: 'shift');
     expect(outcome.batch, isNull);
     expect(outcome.notMerged!.reason, contains('two different ways'));
   });

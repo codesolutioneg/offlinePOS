@@ -225,12 +225,12 @@ void main() {
 
     expect(await outbox.drain(), greaterThan(0));
     final payload = bookedOrder();
-    // 2 x 250, less 10%.
+    // 2 x 250, less 10% — menu prices stay full; Odoo adds the discount line.
     expect(payload['discount_amount'], 50,
         reason: 'a payload that only carries cheaper prices leaves nothing in Odoo '
             'that says a discount happened');
-    expect(payload['prices_include_discount'], isTrue);
-    expect((payload['lines'] as List).single['unit_price'], 225);
+    expect(payload['prices_include_discount'], isFalse);
+    expect((payload['lines'] as List).single['unit_price'], 250);
   });
 
   testWidgets('with a discount product it books as a discount line', (t) async {

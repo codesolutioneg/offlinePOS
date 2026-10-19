@@ -87,12 +87,29 @@ double payloadTaxTotal(Map<String, dynamic> payload) {
   return tax;
 }
 
-/// Everything this payload says was sold: its lines, the tax charged on them, and
-/// [payloadPricedExtras].
+/// Order discount stated on the payload when line prices are still full.
+///
+/// When `prices_include_discount` is true the amount is informational only.
+/// When false and no negative line is already in `lines`, Odoo books
+/// `OFFLINE_DISCOUNT` from this figure — so the till's balance check must too.
+double payloadOrderDiscount(Map<String, dynamic> payload) {
+  if (payload['prices_include_discount'] == true) return 0;
+  final alreadyALine = (payload['lines'] as List? ?? const []).any((raw) {
+    final price = _num(((raw as Map).cast<String, dynamic>())['unit_price']);
+    return price < -0.005;
+  });
+  if (alreadyALine) return 0;
+  return _num(payload['discount_amount']);
+}
+
+/// Everything this payload says was sold: its lines, the tax charged on them,
+/// [payloadPricedExtras], less an order discount that Odoo will book as its own
+/// negative line.
 double payloadDeclaredTotal(Map<String, dynamic> payload) =>
     payloadLinesTotal(payload) +
     payloadTaxTotal(payload) +
-    payloadPricedExtras(payload);
+    payloadPricedExtras(payload) -
+    payloadOrderDiscount(payload);
 
 /// Everything this payload says was tendered.
 double payloadTendered(Map<String, dynamic> payload) => (payload['payments']
