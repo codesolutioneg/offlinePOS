@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'dart:io' show Directory, File, exit;
+import 'dart:io' show Directory, File;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../core/i18n/l10n.dart';
+import '../core/window/till_window.dart';
 
 import '../core/audit/audit_log.dart';
 import '../core/cloud/cloud_backup_service.dart';
@@ -2150,10 +2151,11 @@ class _PosAppState extends State<PosApp> {
         );
       });
 
-  /// The same bar as the signed-in floor, greyed out except Begin (and Quit, so a
-  /// locked till can still be shut down).
+  /// The same bar as the signed-in floor, greyed out except Begin, Minimize and
+  /// Quit. Quit does not close the till.
   List<FloorAction> _lockedActions(BuildContext context) => _barFrom(context, {
         'begin': () => unawaited(_openLogin(context)),
+        'minimize': () => unawaited(TillWindow.minimize()),
         'quit': () => unawaited(_quitApp(context)),
       });
 
@@ -3521,6 +3523,7 @@ class _PosAppState extends State<PosApp> {
             }
           },
           'end': _signOut,
+          'minimize': () => unawaited(TillWindow.minimize()),
           'quit': () => unawaited(_quitApp(context)),
         };
         return DeliveryHomeScreen(
@@ -4024,6 +4027,7 @@ class _PosAppState extends State<PosApp> {
           await _openFlashPopup(context);
         }
       },
+      'minimize': () => unawaited(TillWindow.minimize()),
       'quit': () => unawaited(_quitApp(context)),
     });
     if (!kStressLabEnabled || bar.isEmpty) return bar;
@@ -4579,26 +4583,28 @@ class _PosAppState extends State<PosApp> {
       _pickTabThen(context, session, _openTableTabs(),
           tr(context, 'Move items from which table?'), SellStartAction.moveItems);
   Future<void> _quitApp(BuildContext context) async {
-    final ok = await showDialog<bool>(
+    final minimize = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(tr(ctx, 'Quit Dishflow?')),
+        key: const Key('quit-blocked'),
+        title: Text(tr(ctx, 'Closing is turned off')),
+        content: Text(tr(
+            ctx,
+            'The till stays open. Use Minimize to leave it running on this computer.')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text(tr(ctx, 'Cancel')),
           ),
           FilledButton(
-            key: const Key('quit-confirm'),
+            key: const Key('quit-minimize'),
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(tr(ctx, 'Quit')),
+            child: Text(tr(ctx, 'Minimize')),
           ),
         ],
       ),
     );
-    if (ok != true) return;
-    widget.audit.record(_session?.cashierId ?? '', 'app.quit');
-    exit(0);
+    if (minimize == true) await TillWindow.minimize();
   }
 
   /// Bring a parked tab back to the counter, asking whose it is first when the shop

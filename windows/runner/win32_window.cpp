@@ -207,9 +207,9 @@ Win32Window::MessageHandler(HWND hwnd,
     case WM_SYSCOMMAND:
       if (kiosk_) {
         const WPARAM command = wparam & 0xFFF0;
+        // Minimize and restore stay available. Close, move and resize do not.
         if (command == SC_CLOSE || command == SC_MOVE || command == SC_SIZE ||
-            command == SC_MINIMIZE || command == SC_MAXIMIZE ||
-            command == SC_RESTORE) {
+            command == SC_MAXIMIZE) {
           return 0;
         }
       }

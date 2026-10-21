@@ -246,6 +246,10 @@ const Map<String, String> _ar = {
   'Flash Report': 'تقرير الفلاش',
   'Quit': 'خروج',
   'Quit Dishflow?': 'الخروج من Dishflow؟',
+  'Minimize': 'تصغير',
+  'Closing is turned off': 'الإغلاق متوقف',
+  'The till stays open. Use Minimize to leave it running on this computer.':
+      'البرنامج يفضل شغال. استخدم تصغير عشان يفضل يشتغل على الجهاز.',
   'Move items from which table?': 'نقل الأصناف من أي طاولة؟',
   'Which tables to move?': 'أي الطاولات تريد نقلها؟',
   'Send': 'إرسال',

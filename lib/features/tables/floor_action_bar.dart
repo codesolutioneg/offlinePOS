@@ -59,6 +59,7 @@ class FloorActionBar extends StatelessWidget {
     (id: 'transfer-items', label: 'Transfer Items', icon: Icons.move_down,
         color: Color(0xFF3498DB)),
     (id: 'flash', label: 'Flash Report', icon: Icons.flash_on, color: Color(0xFFC0392B)),
+    (id: 'minimize', label: 'Minimize', icon: Icons.minimize, color: Color(0xFF455A64)),
     (id: 'quit', label: 'Quit', icon: Icons.power_settings_new, color: Color(0xFF7B1F1F)),
   ];
 

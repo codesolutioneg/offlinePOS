@@ -53,8 +53,8 @@ class Win32Window {
   void SetQuitOnClose(bool quit_on_close);
 
   // If true (set before Create), the window has no title bar or frame, fills
-  // its monitor, and ignores Alt+F4 and the taskbar's Close: the app's own
-  // Quit button is the only way out.
+  // its monitor, and ignores Alt+F4 and the taskbar's Close. Minimize still
+  // works. The in-app Quit button does not exit.
   void SetKiosk(bool kiosk);
 
   // Return a RECT representing the bounds of the current client area.
