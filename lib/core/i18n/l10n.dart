@@ -1762,6 +1762,13 @@ const Map<String, String> _ar = {
   'Add driver': 'إضافة سائق',
   'Edit driver': 'تعديل السائق',
   'No phone': 'بدون هاتف',
+  'Export drivers': 'تصدير السائقين',
+  'Import drivers': 'استيراد السائقين',
+  'Imported {added} new, {updated} updated':
+      'تم استيراد {added} جدد، وتحديث {updated}',
+  'Could not import drivers': 'تعذّر استيراد السائقين',
+  'No drivers to export': 'لا يوجد سائقون للتصدير',
+  'No drivers found in this file': 'لا يوجد سائقون في هذا الملف',
   // Phase 2 section E remainder: menu refresh, setup checklist, custom roles,
   // and the emailed Z report.
   'Refresh menu': 'تحديث قائمة الأصناف',

@@ -95,4 +95,33 @@ void main() {
     delivery.addDriver(name: 'Adel');
     expect(delivery.drivers(activeOnly: true).map((d) => d.name), ['Adel', 'Sami']);
   });
+
+  test('upsert inserts with an external id and refreshes on re-import', () {
+    final first = delivery.upsertDriver(
+      id: '9mGhFy5ah25anr02eUUw',
+      name: 'احمد',
+      phone: '0100',
+      active: true,
+    );
+    expect(first.id, '9mGhFy5ah25anr02eUUw');
+    expect(delivery.drivers(), hasLength(1));
+
+    delivery.upsertDriver(
+      id: '9mGhFy5ah25anr02eUUw',
+      name: 'احمد عبد الناصر',
+      phone: '0111',
+      active: false,
+    );
+    final again = delivery.drivers().single;
+    expect(again.id, '9mGhFy5ah25anr02eUUw');
+    expect(again.name, 'احمد عبد الناصر');
+    expect(again.phone, '0111');
+    expect(again.active, isFalse);
+  });
+
+  test('upsert without an id still creates a till uuid', () {
+    final driver = delivery.upsertDriver(name: 'المنياوي');
+    expect(driver.id, isNotEmpty);
+    expect(delivery.drivers().single.name, 'المنياوي');
+  });
 }

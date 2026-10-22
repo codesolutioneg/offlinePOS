@@ -1,6 +1,9 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/db/delivery_store.dart';
+import '../../core/export/data_export.dart';
+import '../../core/export/driver_xlsx.dart';
 import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/delivery.dart';
@@ -297,6 +300,26 @@ class _DeliverySettingsScreenState extends State<DeliverySettingsScreen> {
             },
           ),
         const SizedBox(height: 8),
+        Row(children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              key: const Key('export-drivers'),
+              icon: const Icon(Icons.file_download_outlined),
+              label: Text(tr(context, 'Export drivers')),
+              onPressed: _exportDrivers,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton.icon(
+              key: const Key('import-drivers'),
+              icon: const Icon(Icons.file_upload_outlined),
+              label: Text(tr(context, 'Import drivers')),
+              onPressed: _importDrivers,
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
         FilledButton.icon(
           key: const Key('add-driver'),
           icon: const Icon(Icons.add),
@@ -304,6 +327,65 @@ class _DeliverySettingsScreenState extends State<DeliverySettingsScreen> {
           onPressed: () => _driverDialog(),
         ),
       ]);
+
+  Future<void> _exportDrivers() async {
+    if (_drivers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr(context, 'No drivers to export'))));
+      return;
+    }
+    final bytes = buildDriversXlsx(_drivers);
+    final path = await writeBytesExport(
+        driversExportFileName(DateTime.now()), bytes);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${tr(context, 'Saved to')} $path')));
+  }
+
+  Future<void> _importDrivers() async {
+    final file = await openFile(acceptedTypeGroups: const [
+      XTypeGroup(label: 'Excel', extensions: ['xlsx']),
+    ]);
+    if (file == null) return;
+    try {
+      final rows = parseDriversXlsx(await file.readAsBytes());
+      if (rows.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tr(context, 'No drivers found in this file'))));
+        return;
+      }
+      final known = {for (final d in widget.delivery.drivers()) d.id};
+      var added = 0;
+      var updated = 0;
+      for (final row in rows) {
+        final id = row.id?.trim();
+        final existed = id != null && id.isNotEmpty && known.contains(id);
+        final saved = widget.delivery.upsertDriver(
+          id: row.id,
+          name: row.name,
+          phone: row.phone,
+          active: row.active,
+        );
+        known.add(saved.id);
+        if (existed) {
+          updated++;
+        } else {
+          added++;
+        }
+      }
+      _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr(context, 'Imported {added} new, {updated} updated')
+              .replaceAll('{added}', '$added')
+              .replaceAll('{updated}', '$updated'))));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${tr(context, 'Could not import drivers')}: $e')));
+    }
+  }
 
   Future<void> _driverDialog({Driver? driver}) async {
     final name = TextEditingController(text: driver?.name ?? '');
