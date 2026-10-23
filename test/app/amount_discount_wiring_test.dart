@@ -57,6 +57,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     // A manager, because giving a discount is manager-gated and a PIN prompt in
     // front of the dialog is not what this test is about.

@@ -21,10 +21,13 @@ class FakeStore implements OutboxStore {
   Future<void> append(String k, String u, Map<String, dynamic> p) async =>
       entries.add(OutboxEntry(id: _n++, kind: k, payloadUuid: u, payload: p));
   @override
-  Future<List<OutboxEntry>> pending({int limit = 20}) async => entries
-      .where((e) => !sent.contains(e.id) && !deadReasons.containsKey(e.id))
-      .take(limit)
-      .toList();
+  Future<List<OutboxEntry>> pending({int limit = 20, Set<String>? kinds}) async {
+    var list = entries.where((e) => !sent.contains(e.id) && !deadReasons.containsKey(e.id));
+    if (kinds != null && kinds.isNotEmpty) {
+      list = list.where((e) => kinds.contains(e.kind));
+    }
+    return list.take(limit).toList();
+  }
   @override
   Future<void> markSent(int id) async => sent.add(id);
   @override

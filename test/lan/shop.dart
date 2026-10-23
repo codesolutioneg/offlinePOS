@@ -1,23 +1,28 @@
 import 'dart:convert';
 
 import 'package:offline_pos/core/audit/audit_log.dart';
+import 'package:offline_pos/core/db/data_reset.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
 import 'package:offline_pos/core/db/reservation_store.dart';
 import 'package:offline_pos/core/db/schema.dart';
 import 'package:offline_pos/core/db/settings_store.dart';
+import 'package:offline_pos/core/db/shift_store.dart';
 import 'package:offline_pos/core/db/sqlite_outbox_store.dart';
+import 'package:offline_pos/core/db/stress_purge.dart';
 import 'package:offline_pos/core/db/table_assignment_store.dart';
 import 'package:offline_pos/core/db/table_store.dart';
 import 'package:offline_pos/core/lan/lan_applier.dart';
 import 'package:offline_pos/core/lan/lan_cart_board.dart';
 import 'package:offline_pos/core/lan/lan_claim.dart';
 import 'package:offline_pos/core/lan/lan_credential.dart';
+import 'package:offline_pos/core/lan/lan_update.dart';
 import 'package:offline_pos/core/lan/lan_event.dart';
 import 'package:offline_pos/core/lan/lan_event_log.dart';
 import 'package:offline_pos/core/lan/lan_fabric.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
 import 'package:offline_pos/core/lan/lan_transport.dart';
+import 'package:offline_pos/core/sync/dishflow_wiring.dart';
 import 'package:offline_pos/core/sync/outbox.dart';
 import 'package:offline_pos/domain/order.dart';
 
@@ -67,6 +72,8 @@ class TestTill {
     );
     settings = SettingsStore(db)
       ..publish = (kind, uuid, payload) => fabric.publish(kind, uuid, payload);
+    shifts = ShiftStore(db);
+    dishflow = DishflowWiring(outbox: outbox)..apply(settings);
     reservations = ReservationStore(
       db,
       publish: (kind, uuid, payload) => fabric.publish(kind, uuid, payload),
@@ -83,24 +90,37 @@ class TestTill {
       settings: settings,
       reservations: reservations,
       assignments: assignments,
+      shifts: shifts,
       log: log,
+      onShopBundleApplied: () => dishflow.apply(settings),
+      onStressCleanup: () => purgeStressOrders(db),
+      onHistoryWipe: (before) {
+        wipeOrderHistory(db, before: before);
+        settings.historyWipedAt = before;
+        settings.resetOrderNumbers();
+      },
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
     claims = LanClaimDesk(
       deviceId: deviceId,
       orders: orders,
-      allowed: () => settings.lanAllowTakeover,
+      mayGrant: ({required order, requesterId, asManager = false}) =>
+          settings.lanAllowTakeover ||
+          asManager ||
+          (requesterId != null && requesterId == order.cashierId),
       audit: (event, detail) => audited.add('$event: $detail'),
     );
+    peers = LanPeerDirectory(log: (event, detail) => refusals.add('$event: $detail'));
     protocol = LanProtocol(
       deviceId: deviceId,
       log: log,
       applier: applier,
       credential: credential,
       claims: claims,
+      updates: () => updateOffer,
+      onContact: (id, from, port) => peers.heard(id, host: from, port: port),
       onRefused: (event, detail) => refusals.add('$event: $detail'),
     );
-    peers = LanPeerDirectory(log: (event, detail) => refusals.add('$event: $detail'));
     fabric = LanFabric(
       deviceId: deviceId,
       log: log,
@@ -131,6 +151,9 @@ class TestTill {
   late final LanCredential credential =
       LanCredential.rotating(() => shopKey);
 
+  /// The build this till offers the others, as a primary would.
+  LanUpdateOffer? updateOffer;
+
   late final Db db;
   late final LanEventLog log;
   late final AuditLog audit;
@@ -139,6 +162,8 @@ class TestTill {
   late final OrderStore orders;
   late final TableStore tables;
   late final SettingsStore settings;
+  late final ShiftStore shifts;
+  late final DishflowWiring dishflow;
   late final ReservationStore reservations;
   late final TableAssignmentStore assignments;
   late final LanApplier applier;

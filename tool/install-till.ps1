@@ -265,15 +265,17 @@ foreach ($dir in @(
   [Environment]::GetFolderPath('Desktop'),
   (Join-Path $env:AppData 'Microsoft\Windows\Start Menu\Programs')
 )) {
-  $lnk = $shell.CreateShortcut((Join-Path $dir 'Offline POS.lnk'))
+  $old = Join-Path $dir 'Offline POS.lnk'
+  if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force }
+  $lnk = $shell.CreateShortcut((Join-Path $dir 'Dishflow.lnk'))
   $lnk.TargetPath = $exe
   $lnk.WorkingDirectory = $InstallDir
-  $lnk.Description = 'Offline POS'
+  $lnk.Description = 'Dishflow'
   $lnk.Save()
 }
 
 Write-Host ""
-Write-Host "Done. Offline POS is installed and on the desktop." -ForegroundColor Green
+Write-Host "Done. Dishflow is installed and on the desktop." -ForegroundColor Green
 if ($certTrusted) {
   Write-Host "It will open without a publisher warning on this machine."
 }

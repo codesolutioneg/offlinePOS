@@ -76,6 +76,9 @@ void main() {
       rows = reportRows;
     }));
 
+    // Under the session card, below the fold.
+    await t.scrollUntilVisible(find.byKey(const Key('print-x')), 200,
+        scrollable: find.byType(Scrollable).first);
     await t.tap(find.byKey(const Key('print-x')));
     await t.pumpAndSettle();
 
@@ -87,5 +90,115 @@ void main() {
       ('  Cash', '40.00'),
       ('  Visa', '30.00'),
     ]);
+  });
+
+  testWidgets('Money Drop from the floor opens straight into a cash out',
+      (t) async {
+    shifts.openShift(openingFloat: 100, cashierId: 'sara');
+    await t.pumpWidget(MaterialApp(
+      home: ShiftScreen(
+        store: shifts,
+        cashierId: 'sara',
+        formatAmount: (v) => v.toStringAsFixed(2),
+        startMovement: 'drop',
+      ),
+    ));
+    await t.pumpAndSettle();
+
+    expect(find.text('Money Drop'), findsWidgets);
+    await t.enterText(find.byType(TextField).first, '50');
+    await t.tap(find.text('OK'));
+    await t.pumpAndSettle();
+
+    final m = shifts.currentOpenShift()!.movements.single;
+    expect(m.type, 'out');
+    expect(m.amount, 50);
+    expect(m.reason, 'Money Drop');
+  });
+
+  group('collecting the other tills\' sales before the count', () {
+    Widget closing(
+      Future<List<String>> Function(DateTime since,
+              {void Function(String status)? onProgress})
+          catchUp, {
+      List<String>? blocked,
+      List<String>? overrides,
+    }) =>
+        MaterialApp(
+          home: ShiftScreen(
+            store: shifts,
+            cashierId: 'sara',
+            formatAmount: (v) => v.toStringAsFixed(2),
+            startCloseOnOpen: true,
+            catchUpOtherTills: catchUp,
+            onCloseBlocked: (r) => blocked?.add(r),
+            onCloseOverride: (r, d) => overrides?.add('$r: $d'),
+          ),
+        );
+
+    testWidgets('with every till in, the count is asked for straight away',
+        (t) async {
+      final opened = shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      DateTime? since;
+      await t.pumpWidget(closing((s, {onProgress}) async {
+        since = s;
+        return const [];
+      }));
+      await t.pumpAndSettle();
+
+      expect(since, opened.openedAt);
+      expect(find.byKey(const Key('tills-unreachable')), findsNothing);
+      expect(find.text('Counted cash'), findsOneWidget);
+    });
+
+    testWidgets('a silent till stops the close, and is asked again', (t) async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      final blocked = <String>[];
+      var calls = 0;
+      await t.pumpWidget(closing((s, {onProgress}) async {
+        calls++;
+        return calls == 1 ? ['Bar: unreachable'] : const [];
+      }, blocked: blocked));
+      await t.pumpAndSettle();
+
+      expect(find.byKey(const Key('tills-unreachable')), findsOneWidget);
+      expect(find.text('• Bar: unreachable'), findsOneWidget);
+      expect(blocked, ['shift.close.blocked.tills_unreachable']);
+
+      await t.tap(find.byKey(const Key('tills-unreachable-retry')));
+      await t.pumpAndSettle();
+
+      expect(calls, 2);
+      expect(find.text('Counted cash'), findsOneWidget);
+    });
+
+    testWidgets('cancel leaves the shift open', (t) async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      await t.pumpWidget(
+          closing((s, {onProgress}) async => ['Bar: unreachable']));
+      await t.pumpAndSettle();
+
+      await t.tap(find.byKey(const Key('tills-unreachable-cancel')));
+      await t.pumpAndSettle();
+
+      expect(find.text('Counted cash'), findsNothing);
+      expect(shifts.currentOpenShift(), isNotNull);
+    });
+
+    testWidgets('closing anyway goes on to the count, and says what was skipped',
+        (t) async {
+      shifts.openShift(openingFloat: 0, cashierId: 'sara');
+      final overrides = <String>[];
+      await t.pumpWidget(closing((s, {onProgress}) async => ['Bar: unreachable'],
+          overrides: overrides));
+      await t.pumpAndSettle();
+
+      await t.tap(find.byKey(const Key('tills-unreachable-close-anyway')));
+      await t.pumpAndSettle();
+
+      expect(overrides,
+          ['shift.close.override.tills_unreachable: Bar: unreachable']);
+      expect(find.text('Counted cash'), findsOneWidget);
+    });
   });
 }

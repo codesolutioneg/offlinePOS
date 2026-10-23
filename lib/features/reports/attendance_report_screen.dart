@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../core/db/attendance_store.dart';
+import '../../domain/attendance_entry.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/widgets/feedback.dart';
 import 'report_export.dart';

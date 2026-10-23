@@ -57,6 +57,7 @@ void main() {
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234');
     WizardStore(db).dismiss(WizardId.firstSale, 'sara');
+    SettingsStore(db).lanRolePromptDismissed = true;
   });
   tearDown(() => db.close());
 
@@ -193,7 +194,7 @@ void main() {
   });
 
   testWidgets('a delivery turned into a takeaway keeps its customer', (t) async {
-    final order = draftOnTheTill(type: OrderType.delivery)
+    final order = draftOnTheTill(type: OrderType.storeDelivery)
       ..partnerId = 42
       ..customerName = 'Nadia'
       ..customerPhone = '0100'

@@ -31,6 +31,7 @@ import 'package:offline_pos/features/tables/table_floor_screen.dart';
 import '../db/sqlite_loader.dart';
 import '../printing/strip_escpos.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/pay_button.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -84,6 +85,8 @@ void main() {
     // Built last so the print profile is published from a settled database, exactly
     // as it is on a real start-up.
     settings = SettingsStore(db);
+    settings.askCashierOnOpen = false;
+    settings.lanRolePromptDismissed = true;
     // Seating here is about the order type / the receipt, not the covers, so the
     // guest prompt is off: on by default it would sit in front of every seating.
     settings.askGuestCount = false;
@@ -158,7 +161,7 @@ void main() {
   Future<void> ringAndPay(WidgetTester t) async {
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-1')));
     await t.pumpAndSettle();
@@ -252,7 +255,7 @@ void main() {
     await sitAtTableFive(t);
     await ringAndPay(t);
 
-    expect(strippedText(await saleSlip(t)), contains('Terrace - Table 5'));
+    expect(strippedText(await saleSlip(t)), contains('* Terrace - Table 5 *'));
   });
 
   testWidgets('money off prints the money, and no rate that contradicts it',
@@ -270,7 +273,7 @@ void main() {
     await t.enterText(find.byKey(const Key('discount-value')), '50');
     await t.tap(find.byKey(const Key('apply-discount')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-1')));
     await t.pumpAndSettle();
@@ -295,7 +298,7 @@ void main() {
     await t.enterText(find.byKey(const Key('discount-value')), '10');
     await t.tap(find.byKey(const Key('apply-discount')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('pay')));
+    await t.tap(findPay());
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('method-1')));
     await t.pumpAndSettle();

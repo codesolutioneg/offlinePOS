@@ -13,6 +13,7 @@ class NumericKeypad extends StatelessWidget {
     required this.onBackspace,
     this.onClear,
     this.decimal = true,
+    this.compact = false,
   });
 
   /// Called with the digit ('0'-'9') or '.' the cashier pressed.
@@ -24,6 +25,9 @@ class NumericKeypad extends StatelessWidget {
 
   /// Whether to offer the decimal point (off for whole-number entry like PIN/qty).
   final bool decimal;
+
+  /// Slightly shorter keys for dialogs that also show a title and dots.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -38,7 +42,7 @@ class NumericKeypad extends StatelessWidget {
       children: [
         for (final row in rows)
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
+            padding: EdgeInsets.symmetric(vertical: compact ? 2 : 4),
             child: Row(
               children: [
                 for (final k in row)
@@ -47,6 +51,7 @@ class NumericKeypad extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 4),
                       child: _Key(
                         label: k,
+                        height: compact ? 52 : 64,
                         onTap: () {
                           if (k == '⌫') {
                             onBackspace();
@@ -68,16 +73,17 @@ class NumericKeypad extends StatelessWidget {
 }
 
 class _Key extends StatelessWidget {
-  const _Key({required this.label, required this.onTap});
+  const _Key({required this.label, required this.onTap, this.height = 64});
   final String label;
   final VoidCallback onTap;
+  final double height;
 
   @override
   Widget build(BuildContext context) {
     final isAction = label == '⌫' || label == 'C';
     final scheme = Theme.of(context).colorScheme;
     return SizedBox(
-      height: 64,
+      height: height,
       child: Material(
         // Theme surfaces rather than fixed greys, so the pad reads correctly in
         // the dark theme too.
@@ -174,6 +180,85 @@ Future<double?> promptNumber(
               // the dialog was already showing.
               onPressed: () =>
                   Navigator.pop(ctx, double.tryParse(text.isEmpty ? '0' : text)),
+              child: Text(confirmLabel ?? tr(ctx, 'OK')),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+/// Touch-first PIN dialog: dots + number pad, no OS soft keyboard.
+///
+/// Returns the entered digits, or null on cancel. Empty entry cannot confirm.
+Future<String?> promptTouchPin(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String? confirmLabel,
+  Key displayKey = const Key('touch-pin'),
+  Key confirmKey = const Key('touch-pin-ok'),
+}) {
+  var pin = '';
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setLocal) {
+        final scheme = Theme.of(ctx).colorScheme;
+        return AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: 300,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(message),
+                const SizedBox(height: 10),
+                Container(
+                  key: displayKey,
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Text(
+                    pin.isEmpty ? '····' : '•' * pin.length,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 26,
+                      letterSpacing: 8,
+                      fontWeight: FontWeight.w700,
+                      color: pin.isEmpty
+                          ? scheme.onSurfaceVariant
+                          : scheme.primary,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                NumericKeypad(
+                  decimal: false,
+                  compact: true,
+                  onKey: (k) {
+                    if (pin.length >= 6) return;
+                    setLocal(() => pin += k);
+                  },
+                  onBackspace: () => setLocal(() =>
+                      pin = pin.isEmpty ? pin : pin.substring(0, pin.length - 1)),
+                  onClear: () => setLocal(() => pin = ''),
+                ),
+              ]),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(tr(ctx, 'Cancel'))),
+            FilledButton(
+              key: confirmKey,
+              onPressed: pin.isEmpty ? null : () => Navigator.pop(ctx, pin),
               child: Text(confirmLabel ?? tr(ctx, 'OK')),
             ),
           ],

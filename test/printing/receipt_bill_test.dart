@@ -36,17 +36,17 @@ void main() {
   String bill(Order o, {bool openDrawer = false}) =>
       strippedText(builder(openDrawer: openDrawer).buildBill(o));
 
-  test('is titled BILL and says it is not a tax receipt', () {
+  test('carries no BILL title or tax-receipt disclaimer at the top', () {
     final s = bill(table());
-    expect(s, contains('BILL'));
-    expect(s, contains('NOT A TAX RECEIPT'));
+    expect(s, isNot(contains('*** BILL ***')));
+    expect(s, isNot(contains('NOT A TAX RECEIPT')));
   });
 
   test('carries the same lines and total as the sale receipt', () {
     final o = table();
     final s = bill(o);
     expect(s, contains('Pizza'));
-    expect(s, contains('+ Extra Cheese'));
+    expect(s, contains('=> Extra Cheese'));
     expect(s, contains('Water'));
     expect(s, contains('T4'));
     expect(s, contains('sara'));

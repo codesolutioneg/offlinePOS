@@ -1,4 +1,5 @@
 import '../db/schema.dart';
+import '../../domain/table_section_config.dart';
 
 /// Where a fabric error or refusal is recorded. Wired to the audit log on a real
 /// till, so a peer that never joined is answerable to support instead of being a
@@ -14,6 +15,9 @@ class LanPeer {
     required this.port,
     required this.schemaVersion,
     required this.lastSeenAt,
+    this.role,
+    this.serving = true,
+    this.clockOffset,
   });
 
   /// The peer's own device id, which is its identity here. The address is not: a
@@ -34,6 +38,21 @@ class LanPeer {
 
   final DateTime lastSeenAt;
 
+  /// Primary / secondary when the peer's build announces it; null on older beacons.
+  final DeviceRole? role;
+
+  /// False when the peer announced that its server could not bind: it is on the
+  /// network, but every request to it would be refused.
+  final bool serving;
+
+  /// How far the peer's clock is ahead of this one (negative: behind), from the
+  /// time its last beacon said it was sent. Null on beacons from older builds.
+  ///
+  /// Worth showing because the clocks matter twice: past
+  /// `LanCredential.clockTolerance` the two refuse each other outright, and below
+  /// it the newer of two edits to one tab is decided by whichever clock wrote it.
+  final Duration? clockOffset;
+
   bool get isCompatible => schemaVersion == Schema.version;
 
   Uri get baseUrl => Uri.parse('http://$host:$port');
@@ -45,6 +64,9 @@ class LanPeer {
         port: port,
         schemaVersion: schemaVersion,
         lastSeenAt: at,
+        role: role,
+        serving: serving,
+        clockOffset: clockOffset,
       );
 
   /// The beacon datagram. Deliberately tiny and free of anything private: it is
@@ -55,6 +77,8 @@ class LanPeer {
         'name': name,
         'port': port,
         'schema': schemaVersion,
+        if (role != null && role != DeviceRole.unset) 'role': role!.wire,
+        if (!serving) 'serving': false,
       };
 
   /// Throws [FormatException] on a datagram this build cannot read. Anything at all
@@ -70,6 +94,13 @@ class LanPeer {
     if (deviceId is! String || deviceId.isEmpty || port is! int || schema is! int) {
       throw const FormatException('beacon is missing device_id, port or schema');
     }
+    DeviceRole? role;
+    final rawRole = m['role'];
+    if (rawRole is String && rawRole.isNotEmpty) {
+      final parsed = DeviceRole.fromWire(rawRole);
+      if (parsed != DeviceRole.unset) role = parsed;
+    }
+    final sentAt = m['sent_at'];
     return LanPeer(
       deviceId: deviceId,
       name: m['name'] is String ? m['name'] as String : deviceId,
@@ -77,8 +108,59 @@ class LanPeer {
       port: port,
       schemaVersion: schema,
       lastSeenAt: at,
+      role: role,
+      serving: m['serving'] != false,
+      clockOffset: sentAt is int
+          ? Duration(milliseconds: sentAt - at.toUtc().millisecondsSinceEpoch)
+          : null,
     );
   }
+}
+
+/// A till that could not be read to the end of its log before a shift closed, so
+/// the sales it holds may be missing from the device that asked.
+class LanTillGap {
+  const LanTillGap({
+    required this.deviceId,
+    required this.name,
+    required this.reason,
+    this.lastSeenAt,
+  });
+
+  final String deviceId;
+  final String name;
+  final String reason;
+  final DateTime? lastSeenAt;
+
+  Map<String, dynamic> toMap() => {
+        'device_id': deviceId,
+        'name': name,
+        'reason': reason,
+        if (lastSeenAt != null) 'last_seen_at': lastSeenAt!.toUtc().toIso8601String(),
+      };
+
+  factory LanTillGap.fromMap(Map<String, dynamic> m) => LanTillGap(
+        deviceId: '${m['device_id'] ?? ''}',
+        name: '${m['name'] ?? m['device_id'] ?? ''}',
+        reason: '${m['reason'] ?? ''}',
+        lastSeenAt: DateTime.tryParse('${m['last_seen_at']}')?.toUtc(),
+      );
+}
+
+/// Whether the shop primary is among [activePeers].
+///
+/// Prefers [primaryDeviceId] from a prior join; otherwise any peer advertising
+/// [DeviceRole.primary]. A primary announcing that it cannot serve is not reached.
+bool primaryReached({
+  required Iterable<LanPeer> activePeers,
+  required String? primaryDeviceId,
+}) {
+  final id = primaryDeviceId?.trim();
+  final serving = activePeers.where((p) => p.serving);
+  if (id != null && id.isNotEmpty) {
+    return serving.any((p) => p.deviceId == id);
+  }
+  return serving.any((p) => p.role == DeviceRole.primary);
 }
 
 /// Who is on the LAN right now, and who was refused.
@@ -136,6 +218,32 @@ class LanPeerDirectory {
     return joined;
   }
 
+  /// A signed request from [deviceId], which proves it is on the network and holds
+  /// the shop key even when its beacon never arrives here (a second adapter, an
+  /// access point that drops broadcast from one side). Without this a till that can
+  /// hear the others but not be heard pushes to them and is never read from.
+  ///
+  /// A peer already known keeps what its beacon said and is only marked as seen.
+  void heard(String deviceId, {required String host, required int port}) {
+    if (deviceId.isEmpty || _refused.containsKey(deviceId)) return;
+    final at = _now().toUtc();
+    final known = _peers[deviceId];
+    if (known != null) {
+      _peers[deviceId] = known.seenAt(at);
+      return;
+    }
+    _peers[deviceId] = LanPeer(
+      deviceId: deviceId,
+      name: deviceId,
+      host: host,
+      port: port,
+      schemaVersion: Schema.version,
+      lastSeenAt: at,
+    );
+    _log?.call('lan.peer.joined',
+        '$deviceId at $host:$port, from its requests: its beacon does not reach this till');
+  }
+
   /// Peers heard from recently enough to be worth talking to, by name.
   List<LanPeer> get active {
     final cutoff = _now().toUtc().subtract(staleAfter);
@@ -147,6 +255,9 @@ class LanPeerDirectory {
   /// needs to see "last seen 40 minutes ago" rather than an empty list.
   List<LanPeer> get all =>
       _peers.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+
+  /// The peer last heard as [deviceId], stale or not.
+  LanPeer? byId(String deviceId) => _peers[deviceId];
 
   /// Peers turned away on a schema mismatch, shown on the settings screen so an
   /// unfinished rollout is visible on the device rather than only in the log.

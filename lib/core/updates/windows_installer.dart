@@ -50,6 +50,8 @@ class WindowsZipInstaller {
     ScriptLauncher? launcher,
     ExitRequest? requestExit,
     WritabilityProbe? canWrite,
+    this.visible = false,
+    this.desktopDirectory,
   })  : _canWrite = canWrite ?? _probeByWriting,
         executablePath = executablePath ?? Platform.resolvedExecutable,
         installDirectory = installDirectory ??
@@ -75,6 +77,15 @@ class WindowsZipInstaller {
   /// The process the script waits for. Ours, so it is waiting for us to let go of
   /// our own files.
   final int processId;
+
+  /// Shows the script's window, so whoever asked for the update can watch it go
+  /// through instead of staring at a till that closed. Hidden for an install
+  /// nobody asked for.
+  final bool visible;
+
+  /// Where the shortcut goes. Null is this user's Desktop, and then shortcuts to
+  /// old copies on the shared Desktop are cleared too.
+  final String? desktopDirectory;
 
   final ScriptLauncher _launch;
   final ExitRequest _exit;
@@ -130,7 +141,7 @@ class WindowsZipInstaller {
       '-ExecutionPolicy',
       'Bypass',
       '-WindowStyle',
-      'Hidden',
+      visible ? 'Normal' : 'Hidden',
       '-File',
       script.path,
     ]);
@@ -204,6 +215,12 @@ class WindowsZipInstaller {
     final report = _quote(
         '${stagingDirectory.path}${Platform.pathSeparator}$reportFileName');
     final buildName = _quote(_buildNameOf(stagedZipPath));
+    final shared = desktopDirectory == null;
+    final desktop = shared
+        ? "[Environment]::GetFolderPath('Desktop')"
+        : _quote(desktopDirectory!);
+    final commonDesktop =
+        shared ? ", [Environment]::GetFolderPath('CommonDesktopDirectory')" : '';
 
     return '''
 \$ErrorActionPreference = 'Stop'
@@ -223,8 +240,15 @@ class WindowsZipInstaller {
 # this one from a failure of the build before it.
 \$buildName = $buildName
 
+function Step(\$percent, \$text) {
+  Write-Progress -Activity "Offline POS update \$buildName" -Status \$text -PercentComplete \$percent
+  Write-Host "[\$percent%] \$text"
+}
+\$host.UI.RawUI.WindowTitle = "Offline POS update"
+
 # Wait for the till to let go of its own exe and dlls. Unpacking over a live
 # install fails part way through and leaves a mix of two builds behind.
+Step 5 'Waiting for Offline POS to close...'
 for (\$i = 0; \$i -lt $_waitSeconds; \$i++) {
   if (-not (Get-Process -Id \$tillPid -ErrorAction SilentlyContinue)) { break }
   Start-Sleep -Seconds 1
@@ -247,7 +271,19 @@ try {
   if (Test-Path -LiteralPath \$unpackedDir) {
     Remove-Item -LiteralPath \$unpackedDir -Recurse -Force
   }
+  Step 20 'Unpacking the new version...'
   Expand-Archive -LiteralPath \$zipPath -DestinationPath \$unpackedDir -Force
+
+  # Anything else still running out of the install (the fingerprint agent) holds
+  # its files open, and a held file is retried for the length of the copy.
+  Step 50 'Closing helpers started from the install folder...'
+  Get-CimInstance Win32_Process | Where-Object {
+    \$_.ProcessId -ne \$PID -and \$_.ExecutablePath -and
+    \$_.ExecutablePath.StartsWith(\$targetDir.TrimEnd('\\') + '\\', [StringComparison]::OrdinalIgnoreCase)
+  } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }
+  Start-Sleep -Seconds 1
+
+  Step 60 'Copying the new version into place...'
 
   # Only once the whole archive is on disk does the install get touched, and it
   # is mirrored rather than copied over. A copy leaves whatever the new build no
@@ -255,26 +291,60 @@ try {
   # under flutter_assets once the manifest naming them has been replaced. That is
   # the mix of two builds this whole dance exists to avoid, arriving by the other
   # door.
-  robocopy \$unpackedDir \$targetDir /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+  # A few short retries, not the default of a million at thirty seconds, which
+  # is a till that never comes back.
+  robocopy \$unpackedDir \$targetDir /MIR /R:5 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
   # Robocopy does not report success as zero. Anything below 8 is copied, extra
   # files removed, or nothing to do; 8 and above is a real failure.
   if (\$LASTEXITCODE -ge 8) { throw "robocopy failed with \$LASTEXITCODE" }
   \$global:LASTEXITCODE = 0
 
+  # One Desktop shortcut, to this install. Old ones to other copies open an old
+  # build. Never allowed to fail the install it follows.
+  Step 85 'Updating the Desktop shortcut...'
+  try {
+    \$shell = New-Object -ComObject WScript.Shell
+    \$desktop = $desktop
+    \$desktops = @(\$desktop$commonDesktop) |
+      Where-Object { \$_ -and (Test-Path -LiteralPath \$_) }
+    foreach (\$desk in \$desktops) {
+      Get-ChildItem -LiteralPath \$desk -Filter '*.lnk' -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+          \$linked = \$shell.CreateShortcut(\$_.FullName).TargetPath
+          if (\$linked -and ([IO.Path]::GetFileName(\$linked) -in @('offline_pos.exe', 'RunOfflinePOS.bat'))) {
+            Remove-Item -LiteralPath \$_.FullName -Force -ErrorAction Stop
+          }
+        } catch {}
+      }
+    }
+    \$link = \$shell.CreateShortcut((Join-Path \$desktop 'Offline POS.lnk'))
+    \$link.TargetPath = \$exePath
+    \$link.WorkingDirectory = \$targetDir
+    \$link.IconLocation = "\$exePath,0"
+    \$link.Save()
+  } catch {
+    Write-Host "Desktop shortcut not updated: \$(\$_.Exception.Message)" -ForegroundColor Yellow
+  }
   "installed \$buildName" | Set-Content -LiteralPath \$reportPath
+  Step 90 'Installed. Starting Offline POS...'
 } catch {
+  Write-Host "Update failed: \$(\$_.Exception.Message)" -ForegroundColor Red
   # Recorded for the next launch to find. The exit code cannot say anything: this
   # is detached, so nobody is waiting for it.
   # Named with the build it was installing, so the app can refuse to hand this
   # same one off again. Without that it would close the till, fail, restart, and
   # be offered the identical build half a minute later, all night.
-  "failed \$buildName: \$(\$_.Exception.Message)" | Set-Content -LiteralPath \$reportPath
+  # Braced: a bare name followed by a colon reads as a drive-qualified variable,
+  # which fails to parse and takes the whole script with it.
+  "failed \${buildName}: \$(\$_.Exception.Message)" | Set-Content -LiteralPath \$reportPath
 } finally {
   # Unconditional on purpose. Whether the mirror finished, failed, or failed half
   # way, the till comes back up: worst case on a mixed directory, where the app's
   # own startup guard reports what it found.
   Start-Process -FilePath \$exePath -WorkingDirectory \$targetDir
   Remove-Item -LiteralPath \$unpackedDir -Recurse -Force -ErrorAction SilentlyContinue
+  Step 100 'Done.'
+  Start-Sleep -Seconds 3
 }
 
 # Best effort: the shell may still hold this file open, and a leftover copy is
@@ -302,9 +372,14 @@ Remove-Item -LiteralPath \$selfPath -Force -ErrorAction SilentlyContinue
 
   /// Detached with no stdio: nothing is left holding a pipe to a process that has
   /// to outlive us.
+  /// Through `start`, which gives the script a console of its own. PowerShell
+  /// started detached straight from a GUI app has none and exits before running
+  /// a single line, so the till closed and nothing was installed. The title has
+  /// a space so it is passed quoted, which is what tells `start` it is a title.
   static Future<void> _startDetached(
       String executable, List<String> arguments) async {
-    await Process.start(executable, arguments,
+    await Process.start(
+        'cmd.exe', ['/c', 'start', 'Offline POS update', executable, ...arguments],
         mode: ProcessStartMode.detached);
   }
 
@@ -319,7 +394,9 @@ Remove-Item -LiteralPath \$selfPath -Force -ErrorAction SilentlyContinue
 /// packaging that an unattended replace-and-restart would be correct against.
 /// Returning null says that plainly, and `UpdateService` already treats a staged
 /// build with no installer as a finished, reportable state.
-Installer? platformUpdateInstaller({required Directory stagingDirectory}) {
+Installer? platformUpdateInstaller(
+    {required Directory stagingDirectory, bool visible = false}) {
   if (!Platform.isWindows) return null;
-  return WindowsZipInstaller(stagingDirectory: stagingDirectory).install;
+  return WindowsZipInstaller(stagingDirectory: stagingDirectory, visible: visible)
+      .install;
 }

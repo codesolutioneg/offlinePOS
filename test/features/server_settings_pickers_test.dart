@@ -22,8 +22,8 @@ void main() {
 
   const fromOdoo = OdooSiteChoices(
     branches: [
-      OdooSiteOption(id: 1, name: 'Downtown'),
-      OdooSiteOption(id: 2, name: 'Riverside'),
+      OdooSiteOption(id: 10, name: 'Downtown', companyId: 1, warehouseId: 2),
+      OdooSiteOption(id: 11, name: 'Riverside', companyId: 2, warehouseId: 3),
     ],
     pointsOfSale: [
       OdooSiteOption(id: 7, name: 'Counter', companyId: 1),
@@ -104,14 +104,15 @@ void main() {
     await open(t, load: () async => fromOdoo);
 
     final branches = await optionsOf(t, 'branch');
-    expect(branches, contains('Downtown (1)'));
-    expect(branches, contains('Riverside (2)'));
+    expect(branches, contains('Downtown (10)'));
+    expect(branches, contains('Riverside (11)'));
 
-    await pick(t, 'branch', 'Riverside (2)');
+    await pick(t, 'branch', 'Riverside (11)');
     await pick(t, 'warehouse', 'Cold store (3)');
     await save(t);
 
-    expect(settings.odooBranchId, 2);
+    expect(settings.odooBranchId, 11);
+    expect(settings.odooCompanyId, 2);
     expect(settings.odooWarehouseId, 3);
   });
 
@@ -172,7 +173,7 @@ void main() {
     settings.odooWarehouseId = 3;
     await open(t, load: () async => fromOdoo);
 
-    await pick(t, 'branch', 'Downtown (1)');
+    await pick(t, 'branch', 'Downtown (10)');
 
     final warehouses = await optionsOf(t, 'warehouse');
     expect(warehouses, contains('Main (2)'),
@@ -180,6 +181,8 @@ void main() {
     expect(warehouses, contains('Cold store (3)'),
         reason: 'and the one already configured stays selectable whatever branch '
             'is chosen, or picking a branch would silently unset it');
+    await save(t);
+    expect(settings.odooCompanyId, 1);
   });
 
   testWidgets('a build with no way to ask still shows and keeps the ids',
@@ -224,5 +227,38 @@ void main() {
     for (final picker in ['branch', 'restaurant', 'warehouse']) {
       expect(find.byKey(Key('unread-$picker')), findsNothing);
     }
+  });
+
+  group('the discount product', () {
+    const withDiscount = OdooSiteChoices(
+      pointsOfSale: [
+        OdooSiteOption(id: 7, name: 'Counter', discountProductId: 55),
+        OdooSiteOption(id: 8, name: 'Terrace'),
+      ],
+    );
+
+    testWidgets('is taken from the chosen point of sale when none was named',
+        (t) async {
+      await open(t, load: () async => withDiscount);
+      await pick(t, 'restaurant', 'Counter (7)');
+      await save(t);
+      expect(settings.odooRestaurantId, 7);
+      expect(settings.odooDiscountProductId, 55);
+    });
+
+    testWidgets('typed by hand is never replaced', (t) async {
+      settings.odooDiscountProductId = 99;
+      await open(t, load: () async => withDiscount);
+      await pick(t, 'restaurant', 'Counter (7)');
+      await save(t);
+      expect(settings.odooDiscountProductId, 99);
+    });
+
+    testWidgets('stays unset when the point of sale has none', (t) async {
+      await open(t, load: () async => withDiscount);
+      await pick(t, 'restaurant', 'Terrace (8)');
+      await save(t);
+      expect(settings.odooDiscountProductId, isNull);
+    });
   });
 }

@@ -22,6 +22,20 @@ class OdooEndpoint {
   bool get isComplete =>
       baseUrl.trim().isNotEmpty && db.trim().isNotEmpty && login.trim().isNotEmpty;
 
+  Map<String, dynamic> toMap() => {
+        'base_url': baseUrl,
+        'db': db,
+        'login': login,
+        'password': password,
+      };
+
+  factory OdooEndpoint.fromMap(Map<String, dynamic> m) => OdooEndpoint(
+        baseUrl: '${m['base_url'] ?? ''}',
+        db: '${m['db'] ?? ''}',
+        login: '${m['login'] ?? ''}',
+        password: m['password'] == null ? null : '${m['password']}',
+      );
+
   OdooEndpoint copyWith({String? baseUrl, String? db, String? login, String? password}) =>
       OdooEndpoint(
         baseUrl: baseUrl ?? this.baseUrl,

@@ -20,7 +20,7 @@ void main() {
     final o = Order(
       deviceId: 'till-1',
       cashierId: 'sara',
-      type: delivery > 0 ? OrderType.delivery : OrderType.dineIn,
+      type: delivery > 0 ? OrderType.storeDelivery : OrderType.dineIn,
       deliveryCost: delivery,
       tip: tip,
       serviceChargePercent: service,
@@ -92,11 +92,12 @@ void main() {
     expect(payloadImbalanceReason(payload), isNull);
   });
 
-  test('folded prices still balance to the taxed total the guest paid', () {
+  test('full prices plus discount_amount still balance to what the guest paid', () {
     final o = sale(service: 12, orderDiscount: 10, modifierWithProduct: true);
     final payload = paid(o);
-    // No discount product: the fold reshapes each taxed price so the server's
-    // own multiplication lands on the till's figure, tax and all.
+    // No discount product on the till: menu prices stay full and discount_amount
+    // is what Odoo books as OFFLINE_DISCOUNT.
+    expect(payload['prices_include_discount'], isFalse);
     expect(payloadImbalanceReason(payload), isNull);
   });
 

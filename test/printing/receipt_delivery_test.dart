@@ -18,7 +18,7 @@ void main() {
       Order(
         deviceId: 'till-1',
         cashierId: 'sara',
-        type: OrderType.delivery,
+        type: OrderType.storeDelivery,
         customerName: 'Nadia',
         customerPhone: phone,
         customerAddress: address,
@@ -88,10 +88,11 @@ void main() {
 
   test('the kitchen ticket says who the bag is for and where it came from', () {
     final text = ticket(delivery(channel: 'Talabat', companyNo: 'TLB-99182'));
-    expect(text, contains('DELIVERY'));
-    expect(text, contains('For: Nadia'));
+    expect(text, contains(OrderType.storeDelivery.printBanner));
+    expect(text, contains('#TLB-99182'));
+    expect(text, contains('Customer: Nadia'));
     expect(text, contains('Phone: 0100 123 4567'));
-    expect(text, contains('Channel: Talabat #TLB-99182'));
+    expect(text, contains('Channel: Talabat'));
   });
 
   test('a dine-in ticket is unchanged by any of this', () {
@@ -102,8 +103,8 @@ void main() {
       customerName: 'Nadia',
       lines: [OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100)],
     ));
-    expect(text, contains('Table: 4'));
-    expect(text, isNot(contains('For: Nadia')));
+    expect(text, contains('Table 4'));
+    expect(text, isNot(contains('Customer: Nadia')));
     expect(text, isNot(contains('Channel:')));
   });
 }

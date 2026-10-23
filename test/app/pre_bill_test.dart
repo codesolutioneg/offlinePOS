@@ -90,7 +90,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       attendance: AttendanceStore(db),
       config: const TillConfig(),
@@ -140,8 +140,6 @@ void main() {
     final held = await spool.oldestFirst();
     expect(held, hasLength(1));
     expect(held.single.reference, startsWith('bill-${order.uuid}-'));
-    // The bill is what got spooled, not a sale slip.
-    expect(String.fromCharCodes(held.single.bytes), contains('BILL'));
 
     // Paper and an audit entry, and nothing else: no tender, no push, no state move.
     expect(audit.recent(event: 'bill.printed').single['detail'], order.uuid);

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/audit/audit_log.dart';
+import 'package:offline_pos/core/auth/user_store.dart';
 import 'package:offline_pos/core/config/till_config.dart';
 import 'package:offline_pos/core/db/database.dart';
 import 'package:offline_pos/core/db/order_store.dart';
@@ -16,10 +17,22 @@ import 'package:offline_pos/core/lan/lan_credential.dart';
 import 'package:offline_pos/core/lan/lan_peer.dart';
 import 'package:offline_pos/core/lan/lan_transport.dart';
 import 'package:offline_pos/core/lan/lan_wiring.dart';
+import 'package:offline_pos/core/printing/printer_discovery.dart';
+import 'package:offline_pos/core/printing/printer_registry.dart';
+import 'package:offline_pos/core/sync/odoo_endpoint.dart';
 import 'package:offline_pos/domain/order.dart';
 
 import '../db/sqlite_loader.dart';
 import 'shop.dart';
+
+class _NoPrinters extends PrinterDiscovery {
+  @override
+  Future<bool> probe(String host, {int? port}) async => false;
+
+  @override
+  Future<List<DiscoveredPrinter>> scan({int? port, Duration? budget}) async =>
+      const [];
+}
 
 /// A datagram socket that goes nowhere, so the beacon's binds and closes can be
 /// counted. The real thing is exercised over a loopback socket in the transport
@@ -119,6 +132,9 @@ void main() {
         orders: OrderStore(db, ownDeviceId: 'till-a'),
         tables: TableStore(db),
         settings: SettingsStore(db),
+        users: UserStore(db),
+        printers: PrinterRegistry(discovery: _NoPrinters()),
+        endpoints: OdooEndpointStore(db),
         reservations: ReservationStore(db),
         assignments: TableAssignmentStore(db),
         audit: AuditLog(db),

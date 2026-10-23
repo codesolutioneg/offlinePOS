@@ -1,6 +1,7 @@
 import 'package:flutter/painting.dart';
 
 import 'app_colors.dart';
+import '../../domain/table_floor_info.dart';
 
 /// What free and occupied look like on the floor.
 ///
@@ -9,6 +10,9 @@ import 'app_colors.dart';
 /// one for a manager who cannot tell them apart. Published by [SettingsStore] the way
 /// the print profile is, because the floor is drawn deep inside a screen that has no
 /// business holding a database handle.
+///
+/// Sent-to-kitchen and pre-bill colours stay on the brand defaults: they are status
+/// facts derived from the bill, not shop branding.
 class TablePalette {
   const TablePalette(
       {this.free = AppColors.tableFree, this.occupied = AppColors.tableOccupied});
@@ -25,4 +29,19 @@ class TablePalette {
 
   final Color free;
   final Color occupied;
+
+  /// Kitchen has the ticket; blue so it does not read as "still at the waiter".
+  Color get sent => AppColors.tableSent;
+
+  /// The check was printed and the table is still open.
+  Color get billed => AppColors.tableBilled;
+
+  Color colorFor(TableFloorLife? life, {required bool occupied}) {
+    if (!occupied) return free;
+    return switch (life) {
+      TableFloorLife.sent => sent,
+      TableFloorLife.billed => billed,
+      TableFloorLife.unsent || null => this.occupied,
+    };
+  }
 }

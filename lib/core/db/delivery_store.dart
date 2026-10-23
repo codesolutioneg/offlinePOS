@@ -115,6 +115,42 @@ class DeliveryStore {
   void setDriverActive(String id, bool active) => _db.raw
       .execute('UPDATE drivers SET active = ? WHERE id = ?', [active ? 1 : 0, id]);
 
+  /// Insert or refresh one driver from a spreadsheet row.
+  ///
+  /// When [id] is set and already on file, name/phone/active are updated in place
+  /// so a re-import keeps the same driver on old tickets. A new id (or none) adds
+  /// a row; we keep the external id when given so the next export matches.
+  Driver upsertDriver({
+    String? id,
+    required String name,
+    String? phone,
+    bool active = true,
+  }) {
+    final trimmed = name.trim();
+    final phoneVal = _blankToNull(phone);
+    final given = id?.trim();
+    if (given != null && given.isNotEmpty) {
+      final exists = _db.raw
+          .select('SELECT 1 AS ok FROM drivers WHERE id = ? LIMIT 1', [given]);
+      if (exists.isNotEmpty) {
+        updateDriver(given, name: trimmed, phone: phoneVal, active: active);
+        return Driver(
+            id: given, name: trimmed, phone: phoneVal, active: active);
+      }
+      final driver =
+          Driver(id: given, name: trimmed, phone: phoneVal, active: active);
+      _db.raw.execute(
+        'INSERT INTO drivers (id, name, phone, active, created_at) VALUES (?,?,?,?,?)',
+        [driver.id, driver.name, driver.phone, active ? 1 : 0, _now()],
+      );
+      return driver;
+    }
+    final driver = addDriver(name: trimmed, phone: phoneVal);
+    if (!active) setDriverActive(driver.id, false);
+    return Driver(
+        id: driver.id, name: driver.name, phone: driver.phone, active: active);
+  }
+
   static String? _blankToNull(String? v) {
     final t = v?.trim() ?? '';
     return t.isEmpty ? null : t;

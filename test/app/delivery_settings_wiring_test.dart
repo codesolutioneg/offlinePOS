@@ -90,7 +90,7 @@ void main() {
       endpoints: OdooEndpointStore(db),
       odoo: OdooWiring(outbox: outbox),
       tables: TableStore(db),
-      settings: SettingsStore(db),
+      settings: SettingsStore(db)..lanRolePromptDismissed = true,
       customers: CustomerStore(db),
       delivery: delivery,
       attendance: AttendanceStore(db),
@@ -125,6 +125,8 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-settings')));
     await t.pumpAndSettle();
+    await t.scrollUntilVisible(find.byKey(const Key('set-delivery')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-delivery')));
     await t.pumpAndSettle();
     expect(find.byType(DeliverySettingsScreen), findsOneWidget,

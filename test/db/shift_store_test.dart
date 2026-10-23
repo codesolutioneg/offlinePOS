@@ -34,6 +34,8 @@ void main() {
     final closed = shifts.closeShift(countedCash: 130);
     expect(closed.isOpen, isFalse);
     expect(shifts.currentOpenShift(), isNull);
+    expect(shifts.recentClosed(), hasLength(1));
+    expect(shifts.recentClosed().first.id, closed.id);
   });
 
   test('a paid-out carries an expense category that round-trips through storage', () {
@@ -183,15 +185,15 @@ void main() {
     expect(sum.tenders.where((t) => t.isCash).fold(0.0, (s, t) => s + t.amount), 25);
   });
 
-  test('a refund in the window reduces the tender it went back on', () {
+  test('a refund stays off the Z; the sale keeps its full tender', () {
     shifts.openShift(openingFloat: 100, cashierId: 'c1');
     final sale = Order(deviceId: 'd', cashierId: 'c1')
       ..lines.add(line(60))
       ..payments = [const OrderPayment(methodId: 2, amount: 60, label: 'Visa')]
       ..state = OrderState.paid;
     orders.save(sale);
-    // A refund is an order of its own with negative lines and negative tenders, so
-    // it nets off the method the money came in on rather than the cash row.
+    // Same rule as Flash / Odoo session close: refund rows live in Refunds
+    // reports only, so the End of Day card matches what close will send.
     orders.save(Order(
       deviceId: 'd',
       cashierId: 'c1',
@@ -202,11 +204,11 @@ void main() {
       ..state = OrderState.paid);
 
     final sum = shifts.summary(shifts.currentOpenShift()!, cashMethodIds: {1});
-    expect(sum.salesTotal, 40);
+    expect(sum.salesCount, 1);
+    expect(sum.salesTotal, 60);
     expect(sum.tenders.single.label, 'Visa');
-    expect(sum.tenders.single.amount, 40);
+    expect(sum.tenders.single.amount, 60);
     expect(sum.cashSales, 0);
-    // The card refund never touched the drawer, so the expected cash is the float.
     expect(sum.expectedCash, 100);
     final closed = shifts.closeShift(countedCash: 100);
     expect(shifts.summary(closed, cashMethodIds: {1}).variance, 0);

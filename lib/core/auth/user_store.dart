@@ -1,4 +1,5 @@
 import '../db/database.dart';
+import '../lan/lan_event.dart';
 
 class Cashier {
   const Cashier({
@@ -27,6 +28,28 @@ class Cashier {
 
   /// Whether approving with this account also takes a code from their phone.
   bool get hasSecondFactor => (totpSecret ?? '').isNotEmpty;
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'name': name,
+        'pin_salt': pinSalt,
+        'pin_hash': pinHash,
+        'role': role,
+        'active': active,
+        'totp_secret': totpSecret,
+      };
+
+  factory Cashier.fromMap(Map<String, dynamic> m) => Cashier(
+        id: '${m['id']}',
+        name: '${m['name'] ?? ''}',
+        pinSalt: '${m['pin_salt'] ?? ''}',
+        pinHash: '${m['pin_hash'] ?? ''}',
+        role: '${m['role'] ?? 'cashier'}',
+        active: m['active'] != false && m['active'] != 0,
+        totpSecret: m['totp_secret'] == null || '${m['totp_secret']}'.isEmpty
+            ? null
+            : '${m['totp_secret']}',
+      );
 }
 
 /// Cashiers as held on the till, so a shift change works with no network.
@@ -35,7 +58,31 @@ class UserStore {
 
   final Db _db;
 
-  void upsert(Cashier c) => _db.raw.execute(
+  /// Announces a changed account to the other tills; null with the fabric off.
+  LanPublish? publish;
+
+  /// The provisioning account is local to one till and never announced.
+  static const _localOnly = 'setup';
+
+  void _announce(Cashier c) {
+    final p = publish;
+    if (p == null || c.id == _localOnly) return;
+    p(LanEventKind.userUpsert, 'user-${c.id}', c.toMap());
+  }
+
+  void upsert(Cashier c) {
+    _write(c);
+    _announce(c);
+  }
+
+  /// An account another till announced. Written without announcing it back.
+  void applyRemote(Map<String, dynamic> payload) {
+    final c = Cashier.fromMap(payload);
+    if (c.id.isEmpty || c.id == _localOnly) return;
+    _write(c);
+  }
+
+  void _write(Cashier c) => _db.raw.execute(
         'INSERT INTO users (id, name, pin_salt, pin_hash, role, active, totp_secret) '
         'VALUES (?,?,?,?,?,?,?) '
         'ON CONFLICT(id) DO UPDATE SET name=excluded.name, pin_salt=excluded.pin_salt, '
@@ -46,19 +93,23 @@ class UserStore {
 
   /// Turn a second factor on or off for one person without touching their PIN, so
   /// enrolling an authenticator is not a password reset.
-  void setTotpSecret(String id, String? secret) => _db.raw.execute(
-      'UPDATE users SET totp_secret = ? WHERE id = ?',
-      [(secret ?? '').isEmpty ? null : secret, id]);
+  void setTotpSecret(String id, String? secret) {
+    _db.raw.execute('UPDATE users SET totp_secret = ? WHERE id = ?',
+        [(secret ?? '').isEmpty ? null : secret, id]);
+    final c = byId(id);
+    if (c != null) _announce(c);
+  }
 
   /// Replaces the roster in one transaction, so a partial sync cannot leave the
-  /// till with nobody able to sign in.
+  /// till with nobody able to sign in. Not announced: it is how a joining till
+  /// takes the primary's roster, which the others already have.
   void replaceAll(List<Cashier> users) {
     if (users.isEmpty) return;
     _db.raw.execute('BEGIN');
     try {
       _db.raw.execute('DELETE FROM users');
       for (final u in users) {
-        upsert(u);
+        _write(u);
       }
       _db.raw.execute('COMMIT');
     } catch (_) {

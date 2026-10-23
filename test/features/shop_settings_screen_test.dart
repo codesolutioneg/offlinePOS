@@ -88,15 +88,15 @@ void main() {
       (t) async {
     await t.pumpWidget(app());
 
-    await scrollTo(t, 'shop-type-delivery');
-    await t.tap(find.byKey(const Key('shop-type-delivery')));
+    await scrollTo(t, 'shop-type-storedelivery');
+    await t.tap(find.byKey(const Key('shop-type-storedelivery')));
     await t.pumpAndSettle();
     await scrollTo(t, 'save-shop');
     await t.tap(find.byKey(const Key('save-shop')));
     await t.pumpAndSettle();
 
-    expect(settings.shopOrderTypes.contains(OrderType.delivery), isFalse);
-    expect(settings.availableOrderTypesFor('cashier').contains(OrderType.delivery),
+    expect(settings.shopOrderTypes.contains(OrderType.storeDelivery), isFalse);
+    expect(settings.availableOrderTypesFor('cashier').contains(OrderType.storeDelivery),
         isFalse);
   });
 
