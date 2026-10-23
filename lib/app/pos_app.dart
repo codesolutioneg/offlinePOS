@@ -6327,7 +6327,8 @@ class _PosAppState extends State<PosApp> {
           ? entry.value
           : entry.value.where((l) => !l.firedStations.contains(station)).toList();
       if (pending.isEmpty) continue;
-      final bytes = builder.build(order, only: pending, station: station);
+      final bytes =
+          builder.build(order, only: pending, station: station, at: now);
       final result = await _sendToStation(
         station,
         bytes,

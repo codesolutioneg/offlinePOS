@@ -46,13 +46,21 @@ class KitchenTicketBuilder {
   final String? Function(String cashierId)? serverNameOf;
 
   /// Build a ticket for [order]. When [only] is given, prints just those lines.
+  ///
+  /// [at] is when this ticket is sent. The clock on the paper is that moment,
+  /// not when the table was opened ([Order.createdAt]).
   Uint8List build(Order order,
-      {List<OrderLine>? only, String? station, bool reprint = false}) {
+      {List<OrderLine>? only,
+      String? station,
+      bool reprint = false,
+      DateTime? at}) {
     final lines = only ?? order.lines;
     final p = EscPos(columns: columns)..reset();
     const major = '=';
     _header(p, order,
-        station: station, at: order.createdAt, reprint: reprint);
+        station: station,
+        at: at ?? DateTime.now().toUtc(),
+        reprint: reprint);
 
     // Items grouped by category (uppercase headers), Dishflow style.
     String? lastCat;

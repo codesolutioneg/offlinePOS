@@ -4,6 +4,14 @@ import 'package:offline_pos/domain/order.dart';
 
 import 'strip_escpos.dart';
 
+String _clock(DateTime utc) {
+  final d = utc.toLocal();
+  final ap = d.hour >= 12 ? 'PM' : 'AM';
+  final h12 = d.hour % 12 == 0 ? 12 : d.hour % 12;
+  final min = d.minute.toString().padLeft(2, '0');
+  return '$h12:$min $ap';
+}
+
 void main() {
   OrderLine line(int productId, {int? categoryId, String name = 'Item'}) => OrderLine(
         productId: productId,
@@ -101,6 +109,20 @@ void main() {
           orderNo: orderNo,
           lines: [OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100)],
         );
+
+    test('the clock is the send time, not when the table was opened', () {
+      final opened = DateTime.utc(2026, 1, 1, 8, 0);
+      final sent = DateTime.utc(2026, 1, 1, 9, 20);
+      final order = Order(
+        deviceId: 'till-1',
+        cashierId: 'sara',
+        createdAt: opened,
+        lines: [OrderLine(productId: 1, name: 'Pizza', quantity: 1, unitPrice: 100)],
+      );
+      final text = strippedText(KitchenTicketBuilder().build(order, at: sent));
+      expect(text, contains(_clock(sent)));
+      expect(text, isNot(contains(_clock(opened))));
+    });
 
     test('the kitchen ticket carries the same order number as the receipt', () {
       final text =
