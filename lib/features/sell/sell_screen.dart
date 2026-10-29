@@ -10,6 +10,7 @@ import '../../core/auth/permissions.dart';
 import '../../core/db/catalogue_store.dart' show ModifierMark;
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/vouchers/voucher_code.dart';
 import '../../core/printing/kitchen_ticket.dart' show KitchenFireResult;
 import '../../core/printing/receipt_builder.dart' show PartialPayment;
 import '../../core/theme/app_colors.dart';
@@ -64,6 +65,8 @@ class SellScreen extends StatefulWidget {
     this.discountPercents = const [5, 10, 15, 20],
     this.maxDiscountPercent = 0,
     this.allowAmountDiscount = false,
+    this.onRedeemVoucher,
+    this.onClearVoucher,
     this.authorize,
     this.authorizeVoidManager,
     this.authorizeTabTable,
@@ -233,6 +236,13 @@ class SellScreen extends StatefulWidget {
   /// amount is converted to the equivalent percentage before it is applied, so the
   /// order, the receipt and every report stay percent-based.
   final bool allowAmountDiscount;
+
+  /// Holds a voucher on the open bill and applies its discount. The returned
+  /// sentence is what the cashier is shown when the code is refused.
+  final Future<String?> Function(String code, String customerName)? onRedeemVoucher;
+
+  /// Gives a held voucher back and takes its discount off the open bill.
+  final Future<String?> Function()? onClearVoucher;
 
   /// Gate for privileged actions: called with the specific [Permission] the action
   /// needs and returns true if the cashier's role allows it or a manager approves.
@@ -462,29 +472,42 @@ class _SellScreenState extends State<SellScreen> {
     _lastScanKey = now;
     if (e.logicalKey == LogicalKeyboardKey.enter ||
         e.logicalKey == LogicalKeyboardKey.numpadEnter) {
-      _finishScan();
+      unawaited(_finishScan());
       return;
     }
     final ch = e.character;
     if (ch != null && ch.length == 1 && ch.trim().isNotEmpty) _scanBuffer += ch;
   }
 
-  void _finishScan() {
+  Future<void> _finishScan() async {
     final code = _scanBuffer.trim();
     _scanBuffer = '';
-    // Too short to be a real barcode: ignore, so a stray Enter does nothing.
-    if (code.length < 3) return;
-    final product = s.catalogue.byBarcode(code);
-    if (product == null) {
-      showToast(context, '${tr(context, 'No product for barcode')} $code',
-          kind: ToastKind.error);
+    if (code.isEmpty) return;
+    if (code.length >= 3) {
+      final product = s.catalogue.byBarcode(code);
+      if (product != null) {
+        _changed(() => s.addProduct(product));
+        showToast(context, '${tr(context, 'Added')} ${product.displayName}',
+            kind: ToastKind.success,
+            key: const Key('scanned'),
+            duration: const Duration(milliseconds: 900));
+        return;
+      }
+    }
+    if (widget.onRedeemVoucher != null && VoucherCode.parse(code) != null) {
+      final blocked = await widget.onRedeemVoucher!(code, '');
+      if (!mounted) return;
+      if (blocked != null) {
+        showToast(context, tr(context, blocked), kind: ToastKind.error);
+        return;
+      }
+      setState(() {});
+      showToast(context, tr(context, 'Voucher applied'), kind: ToastKind.success);
       return;
     }
-    _changed(() => s.addProduct(product));
-    showToast(context, '${tr(context, 'Added')} ${product.displayName}',
-        kind: ToastKind.success,
-        key: const Key('scanned'),
-        duration: const Duration(milliseconds: 900));
+    if (code.length < 3) return;
+    showToast(context, '${tr(context, 'No product for barcode')} $code',
+        kind: ToastKind.error);
   }
 
   // A fresh catalogue landed from the server: rebuild so the grid re-queries it.
@@ -860,8 +883,96 @@ class _SellScreenState extends State<SellScreen> {
         }
       }
       final reason = (result['reason'] as String).isEmpty ? null : result['reason'] as String;
+      // A voucher already holds this bill's discount. A hand-typed discount
+      // takes its place only after the code is given back, so it cannot be
+      // used on a second bill as well.
+      if (s.current.voucherCode != null) {
+        final clear = widget.onClearVoucher;
+        if (clear == null) return;
+        final blocked = await clear();
+        if (!mounted) return;
+        if (blocked != null) {
+          showToast(context, tr(context, blocked), kind: ToastKind.error);
+          return;
+        }
+      }
       _changed(() => s.setDiscount(pct, reason: reason));
     }
+  }
+
+  /// Ask the shared voucher server, then put its discount on this bill.
+  Future<void> _openVoucher() async {
+    final redeem = widget.onRedeemVoucher;
+    if (redeem == null) return;
+    final codeCtrl = TextEditingController(text: s.current.voucherCode ?? '');
+    final nameCtrl = TextEditingController(
+      text: s.current.voucherCustomerName ?? s.current.customerPhone ?? '',
+    );
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr(ctx, 'Voucher')),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            key: const Key('voucher-code'),
+            controller: codeCtrl,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: tr(ctx, 'Voucher number'),
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            key: const Key('voucher-customer'),
+            controller: nameCtrl,
+            keyboardType: TextInputType.phone,
+            decoration: InputDecoration(
+              labelText: tr(ctx, 'Customer number'),
+              border: const OutlineInputBorder(),
+            ),
+          ),
+        ]),
+        actions: [
+          if (s.current.voucherCode != null)
+            TextButton(
+              key: const Key('voucher-clear'),
+              onPressed: () => Navigator.pop(ctx, 'clear'),
+              child: Text(tr(ctx, 'Clear voucher')),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr(ctx, 'Cancel')),
+          ),
+          FilledButton(
+            key: const Key('voucher-apply'),
+            onPressed: () => Navigator.pop(ctx, 'apply'),
+            child: Text(tr(ctx, 'Apply')),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'clear') {
+      final blocked = await widget.onClearVoucher?.call();
+      if (!mounted) return;
+      if (blocked != null) {
+        showToast(context, tr(context, blocked), kind: ToastKind.error);
+        return;
+      }
+      setState(() {});
+      showToast(context, tr(context, 'Voucher removed'), kind: ToastKind.success);
+      return;
+    }
+    final blocked = await redeem(codeCtrl.text, nameCtrl.text);
+    if (!mounted) return;
+    if (blocked != null) {
+      showToast(context, tr(context, blocked), kind: ToastKind.error);
+      return;
+    }
+    setState(() {});
+    showToast(context, tr(context, 'Voucher applied'), kind: ToastKind.success);
   }
 
   // ── per-line actions: note, discount, void with reason ───────────
@@ -2301,6 +2412,9 @@ class _SellScreenState extends State<SellScreen> {
           'Discount Items', const Color(0xFFE67E22), has),
       IconPadItem('discount-check', 'misc-discount-check', Icons.percent,
           'Discount Check', const Color(0xFF2E86C1), has),
+      if (widget.onRedeemVoucher != null)
+        IconPadItem('voucher', 'misc-voucher', Icons.confirmation_number_outlined,
+            'Voucher', const Color(0xFF0E6655), true),
       IconPadItem('split-check', 'misc-split-check', Icons.call_split,
           'Split Check', const Color(0xFF1E8449), dineIn && has),
       IconPadItem('customer-count', 'misc-customer-count', Icons.groups_2_outlined,
@@ -2364,6 +2478,8 @@ class _SellScreenState extends State<SellScreen> {
         if (line != null && mounted) await _lineDiscount(line);
       case 'discount-check':
         await _openDiscount();
+      case 'voucher':
+        await _openVoucher();
       case 'split-check':
         await _splitCheck();
       case 'customer-count':
@@ -4521,18 +4637,33 @@ class _SellScreenState extends State<SellScreen> {
             if (!_actionBarShown)
               Align(
               alignment: AlignmentDirectional.centerStart,
-              child: TextButton.icon(
-                key: const Key('discount'),
-                onPressed: _openDiscount,
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
+              child: Wrap(spacing: 12, children: [
+                TextButton.icon(
+                  key: const Key('discount'),
+                  onPressed: _openDiscount,
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                  ),
+                  icon: const Icon(Icons.percent, size: 15),
+                  label: Text(s.current.discountPercent > 0
+                      ? tr(context, 'Edit discount')
+                      : tr(context, 'Add discount')),
                 ),
-                icon: const Icon(Icons.percent, size: 15),
-                label: Text(s.current.discountPercent > 0
-                    ? tr(context, 'Edit discount')
-                    : tr(context, 'Add discount')),
-              ),
+                if (widget.onRedeemVoucher != null)
+                  TextButton.icon(
+                    key: const Key('voucher'),
+                    onPressed: _openVoucher,
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                    ),
+                    icon: const Icon(Icons.confirmation_number_outlined, size: 15),
+                    label: Text(s.current.voucherCode != null
+                        ? '${tr(context, 'Voucher')} ${s.current.voucherCode}'
+                        : tr(context, 'Voucher')),
+                  ),
+              ]),
             ),
           ],
         ),

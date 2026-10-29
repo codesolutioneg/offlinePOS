@@ -7,6 +7,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../core/i18n/l10n.dart';
 import '../core/window/till_window.dart';
+import '../core/vouchers/voucher_client.dart';
 
 import '../core/audit/audit_log.dart';
 import '../core/cloud/cloud_backup_service.dart';
@@ -129,6 +130,7 @@ import '../features/settings/cloud_backup_screen.dart';
 import '../features/settings/dishflow_floor_import_screen.dart';
 import '../features/settings/dishflow_mirror_settings_screen.dart';
 import '../features/settings/discount_settings_screen.dart';
+import '../features/settings/voucher_settings_screen.dart';
 import '../features/settings/email_settings_screen.dart';
 import '../features/settings/lan_settings_screen.dart';
 import '../features/settings/tax_settings_screen.dart';
@@ -2577,6 +2579,8 @@ class _PosAppState extends State<PosApp> {
           discountPercents: widget.settings.discountPercents,
           maxDiscountPercent: widget.settings.maxDiscountPercent,
           allowAmountDiscount: widget.settings.allowAmountDiscount,
+          onRedeemVoucher: (code, name) => _redeemVoucher(session, code, name),
+          onClearVoucher: () => _clearVoucher(session),
           authorize: (p) => _authorize(p, context),
           // Void always collects a manager PIN (never skipped by role) so the
           // approving manager is named on the audit trail and the deletion slip.
@@ -2725,6 +2729,7 @@ class _PosAppState extends State<PosApp> {
           onPaid: (order) {
             _publishActivity();
             final sale = order as Order;
+            unawaited(_confirmVoucher(sale));
             // Paying starts a fresh blank order, so the way back to the floor no
             // longer knows which table this was: release it by the sale's own.
             _releaseIfFree(sale.tableLabel);
@@ -3052,6 +3057,7 @@ class _PosAppState extends State<PosApp> {
           // line and the total removed, printed alongside the audit entry.
           unawaited(_printDeletion(order, order.lines,
               title: 'ORDER CANCELLED', reason: reason));
+          await _releaseVoucher(order);
           widget.orders.delete(order.uuid);
           // Nothing left to correct, so the snapshot taken when it was reopened
           // has no second payment coming to consume it.
@@ -5562,6 +5568,16 @@ class _PosAppState extends State<PosApp> {
             DiscountSettingsScreen(settings: widget.settings, onChanged: refresh)),
       ),
       SettingsEntry(
+        title: 'Vouchers',
+        subtitle: 'Branch key for the shared voucher server',
+        icon: Icons.confirmation_number_outlined,
+        keyValue: 'set-vouchers',
+        group: 'Shop',
+        onTap: () => pushGated(
+            Permission.openSettings,
+            VoucherSettingsScreen(settings: widget.settings, onChanged: refresh)),
+      ),
+      SettingsEntry(
         title: 'Tax rules',
         subtitle: 'Per category, per order type',
         icon: Icons.receipt_long_outlined,
@@ -6259,6 +6275,107 @@ class _PosAppState extends State<PosApp> {
       return false;
     }
     return true;
+  }
+
+  VoucherClient? _voucherClient() {
+    final key = widget.settings.voucherBranchKey;
+    if (key == null || key.isEmpty) return null;
+    return VoucherClient(
+      baseUrl: widget.settings.voucherServerUrl,
+      branchKey: key,
+    );
+  }
+
+  /// Hold the code on the shared server and put its discount on the open bill.
+  /// A code already on this bill is given back only after the new one is held.
+  Future<String?> _redeemVoucher(
+      PosSession session, String code, String customerName) async {
+    final client = _voucherClient();
+    if (client == null) return voucherFailure('not_configured');
+    final name = customerName.trim();
+    final order = session.current;
+    session.ensureOrderNo(order);
+    final previous = order.voucherCode;
+    try {
+      final reply = await client.redeem(
+        code: code,
+        customerName: name,
+        orderUuid: order.uuid,
+        orderNo: order.orderNo ?? order.displayNo,
+        cashier: widget.users.byId(session.cashierId)?.name ?? session.cashierId,
+      );
+      if (!reply.ok || reply.code == null || reply.percent == null) {
+        return voucherFailure(reply.error);
+      }
+      if (previous != null && previous != reply.code) {
+        await client.release(code: previous, orderUuid: order.uuid);
+      }
+      final saved = (reply.customerName ?? name).trim();
+      if (saved.isEmpty) return voucherFailure('name');
+      order.voucherCode = reply.code;
+      order.voucherCustomerName = saved;
+      if ((order.customerPhone ?? '').trim().isEmpty) order.customerPhone = saved;
+      session.setDiscount(reply.percent!, reason: 'Voucher ${reply.code}');
+      return null;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Give the open bill's voucher back. The discount stays if the server still
+  /// says the code is on this bill, so it cannot be spent twice.
+  Future<String?> _clearVoucher(PosSession session) async {
+    final order = session.current;
+    final code = order.voucherCode;
+    if (code == null || code.isEmpty) return null;
+    final client = _voucherClient();
+    if (client == null) return voucherFailure('not_configured');
+    try {
+      final reply = await client.release(code: code, orderUuid: order.uuid);
+      if (!reply.ok) return voucherFailure(reply.error);
+      order.voucherCode = null;
+      order.voucherCustomerName = null;
+      session.setDiscount(0);
+      return null;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// The bill was paid, so the code stays used even if the sale is refunded later.
+  Future<void> _confirmVoucher(Order order) async {
+    final code = order.voucherCode;
+    if (code == null || code.isEmpty) return;
+    final client = _voucherClient();
+    if (client == null) return;
+    try {
+      final reply = await client.confirm(
+        code: code,
+        orderUuid: order.uuid,
+        discountAmount: order.discountMoney,
+        orderNo: order.orderNo ?? order.displayNo,
+      );
+      if (!reply.ok) {
+        widget.audit.record(order.cashierId, 'voucher.confirm.failed',
+            detail: '${order.uuid}|$code|${reply.error}');
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  /// A cancelled bill gives its code back. A server that cannot be reached
+  /// keeps the hold, and the hold expires on its own.
+  Future<void> _releaseVoucher(Order order) async {
+    final code = order.voucherCode;
+    if (code == null || code.isEmpty) return;
+    final client = _voucherClient();
+    if (client == null) return;
+    try {
+      await client.release(code: code, orderUuid: order.uuid);
+    } finally {
+      client.close();
+    }
   }
 
   // ── kitchen tickets ──────────────────────────────────────────────

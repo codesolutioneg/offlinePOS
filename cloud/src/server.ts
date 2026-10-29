@@ -4,6 +4,7 @@ import { buildApp } from './app.js';
 import { config } from './config.js';
 import { PrismaRepo } from './prisma-repo.js';
 import { Storage } from './storage.js';
+import { voucherAdmin } from './voucher_admin.js';
 
 const cfg = config();
 const prisma = new PrismaClient();
@@ -13,6 +14,7 @@ const app = await buildApp({
   adminToken: cfg.adminToken,
   maxBackupBytes: cfg.maxBackupBytes,
   webDir: cfg.webDir,
+  vouchers: voucherAdmin(cfg.voucherBaseUrl, cfg.voucherAdminKey),
   logger: true,
   ping: async () => {
     await prisma.$queryRaw`SELECT 1`;

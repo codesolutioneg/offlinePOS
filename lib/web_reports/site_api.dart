@@ -109,6 +109,134 @@ class SiteSession {
   final List<SiteBranch> branches;
 }
 
+class SiteVoucherDiscount {
+  const SiteVoucherDiscount({required this.id, required this.name, required this.percent});
+
+  final String id;
+  final String name;
+  final double percent;
+}
+
+class SiteVoucherRange {
+  const SiteVoucherRange({
+    required this.from,
+    required this.to,
+    required this.percent,
+    this.discountId,
+  });
+
+  final int from;
+  final int to;
+  final double percent;
+  final String? discountId;
+}
+
+class SiteVoucherBranch {
+  const SiteVoucherBranch({
+    required this.name,
+    required this.key,
+    this.connected = false,
+    this.lastSeen,
+  });
+
+  final String name;
+  final String key;
+  final bool connected;
+  final DateTime? lastSeen;
+}
+
+class SiteVoucherUse {
+  const SiteVoucherUse({
+    required this.code,
+    required this.serial,
+    required this.status,
+    required this.branchName,
+    required this.customerName,
+    this.orderNo,
+    this.cashier,
+    this.discountAmount,
+    this.heldAt,
+    this.usedAt,
+  });
+
+  final String code;
+  final int serial;
+  final String status;
+  final String branchName;
+  final String customerName;
+  final String? orderNo;
+  final String? cashier;
+  final double? discountAmount;
+  final DateTime? heldAt;
+  final DateTime? usedAt;
+}
+
+/// Numbers, branch keys and redemptions from the shared voucher server.
+class SiteVouchers {
+  const SiteVouchers({
+    required this.percent,
+    required this.discounts,
+    required this.ranges,
+    required this.branches,
+    required this.rows,
+  });
+
+  final double percent;
+  final List<SiteVoucherDiscount> discounts;
+  final List<SiteVoucherRange> ranges;
+  final List<SiteVoucherBranch> branches;
+  final List<SiteVoucherUse> rows;
+
+  factory SiteVouchers.fromJson(Map<String, dynamic> m) =>       SiteVouchers(
+        percent: (m['percent'] as num?)?.toDouble() ?? 15,
+        discounts: [
+          for (final d in (m['discounts'] as List? ?? const []))
+            if (d is Map)
+              SiteVoucherDiscount(
+                id: '${d['id'] ?? ''}',
+                name: '${d['name'] ?? ''}',
+                percent: (d['percent'] as num?)?.toDouble() ?? 0,
+              ),
+        ],
+        ranges: [
+          for (final r in (m['ranges'] as List? ?? const []))
+            if (r is Map)
+              SiteVoucherRange(
+                from: (r['from'] as num?)?.toInt() ?? 0,
+                to: (r['to'] as num?)?.toInt() ?? 0,
+                percent: (r['percent'] as num?)?.toDouble() ?? (m['percent'] as num?)?.toDouble() ?? 15,
+                discountId: '${r['discount_id'] ?? ''}'.isEmpty ? null : '${r['discount_id']}',
+              ),
+        ],
+        branches: [
+          for (final b in (m['branches'] as List? ?? const []))
+            if (b is Map)
+              SiteVoucherBranch(
+                name: '${b['name'] ?? ''}',
+                key: '${b['key'] ?? ''}',
+                connected: b['connected'] == true,
+                lastSeen: DateTime.tryParse('${b['last_seen'] ?? ''}'),
+              ),
+        ],
+        rows: [
+          for (final row in (m['rows'] as List? ?? const []))
+            if (row is Map)
+              SiteVoucherUse(
+                code: '${row['code'] ?? ''}',
+                serial: (row['serial'] as num?)?.toInt() ?? int.tryParse('${row['code'] ?? ''}') ?? 0,
+                status: '${row['status'] ?? ''}',
+                branchName: '${row['branch_name'] ?? ''}',
+                customerName: '${row['customer_name'] ?? ''}',
+                orderNo: row['order_no'] as String?,
+                cashier: row['cashier'] as String?,
+                discountAmount: (row['discount_amount'] as num?)?.toDouble(),
+                heldAt: DateTime.tryParse('${row['held_at'] ?? ''}'),
+                usedAt: DateTime.tryParse('${row['used_at'] ?? ''}'),
+              ),
+        ],
+      );
+}
+
 /// One uploaded row: a sale, a shift, a clock-in, an audit entry or a lookup.
 class SiteRecord {
   const SiteRecord({
@@ -278,6 +406,34 @@ class SiteApi {
       (await _call('POST', '/api/users/$id/reset-password'))['password'] as String;
 
   Future<void> deleteUser(String id) => _call('DELETE', '/api/users/$id');
+
+  Future<SiteVouchers> vouchers() async =>
+      SiteVouchers.fromJson(await _call('GET', '/api/vouchers'));
+
+  Future<void> addVoucherDiscount(String name, double percent) =>
+      _call('POST', '/api/vouchers/discounts', {'name': name, 'percent': percent});
+
+  Future<void> removeVoucherDiscount(int index) =>
+      _call('POST', '/api/vouchers/discounts/remove', {'index': index});
+
+  Future<void> addVoucherRange(int from, int to, {String? discountId}) =>
+      _call('POST', '/api/vouchers/ranges', {
+        'from': from,
+        'to': to,
+        'discount_id': ?discountId,
+      });
+
+  Future<void> removeVoucherRange(int index) =>
+      _call('POST', '/api/vouchers/ranges/remove', {'index': index});
+
+  Future<void> setVoucherRangeDiscount(int index, String? discountId) =>
+      _call('POST', '/api/vouchers/ranges/discount', {
+        'index': index,
+        'discount_id': discountId ?? '',
+      });
+
+  Future<String> addVoucherBranch(String name) async =>
+      (await _call('POST', '/api/vouchers/branches', {'name': name}))['key'] as String;
 
   Future<Map<String, dynamic>> _call(String method, String path,
       [Map<String, Object?>? body, Map<String, String>? query]) async {

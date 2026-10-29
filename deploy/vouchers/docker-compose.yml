@@ -1,0 +1,9 @@
+services:
+  vouchers:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "172.17.0.1:8792:8787"
+    volumes:
+      - ./data:/app/voucher-data

@@ -433,6 +433,8 @@ class Order {
     this.type = OrderType.dineIn,
     this.discountPercent = 0,
     this.discountReason,
+    this.voucherCode,
+    this.voucherCustomerName,
     this.partnerId,
     this.customerName,
     this.customerPhone,
@@ -491,6 +493,11 @@ class Order {
   /// sent, so the server books the discounted total.
   double discountPercent;
   String? discountReason;
+
+  /// The voucher holding this bill's order discount, and the customer name the
+  /// cashier typed for it. Local only: Odoo is handed the discount, not the code.
+  String? voucherCode;
+  String? voucherCustomerName;
 
   /// The Odoo partner this sale is for, and its details. For delivery, the phone
   /// and address are captured on the till since a walk-in partner has none.
@@ -801,6 +808,9 @@ class Order {
         'server_id': serverId,
         'discount_percent': discountPercent,
         'discount_reason': discountReason,
+        if (voucherCode != null) 'voucher_code': voucherCode,
+        if (voucherCustomerName != null)
+          'voucher_customer_name': voucherCustomerName,
         'partner_id': partnerId,
         'customer_name': customerName,
         'customer_phone': customerPhone,
@@ -881,6 +891,10 @@ class Order {
     // Whether the till corrected this sale before sending it is the till's own
     // business: the server is handed one sale under one uuid either way.
     m.remove('amended');
+    // Which voucher earned the discount is the voucher server's record. Odoo
+    // books the discount line and has no field for the code.
+    m.remove('voucher_code');
+    m.remove('voucher_customer_name');
     // The trading day is already on the wire as business_date. The hour that
     // produced it is a shop rule the server neither reads nor needs.
     m.remove('business_day_cutover_hour');
@@ -975,6 +989,8 @@ class Order {
         type: OrderTypeLabel.parse(m['order_type'] as String?),
         discountPercent: (m['discount_percent'] as num?)?.toDouble() ?? 0,
         discountReason: m['discount_reason'] as String?,
+        voucherCode: m['voucher_code'] as String?,
+        voucherCustomerName: m['voucher_customer_name'] as String?,
         partnerId: m['partner_id'] as int?,
         customerName: m['customer_name'] as String?,
         customerPhone: m['customer_phone'] as String?,

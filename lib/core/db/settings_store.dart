@@ -62,6 +62,8 @@ class SettingsStore {
   static const _receiptFooter = 'receipt_footer';
   static const _quickComments = 'quick_comments';
   static const _discountReasons = 'discount_reasons';
+  static const _voucherServerUrl = 'voucher_server_url';
+  static const _voucherBranchKey = 'voucher_branch_key';
   static const _discountPercents = 'discount_percents';
   static const _maxDiscountPercent = 'max_discount_percent';
   static const _allowAmountDiscount = 'allow_amount_discount';
@@ -265,6 +267,26 @@ class SettingsStore {
   }
 
   set discountReasons(List<String> v) => setStringList(_discountReasons, v);
+
+  /// Where this till asks whether a voucher code is still free. Empty means the
+  /// shared voucher server.
+  String get voucherServerUrl {
+    final v = getString(_voucherServerUrl)?.trim();
+    if (v == null || v.isEmpty) return 'https://vouchers.91.99.195.177.sslip.io';
+    return v;
+  }
+
+  set voucherServerUrl(String? v) => setString(_voucherServerUrl, v);
+
+  /// The secret that names this branch on the voucher server. Every till in the
+  /// branch pastes the same key. Empty means vouchers are not set up here.
+  String? get voucherBranchKey {
+    final v = getString(_voucherBranchKey)?.trim();
+    if (v == null || v.isEmpty) return null;
+    return v;
+  }
+
+  set voucherBranchKey(String? v) => setString(_voucherBranchKey, v);
 
   /// The preset discount percentages offered as quick-pick chips when applying a
   /// discount. Editable by a manager; a sensible default until then.
@@ -1634,6 +1656,8 @@ class SettingsStore {
         'discount_percents': discountPercents,
         'max_discount_percent': maxDiscountPercent,
         'allow_amount_discount': allowAmountDiscount,
+        'voucher_server_url': getString(_voucherServerUrl),
+        'voucher_branch_key': voucherBranchKey,
         'custom_roles': customRoles,
         'role_permissions': {
           for (final e in _rolePermissionMap.entries) e.key: e.value.toList(),
@@ -1702,6 +1726,14 @@ class SettingsStore {
       }
     }
     if (bundle['shop_name'] != null) shopName = '${bundle['shop_name']}';
+    if (bundle.containsKey('voucher_server_url')) {
+      final v = bundle['voucher_server_url'];
+      voucherServerUrl = v == null ? null : '$v';
+    }
+    if (bundle.containsKey('voucher_branch_key')) {
+      final v = bundle['voucher_branch_key'];
+      voucherBranchKey = v == null ? null : '$v';
+    }
     if (bundle['tax_id'] != null) taxId = '${bundle['tax_id']}';
     if (bundle['receipt_footer'] != null) {
       receiptFooter = '${bundle['receipt_footer']}';

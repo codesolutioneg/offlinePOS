@@ -9,6 +9,7 @@ import type { Device, Repo, SyncRecord } from './repo.js';
 import { backupsToDelete } from './retention.js';
 import { Storage, TooLarge } from './storage.js';
 import { registerWeb } from './web.js';
+import type { VoucherAdmin } from './voucher_admin.js';
 
 export interface AppOptions {
   repo: Repo;
@@ -22,6 +23,8 @@ export interface AppOptions {
   ping?: () => Promise<void>;
   /// The built reports site (flutter build web). Unset serves no site.
   webDir?: string;
+  /// Shared voucher server. Unset hides a working vouchers page behind a clear error.
+  vouchers?: VoucherAdmin | null;
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -368,6 +371,12 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     },
   );
 
-  await registerWeb(app, { repo, storage, now, webDir: opts.webDir });
+  await registerWeb(app, {
+    repo,
+    storage,
+    now,
+    webDir: opts.webDir,
+    vouchers: opts.vouchers,
+  });
   return app;
 }

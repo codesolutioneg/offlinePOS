@@ -12,4 +12,6 @@ export const config = () => ({
   adminToken: process.env.ADMIN_TOKEN ?? '',
   maxBackupBytes: Number(process.env.MAX_BACKUP_MB ?? 1024) * 1024 * 1024,
   webDir: process.env.WEB_DIR ?? '/app/web',
+  voucherBaseUrl: process.env.VOUCHER_BASE_URL ?? '',
+  voucherAdminKey: process.env.VOUCHER_ADMIN_KEY ?? '',
 });

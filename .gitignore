@@ -88,3 +88,6 @@ tools/fpslib.dll
 tools/fppswsk12.dll
 tools/zkfpslibLow.dll
 tools/ZKFPSensors/
+
+# Voucher server data (branch keys live in here).
+/voucher-data/

@@ -28,6 +28,8 @@ services:
       MAX_BACKUP_MB: ${MAX_BACKUP_MB:-1024}
       STORAGE_DIR: /data/backups
       WEB_DIR: /app/web
+      VOUCHER_BASE_URL: ${VOUCHER_BASE_URL:-}
+      VOUCHER_ADMIN_KEY: ${VOUCHER_ADMIN_KEY:-}
     volumes:
       - backups:/data/backups
       # The reports site (flutter build web -t lib/web_reports/main.dart), copied

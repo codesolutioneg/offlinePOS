@@ -23,6 +23,7 @@ import {
 } from './permissions.js';
 import { UsernameTaken, type Repo, type Role, type User, type UserPatch } from './repo.js';
 import type { Storage } from './storage.js';
+import { VoucherServerError, type VoucherAdmin } from './voucher_admin.js';
 
 export const SESSION_COOKIE = 'pos_session';
 const SESSION_DAYS = 30;
@@ -86,7 +87,13 @@ const userJson = (u: User) => ({
 
 export async function registerWeb(
   app: FastifyInstance,
-  opts: { repo: Repo; storage: Storage; now: () => Date; webDir?: string },
+  opts: {
+    repo: Repo;
+    storage: Storage;
+    now: () => Date;
+    webDir?: string;
+    vouchers?: VoucherAdmin | null;
+  },
 ) {
   const { repo, storage, now } = opts;
   const throttle = new LoginThrottle(now);
@@ -461,6 +468,121 @@ export async function registerWeb(
     }
     await repo.deleteUser(target.id);
     return reply.code(204).send();
+  });
+
+  // ── Vouchers (owner, on the shared voucher server) ─────────────────────
+
+  const vouchers = opts.vouchers ?? null;
+
+  async function withVouchers(reply: FastifyReply): Promise<VoucherAdmin | undefined> {
+    if (!vouchers) {
+      fail(reply, 503, 'voucher server is not set up');
+      return;
+    }
+    return vouchers;
+  }
+
+  app.get('/api/vouchers', owner, async (_req, reply) => {
+    const book = await withVouchers(reply);
+    if (!book) return;
+    try {
+      return await book.overview();
+    } catch (e) {
+      return fail(reply, 502, e instanceof VoucherServerError ? e.message : 'voucher server refused the request');
+    }
+  });
+
+  app.post<{ Body: { name?: string; percent?: number } }>('/api/vouchers/discounts', owner, async (req, reply) => {
+    const book = await withVouchers(reply);
+    if (!book) return;
+    const name = (req.body?.name ?? '').trim();
+    const percent = Number(req.body?.percent);
+    if (!name || !Number.isFinite(percent) || percent <= 0 || percent > 100) {
+      return fail(reply, 400, 'that discount is not valid');
+    }
+    try {
+      await book.addDiscount(name, percent);
+      return { ok: true };
+    } catch (e) {
+      return fail(reply, 502, e instanceof VoucherServerError ? e.message : 'voucher server refused the request');
+    }
+  });
+
+  app.post<{ Body: { index?: number } }>('/api/vouchers/discounts/remove', owner, async (req, reply) => {
+    const book = await withVouchers(reply);
+    if (!book) return;
+    const index = Number(req.body?.index);
+    if (!Number.isInteger(index) || index < 0) return fail(reply, 400, 'that discount is not valid');
+    try {
+      await book.removeDiscount(index);
+      return { ok: true };
+    } catch (e) {
+      return fail(reply, 502, e instanceof VoucherServerError ? e.message : 'voucher server refused the request');
+    }
+  });
+
+  app.post<{ Body: { from?: number; to?: number; discount_id?: string } }>(
+    '/api/vouchers/ranges',
+    owner,
+    async (req, reply) => {
+      const book = await withVouchers(reply);
+      if (!book) return;
+      const from = Number(req.body?.from);
+      const to = Number(req.body?.to);
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from) {
+        return fail(reply, 400, 'that number range is not valid');
+      }
+      const discountId = (req.body?.discount_id ?? '').trim();
+      try {
+        await book.addRange(from, to, discountId || undefined);
+        return { ok: true };
+      } catch (e) {
+        return fail(reply, 502, e instanceof VoucherServerError ? e.message : 'voucher server refused the request');
+      }
+    },
+  );
+
+  app.post<{ Body: { index?: number; discount_id?: string | null } }>(
+    '/api/vouchers/ranges/discount',
+    owner,
+    async (req, reply) => {
+      const book = await withVouchers(reply);
+      if (!book) return;
+      const index = Number(req.body?.index);
+      if (!Number.isInteger(index) || index < 0) return fail(reply, 400, 'that number range is not valid');
+      const discountId = (req.body?.discount_id ?? '').trim();
+      try {
+        await book.setRangeDiscount(index, discountId || null);
+        return { ok: true };
+      } catch (e) {
+        return fail(reply, 502, e instanceof VoucherServerError ? e.message : 'voucher server refused the request');
+      }
+    },
+  );
+
+  app.post<{ Body: { index?: number } }>('/api/vouchers/ranges/remove', owner, async (req, reply) => {
+    const book = await withVouchers(reply);
+    if (!book) return;
+    const index = Number(req.body?.index);
+    if (!Number.isInteger(index) || index < 0) return fail(reply, 400, 'that number range is not valid');
+    try {
+      await book.removeRange(index);
+      return { ok: true };
+    } catch (e) {
+      return fail(reply, 502, e instanceof VoucherServerError ? e.message : 'voucher server refused the request');
+    }
+  });
+
+  app.post<{ Body: { name?: string } }>('/api/vouchers/branches', owner, async (req, reply) => {
+    const book = await withVouchers(reply);
+    if (!book) return;
+    const name = (req.body?.name ?? '').trim();
+    if (!name) return fail(reply, 400, 'name is required');
+    try {
+      return await book.addBranch(name);
+    } catch (e) {
+      return fail(reply, 502, e instanceof VoucherServerError ? e.message : 'voucher server refused the request');
+    }
   });
 
   // ── The site itself ────────────────────────────────────────────────────

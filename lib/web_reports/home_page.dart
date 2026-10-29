@@ -14,6 +14,7 @@ import 'shift_days.dart';
 import 'site_api.dart';
 import 'site_widgets.dart';
 import 'users_page.dart';
+import 'vouchers_page.dart';
 
 enum _Period { today, yesterday, week }
 
@@ -543,6 +544,15 @@ class _HomePageState extends State<HomePage> {
           title: tr(context, 'Users and permissions'),
           subtitle: tr(context, 'Accounts, their branches and what each may see'),
           onTap: () => _open(UsersPage(api: widget.api, me: _user)),
+        ),
+      if (_user.isOwner)
+        _ActionCard(
+          key: const Key('home-vouchers'),
+          icon: Icons.confirmation_number_outlined,
+          color: const Color(0xFF0E6655),
+          title: tr(context, 'Vouchers'),
+          subtitle: tr(context, 'Add a number range, and see which branch used each code'),
+          onTap: () => _open(VouchersPage(api: widget.api)),
         ),
     ];
     return _row(cards, wide ? cards.length : 1, gap: 16);
