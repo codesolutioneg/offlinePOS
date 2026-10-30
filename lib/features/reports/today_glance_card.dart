@@ -35,8 +35,7 @@ class TodayGlanceCard extends StatelessWidget {
 
   /// Today is the trading day, so at 1am the evening service is still on it.
   List<Order> get _today {
-    final day = BusinessDay.of(now ?? DateTime.now()).date;
-    final start = DateTime(day.year, day.month, day.day, BusinessDay.shopCutoverHour);
+    final start = BusinessDay.opensAt(now ?? DateTime.now());
     return salesForOdoo([
       for (final o in allOrders)
         if (!o.createdAt.toLocal().isBefore(start)) o,

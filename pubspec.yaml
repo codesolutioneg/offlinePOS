@@ -26,7 +26,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # stamping 1.0.<build> onto the Windows zips that went out, so calling the source
 # 1.0.0 would collide with builds in the field. 1.1.0 is the first version the
 # source itself names and sorts clear of all of them.
-version: 1.1.1+38
+version: 1.1.1+39
 
 environment:
   sdk: ^3.11.4

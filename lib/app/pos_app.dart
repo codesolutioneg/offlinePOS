@@ -3940,21 +3940,22 @@ class _PosAppState extends State<PosApp> {
 
   /// The delivery station's Bulletin numbers, across every till on the LAN.
   DeliveryBulletin _deliveryBulletin() {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    final since = BusinessDay.opensAt();
     return DeliveryBulletin.from(
       held: widget.orders.heldAnywhere(),
       closedToday: widget.orders
           .recentAnywhere(limit: 2000)
-          .where((o) => !o.createdAt.toLocal().isBefore(today)),
+          .where((o) => !o.createdAt.toLocal().isBefore(since)),
     );
   }
 
   /// The Bulletin board's numbers, across every till on the LAN.
+  ///
+  /// "Today" is the trading day (same cutover as Flash), not calendar midnight —
+  /// otherwise a DST change or a night service past 00:00 makes Sales today argue
+  /// with Flash Collector.
   FloorBulletin _floorBulletin(PosSession? session) {
-    final now = DateTime.now();
-    final paid = widget.orders
-        .paidAnywhereSince(DateTime(now.year, now.month, now.day));
+    final paid = widget.orders.paidAnywhereSince(BusinessDay.opensAt());
     return FloorBulletin.from(
       tableNames: {for (final t in widget.tables.all()) t.name},
       open: [
@@ -4270,8 +4271,7 @@ class _PosAppState extends State<PosApp> {
       case 'revenue-report':
         if (await _authorize(Permission.viewReports, context) &&
             context.mounted) {
-          final now = DateTime.now();
-          final today = DateTime(now.year, now.month, now.day);
+          final since = BusinessDay.opensAt();
           await Navigator.of(context).push(MaterialPageRoute<void>(
             builder: (_) => RevenueCenterReportScreen(
               orders: widget.orders
@@ -4279,7 +4279,7 @@ class _PosAppState extends State<PosApp> {
                   .where((o) =>
                       (o.state == OrderState.paid ||
                           o.state == OrderState.synced) &&
-                      !o.createdAt.toLocal().isBefore(today))
+                      !o.createdAt.toLocal().isBefore(since))
                   .toList(),
               formatAmount: PosApp.money,
             ),
@@ -4412,13 +4412,12 @@ class _PosAppState extends State<PosApp> {
   /// closed today reprints its receipt (with the reprint grant).
   Future<void> _reprintLast(BuildContext context) async {
     final open = _openTableTabs();
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    final since = BusinessDay.opensAt();
     final closed = widget.orders
         .recent(limit: 300)
         .where((o) =>
             (o.state == OrderState.paid || o.state == OrderState.synced) &&
-            !o.createdAt.toLocal().isBefore(today))
+            !o.createdAt.toLocal().isBefore(since))
         .toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     if (open.isEmpty && closed.isEmpty) {
@@ -4499,9 +4498,8 @@ class _PosAppState extends State<PosApp> {
   /// shift opened, or today with no shift) and print all of theirs. Open tabs
   /// print their check; closed ones reprint the receipt, under the reprint grant.
   Future<void> _printAllChecks(BuildContext context) async {
-    final now = DateTime.now();
     final since = widget.shifts.currentOpenShift()?.openedAt.toLocal() ??
-        DateTime(now.year, now.month, now.day);
+        BusinessDay.opensAt();
     final orders = [
       ...widget.orders.held().where((o) => o.lines.isNotEmpty),
       ...widget.orders
