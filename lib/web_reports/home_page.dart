@@ -14,6 +14,7 @@ import 'shift_days.dart';
 import 'site_api.dart';
 import 'site_widgets.dart';
 import 'users_page.dart';
+import 'tax_upload_page.dart';
 import 'vouchers_page.dart';
 
 enum _Period { today, yesterday, week }
@@ -553,6 +554,15 @@ class _HomePageState extends State<HomePage> {
           title: tr(context, 'Vouchers'),
           subtitle: tr(context, 'Add a number range, and see which branch used each code'),
           onTap: () => _open(VouchersPage(api: widget.api)),
+        ),
+      if (_user.isOwner)
+        _ActionCard(
+          key: const Key('home-tax-upload'),
+          icon: Icons.receipt_long_outlined,
+          color: const Color(0xFF6B3A1F),
+          title: tr(context, 'Tax upload'),
+          subtitle: tr(context, 'Import ETA receipts and submit new ones from the server'),
+          onTap: () => _open(TaxUploadPage(api: widget.api)),
         ),
     ];
     return _row(cards, wide ? cards.length : 1, gap: 16);

@@ -10,6 +10,7 @@ import { backupsToDelete } from './retention.js';
 import { Storage, TooLarge } from './storage.js';
 import { registerWeb } from './web.js';
 import type { VoucherAdmin } from './voucher_admin.js';
+import type { TaxService } from './tax/service.js';
 
 export interface AppOptions {
   repo: Repo;
@@ -25,6 +26,8 @@ export interface AppOptions {
   webDir?: string;
   /// Shared voucher server. Unset hides a working vouchers page behind a clear error.
   vouchers?: VoucherAdmin | null;
+  /// Dishflow ETA tax upload. Unset returns 503 on /api/tax/*.
+  tax?: TaxService | null;
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -377,6 +380,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     now,
     webDir: opts.webDir,
     vouchers: opts.vouchers,
+    tax: opts.tax,
   });
   return app;
 }

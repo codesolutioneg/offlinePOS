@@ -24,6 +24,7 @@ import {
 import { UsernameTaken, type Repo, type Role, type User, type UserPatch } from './repo.js';
 import type { Storage } from './storage.js';
 import { VoucherServerError, type VoucherAdmin } from './voucher_admin.js';
+import { NASR_CONNECTION_ID, type TaxService } from './tax/service.js';
 
 export const SESSION_COOKIE = 'pos_session';
 const SESSION_DAYS = 30;
@@ -93,6 +94,7 @@ export async function registerWeb(
     now: () => Date;
     webDir?: string;
     vouchers?: VoucherAdmin | null;
+    tax?: TaxService | null;
   },
 ) {
   const { repo, storage, now } = opts;
@@ -222,6 +224,7 @@ export async function registerWeb(
       branches: branches.map((b) => ({
         id: b.id,
         name: b.name,
+        tax_connection_id: b.taxConnectionId || '',
         devices: devices
           .filter((d) => d.branchId === b.id)
           .map((d) => ({
@@ -241,7 +244,12 @@ export async function registerWeb(
     if (!name) return fail(reply, 400, 'name is required');
     const code = newPairCode();
     const branch = await repo.createBranch(req.user!.shopId, name, pairCodeHash(code));
-    return reply.code(201).send({ id: branch.id, name: branch.name, pair_code: code });
+    return reply.code(201).send({
+      id: branch.id,
+      name: branch.name,
+      tax_connection_id: branch.taxConnectionId || '',
+      pair_code: code,
+    });
   });
 
   async function ownBranch(req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) {
@@ -253,12 +261,34 @@ export async function registerWeb(
     return branch;
   }
 
-  app.patch<{ Params: { id: string }; Body: { name?: string } }>('/api/branches/:id', owner, async (req, reply) => {
-    if (!(await ownBranch(req, reply))) return;
-    const name = String(req.body?.name ?? '').trim();
-    if (!name) return fail(reply, 400, 'name is required');
-    await repo.renameBranch(req.params.id, name);
-    return { id: req.params.id, name };
+  app.patch<{
+    Params: { id: string };
+    Body: { name?: string; tax_connection_id?: string };
+  }>('/api/branches/:id', owner, async (req, reply) => {
+    const branch = await ownBranch(req, reply);
+    if (!branch) return;
+    const name =
+      req.body?.name !== undefined ? String(req.body.name).trim() : undefined;
+    const taxConnectionId =
+      req.body?.tax_connection_id !== undefined
+        ? String(req.body.tax_connection_id).trim()
+        : undefined;
+    if (name === undefined && taxConnectionId === undefined) {
+      return fail(reply, 400, 'name or tax_connection_id is required');
+    }
+    if (name !== undefined) {
+      if (!name) return fail(reply, 400, 'name is required');
+      await repo.renameBranch(req.params.id, name);
+    }
+    if (taxConnectionId !== undefined) {
+      await repo.setBranchTaxConnection(req.params.id, taxConnectionId);
+    }
+    const fresh = await repo.branchById(req.params.id);
+    return {
+      id: req.params.id,
+      name: fresh?.name ?? name ?? branch.name,
+      tax_connection_id: fresh?.taxConnectionId ?? taxConnectionId ?? '',
+    };
   });
 
   app.delete<{ Params: { id: string } }>('/api/branches/:id', owner, async (req, reply) => {
@@ -582,6 +612,205 @@ export async function registerWeb(
       return await book.addBranch(name);
     } catch (e) {
       return fail(reply, 502, e instanceof VoucherServerError ? e.message : 'voucher server refused the request');
+    }
+  });
+
+  // ── Tax upload (owner; Dishflow ETA via server-side Firebase) ───────────
+
+  const tax = opts.tax ?? null;
+
+  function withTax(reply: FastifyReply): TaxService | undefined {
+    if (!tax || !tax.ready()) {
+      fail(reply, 503, 'tax upload is not set up on the server');
+      return;
+    }
+    return tax;
+  }
+
+  function parseDay(raw: unknown): Date | undefined {
+    if (typeof raw !== 'string' || !raw.trim()) return undefined;
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  }
+
+  app.get('/api/tax/settings', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    try {
+      let settings = await svc.getSettingsPublic(req.user!.shopId);
+      if (!settings) {
+        await svc.syncEtaSettings(req.user!.shopId);
+        settings = await svc.getSettingsPublic(req.user!.shopId);
+      }
+      return { settings, default_connection_id: NASR_CONNECTION_ID };
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax settings failed');
+    }
+  });
+
+  app.post('/api/tax/settings/sync', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    try {
+      await svc.syncEtaSettings(req.user!.shopId);
+      return { settings: await svc.getSettingsPublic(req.user!.shopId) };
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax settings sync failed');
+    }
+  });
+
+  app.put<{
+    Body: {
+      connection_id?: string;
+      rin?: string;
+      company_trade_name?: string;
+      activity_code?: string;
+      use_sandbox?: boolean;
+      integrations?: unknown;
+    };
+  }>('/api/tax/settings', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    try {
+      const settings = await svc.saveSettings(req.user!.shopId, req.body ?? {});
+      return { settings };
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax settings save failed');
+    }
+  });
+
+  app.post<{ Body: { connection_id?: string } }>('/api/tax/migrate', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    const connectionId = (req.body?.connection_id ?? NASR_CONNECTION_ID).trim() || NASR_CONNECTION_ID;
+    try {
+      const result = await svc.migrateSubmitted(req.user!.shopId, connectionId);
+      return { ok: true, connection_id: connectionId, ...result };
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax migrate failed');
+    }
+  });
+
+  app.get<{
+    Querystring: {
+      connection_id?: string;
+      from?: string;
+      to?: string;
+      session?: string;
+      payment?: string;
+      status?: string;
+    };
+  }>('/api/tax/summary', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    try {
+      return await svc.summary(req.user!.shopId, {
+        connectionId: (req.query.connection_id ?? NASR_CONNECTION_ID).trim() || NASR_CONNECTION_ID,
+        from: parseDay(req.query.from),
+        to: parseDay(req.query.to),
+        sessionId: (req.query.session ?? '').trim() || undefined,
+        paymentMethod: (req.query.payment ?? '').trim() || undefined,
+        status: (req.query.status ?? '').trim() || undefined,
+      });
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax summary failed');
+    }
+  });
+
+  app.get<{
+    Querystring: {
+      connection_id?: string;
+      from?: string;
+      to?: string;
+      session?: string;
+      payment?: string;
+      status?: string;
+      limit?: string;
+      offset?: string;
+    };
+  }>('/api/tax/invoices', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    try {
+      return await svc.list(req.user!.shopId, {
+        connectionId: (req.query.connection_id ?? NASR_CONNECTION_ID).trim() || NASR_CONNECTION_ID,
+        from: parseDay(req.query.from),
+        to: parseDay(req.query.to),
+        sessionId: (req.query.session ?? '').trim() || undefined,
+        paymentMethod: (req.query.payment ?? '').trim() || undefined,
+        status: (req.query.status ?? '').trim() || undefined,
+        limit: Number(req.query.limit ?? 100),
+        offset: Number(req.query.offset ?? 0),
+      });
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax list failed');
+    }
+  });
+
+  app.get('/api/tax/connections', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    try {
+      return { connections: await svc.listConnections(req.user!.shopId) };
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax connections failed');
+    }
+  });
+
+  app.post<{ Body: { connection_id?: string } }>('/api/tax/sync-pending', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    const connectionId = (req.body?.connection_id ?? NASR_CONNECTION_ID).trim() || NASR_CONNECTION_ID;
+    try {
+      const result = await svc.syncPending(req.user!.shopId, connectionId);
+      return { ok: true, connection_id: connectionId, ...result };
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax sync-pending failed');
+    }
+  });
+
+  app.get<{
+    Querystring: {
+      connection_id?: string;
+      session?: string;
+      payment?: string;
+      limit?: string;
+    };
+  }>('/api/tax/pending', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    const connectionId = (req.query.connection_id ?? NASR_CONNECTION_ID).trim() || NASR_CONNECTION_ID;
+    try {
+      return await svc.listPendingFromDb(req.user!.shopId, {
+        connectionId,
+        sessionId: (req.query.session ?? '').trim() || undefined,
+        paymentMethod: (req.query.payment ?? '').trim() || undefined,
+        limit: Number(req.query.limit ?? 500),
+      });
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax pending failed');
+    }
+  });
+
+  app.post<{
+    Body: { connection_id?: string; invoice_ids?: string[] };
+  }>('/api/tax/submit', owner, async (req, reply) => {
+    const svc = withTax(reply);
+    if (!svc) return;
+    const connectionId = (req.body?.connection_id ?? NASR_CONNECTION_ID).trim() || NASR_CONNECTION_ID;
+    const ids = Array.isArray(req.body?.invoice_ids)
+      ? req.body!.invoice_ids!.map((x) => String(x).trim()).filter(Boolean)
+      : [];
+    if (!ids.length) return fail(reply, 400, 'pick at least one sale to submit');
+    if (ids.length > 100) return fail(reply, 400, 'submit at most 100 sales at a time');
+    try {
+      return await svc.submitBatch(req.user!.shopId, {
+        connectionId,
+        invoiceIds: ids,
+        createdBy: req.user!.username,
+      });
+    } catch (e) {
+      return fail(reply, 502, e instanceof Error ? e.message : 'tax submit failed');
     }
   });
 

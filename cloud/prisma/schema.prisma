@@ -21,10 +21,86 @@ model Shop {
   branches  Branch[]
   devices   Device[]
   backups   Backup[]
-  users     User[]
-  records   Record[]
+  users          User[]
+  records        Record[]
+  taxInvoices    TaxInvoice[]
+  taxEtaSettings TaxEtaSettings?
+  taxBatches     TaxUploadBatch[]
 
   @@map("shops")
+}
+
+/// One ETA e-receipt, mirrored from Dishflow Firebase or submitted from this site.
+model TaxInvoice {
+  id               String    @id @default(cuid())
+  shopId           String    @map("shop_id")
+  shop             Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Dishflow odooConnectionId (Nasr first).
+  connectionId     String    @map("connection_id")
+  branchName       String    @default("") @map("branch_name")
+  /// Firebase sales document id when known.
+  firebaseDocId    String?   @unique @map("firebase_doc_id")
+  orderNumber      String    @default("") @map("order_number")
+  sessionId        String    @default("") @map("session_id")
+  businessDateKey  String    @default("") @map("business_date_key")
+  paymentMethod    String    @default("") @map("payment_method")
+  amount           Float     @default(0)
+  /// submitted | pending | failed | rejected
+  status           String    @default("submitted")
+  etaUuid          String?   @map("eta_uuid")
+  etaLongId        String?   @map("eta_long_id")
+  etaSubmissionId  String?   @map("eta_submission_id")
+  etaSubmittedAt   DateTime? @map("eta_submitted_at")
+  error            String?
+  /// Full sale payload as Dishflow stored it (for rebuild / audit).
+  payload          Json
+  batchId          String?   @map("batch_id")
+  batch            TaxUploadBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([shopId, connectionId, etaSubmittedAt])
+  @@index([shopId, status, etaSubmittedAt])
+  @@index([shopId, sessionId])
+  @@map("tax_invoices")
+}
+
+/// ETA company / POS credentials for one shop (server-side only).
+model TaxEtaSettings {
+  shopId            String   @id @map("shop_id")
+  shop              Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  firebaseProjectId String   @default("") @map("firebase_project_id")
+  /// Default Dishflow connection to migrate/submit for.
+  connectionId      String   @default("") @map("connection_id")
+  rin               String   @default("")
+  companyTradeName  String   @default("") @map("company_trade_name")
+  activityCode      String   @default("") @map("activity_code")
+  useSandbox        Boolean  @default(false) @map("use_sandbox")
+  /// JSON list of EtaIntegration maps from Dishflow settings/eta_integration.
+  integrationsJson  Json     @map("integrations_json")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("tax_eta_settings")
+}
+
+model TaxUploadBatch {
+  id           String       @id @default(cuid())
+  shopId       String       @map("shop_id")
+  shop         Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  connectionId String       @map("connection_id")
+  createdBy    String       @default("") @map("created_by")
+  /// running | done | failed
+  status       String       @default("running")
+  total        Int          @default(0)
+  accepted     Int          @default(0)
+  rejected     Int          @default(0)
+  error        String?
+  createdAt    DateTime     @default(now()) @map("created_at")
+  finishedAt   DateTime?    @map("finished_at")
+  invoices     TaxInvoice[]
+
+  @@index([shopId, createdAt])
+  @@map("tax_upload_batches")
 }
 
 model Branch {
@@ -34,6 +110,8 @@ model Branch {
   name         String
   /// sha256 of the branch's pairing code. The code itself is shown once.
   pairCodeHash String   @unique @map("pair_code_hash")
+  /// Dishflow odooConnectionId for this branch's ETA tax link (empty = not linked).
+  taxConnectionId String @default("") @map("tax_connection_id")
   createdAt    DateTime @default(now()) @map("created_at")
   devices      Device[]
 

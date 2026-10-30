@@ -11,6 +11,8 @@ export interface Branch {
   id: string;
   shopId: string;
   name: string;
+  /** Dishflow odooConnectionId for ETA; empty when not linked. */
+  taxConnectionId: string;
   createdAt: Date;
 }
 
@@ -107,6 +109,7 @@ export interface Repo {
   branchById(id: string): Promise<Branch | null>;
   listBranches(shopId: string): Promise<Branch[]>;
   renameBranch(id: string, name: string): Promise<void>;
+  setBranchTaxConnection(id: string, taxConnectionId: string): Promise<void>;
   /// The branch and everything its tills sent: devices, backups and records, and
   /// its place in any user's branch list. Answers the backups it took, whose
   /// files are the caller's to remove.
@@ -213,7 +216,14 @@ export class MemoryRepo implements Repo {
   }
 
   async createBranch(shopId: string, name: string, pairCodeHash: string): Promise<Branch> {
-    const branch = { id: randomUUID(), shopId, name, createdAt: new Date(), pairCodeHash };
+    const branch = {
+      id: randomUUID(),
+      shopId,
+      name,
+      taxConnectionId: '',
+      createdAt: new Date(),
+      pairCodeHash,
+    };
     this.branches.push(branch);
     return pick(branch, ['pairCodeHash']);
   }
@@ -242,6 +252,11 @@ export class MemoryRepo implements Repo {
   async renameBranch(id: string, name: string): Promise<void> {
     const branch = this.branches.find((b) => b.id === id);
     if (branch) branch.name = name;
+  }
+
+  async setBranchTaxConnection(id: string, taxConnectionId: string): Promise<void> {
+    const branch = this.branches.find((b) => b.id === id);
+    if (branch) branch.taxConnectionId = taxConnectionId;
   }
 
   async deleteBranch(id: string): Promise<Backup[]> {

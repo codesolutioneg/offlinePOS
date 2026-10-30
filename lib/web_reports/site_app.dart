@@ -23,7 +23,7 @@ class SiteApp extends StatefulWidget {
 }
 
 class _SiteAppState extends State<SiteApp> {
-  final _locale = LocaleController(const Locale('ar'));
+  final _locale = LocaleController(const Locale('en'));
   SiteSession? _session;
   bool _checking = true;
 

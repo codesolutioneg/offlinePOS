@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 web/
+secrets/*.json
+!secrets/.gitkeep

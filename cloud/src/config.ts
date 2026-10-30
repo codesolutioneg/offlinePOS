@@ -14,4 +14,11 @@ export const config = () => ({
   webDir: process.env.WEB_DIR ?? '/app/web',
   voucherBaseUrl: process.env.VOUCHER_BASE_URL ?? '',
   voucherAdminKey: process.env.VOUCHER_ADMIN_KEY ?? '',
+  /// Dishflow Firebase (tax upload). Empty = feature off until credentials are set.
+  firebaseProjectId: process.env.FIREBASE_PROJECT_ID ?? '',
+  firebaseCredentialsFile: process.env.FIREBASE_SERVICE_ACCOUNT_FILE ?? '',
+  firebaseCredentialsJson: process.env.FIREBASE_SERVICE_ACCOUNT ?? '',
+  etaProxyBase: process.env.ETA_PROXY_BASE ?? '',
+  taxDefaultConnectionId:
+    process.env.TAX_DEFAULT_CONNECTION_ID ?? 'yFsBtvlradoAkKSascZ3',
 });

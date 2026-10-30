@@ -41,7 +41,13 @@ const user = (u: UserRow): User => {
 };
 
 const shopFields = { id: true, name: true, keyId: true, createdAt: true } as const;
-const branchFields = { id: true, shopId: true, name: true, createdAt: true } as const;
+const branchFields = {
+  id: true,
+  shopId: true,
+  name: true,
+  taxConnectionId: true,
+  createdAt: true,
+} as const;
 const deviceFields = {
   id: true,
   shopId: true,
@@ -129,6 +135,13 @@ export class PrismaRepo implements Repo {
 
   async renameBranch(id: string, name: string): Promise<void> {
     await this.db.branch.updateMany({ where: { id }, data: { name } });
+  }
+
+  async setBranchTaxConnection(id: string, taxConnectionId: string): Promise<void> {
+    await this.db.branch.updateMany({
+      where: { id },
+      data: { taxConnectionId },
+    });
   }
 
   async deleteBranch(id: string): Promise<Backup[]> {
