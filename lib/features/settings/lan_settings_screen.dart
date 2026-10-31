@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../core/db/schema.dart';
 import '../../core/db/settings_store.dart';
 import '../../core/i18n/l10n.dart';
+import '../../core/theme/app_colors.dart';
 import '../../core/lan/lan_cart_board.dart';
 import '../../core/lan/lan_credential.dart';
 import '../../core/lan/lan_peer.dart';
@@ -114,6 +115,11 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
       TextEditingController(text: widget.settings.lanDeviceName ?? '');
   late final TextEditingController _shopKey =
       TextEditingController(text: widget.settings.lanShopKey ?? '');
+  /// Emulator → host loopback. Real tablets use the primary's LAN IP instead.
+  late final TextEditingController _manualHost = TextEditingController(
+      text: Platform.isAndroid ? '10.0.2.2' : '');
+  late final TextEditingController _manualPort =
+      TextEditingController(text: '45333');
   late bool _enabled = widget.settings.lanEnabled(fallback: widget.buildDefault);
   late bool _allowTakeover = widget.settings.lanAllowTakeover;
   late LanDayClosePolicy _dayClose = LanShiftBoard(widget.settings).policy;
@@ -124,7 +130,29 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
     _live?.cancel();
     _name.dispose();
     _shopKey.dispose();
+    _manualHost.dispose();
+    _manualPort.dispose();
     super.dispose();
+  }
+
+  Future<void> _joinByAddress() async {
+    final host = _manualHost.text.trim();
+    final port = int.tryParse(_manualPort.text.trim()) ?? 0;
+    if (host.isEmpty || port <= 0 || port > 65535) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr(context, 'Enter the primary host and port'))));
+      return;
+    }
+    final peer = LanPeer(
+      deviceId: 'manual-primary',
+      name: '$host:$port',
+      host: host,
+      port: port,
+      schemaVersion: Schema.version,
+      lastSeenAt: DateTime.now(),
+      role: DeviceRole.primary,
+    );
+    await _joinSelected(peer);
   }
 
   Timer? _live;
@@ -656,6 +684,19 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
                     'with a PIN from the primary.'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          if (role == DeviceRole.primary) ...[
+            const SizedBox(height: 8),
+            Text(
+              tr(
+                  context,
+                  'Self-order kiosk: copy the Shop key below into the kiosk app '
+                      '(no PIN). Keep Share On.'),
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: AppColors.primaryDark),
+            ),
+          ],
           const SizedBox(height: 8),
           SegmentedButton<DeviceRole>(
             key: const Key('lan-device-role'),
@@ -727,6 +768,59 @@ class _LanSettingsScreenState extends State<LanSettingsScreen> {
                   'Waiting for the primary on this Wi‑Fi… Keep Share On on both '
                       'devices, then Join when it appears.'),
               style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          if (role == DeviceRole.secondary && widget.onJoinPrimary != null) ...[
+            const SizedBox(height: 16),
+            Text(tr(context, 'Join by address'),
+                style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Text(
+              tr(
+                  context,
+                  'For Android emulator use 10.0.2.2 (this PC). On a real tablet '
+                      'use the primary Wi‑Fi IP. Port is usually 45333.'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: TextField(
+                    key: const Key('lan-manual-host'),
+                    controller: _manualHost,
+                    decoration: InputDecoration(
+                      labelText: tr(context, 'Primary host'),
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    key: const Key('lan-manual-port'),
+                    controller: _manualPort,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: tr(context, 'Port'),
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: FilledButton.icon(
+                key: const Key('lan-join-by-address'),
+                onPressed: _joinByAddress,
+                icon: const Icon(Icons.dns),
+                label: Text(tr(context, 'Join this address')),
+              ),
             ),
           ],
           if (role == DeviceRole.primary || role == DeviceRole.secondary) ...[

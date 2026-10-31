@@ -18,6 +18,59 @@ class RmBinding {
 /// The figures are the till's own, read through the same definitions every
 /// other report uses (see `restaurant_analytics.dart`); what is the back
 /// office's here is which figure goes in which column.
+/// Whether [id] has a layout binder that fills the RM page from till sales.
+bool rmLayoutConnected(String id) => switch (id) {
+      'SessionSummary' ||
+      'PaymentTransactionDetails' ||
+      'PaymentTransactionDetails40' ||
+      'MenuEngineering' ||
+      'groupSalesByEmployee' ||
+      'ItemSalesByCustomerSummary' ||
+      'ItemSalesByCustomerDetail' ||
+      'RefundsSummary' ||
+      'refundDetails' ||
+      'DiscReport' ||
+      'ItemSales' ||
+      'ItemSalesWide' ||
+      'ItemSalesNoPrice' ||
+      'SalesByCategory' ||
+      'SalesByCategoryDetails' ||
+      'HashDeptItemsByGroup' ||
+      'HashDeptDetail' ||
+      'emplPaymentsSummary' ||
+      'Gratuities' ||
+      'CouponSummary' ||
+      'CouponAllocations' ||
+      'USFOnlineSalesReport' ||
+      'DD_Weekly(1)' ||
+      'DD_Weekly(2)' ||
+      'DD_AvgByDayOfWeek' ||
+      'DD_DayToDay' ||
+      'DD_WeekToWeek' ||
+      'DD_MonthToMonth' ||
+      'ItemsAndModifiers' =>
+        true,
+      _ => false,
+    };
+
+/// A till report key to open when an RM layout has no drawable bands of its
+/// own (rules-only export) but matches a report the hub already builds.
+String? nativeFallbackReportKey(String id) => switch (id) {
+      'orderSales' => 'rep-summary',
+      'SalesSummaryByDayOfWeek' ||
+      'SalesSummaryByWeek' ||
+      'SalesSummaryByMonth' ||
+      'SalesSummaryByYear' =>
+        'rep-daily-sales',
+      'SalesSummaryBySession' => 'rep-session-summary',
+      'employeeSalesAnalysis' || 'empSalesAndTips' => 'rep-cashier',
+      'employeePaymentDetail' => 'rep-payment',
+      'ItemByTime' => 'rep-time',
+      'CouponDetail' => 'rep-discounts',
+      'AccListReport' || 'AccListReportGrp' => 'rep-receivables',
+      _ => null,
+    };
+
 RmBinding? bindRmReport(
   String id, {
   required List<Order> orders,
@@ -49,6 +102,19 @@ RmBinding? bindRmReport(
       'SalesByCategory' => _salesByCategory(orders, categories, costs),
       'SalesByCategoryDetails' =>
         _salesByCategoryDetails(orders, categories, costs),
+      'HashDeptItemsByGroup' =>
+        _hashDeptItemsByGroup(orders, categories, costs),
+      'HashDeptDetail' => _hashDeptDetail(orders, categories, staffNames),
+      'emplPaymentsSummary' => _emplPaymentsSummary(orders, staffNames),
+      'Gratuities' => _gratuities(orders, staffNames),
+      'CouponSummary' => _couponSummary(orders),
+      'CouponAllocations' => _couponAllocations(orders),
+      'USFOnlineSalesReport' => _usfOnlineSales(orders),
+      'DD_Weekly(1)' || 'DD_Weekly(2)' => _weeklyByDay(orders),
+      'DD_AvgByDayOfWeek' => _avgByDayOfWeek(orders),
+      'DD_DayToDay' => _dayToDay(orders),
+      'DD_WeekToWeek' || 'DD_MonthToMonth' => _periodCompareColumns(orders),
+      'ItemsAndModifiers' => _itemsAndModifiers(orders, categories),
       _ => null,
     };
 
@@ -1017,6 +1083,582 @@ RmBinding _discounts(List<Order> orders, Map<String, String> staffNames) {
         'Total Sales': _money(sales),
         'Disc % of Sales': _percent(itemTotal + checkTotal, sales),
       }),
+    ],
+  });
+}
+
+// -- Hash department / group item layouts -----------------------------------------
+
+RmBinding _hashDeptItemsByGroup(
+    List<Order> orders, List<Category> categories, Map<int, double> costs) {
+  const root = 'Flattened Item grouped by Menu Item grouped by Group Numbers';
+  final items = itemSales(orders, categories, costs);
+  final groups = <String, List<ItemSalesRow>>{};
+  for (final i in items) {
+    groups.putIfAbsent(i.group, () => []).add(i);
+  }
+  final qty = items.fold<double>(0, (s, i) => s + i.qty);
+  final net = items.fold<double>(0, (s, i) => s + i.net);
+  var groupNo = 0;
+  var itemNo = 0;
+  return RmBinding({
+    root: [
+      RmRow({
+        'Quantity': _qty(qty),
+        'Amount': _money(net),
+      }, children: {
+        'Group': [
+          for (final e in groups.entries)
+            () {
+              final gQty = e.value.fold<double>(0, (s, i) => s + i.qty);
+              final gNet = e.value.fold<double>(0, (s, i) => s + i.net);
+              return RmRow({
+                'Group Numbers': '${++groupNo}',
+                'Group Name': e.key,
+                'Quantity': _qty(gQty),
+                'Amount': _money(gNet),
+              }, children: {
+                'Flattened Item grouped by Menu Item Detail': [
+                  for (final i in e.value)
+                    RmRow({
+                      'Menu Item': '${++itemNo}',
+                      'Description': i.name,
+                      'Quantity': _qty(i.qty),
+                      'Amount': _money(i.net),
+                    }),
+                ],
+              });
+            }(),
+        ],
+      }),
+    ],
+  });
+}
+
+RmBinding _hashDeptDetail(
+    List<Order> orders, List<Category> categories, Map<String, String> staffNames) {
+  final byId = {for (final c in categories) c.id: c};
+  final lines = <({Order order, OrderLine line, String group})>[];
+  for (final o in orders) {
+    for (final l in o.lines) {
+      lines.add((
+        order: o,
+        line: l,
+        group: categoryPath(l.categoryId, byId).group,
+      ));
+    }
+  }
+  lines.sort((a, b) => a.order.createdAt.compareTo(b.order.createdAt));
+  final amount = lines.fold<double>(0, (s, e) => s + e.line.total);
+  return RmBinding({
+    'Flattened Item': [
+      RmRow({
+        'Amount': _money(amount),
+      }, children: {
+        'Flattened Item Detail': [
+          for (final e in lines)
+            RmRow({
+              'Bill Date': _date(e.order.createdAt),
+              'Empl': _staff(e.order.cashierId, staffNames),
+              'Description': e.line.name,
+              'Group Name': e.group,
+              'Amount': _money(e.line.total),
+              'Order number': e.order.displayNo,
+            }),
+        ],
+      }),
+    ],
+  });
+}
+
+// -- Payments / tips by employee ---------------------------------------------------
+
+RmBinding _emplPaymentsSummary(
+    List<Order> orders, Map<String, String> staffNames) {
+  final numbers = _staffNumbers(orders);
+  final byStaff = <String, Map<String, ({int qty, double amount})>>{};
+  for (final p in _paymentsOf(orders)) {
+    final bag = byStaff.putIfAbsent(p.order.cashierId, () => {});
+    final was = bag[p.label];
+    bag[p.label] = (
+      qty: (was?.qty ?? 0) + 1,
+      amount: (was?.amount ?? 0) + p.amount,
+    );
+  }
+  return RmBinding({
+    'Flattened Payment grouped by Employee number grouped by Payment Type.Group':
+        [
+      for (final e in byStaff.entries)
+        () {
+          final total =
+              e.value.values.fold<double>(0, (s, v) => s + v.amount);
+          final cash = e.value.entries
+              .where((x) => x.key.toLowerCase() == 'cash')
+              .fold<double>(0, (s, x) => s + x.value.amount);
+          return RmRow({
+            'Employee number': '${numbers[e.key]}',
+            'Employee name': _staff(e.key, staffNames),
+            'Cash Due': _money(total),
+            'fCashReceipts': _money(cash),
+            'fCashBack': '0.00',
+            'fCreditCardFees': '0.00',
+            'fTipShare': '0.00',
+            'fEmployeePaidOut': '0.00',
+            'fLessTips': '0.00',
+            'fMoneyDrops': '0.00',
+            'fPaidOutWithoutCashTray': '0.00',
+            'fPaidInWithoutCashTray': '0.00',
+          }, children: {
+            'Group': [
+              for (final p in e.value.entries)
+                RmRow({
+                  'Payment Type': p.key,
+                  'Received': _money(p.value.amount),
+                  'Qty': '${p.value.qty}',
+                }),
+            ],
+          });
+        }(),
+    ],
+  });
+}
+
+RmBinding _gratuities(List<Order> orders, Map<String, String> staffNames) {
+  final numbers = _staffNumbers(orders);
+  final byStaff = <String, ({double tips, double service})>{};
+  for (final o in orders) {
+    final was = byStaff[o.cashierId];
+    byStaff[o.cashierId] = (
+      tips: (was?.tips ?? 0) + o.tip,
+      service: (was?.service ?? 0) + orderService(o),
+    );
+  }
+  final tipTotal = byStaff.values.fold<double>(0, (s, v) => s + v.tips);
+  final serviceTotal =
+      byStaff.values.fold<double>(0, (s, v) => s + v.service);
+  return RmBinding({
+    'Labor Report grouped by Empl No': [
+      RmRow({
+        'Additional Gratuities': _money(tipTotal),
+        'Auto Gratuities': _money(serviceTotal),
+        'Total': _money(tipTotal + serviceTotal),
+      }, children: {
+        'Group': [
+          for (final e in byStaff.entries)
+            RmRow({
+              'Empl No': '${numbers[e.key]}',
+              'Employee': _staff(e.key, staffNames),
+              'Auto Gratuities': _money(e.value.service),
+              'Additional Gratuities': _money(e.value.tips),
+              'Total': _money(e.value.tips + e.value.service),
+            }),
+        ],
+      }),
+    ],
+  });
+}
+
+// -- Coupons from recorded discounts ----------------------------------------------
+
+RmBinding _couponSummary(List<Order> orders) {
+  final bags = <String, ({int qty, double discounted, double sales})>{};
+  void add(String name, double off, double sales) {
+    if (off.abs() < 0.005) return;
+    final was = bags[name];
+    bags[name] = (
+      qty: (was?.qty ?? 0) + 1,
+      discounted: (was?.discounted ?? 0) + off,
+      sales: (was?.sales ?? 0) + sales,
+    );
+  }
+
+  for (final o in orders) {
+    final reason = (o.discountReason ?? '').trim();
+    final checkName = reason.isEmpty ? 'Check discount' : reason;
+    add(checkName, orderCheckDiscount(o), orderNet(o));
+    for (final l in o.lines) {
+      if (l.discountPercent <= 0) continue;
+      add('Line discount', l.gross * l.discountPercent / 100, l.total);
+    }
+  }
+  final qty = bags.values.fold<int>(0, (s, v) => s + v.qty);
+  final discounted =
+      bags.values.fold<double>(0, (s, v) => s + v.discounted);
+  final sales = bags.values.fold<double>(0, (s, v) => s + v.sales);
+  var no = 0;
+  return RmBinding({
+    'Flattened Coupon grouped by COU_REF grouped by COU_BILL_NO': [
+      RmRow({
+        'Qty': '$qty',
+        'Value Discounted': _money(discounted),
+        'Sales Revenue': _money(sales),
+      }, children: {
+        'Group': [
+          for (final e in bags.entries)
+            RmRow({
+              'Coupon#': '${++no}',
+              'Coupon Name': e.key,
+              'Qty': '${e.value.qty}',
+              'Value Discounted': _money(e.value.discounted),
+              'Sales Revenue': _money(e.value.sales),
+            }),
+        ],
+      }),
+    ],
+  });
+}
+
+RmBinding _couponAllocations(List<Order> orders) {
+  final bags = <String, List<({String item, double qty, double amount})>>{};
+  for (final o in orders) {
+    final reason = (o.discountReason ?? '').trim();
+    final checkName = reason.isEmpty ? 'Check discount' : reason;
+    final checkOff = orderCheckDiscount(o);
+    if (checkOff.abs() >= 0.005) {
+      bags.putIfAbsent(checkName, () => []).add((
+        item: 'Whole check ${o.displayNo}',
+        qty: 1,
+        amount: checkOff,
+      ));
+    }
+    for (final l in o.lines) {
+      if (l.discountPercent <= 0) continue;
+      bags.putIfAbsent('Line discount', () => []).add((
+        item: l.name,
+        qty: l.quantity,
+        amount: l.gross * l.discountPercent / 100,
+      ));
+    }
+  }
+  var no = 0;
+  return RmBinding({
+    'Flattened Coupon grouped by COU_REF grouped by REF_NO.Group': [
+      for (final e in bags.entries)
+        () {
+          final qty = e.value.fold<double>(0, (s, r) => s + r.qty);
+          final amount = e.value.fold<double>(0, (s, r) => s + r.amount);
+          final id = ++no;
+          return RmRow({
+            'Coupon#': '$id',
+            'Coupon Name': e.key,
+            'Qty': _qty(qty),
+            'Amt Applied': _money(amount),
+          }, children: {
+            'Group': [
+              for (final r in e.value)
+                RmRow({
+                  'Item#': '',
+                  'Item': r.item,
+                  'Qty': _qty(r.qty),
+                  'Amt Applied': _money(r.amount),
+                }),
+            ],
+          });
+        }(),
+    ],
+  });
+}
+
+RmBinding _usfOnlineSales(List<Order> orders) {
+  final bags = <int, ({String name, double qty, double net})>{};
+  DateTime? start;
+  DateTime? end;
+  for (final o in orders) {
+    final at = o.createdAt;
+    if (start == null || at.isBefore(start)) start = at;
+    if (end == null || at.isAfter(end)) end = at;
+    for (final l in o.lines) {
+      final was = bags[l.productId];
+      bags[l.productId] = (
+        name: l.name,
+        qty: (was?.qty ?? 0) + l.quantity,
+        net: (was?.net ?? 0) + l.total,
+      );
+    }
+  }
+  final startLabel = start == null ? '' : _date(start);
+  final endLabel = end == null ? '' : _date(end);
+  return RmBinding({
+    'Flattened Group.Flattened Group Detail': [
+      for (final e in bags.entries)
+        RmRow({
+          'POS Number': '${e.key}',
+          'POS Description': e.value.name,
+          'Sales Start Date': startLabel,
+          'Sales End Date': endLabel,
+          'Sales Quantity': _qty(e.value.qty),
+          'Sale Price':
+              _money(e.value.qty == 0 ? 0 : e.value.net / e.value.qty),
+        }),
+    ],
+  });
+}
+
+RmBinding _itemsAndModifiers(List<Order> orders, List<Category> categories) {
+  final byId = {for (final c in categories) c.id: c};
+  final seen = <int, ({String name, String group, String type})>{};
+  for (final o in orders) {
+    for (final l in o.lines) {
+      if (seen.containsKey(l.productId)) continue;
+      final path = categoryPath(l.categoryId, byId);
+      seen[l.productId] = (name: l.name, group: path.group, type: path.type);
+    }
+  }
+  var groupNo = 0;
+  final groupIds = <String, int>{};
+  return RmBinding({
+    'Menu.Menu Item': [
+      for (final e in seen.entries)
+        RmRow({
+          'Item#': '${e.key}',
+          'Description': e.value.name,
+          'Group #': '${groupIds.putIfAbsent(e.value.group, () => ++groupNo)}',
+          'Group name': e.value.group,
+          'Group type': e.value.type,
+          'Group type #': '',
+        }),
+    ],
+  });
+}
+
+// -- Day-of-week / comparison dictionary layouts ----------------------------------
+
+/// Monday = DAY1 … Sunday = DAY7, matching the weekly RM columns.
+int _dayColumn(DateTime at) {
+  // DateTime.weekday: Mon=1 … Sun=7.
+  return at.toLocal().weekday;
+}
+
+typedef _DayBag = ({
+  double sales,
+  double taxes,
+  double total,
+  int checks,
+  int customers,
+  double discounts,
+});
+
+Map<int, _DayBag> _byWeekday(List<Order> orders) {
+  final out = <int, _DayBag>{
+    for (var d = 1; d <= 7; d++)
+      d: (sales: 0, taxes: 0, total: 0, checks: 0, customers: 0, discounts: 0),
+  };
+  for (final o in orders) {
+    if (o.isRefund) continue;
+    final d = _dayColumn(o.createdAt);
+    final was = out[d]!;
+    out[d] = (
+      sales: was.sales + orderNet(o),
+      taxes: was.taxes + orderTaxes(o),
+      total: was.total + orderTotal(o),
+      checks: was.checks + 1,
+      customers: was.customers + (o.guestCount ?? 0),
+      discounts: was.discounts +
+          orderCheckDiscount(o) +
+          orderLineDiscount(o),
+    );
+  }
+  return out;
+}
+
+RmBinding _weeklyByDay(List<Order> orders) {
+  final byDay = _byWeekday(orders);
+
+  Map<String, String> row(String type, double Function(_DayBag b) pick,
+      {bool count = false}) {
+    final fields = <String, String>{'Data Type': type};
+    var total = 0.0;
+    for (var d = 1; d <= 7; d++) {
+      final v = pick(byDay[d]!);
+      total += v;
+      fields['DAY$d'] = count ? '${v.round()}' : _money(v);
+    }
+    fields['Total'] = count ? '${total.round()}' : _money(total);
+    fields['Avg/day'] = count
+        ? (total / 7).toStringAsFixed(1)
+        : _money(total / 7);
+    return fields;
+  }
+
+  return RmBinding({
+    'Weekly Report.Week.DataDictionaryType': [
+      RmRow(row('Sales', (b) => b.sales)),
+      RmRow(row('Taxes', (b) => b.taxes)),
+      RmRow(row('Total', (b) => b.total)),
+      RmRow(row('Checks', (b) => b.checks.toDouble(), count: true)),
+      RmRow(row('Customers', (b) => b.customers.toDouble(), count: true)),
+      RmRow(row('Discounts', (b) => b.discounts)),
+    ],
+  });
+}
+
+RmBinding _avgByDayOfWeek(List<Order> orders) {
+  final byDay = _byWeekday(orders);
+  // How many calendar dates contributed to each weekday in the window.
+  final dayHits = <int, Set<String>>{
+    for (var d = 1; d <= 7; d++) d: {},
+  };
+  for (final o in orders) {
+    if (o.isRefund) continue;
+    final l = o.createdAt.toLocal();
+    dayHits[_dayColumn(o.createdAt)]!
+        .add('${l.year}-${_two(l.month)}-${_two(l.day)}');
+  }
+
+  Map<String, String> row(String type, double Function(_DayBag b) pick,
+      {bool count = false}) {
+    final fields = <String, String>{'Data Type': type};
+    var sum = 0.0;
+    var daysWith = 0;
+    for (var d = 1; d <= 7; d++) {
+      final hits = dayHits[d]!.length;
+      final raw = pick(byDay[d]!);
+      final avg = hits == 0 ? 0.0 : raw / hits;
+      if (hits > 0) {
+        sum += avg;
+        daysWith++;
+      }
+      fields['DAY$d'] = hits == 0
+          ? ''
+          : (count ? avg.toStringAsFixed(1) : _money(avg));
+    }
+    fields['Avg/day'] = daysWith == 0
+        ? ''
+        : (count
+            ? (sum / daysWith).toStringAsFixed(1)
+            : _money(sum / daysWith));
+    return fields;
+  }
+
+  return RmBinding({
+    'Data Dict. - Averages by Day of Week.Week.DataDictionaryType': [
+      RmRow(row('Sales', (b) => b.sales)),
+      RmRow(row('Taxes', (b) => b.taxes)),
+      RmRow(row('Total', (b) => b.total)),
+      RmRow(row('Checks', (b) => b.checks.toDouble(), count: true)),
+      RmRow(row('Customers', (b) => b.customers.toDouble(), count: true)),
+      RmRow(row('Discounts', (b) => b.discounts)),
+    ],
+  });
+}
+
+/// Last up to four calendar days in [orders] as Col0…Col3.
+RmBinding _dayToDay(List<Order> orders) {
+  final byDate = <String, _DayBag>{};
+  for (final o in orders) {
+    if (o.isRefund) continue;
+    final key = _date(o.createdAt);
+    final was = byDate[key] ??
+        (sales: 0.0, taxes: 0.0, total: 0.0, checks: 0, customers: 0, discounts: 0.0);
+    byDate[key] = (
+      sales: was.sales + orderNet(o),
+      taxes: was.taxes + orderTaxes(o),
+      total: was.total + orderTotal(o),
+      checks: was.checks + 1,
+      customers: was.customers + (o.guestCount ?? 0),
+      discounts: was.discounts +
+          orderCheckDiscount(o) +
+          orderLineDiscount(o),
+    );
+  }
+  final dates = byDate.keys.toList()..sort();
+  final last = dates.length <= 4 ? dates : dates.sublist(dates.length - 4);
+
+  Map<String, String> row(String type, double Function(_DayBag b) pick,
+      {bool count = false}) {
+    final fields = <String, String>{
+      'Data Type': type,
+      'Col': type,
+    };
+    for (var i = 0; i < 4; i++) {
+      final key = i < last.length ? last[i] : null;
+      final bag = key == null ? null : byDate[key];
+      final v = bag == null ? 0.0 : pick(bag);
+      fields['Col$i'] = bag == null
+          ? ''
+          : (count ? '${v.round()}' : _money(v));
+      if (i + 1 < last.length && bag != null) {
+        final next = byDate[last[i + 1]]!;
+        final a = pick(bag);
+        final b = pick(next);
+        fields['% Diff$i'] =
+            a.abs() < 0.005 ? '' : _percent(b - a, a);
+      } else {
+        fields['% Diff$i'] = '';
+      }
+    }
+    return fields;
+  }
+
+  return RmBinding({
+    'Data Dict. Comparisons.Week.DataDictionaryType': [
+      RmRow(row('Sales', (b) => b.sales)),
+      RmRow(row('Taxes', (b) => b.taxes)),
+      RmRow(row('Total', (b) => b.total)),
+      RmRow(row('Checks', (b) => b.checks.toDouble(), count: true)),
+      RmRow(row('Customers', (b) => b.customers.toDouble(), count: true)),
+      RmRow(row('Discounts', (b) => b.discounts)),
+    ],
+  });
+}
+
+/// Split the window in two chronological halves for week/month compare layouts.
+RmBinding _periodCompareColumns(List<Order> orders) {
+  if (orders.isEmpty) {
+    return const RmBinding({
+      'Data Dict. Comparisons.Week.DataDictionaryType': [],
+    });
+  }
+  final sorted = [...orders]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  final mid = sorted.first.createdAt
+      .add(sorted.last.createdAt.difference(sorted.first.createdAt) ~/ 2);
+  _DayBag bag(Iterable<Order> list) {
+    var sales = 0.0, taxes = 0.0, total = 0.0, discounts = 0.0;
+    var checks = 0, customers = 0;
+    for (final o in list) {
+      if (o.isRefund) continue;
+      sales += orderNet(o);
+      taxes += orderTaxes(o);
+      total += orderTotal(o);
+      checks += 1;
+      customers += o.guestCount ?? 0;
+      discounts += orderCheckDiscount(o) + orderLineDiscount(o);
+    }
+    return (
+      sales: sales,
+      taxes: taxes,
+      total: total,
+      checks: checks,
+      customers: customers,
+      discounts: discounts
+    );
+  }
+
+  final a = bag(sorted.where((o) => !o.createdAt.isAfter(mid)));
+  final b = bag(sorted.where((o) => o.createdAt.isAfter(mid)));
+
+  Map<String, String> row(String type, double Function(_DayBag x) pick,
+      {bool count = false}) {
+    final va = pick(a);
+    final vb = pick(b);
+    return {
+      'Data Type': type,
+      'Col': type,
+      'Col0': count ? '${va.round()}' : _money(va),
+      'Col1': count ? '${vb.round()}' : _money(vb),
+      '% Diff0': va.abs() < 0.005 ? '' : _percent(vb - va, va),
+      '% Diff1': '',
+    };
+  }
+
+  return RmBinding({
+    'Data Dict. Comparisons.Week.DataDictionaryType': [
+      RmRow(row('Sales', (x) => x.sales)),
+      RmRow(row('Taxes', (x) => x.taxes)),
+      RmRow(row('Total', (x) => x.total)),
+      RmRow(row('Checks', (x) => x.checks.toDouble(), count: true)),
+      RmRow(row('Customers', (x) => x.customers.toDouble(), count: true)),
+      RmRow(row('Discounts', (x) => x.discounts)),
     ],
   });
 }

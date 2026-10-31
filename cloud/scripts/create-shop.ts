@@ -6,7 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { newPairCode, pairCodeHash } from '../src/codes.js';
 import { USERNAME, USERNAME_RULE } from '../src/http.js';
 import { hashPassword, newPassword } from '../src/passwords.js';
-import { DEFAULT_CAPABILITIES } from '../src/permissions.js';
+import { DEFAULT_CAPABILITIES, DEFAULT_REPORT_KEYS } from '../src/permissions.js';
 import { PrismaRepo } from '../src/prisma-repo.js';
 
 const [name, branchName, ownerArg] = process.argv.slice(2).map((a) => a.trim());
@@ -39,6 +39,7 @@ await repo.createUser({
   allBranches: true,
   branchIds: [],
   capabilities: DEFAULT_CAPABILITIES.owner,
+  reportKeys: DEFAULT_REPORT_KEYS.owner,
   active: true,
 });
 console.log(`shop:            ${shop.name} (${shop.id})`);

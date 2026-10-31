@@ -864,6 +864,20 @@ class SettingsStore {
   set lanPrimaryDeviceId(String? v) =>
       setString('lan_primary_device_id', v?.trim().isEmpty == true ? null : v?.trim());
 
+  /// Last HTTP address used to reach the primary (emulator / Wi‑Fi IP). Beacon
+  /// discovery can miss this; presence checks refresh from here too.
+  String? get lanPrimaryHost => getString('lan_primary_host');
+  set lanPrimaryHost(String? v) =>
+      setString('lan_primary_host', v?.trim().isEmpty == true ? null : v?.trim());
+
+  int get lanPrimaryPort {
+    final raw = getString('lan_primary_port');
+    return int.tryParse(raw ?? '') ?? 45333;
+  }
+
+  set lanPrimaryPort(int? v) =>
+      setString('lan_primary_port', v == null ? null : '$v');
+
   /// Shown once on a fresh till until the cashier picks Primary, joins, or skips.
   bool get lanRolePromptDismissed => getBool('lan_role_prompt_dismissed');
   set lanRolePromptDismissed(bool v) => setBool('lan_role_prompt_dismissed', v);
@@ -875,12 +889,16 @@ class SettingsStore {
     deviceRole = DeviceRole.unset;
     lanShopKey = null;
     lanPrimaryDeviceId = null;
+    lanPrimaryHost = null;
+    lanPrimaryPort = null;
     _writeJoinPins(const []);
     setString('lan_shift_notices', null);
     lanRolePromptDismissed = false;
     // Belt-and-braces: delete even if a setter no-op'd on an already-empty value.
     setString('lan_shop_key', null);
     setString('lan_primary_device_id', null);
+    setString('lan_primary_host', null);
+    setString('lan_primary_port', null);
     setString(_deviceRole, null);
   }
 
@@ -1209,6 +1227,14 @@ class SettingsStore {
       getString('delivery_receipt_printer') ?? 'delivery';
   set deliveryReceiptPrinter(String v) =>
       setString('delivery_receipt_printer', v.trim());
+
+  /// Printer that prints the self-order guest ticket (order number). Empty =
+  /// main receipt printer. Synced in the shop bundle so the kiosk uses the
+  /// same name after pairing.
+  String get selfOrderReceiptPrinter =>
+      getString('self_order_receipt_printer') ?? '';
+  set selfOrderReceiptPrinter(String v) =>
+      setString('self_order_receipt_printer', v.trim());
 
   // ── what the printer can spell ───────────────────────────────────
 
@@ -1680,6 +1706,9 @@ class SettingsStore {
         'product_stations': {
           for (final e in productStations.entries) '${e.key}': e.value,
         },
+        'self_order_receipt_printer': selfOrderReceiptPrinter,
+        'self_order_show_images': selfOrderShowImages,
+        'show_product_images': showProductImages,
         'odoo_branch_id': odooBranchId,
         'odoo_company_id': odooCompanyId,
         'odoo_restaurant_id': odooRestaurantId,
@@ -1844,6 +1873,16 @@ class SettingsStore {
                 '$s',
             ],
       };
+    }
+    if (bundle.containsKey('self_order_receipt_printer')) {
+      final v = bundle['self_order_receipt_printer'];
+      selfOrderReceiptPrinter = v == null ? '' : '$v';
+    }
+    if (bundle['self_order_show_images'] is bool) {
+      selfOrderShowImages = bundle['self_order_show_images'] as bool;
+    }
+    if (bundle['show_product_images'] is bool) {
+      showProductImages = bundle['show_product_images'] as bool;
     }
     if (bundle['odoo_branch_id'] != null) {
       odooBranchId = int.tryParse('${bundle['odoo_branch_id']}');
@@ -2219,6 +2258,17 @@ class SettingsStore {
   String get themeMode => getString('theme_mode') ?? 'dark';
   set themeMode(String v) => setString('theme_mode', v);
 
+  /// Local path to the self-order attract / marketing video (mp4 etc.). Null = none.
+  String? get selfOrderPromoVideoPath {
+    final v = getString('self_order_promo_video')?.trim();
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  set selfOrderPromoVideoPath(String? v) {
+    final t = v?.trim();
+    setString('self_order_promo_video', (t == null || t.isEmpty) ? null : t);
+  }
+
   /// Show the product picture on its grid tile.
   ///
   /// Off by default and off on a shop that never asks for it: a picture is the only
@@ -2230,10 +2280,20 @@ class SettingsStore {
     publishCataloguePullOptions();
   }
 
+  /// Self-order kiosk shows product pictures (and asks Odoo / LAN for them).
+  /// On by default so a first-time kiosk setup looks like the menu board.
+  bool get selfOrderShowImages =>
+      getBool('self_order_show_images', fallback: true);
+  set selfOrderShowImages(bool v) {
+    setBool('self_order_show_images', v);
+    publishCataloguePullOptions();
+  }
+
   /// Hands the catalogue puller the one choice it cannot ask a database for. Called
   /// on open and on every change, like [publishPrintProfile].
   void publishCataloguePullOptions() =>
-      CataloguePullOptions.shared = CataloguePullOptions(images: showProductImages);
+      CataloguePullOptions.shared = CataloguePullOptions(
+          images: showProductImages || selfOrderShowImages);
 
   /// The two floor colours, as ARGB ints, or null while the shop is on the defaults.
   int? get tableColorFree => int.tryParse(getString('table_color_free') ?? '');

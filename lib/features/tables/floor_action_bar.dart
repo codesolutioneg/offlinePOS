@@ -54,6 +54,7 @@ class FloorActionBar extends StatelessWidget {
     (id: 'misc', label: 'Misc', icon: Icons.more_horiz, color: Color(0xFF607D8B)),
     (id: 'empl', label: 'Empl', icon: Icons.badge_outlined, color: Color(0xFF27AE60)),
     (id: 'tabs', label: 'Tabs', icon: Icons.table_restaurant, color: Color(0xFFF39C12)),
+    (id: 'find-order', label: 'Find order', icon: Icons.search, color: Color(0xFF0EA5E9)),
     (id: 'employee-transfer', label: 'Employee Transfer', icon: Icons.swap_horiz,
         color: Color(0xFF34495E)),
     (id: 'transfer-items', label: 'Transfer Items', icon: Icons.move_down,

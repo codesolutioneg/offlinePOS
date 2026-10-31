@@ -609,6 +609,7 @@ class _PrintersScreenState extends State<PrintersScreen>
     final copies = widget.settings.receiptCopies;
     final subStation = widget.settings.subReceiptStation;
     final deliveryPrinter = widget.settings.deliveryReceiptPrinter;
+    final selfOrderPrinter = widget.settings.selfOrderReceiptPrinter;
     // Only printers that actually exist, unlike the routing chips below: a category
     // can be pointed at a station before its printer is bought, but a copy sent to a
     // name nothing answers to just prints a second slip at the till.
@@ -627,6 +628,11 @@ class _PrintersScreenState extends State<PrintersScreen>
     final deliveryChoices = <String>{
       ...existing,
       if (deliveryPrinter.isNotEmpty) deliveryPrinter,
+    }.toList()
+      ..sort();
+    final selfOrderChoices = <String>{
+      ...existing,
+      if (selfOrderPrinter.isNotEmpty) selfOrderPrinter,
     }.toList()
       ..sort();
     return Card(
@@ -754,6 +760,36 @@ class _PrintersScreenState extends State<PrintersScreen>
           Text(
             tr(context,
                 'Bag slip and paid receipt for store / company delivery'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const Divider(),
+          Row(children: [
+            Expanded(
+              child: Text(tr(context, 'Self-order ticket printer'),
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            DropdownButton<String>(
+              key: const Key('self-order-receipt-printer'),
+              value: selfOrderPrinter.isNotEmpty &&
+                      selfOrderChoices.contains(selfOrderPrinter)
+                  ? selfOrderPrinter
+                  : '',
+              items: [
+                DropdownMenuItem(
+                    value: '', child: Text(tr(context, 'Same as receipt'))),
+                for (final station in selfOrderChoices)
+                  DropdownMenuItem(value: station, child: Text(station)),
+              ],
+              onChanged: (v) {
+                widget.settings.selfOrderReceiptPrinter =
+                    (v == null || v.isEmpty) ? '' : v;
+                _notify();
+              },
+            ),
+          ]),
+          Text(
+            tr(context,
+                'Prints the guest order number after a self-order is placed'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const Divider(),

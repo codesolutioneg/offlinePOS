@@ -393,6 +393,9 @@ class OrderDetailScreen extends StatelessWidget {
   /// as a duplicate of what was already booked rather than as a correction, so the
   /// answer past that point is a refund and a re-ring. The store refuses the same
   /// cases; this only keeps the till from offering what it would then refuse.
+  ///
+  /// Another till's unpaid sale is offered too: reopen claims it onto this device
+  /// and tells peers to drop their queued Odoo push.
   static bool canEdit(Order o) =>
       o.state == OrderState.paid && !o.isRefund;
 

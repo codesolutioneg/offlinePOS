@@ -194,10 +194,13 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   final _closed = <String>{};
   final _find = TextEditingController();
 
-  /// The period: a preset, unless a custom range or one shift was picked.
+  /// The period: a preset, unless a custom range or sessions were picked.
   ReportRange _range = ReportRange.today;
   DateTimeRange? _custom;
-  Shift? _shiftPick;
+
+  /// Sessions picked on the right (multi-select). Orders must fall inside at
+  /// least one of them; the period line shows their combined span for prepare.
+  final Map<String, Shift> _shiftPicks = {};
 
   /// Touch rows instead of Mouse rows: the same screen with more to hit.
   bool _touch = false;
@@ -249,8 +252,16 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
 
   /// Open one of the bundled layouts in the page viewer, over the till's
   /// sales where the layout is connected to them.
-  Future<void> _openRm(RmReport report) {
+  Future<void> _openRm(RmReport report) async {
     final period = _period(context);
+    // Rules-only RM packs have no drawable bands; open the matching till report.
+    if (!rmLayoutConnected(report.id)) {
+      final fallback = nativeFallbackReportKey(report.id);
+      if (fallback == null) return;
+      setState(() => _selected = fallback);
+      await _run();
+      return;
+    }
     final filter = _filterWords(context);
     final ranAt = DateTime.now();
     final labels = RmPageLabels(
@@ -357,8 +368,19 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   List<String> get _cashiers =>
       (widget.allOrders.map((o) => o.cashierId).toSet().toList()..sort());
 
-  bool _inPeriod(Order o, ReportPeriodChoice period) =>
-      period.contains(o.createdAt, shiftOpenedAt: _shiftOpenedAt);
+  bool _orderInShift(Order o, Shift shift) {
+    final at = o.createdAt.toUtc();
+    final from = shift.openedAt.toUtc();
+    final to = shift.closedAt?.toUtc();
+    return !at.isBefore(from) && (to == null || at.isBefore(to));
+  }
+
+  bool _inPeriod(Order o, ReportPeriodChoice period) {
+    if (_shiftPicks.isNotEmpty) {
+      return _shiftPicks.values.any((s) => _orderInShift(o, s));
+    }
+    return period.contains(o.createdAt, shiftOpenedAt: _shiftOpenedAt);
+  }
 
   List<Order> _applyStaffType(Iterable<Order> source,
       {bool ignoreDriverFilter = false}) {
@@ -494,7 +516,12 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
   List<_Report> _visible(BuildContext context) =>
       [for (final r in _reports(context)) if (_may(r.key)) r];
 
-  Iterable<RmReport> get _rmShown => _rm.where((r) => _may('rm-${r.id}'));
+  /// Connected RM layouts, plus rules-only layouts that fall back to a till
+  /// report. Unconnected shells (loyalty, wages, advance orders, …) stay hidden
+  /// so the tree is not a wall of empty forms.
+  Iterable<RmReport> get _rmShown => _rm.where((r) =>
+      _may('rm-${r.id}') &&
+      (rmLayoutConnected(r.id) || nativeFallbackReportKey(r.id) != null));
 
   /// A search finds a layout by the name it shows as well as its own.
   bool _rmMatches(BuildContext context, RmReport r, String query) =>
@@ -872,13 +899,26 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
 
   /// The period the form is set to, labelled in the language on screen.
   ReportPeriodChoice _period(BuildContext context) {
-    final shift = _shiftPick;
-    if (shift != null) {
-      return ReportPeriodChoice.exact(
-        shift.openedAt.toLocal(),
-        shift.closedAt?.toLocal(),
-        '${tr(context, 'Session')} ${_stamp(shift.openedAt)}',
-      );
+    if (_shiftPicks.isNotEmpty) {
+      final shifts = _shiftPicks.values.toList();
+      var from = shifts.first.openedAt.toLocal();
+      DateTime? to = shifts.first.closedAt?.toLocal();
+      var anyOpen = shifts.first.closedAt == null;
+      for (final s in shifts.skip(1)) {
+        final opened = s.openedAt.toLocal();
+        if (opened.isBefore(from)) from = opened;
+        if (s.closedAt == null) {
+          anyOpen = true;
+          to = null;
+        } else if (!anyOpen) {
+          final closed = s.closedAt!.toLocal();
+          if (to == null || closed.isAfter(to)) to = closed;
+        }
+      }
+      final label = shifts.length == 1
+          ? '${tr(context, 'Session')} ${_stamp(shifts.first.openedAt)}'
+          : '${shifts.length} ${tr(context, 'Sessions')}';
+      return ReportPeriodChoice.exact(from, anyOpen ? null : to, label);
     }
     final c = _custom;
     if (c != null) {
@@ -887,6 +927,17 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     }
     return ReportPeriodChoice.preset(_range, _range.label(context));
   }
+
+  void _toggleShift(Shift shift) => setState(() {
+        if (_shiftPicks.containsKey(shift.id)) {
+          _shiftPicks.remove(shift.id);
+        } else {
+          _shiftPicks[shift.id] = shift;
+          _custom = null;
+        }
+      });
+
+  void _clearShiftPicks() => setState(() => _shiftPicks.clear());
 
   static String _two(int n) => n.toString().padLeft(2, '0');
 
@@ -915,7 +966,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     if (!mounted || picked == null) return;
     setState(() {
       _custom = picked;
-      _shiftPick = null;
+      _shiftPicks.clear();
     });
   }
 
@@ -929,7 +980,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
         _customer.clear();
         _range = ReportRange.today;
         _custom = null;
-        _shiftPick = null;
+        _shiftPicks.clear();
       });
 
   /// Open the report picked in the tree over the period and filters in the form.
@@ -1000,7 +1051,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                 .firstOrNull ??
             ReportRange.today;
         _custom = null;
-        _shiftPick = null;
+        _shiftPicks.clear();
         _cashier = f['cashier'] as String?;
         _type =
             OrderType.values.where((t) => t.name == f['type']).firstOrNull;
@@ -1177,7 +1228,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                   children: [
                     SizedBox(width: 230, child: _tree(context, reports)),
                     Expanded(child: _filterForm(context)),
-                    SizedBox(width: 260, child: _sessions(context)),
+                    SizedBox(width: 340, child: _sessions(context)),
                   ],
                 ),
               ),
@@ -1507,8 +1558,8 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
         );
 
     // What the period line shows as picked: a preset, the custom range, or the
-    // one shift picked on the right.
-    final periodValue = _shiftPick != null
+    // sessions picked on the right.
+    final periodValue = _shiftPicks.isNotEmpty
         ? 'session'
         : _custom != null
             ? 'custom'
@@ -1530,7 +1581,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                     const Key('report-period'),
                     periodValue,
                     [
-                      if (_shiftPick != null)
+                      if (_shiftPicks.isNotEmpty)
                         ('session', period.label, null),
                       for (final r in [
                         if (_shiftOpenedAt != null) ReportRange.openShift,
@@ -1556,7 +1607,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
                         _range =
                             ReportRange.values.firstWhere((r) => r.name == v);
                         _custom = null;
-                        _shiftPick = null;
+                        _shiftPicks.clear();
                       });
                     },
                   ),
@@ -1684,31 +1735,57 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
     );
   }
 
-  Widget _sessionList(BuildContext context, List<Shift> shifts) => _panelBox(
-        Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Container(
-            decoration: const BoxDecoration(
-              color: Color(0xFFE1E1E1),
-              border: Border(bottom: BorderSide(color: _edge)),
-            ),
-            padding: EdgeInsets.symmetric(vertical: _pad + 4),
-            alignment: Alignment.center,
-            child: Text(
-              '${tr(context, 'Sessions')} (${shifts.length})',
-              style: _text,
-            ),
+  Widget _sessionList(BuildContext context, List<Shift> shifts) {
+    final selected = _shiftPicks.length;
+    return _panelBox(
+      Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFFE1E1E1),
+            border: Border(bottom: BorderSide(color: _edge)),
           ),
-          Expanded(
-            child: ListView(children: [
-              for (var i = 0; i < shifts.length; i++)
-                _sessionRow(context, shifts[i], shifts.length - i),
-            ]),
+          padding: EdgeInsets.symmetric(horizontal: 6, vertical: _pad + 2),
+          child: Row(children: [
+            Expanded(
+              child: Text(
+                selected == 0
+                    ? '${tr(context, 'Sessions')} (${shifts.length})'
+                    : '${tr(context, 'Sessions')} ($selected/${shifts.length})',
+                style: _text,
+              ),
+            ),
+            if (selected > 0)
+              TextButton(
+                key: const Key('sessions-clear'),
+                onPressed: _clearShiftPicks,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(tr(context, 'Clear'), style: _text),
+              ),
+          ]),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 2),
+          child: Text(
+            tr(context, 'Tap to select more than one session'),
+            style: _text.copyWith(color: Colors.black54, fontSize: 11),
           ),
-        ]),
-      );
+        ),
+        Expanded(
+          child: ListView(children: [
+            for (var i = 0; i < shifts.length; i++)
+              _sessionRow(context, shifts[i], shifts.length - i),
+          ]),
+        ),
+      ]),
+    );
+  }
 
   Widget _sessionRow(BuildContext context, Shift shift, int number) {
-    final picked = _shiftPick?.id == shift.id;
+    final picked = _shiftPicks.containsKey(shift.id);
     final who = widget.staffNames[shift.cashierId] ?? shift.cashierId;
     final style = _text.copyWith(color: picked ? Colors.white : Colors.black);
     final at = shift.openedAt.toLocal();
@@ -1716,20 +1793,29 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
       color: picked ? _blue : Colors.white,
       child: InkWell(
         key: Key('report-session-${shift.id}'),
-        onTap: () => setState(() {
-          _shiftPick = picked ? null : shift;
-          _custom = null;
-        }),
+        onTap: () => _toggleShift(shift),
         onLongPress: () => _showSessionPayments(context, shift),
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: 6, vertical: _pad),
           child: Row(children: [
-            SizedBox(width: 26, child: Text('$number', style: style)),
-            SizedBox(width: 78, child: Text(_day(at), style: style)),
             SizedBox(
-                width: 44,
-                child: Text('${_two(at.hour)}:${_two(at.minute)}',
-                    style: style)),
+              width: 22,
+              child: Icon(
+                picked ? Icons.check_box : Icons.check_box_outline_blank,
+                size: 16,
+                color: picked ? Colors.white : _blue,
+              ),
+            ),
+            SizedBox(width: 22, child: Text('$number', style: style)),
+            SizedBox(
+              width: 86,
+              child: Text(_day(at), style: style, softWrap: false),
+            ),
+            SizedBox(
+              width: 42,
+              child: Text('${_two(at.hour)}:${_two(at.minute)}',
+                  style: style, softWrap: false),
+            ),
             Expanded(
               child: Text(
                 '$who${shift.closedAt == null ? ' (${tr(context, 'Open')})' : ''}',
@@ -1817,7 +1903,7 @@ class _ReportsHubScreenState extends State<ReportsHubScreen> {
             key: const Key('session-use-for-reports'),
             onPressed: () {
               setState(() {
-                _shiftPick = shift;
+                _shiftPicks[shift.id] = shift;
                 _custom = null;
               });
               Navigator.pop(ctx);

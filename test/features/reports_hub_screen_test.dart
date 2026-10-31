@@ -290,6 +290,32 @@ void main() {
     expect(find.text('Taxi'), findsWidgets);
   });
 
+  testWidgets('multiple sessions can be selected together', (t) async {
+    tallWindow(t);
+    final shifts = ShiftStore(db);
+    final first = shifts.openShift(openingFloat: 0, cashierId: 'sara');
+    shifts.closeShift(countedCash: 0);
+    final second = shifts.openShift(openingFloat: 0, cashierId: 'omar');
+
+    await t.pumpWidget(MaterialApp(
+      home: ReportsHubScreen(
+        allOrders: const [],
+        categories: const [],
+        formatAmount: (v) => v.toStringAsFixed(2),
+        audit: audit,
+        shifts: shifts,
+        staffNames: const {'sara': 'Sara', 'omar': 'Omar'},
+      ),
+    ));
+
+    await t.tap(find.byKey(Key('report-session-${first.id}')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(Key('report-session-${second.id}')));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('sessions-clear')), findsOneWidget);
+  });
+
   Order sale(double amount, {int daysAgo = 0}) {
     // Pin to the trading day, not the calendar clock — before the shop cutover
     // "today" is still yesterday's service, and noon-of-calendar-today sits

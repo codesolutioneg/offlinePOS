@@ -56,6 +56,12 @@ typedef LanJoinHandler = Map<String, dynamic>? Function({
   required String peerDeviceId,
 });
 
+/// Answer a self-order kiosk that presents the shop key. Null refuses.
+typedef LanKioskPairHandler = Map<String, dynamic>? Function({
+  required String shopKey,
+  required String peerDeviceId,
+});
+
 /// Nothing here reaches a selling path. A request is handled on the event loop
 /// between taps, and every failure is a status code plus a log line.
 class LanProtocol {
@@ -66,6 +72,7 @@ class LanProtocol {
     required LanCredential credential,
     LanClaimDesk? claims,
     this.onJoin,
+    this.onKioskPair,
     this.seats,
     this.numbers,
     this.catchUp,
@@ -106,6 +113,10 @@ class LanProtocol {
   /// holds the shop key. Only the primary answers.
   static const String joinPath = '/lan/join';
 
+  /// Self-order kiosk pairing: presents the shop key (copied from the primary)
+  /// instead of a join PIN. Only the primary answers.
+  static const String kioskPairPath = '/lan/kiosk-pair';
+
   /// A till about to close its shift asking this one (the primary) to read every
   /// other till to the end of its log now, and to say which it could not.
   static const String catchUpPath = '/lan/catchup';
@@ -129,6 +140,9 @@ class LanProtocol {
 
   /// Null when this till cannot admit secondaries (not primary / no PIN bank).
   final LanJoinHandler? onJoin;
+
+  /// Null when this till cannot admit self-order kiosks by shop key.
+  final LanKioskPairHandler? onKioskPair;
 
   /// The seat desk, read per request because only the primary answers and the role
   /// can change while the till is up. Null (or answering null) refuses with 409.
@@ -195,6 +209,7 @@ class LanProtocol {
 
   LanReply handlePost(String path, String body, {String? auth, String? from}) {
     if (path == joinPath) return _handleJoin(body);
+    if (path == kioskPairPath) return _handleKioskPair(body);
     if (path != notifyPath &&
         path != claimPath &&
         path != seatPath &&
@@ -300,6 +315,42 @@ class LanProtocol {
     if (payload == null) {
       _onRefused?.call('lan.join.refused', '$peer presented a bad join PIN');
       return const LanReply(403, {'error': 'bad pin'});
+    }
+    return LanReply(200, {
+      'device_id': deviceId,
+      'schema': Schema.version,
+      ...payload,
+    });
+  }
+
+  /// Pair a self-order kiosk that already knows the shop key (copied from primary
+  /// settings). No join PIN — the key is the admission proof.
+  LanReply _handleKioskPair(String body) {
+    final gate = onKioskPair;
+    if (gate == null) {
+      return const LanReply(409, {'error': 'this device does not admit kiosks'});
+    }
+    Map<String, dynamic> decoded;
+    try {
+      decoded = (jsonDecode(body) as Map).cast<String, dynamic>();
+    } catch (e) {
+      return const LanReply(400, {'error': 'unreadable body'});
+    }
+    final peer = decoded['device_id'];
+    final key = decoded['shop_key'];
+    if (peer is! String || peer.isEmpty) {
+      return const LanReply(400, {'error': 'no device_id'});
+    }
+    if (key is! String || key.trim().isEmpty) {
+      return const LanReply(400, {'error': 'no shop_key'});
+    }
+    final refusal = _schemaRefusal(
+        decoded['schema'] is int ? decoded['schema'] as int : null, peer);
+    if (refusal != null) return refusal;
+    final payload = gate(shopKey: key.trim(), peerDeviceId: peer);
+    if (payload == null) {
+      _onRefused?.call('lan.kiosk.refused', '$peer presented a bad shop key');
+      return const LanReply(403, {'error': 'bad shop key'});
     }
     return LanReply(200, {
       'device_id': deviceId,
@@ -812,6 +863,27 @@ class LanHttpClient {
     final text = await _send(
       'POST',
       peer.baseUrl.replace(path: LanProtocol.joinPath),
+      body,
+      null,
+      timeout: const Duration(seconds: 60),
+    );
+    return (jsonDecode(text) as Map).cast<String, dynamic>();
+  }
+
+  /// Pair as a self-order kiosk using the shop key from the primary's settings.
+  Future<Map<String, dynamic>> kioskPair(
+    LanPeer peer, {
+    required String shopKey,
+    required String deviceId,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'shop_key': shopKey,
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.kioskPairPath),
       body,
       null,
       timeout: const Duration(seconds: 60),

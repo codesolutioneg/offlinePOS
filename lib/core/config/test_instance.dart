@@ -18,7 +18,10 @@ class TestInstance {
 
   static String? get name {
     final value = Platform.environment[variable]?.trim();
-    return value == null || value.isEmpty ? null : value;
+    if (value != null && value.isNotEmpty) return value;
+    // Dedicated self-order binary on the same PC as the till: own DB + LAN port.
+    if (const bool.fromEnvironment('SELF_ORDER_MODE')) return 'kiosk';
+    return null;
   }
 
   /// Where this copy keeps its data: [base] for the real till, a subfolder of it

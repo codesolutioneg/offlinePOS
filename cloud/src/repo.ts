@@ -69,6 +69,8 @@ export interface User {
   allBranches: boolean;
   branchIds: string[];
   capabilities: string[];
+  /// Mobile owner-app screens (sales_summary, costs, open_orders, …).
+  reportKeys: string[];
   active: boolean;
   createdAt: Date;
   lastLoginAt: Date | null;
@@ -79,7 +81,17 @@ export interface UserWithHash extends User {
 }
 
 export type UserPatch = Partial<
-  Pick<UserWithHash, 'displayName' | 'role' | 'allBranches' | 'branchIds' | 'capabilities' | 'active' | 'passwordHash'>
+  Pick<
+    UserWithHash,
+    | 'displayName'
+    | 'role'
+    | 'allBranches'
+    | 'branchIds'
+    | 'capabilities'
+    | 'reportKeys'
+    | 'active'
+    | 'passwordHash'
+  >
 >;
 
 export interface SyncRecord {

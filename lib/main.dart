@@ -30,6 +30,7 @@ import 'core/db/data_reset.dart';
 import 'core/db/database.dart';
 import 'core/db/db_key.dart';
 import 'core/db/secure_key_store.dart';
+import 'core/db/sqlcipher_init.dart';
 import 'core/db/device_store.dart';
 import 'core/db/attendance_store.dart';
 import 'core/db/customer_store.dart';
@@ -91,6 +92,7 @@ const String appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '0
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initSqlCipher();
 
   final log = StartupLog.forThisLaunch()..begin(appVersion);
   // What to undo if a later step throws. A failure screen with the sync timer

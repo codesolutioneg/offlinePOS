@@ -239,6 +239,16 @@ class AuthService {
   bool get managersUseSecondFactor =>
       _users.active().any((u) => u.isManager && u.hasSecondFactor);
 
+  /// Sign in without a PIN. Only for device-bound modes (self-order kiosk) where
+  /// there is no cashier standing at a pad — the binary itself is the boundary.
+  AuthResult admitDevice(String cashierId) {
+    final user = _users.byId(cashierId);
+    if (user == null || !user.active) return const AuthRejected();
+    _signedIn = user;
+    _audit.record(cashierId, 'device.admit');
+    return AuthOk(user);
+  }
+
   Future<Cashier> enrol({
     required String id,
     required String name,

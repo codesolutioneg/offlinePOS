@@ -113,6 +113,9 @@ import '../features/orders/delivery_home_screen.dart';
 import '../features/orders/delivery_waiting_screen.dart';
 import '../features/orders/ecommerce_orders_screen.dart';
 import '../features/orders/open_orders_screen.dart';
+import '../features/self_order/self_order_kiosk_screen.dart';
+import '../features/self_order/self_order_pair_screen.dart';
+import '../core/db/schema.dart';
 import '../features/orders/order_history_screen.dart';
 import '../features/orders/refund_screen.dart';
 import '../features/reports/reports_hub_screen.dart';
@@ -968,8 +971,8 @@ class _PosAppState extends State<PosApp> {
       if (mounted) setState(() {});
     }());
     _publishActivity();
-    _nudgeShift();
-    unawaited(_offerLanRoleIfNeeded());
+    if (!widget.config.selfOrderMode) _nudgeShift();
+    if (!widget.config.selfOrderMode) unawaited(_offerLanRoleIfNeeded());
     _startStoreOrderWatch();
   }
 
@@ -1734,6 +1737,34 @@ class _PosAppState extends State<PosApp> {
     }
   }
 
+  /// Guest ticket from the self-order kiosk: order number for the cashier.
+  /// Uses [SettingsStore.selfOrderReceiptPrinter] when that printer exists.
+  Future<bool> _printSelfOrderTicket(Order order) async {
+    widget.audit.record(_session?.cashierId ?? order.cashierId,
+        'self_order.ticket_printed',
+        detail: order.uuid);
+    _session?.markBillPrinted(order);
+    final preferred = widget.settings.selfOrderReceiptPrinter.trim();
+    final printerName =
+        preferred.isNotEmpty && widget.printers[preferred] != null
+            ? preferred
+            : PosApp.receiptPrinter;
+    final ref =
+        'self-order-${order.uuid}-${DateTime.now().microsecondsSinceEpoch}';
+    try {
+      final bytes = _receiptBuilder().buildBill(order);
+      await _sendCustomerSlip(bytes, printerName: printerName, reference: ref);
+      return true;
+    } on PrinterUnavailable {
+      _raisePrintAlert('bill', 'Bill did not print', order);
+      return false;
+    } catch (e) {
+      widget.audit
+          .record(order.cashierId, 'receipt.failed', detail: '${order.uuid}: $e');
+      return false;
+    }
+  }
+
   /// Print the detail slip for a payment that leaves the bill part paid: a share, a
   /// guest's check, a selection of items.
   ///
@@ -2029,10 +2060,12 @@ class _PosAppState extends State<PosApp> {
             PrintAlertBar(alerts: _printAlerts, onDismiss: _dismissPrintAlert),
             Expanded(child: content),
           ]);
-          if (nudge != null ||
-              storeAlert ||
-              mirrorHint ||
-              pollError != null) {
+          // Self-order kiosk never takes cash — no shift nudge / store-order chrome.
+          if (!widget.config.selfOrderMode &&
+              (nudge != null ||
+                  storeAlert ||
+                  mirrorHint ||
+                  pollError != null)) {
             content = Column(children: [
               if (nudge != null) _shiftNudgeBar(context, nudge),
               if (storeAlert) _storeOrderAlertBar(context),
@@ -2061,17 +2094,19 @@ class _PosAppState extends State<PosApp> {
         // A restaurant till sits on its floor plan: signed in, that is home, and the
         // counter is what an order opens onto. A device that is only a kitchen board
         // or only a customer display has neither.
-        home: widget.config.displayMode
-            ? _displayOnly()
-            : widget.config.kdsMode
-                ? _kitchenOnly()
-                : session == null
-                    ? (_showLockedFloor
-                        ? _lockedFloor()
-                        : _loginScreen(onSignedIn: _admit))
-                    : _primaryBlocked
-                        ? _waitingForPrimary(session)
-                        : _home(session),
+        home: widget.config.selfOrderMode
+            ? _selfOrderOnly(session)
+            : widget.config.displayMode
+                ? _displayOnly()
+                : widget.config.kdsMode
+                    ? _kitchenOnly()
+                    : session == null
+                        ? (_showLockedFloor
+                            ? _lockedFloor()
+                            : _loginScreen(onSignedIn: _admit))
+                        : _primaryBlocked
+                            ? _waitingForPrimary(session)
+                            : _home(session),
       ),
     );
   }
@@ -2197,7 +2232,8 @@ class _PosAppState extends State<PosApp> {
         _showLockedFloor &&
         !_loginOpen &&
         !widget.config.displayMode &&
-        !widget.config.kdsMode;
+        !widget.config.kdsMode &&
+        !widget.config.selfOrderMode;
     if (want && !_lockFpListening) {
       unawaited(_lockFingerprintLoop(fp));
     } else if (!want && _lockFpListening) {
@@ -2404,6 +2440,144 @@ class _PosAppState extends State<PosApp> {
           ],
         ),
       );
+
+  static const _kioskUserId = 'self-order-kiosk';
+
+  bool _kioskAdmitStarted = false;
+
+  /// Dedicated self-order kiosk: no staff PIN, no shift. Pair with shop key once,
+  /// then customers order. Payment stays on the primary till.
+  Widget _selfOrderOnly(PosSession? session) {
+    if (session == null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => unawaited(_autoAdmitKiosk()));
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    final paired = (widget.settings.lanShopKey ?? '').isNotEmpty &&
+        widget.settings.deviceRole == DeviceRole.secondary;
+    if (!paired) {
+      return SelfOrderPairScreen(
+        initialHost: widget.settings.lanPrimaryHost ?? '127.0.0.1',
+        initialPort: widget.settings.lanPrimaryPort,
+        onPair: _pairSelfOrderKiosk,
+      );
+    }
+    if (_primaryBlocked) return _waitingForPrimary(session);
+    return Builder(
+      builder: (context) => SelfOrderKioskScreen(
+        key: const Key('self-order-standalone'),
+        session: session,
+        catalogue: widget.catalogue,
+        formatAmount: PosApp.money,
+        productImages: (widget.settings.selfOrderShowImages ||
+                widget.settings.showProductImages)
+            ? widget.catalogue.images()
+            : const {},
+        shopName: widget.settings.shopName ?? widget.config.shopName,
+        standalone: true,
+        promoVideoPath: widget.settings.selfOrderPromoVideoPath,
+        onPromoVideoChanged: (path) {
+          widget.settings.selfOrderPromoVideoPath = path;
+          if (mounted) setState(() {});
+        },
+        onPrintTicket: _printSelfOrderTicket,
+        // No staff exit back into the POS — dedicated kiosk stays locked.
+        onOpenNetwork: () => Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => SelfOrderPairScreen(
+                  initialHost: widget.settings.lanPrimaryHost ?? '127.0.0.1',
+                  initialPort: widget.settings.lanPrimaryPort,
+                  onPair: _pairSelfOrderKiosk,
+                ))),
+      ),
+    );
+  }
+
+  Future<void> _autoAdmitKiosk() async {
+    if (!widget.config.selfOrderMode || _session != null || _kioskAdmitStarted) {
+      return;
+    }
+    _kioskAdmitStarted = true;
+    final existing = widget.users.byId(_kioskUserId);
+    if (existing == null) {
+      await widget.auth.enrol(
+        id: _kioskUserId,
+        name: 'Self-order',
+        pin: BootstrapCashier.newPin(),
+        role: 'cashier',
+      );
+    }
+    final result = widget.auth.admitDevice(_kioskUserId);
+    if (result is AuthOk) {
+      _admit(result.cashier);
+    } else {
+      _kioskAdmitStarted = false;
+    }
+  }
+
+  Future<String?> _pairSelfOrderKiosk(
+      String host, int port, String shopKey) async {
+    widget.settings.setLanEnabled(true);
+    widget.settings.lanDeviceName =
+        widget.settings.lanDeviceName ?? 'Self-order kiosk';
+    await _reconcileLan();
+    final lan = widget.lan;
+    if (lan == null || !lan.isRunning) {
+      return 'LAN did not start. Turn on Share on the primary and try again.';
+    }
+    final peer = LanPeer(
+      deviceId: 'primary-pending',
+      name: 'Primary',
+      host: host,
+      port: port,
+      schemaVersion: Schema.version,
+      lastSeenAt: DateTime.now().toUtc(),
+      role: DeviceRole.primary,
+      serving: true,
+    );
+    try {
+      final payload = await lan.pairKioskWithPrimary(peer, shopKey);
+      final key = payload['shop_key'];
+      if (key is! String || key.isEmpty) {
+        return 'Primary answered without a shop key.';
+      }
+      final primaryId = payload['device_id'];
+      widget.settings.lanShopKey = key;
+      widget.settings.deviceRole = DeviceRole.secondary;
+      widget.settings.lanPrimaryDeviceId =
+          primaryId is String && primaryId.isNotEmpty
+              ? primaryId
+              : null;
+      widget.settings.lanPrimaryHost = host;
+      widget.settings.lanPrimaryPort = port;
+      widget.settings.lanRolePromptDismissed = true;
+      // Kiosk parks bags; it must not freeze when UDP beacons are flaky.
+      widget.settings.lanRequirePrimaryOnline = false;
+
+      final catalogueRaw = payload['catalogue'];
+      if (catalogueRaw is Map) {
+        widget.catalogue
+            .applyLanSnapshot(catalogueRaw.cast<String, dynamic>());
+      }
+      final printersPayload = payload['printers'];
+      if (printersPayload is Map) {
+        widget.printers.applySharedStationsFromMap(
+          printersPayload.cast<String, Object?>(),
+        );
+      }
+      final bundle = payload['shop_bundle'];
+      if (bundle is Map) {
+        widget.settings.applyShopBundle(bundle.cast<String, dynamic>());
+      }
+      await _reconcileLan();
+      lan.refreshRememberedPrimary(widget.settings);
+      if (mounted) setState(() {});
+      return null;
+    } catch (e) {
+      return '$e';
+    }
+  }
 
   /// A device that is a kitchen screen and nothing else.
   ///
@@ -2663,6 +2837,7 @@ class _PosAppState extends State<PosApp> {
           onSignOut: _signOut,
           drawer: _buildDrawer(context, session),
           onOpenOrders: () => _openOrders(context, session),
+          onFindOrder: () => _findOrderByNumber(context, session),
           onEmployeeTransfer: () => _transferOpenOrder(context, session),
           onOpenRefunds: () => _openHistory(context),
           access: _access,
@@ -2873,6 +3048,15 @@ class _PosAppState extends State<PosApp> {
             },
           ),
           tile(
+            key: const Key('nav-find-order'),
+            icon: Icons.search,
+            label: tr(rootContext, 'Find order'),
+            onTap: () {
+              Navigator.pop(rootContext);
+              _findOrderByNumber(rootContext, session);
+            },
+          ),
+          tile(
             key: const Key('nav-store-orders'),
             icon: Icons.storefront_outlined,
             label: tr(rootContext, 'Store orders'),
@@ -3018,10 +3202,86 @@ class _PosAppState extends State<PosApp> {
   void _openOrders(BuildContext context, PosSession session) =>
       _ifScreen(context, 'screen.tabs', () => _openOrdersNow(context, session));
 
+  /// Cashier shortcut: type the self-order / tab number (or phone) and open it.
+  Future<void> _findOrderByNumber(
+      BuildContext context, PosSession session) async {
+    final q = TextEditingController();
+    final submitted = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('find-order-dialog'),
+        title: Text(tr(ctx, 'Find order')),
+        content: TextField(
+          key: const Key('find-order-query'),
+          controller: q,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: tr(ctx, 'Order number or phone'),
+            border: const OutlineInputBorder(),
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr(ctx, 'Cancel'))),
+          FilledButton(
+            key: const Key('find-order-open'),
+            onPressed: () => Navigator.pop(ctx, q.text.trim()),
+            child: Text(tr(ctx, 'Open order')),
+          ),
+        ],
+      ),
+    );
+    q.dispose();
+    if (submitted == null || submitted.isEmpty || !context.mounted) return;
+
+    final needle = submitted.toLowerCase();
+    final held =
+        widget.settings.lanEnabled(fallback: widget.config.lanDefault)
+            ? widget.orders.heldAnywhere()
+            : widget.orders.held();
+    Order? match;
+    for (final o in held) {
+      final no = o.displayNo.toLowerCase();
+      final orderNo = (o.orderNo ?? '').toLowerCase();
+      final phone = (o.customerPhone ?? '').toLowerCase();
+      final name = (o.customerName ?? '').toLowerCase();
+      if (no == needle ||
+          orderNo == needle ||
+          phone == needle ||
+          no.contains(needle) ||
+          orderNo.contains(needle) ||
+          phone.contains(needle) ||
+          name.contains(needle)) {
+        match = o;
+        break;
+      }
+    }
+    if (match == null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(tr(context, 'No open order matches'))));
+      }
+      return;
+    }
+    final order = match;
+    if (order.deviceId != widget.deviceId) {
+      _openElsewhere(context, session, order,
+          refusal:
+              'This order is open on another device. Settle it there, or enable tab takeover.');
+      return;
+    }
+    await _resumeTab(context, session, order);
+  }
+
   void _openOrdersNow(BuildContext context, PosSession session) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (sheetContext) => OpenOrdersScreen(
-        orders: widget.orders.held(),
+        // Include bags parked on a self-order kiosk (or any peer) when LAN is on.
+        orders: widget.settings.lanEnabled(fallback: widget.config.lanDefault)
+            ? widget.orders.heldAnywhere()
+            : widget.orders.held(),
         formatAmount: PosApp.money,
         // The same gate the floor puts on a table tap. Reachable from the floor
         // drawer with no shift open, a recall from here used to land on the counter's
@@ -3035,7 +3295,15 @@ class _PosAppState extends State<PosApp> {
         // on the screen underneath, one microtask later.
         onRecall: (order) => scheduleMicrotask(() {
           final below = _navigator.currentContext;
-          if (below != null) unawaited(_resumeTab(below, session, order));
+          if (below == null) return;
+          if (order.deviceId != widget.deviceId) {
+            // Self-order kiosk (and other peers): take over then settle here.
+            _openElsewhere(below, session, order,
+                refusal:
+                    'This order is open on another device. Settle it there, or enable tab takeover.');
+            return;
+          }
+          unawaited(_resumeTab(below, session, order));
         }),
         // A parked tab's bill prints without recalling it, so the list stays put.
         onPrintBill: (order) => unawaited(_printBill(order)),
@@ -3163,24 +3431,42 @@ class _PosAppState extends State<PosApp> {
     final session = _session;
     if (session == null) return;
     if (!await _authorize(Permission.amendOrder, context)) return;
+    // Session-close mode holds sales until End of Day; housekeeping sync also
+    // sets SyncState.working. Wait only for a real Odoo sales booking, then
+    // refuse only if that booking still owns the queue.
+    await widget.sync.waitUntilSalesIdle();
+    final live = widget.orders.byUuid(order.uuid) ?? order;
+    if (live.state == OrderState.synced) {
+      if (context.mounted) {
+        showToast(
+            context,
+            tr(context,
+                'This sale can no longer be edited here. Refund it and ring it again.'),
+            kind: ToastKind.error);
+      }
+      return;
+    }
     // What the customer was charged before the correction, read before anything
     // moves, for the audit trail and for the removal slip at the second payment.
-    final oldTotal = order.total;
-    final before = List<OrderLine>.of(order.lines);
+    // Ownership may move here when the sale was taken on another till.
+    final oldTotal = live.total;
+    final before = List<OrderLine>.of(live.lines);
     final reopened = widget.orders.reopen(
-      order.uuid,
-      // A batch push owns the queue while it runs, and its entries are already read
-      // out of the table, so withdrawing one there would take back a sale that is
-      // on its way to being booked. Refuse instead: the answer a moment later is a
-      // refund, which is right and reversible, rather than a silent divergence.
+      live.uuid,
+      // A shift-close batch owns the queue while it runs, and its entries are
+      // already read out of the table, so withdrawing one there would take back a
+      // sale that is on its way to being booked. Refuse instead: the answer a
+      // moment later is a refund, which is right and reversible, rather than a
+      // silent divergence. Catalogue / audit sync is not that — do not block on it.
       withdrawPush: (uuid) {
-        if (widget.sync.state == SyncState.working) return false;
-        // Odoo queue is the gate: if that sale is already on the wire, refuse.
-        if (!widget.outboxStore.withdrawPending('order.push', uuid)) {
+        if (widget.sync.bookingSales) return false;
+        // Odoo queue is the gate: if that sale is already acknowledged, refuse.
+        // A parked (dead) row never reached Odoo — drop it so the correction can proceed.
+        if (!widget.outboxStore.withdrawUnsent('order.push', uuid)) {
           return false;
         }
         // Mirror row may not exist (mirror off); pull it when it does.
-        widget.outboxStore.withdrawPending(DishflowMirror.kind, uuid);
+        widget.outboxStore.withdrawUnsent(DishflowMirror.kind, uuid);
         return true;
       },
     );
@@ -3521,6 +3807,7 @@ class _PosAppState extends State<PosApp> {
           if (!only) 'table': () => setState(() => _deliveryHome = false),
           'session': () => _openShift(context, session),
           'tabs': () => _openOrders(context, session),
+          'find-order': () => unawaited(_findOrderByNumber(context, session)),
           'misc': () => unawaited(_floorMisc(context, session)),
           'flash': () async {
             if (await _authorize(Permission.viewReports, context) &&
@@ -4023,6 +4310,7 @@ class _PosAppState extends State<PosApp> {
           attendance: widget.attendance,
           auth: widget.auth),
       'tabs': () => _openOrders(context, session),
+      'find-order': () => unawaited(_findOrderByNumber(context, session)),
       'employee-transfer': widget.orders.held().isEmpty
           ? null
           : () => unawaited(_transferTables(context)),
@@ -4207,6 +4495,8 @@ class _PosAppState extends State<PosApp> {
           'Money Drop', const Color(0xFF6D4C41), shiftOpen),
       const IconPadItem('view-checks', 'misc-view-checks', Icons.fact_check,
           'View Checks', Color(0xFF16A085)),
+      const IconPadItem('find-order', 'misc-find-order', Icons.search,
+          'Find order', Color(0xFF0EA5E9)),
       IconPadItem('assign-badge', 'misc-assign-badge', Icons.fingerprint,
           'Assign Badge', const Color(0xFF7F8C8D), isManager),
       const IconPadItem('revenue-report', 'misc-revenue-report',
@@ -4266,6 +4556,8 @@ class _PosAppState extends State<PosApp> {
         await _openShift(context, session, startMovement: 'drop');
       case 'view-checks':
         _openOrders(context, session);
+      case 'find-order':
+        await _findOrderByNumber(context, session);
       case 'assign-badge':
         _openRoster(context);
       case 'revenue-report':
@@ -6086,8 +6378,18 @@ class _PosAppState extends State<PosApp> {
                   report('Saving shop link...', 0.97);
                   widget.settings.lanShopKey = pendingKey;
                   widget.settings.deviceRole = DeviceRole.secondary;
-                  widget.settings.lanPrimaryDeviceId = peer.deviceId;
+                  // Prefer the primary's real id from the join reply; fall back to
+                  // the peer we dialled (beacon join). Manual emulator join used
+                  // a placeholder peer id that must not stick as the master id.
+                  final primaryId = payload['device_id'];
+                  widget.settings.lanPrimaryDeviceId =
+                      primaryId is String && primaryId.isNotEmpty
+                          ? primaryId
+                          : peer.deviceId;
+                  widget.settings.lanPrimaryHost = peer.host;
+                  widget.settings.lanPrimaryPort = peer.port;
                   widget.settings.lanRolePromptDismissed = true;
+                  widget.lan?.refreshRememberedPrimary(widget.settings);
 
                   report('Done', 1.0);
                   refresh();

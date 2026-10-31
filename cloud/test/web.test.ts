@@ -302,7 +302,10 @@ describe('who sees what', () => {
   async function addUser(body: object) {
     const res = await send('POST', '/api/users', owner, body);
     expect(res.statusCode).toBe(201);
-    return res.json() as { user: { id: string; capabilities: string[] }; password: string };
+    return res.json() as {
+      user: { id: string; capabilities: string[]; report_keys: string[] };
+      password: string;
+    };
   }
 
   const keys = async (cookie: string, query: string) =>
@@ -342,6 +345,36 @@ describe('who sees what', () => {
     const a = await addUser({ username: 'acc2', role: 'accountant', all_branches: true, capabilities: ['costs'] });
     const cookie = await session('acc2', a.password);
     expect(await keys(cookie, 'kinds=costs')).toEqual([shop.branch.id]);
+  });
+
+  it('report_keys default by role and can be patched', async () => {
+    const m = await addUser({ username: 'mgrkeys', role: 'manager', all_branches: true });
+    expect(m.user).toMatchObject({
+      report_keys: expect.arrayContaining([
+        'sales_summary',
+        'sales_detail',
+        'costs',
+        'open_orders',
+        'order_detail',
+      ]),
+    });
+    const a = await addUser({ username: 'acckeys', role: 'accountant', all_branches: true });
+    expect((a.user as { report_keys: string[] }).report_keys.sort()).toEqual([
+      'costs',
+      'order_detail',
+      'sales_detail',
+      'sales_summary',
+    ]);
+    const patched = await send('PATCH', `/api/users/${m.user.id}`, owner, {
+      report_keys: ['sales_summary', 'open_orders'],
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().user.report_keys.sort()).toEqual(['open_orders', 'sales_summary']);
+    const me = (await get('/api/me', await session('mgrkeys', m.password))).json().user;
+    expect(me.report_keys.sort()).toEqual(['open_orders', 'sales_summary']);
+    expect(
+      (await send('PATCH', `/api/users/${m.user.id}`, owner, { report_keys: ['nope'] })).statusCode,
+    ).toBe(400);
   });
 
   it('only the owner manages users and branches', async () => {

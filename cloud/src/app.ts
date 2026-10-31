@@ -4,7 +4,12 @@ import type { Readable } from 'node:stream';
 import { newPairCode, newToken, pairCodeHash, sameSecret, sha256 } from './codes.js';
 import { fail, USERNAME, USERNAME_RULE } from './http.js';
 import { hashPassword, newPassword } from './passwords.js';
-import { DEFAULT_CAPABILITIES, RECORD_KINDS, SNAPSHOT_KINDS } from './permissions.js';
+import {
+  DEFAULT_CAPABILITIES,
+  DEFAULT_REPORT_KEYS,
+  RECORD_KINDS,
+  SNAPSHOT_KINDS,
+} from './permissions.js';
 import type { Device, Repo, SyncRecord } from './repo.js';
 import { backupsToDelete } from './retention.js';
 import { Storage, TooLarge } from './storage.js';
@@ -113,6 +118,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
           allBranches: true,
           branchIds: [],
           capabilities: DEFAULT_CAPABILITIES.owner,
+          reportKeys: DEFAULT_REPORT_KEYS.owner,
           active: true,
         });
         created = { username: owner, password };

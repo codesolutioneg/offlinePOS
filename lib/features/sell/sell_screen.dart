@@ -53,6 +53,7 @@ class SellScreen extends StatefulWidget {
     this.onHold,
     this.onSendToKitchen,
     this.onOpenOrders,
+    this.onFindOrder,
     this.onLinesVoided,
     this.online,
     this.pendingToSync,
@@ -193,6 +194,9 @@ class SellScreen extends StatefulWidget {
 
   /// Opens the parked-orders list to recall a table.
   final VoidCallback? onOpenOrders;
+
+  /// Quick search by order number / phone, then open that parked tab.
+  final VoidCallback? onFindOrder;
 
   /// Lines were voided together under one reason, so the shell can print one
   /// deletion slip for them and a kitchen cancel for any already fired.
@@ -3188,6 +3192,13 @@ class _SellScreenState extends State<SellScreen> {
           _statusChip(),
           // Recalling a tab or starting a new order is selling, so both go with the
           // grid while the drawer is shut.
+          if (widget.onFindOrder != null && !_noShift)
+            IconButton(
+              key: const Key('find-order'),
+              tooltip: tr(context, 'Find order'),
+              icon: const Icon(Icons.search),
+              onPressed: widget.onFindOrder,
+            ),
           if (widget.onOpenOrders != null && !_noShift)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),

@@ -441,6 +441,10 @@ class _UserDialogState extends State<_UserDialog> {
   late bool _allBranches = widget.user?.allBranches ?? false;
   late final Set<String> _branchIds = {...?widget.user?.branchIds};
   late Set<String> _caps = {...(widget.user?.capabilities ?? _defaults(SiteRole.manager))};
+  late Set<String> _reportKeys = {
+    ...(widget.user?.reportKeys ??
+        defaultOwnerReportKeys(SiteRole.manager.name)),
+  };
   late bool _active = widget.user?.active ?? true;
 
   bool get _creating => widget.user == null;
@@ -472,7 +476,10 @@ class _UserDialogState extends State<_UserDialog> {
 
   void _pickRole(SiteRole role) => setState(() {
         _role = role;
-        if (_creating) _caps = _defaults(role);
+        if (_creating) {
+          _caps = _defaults(role);
+          _reportKeys = defaultOwnerReportKeys(role.name);
+        }
         if (role == SiteRole.owner) _allBranches = true;
       });
 
@@ -573,6 +580,25 @@ class _UserDialogState extends State<_UserDialog> {
                     onChanged: (v) => setState(
                         () => v == true ? _caps.add(c) : _caps.remove(c)),
                   ),
+              const SizedBox(height: 8),
+              Text(tr(context, 'Mobile owner app'),
+                  style: Theme.of(context).textTheme.titleSmall),
+              if (owner)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(tr(context, 'The owner sees everything.')),
+                )
+              else
+                for (final k in ownerReportKeys)
+                  CheckboxListTile(
+                    key: Key('user-report-$k'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: Text(ownerReportKeyLabel(context, k)),
+                    value: _reportKeys.contains(k),
+                    onChanged: (v) => setState(() =>
+                        v == true ? _reportKeys.add(k) : _reportKeys.remove(k)),
+                  ),
             if (!_creating && !widget.isMe)
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -651,6 +677,7 @@ class _UserDialogState extends State<_UserDialog> {
                 allBranches: owner || _allBranches,
                 branchIds: _branchIds.toList(),
                 capabilities: _caps,
+                reportKeys: owner ? null : _reportKeys,
                 active: _creating ? null : _active,
               ),
             );

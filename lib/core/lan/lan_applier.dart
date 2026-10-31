@@ -247,6 +247,12 @@ class LanApplier {
   bool _movesForward(LanEvent event) {
     if (event.kind != LanEventKind.orderUpsert) return false;
     if (event.payload['deleted'] == true) return false;
+    // A deliberate amend on another till: paid → draft must land even when the
+    // clock lost, or End of Day on this till would still push the pre-edit sale.
+    if (event.payload['reopen'] == true) {
+      final local = _orders.byUuid(event.recordUuid);
+      return local == null || local.state == OrderState.paid;
+    }
     final state = event.payload['state'];
     if (state is! String) return false;
     final incoming = OrderState.values.asNameMap()[state];
@@ -268,6 +274,13 @@ class LanApplier {
     final wipedAt = _settings.historyWipedAt;
     if (wipedAt != null && incoming.createdAt.toUtc().isBefore(wipedAt)) {
       return false;
+    }
+    // Cashier amended on another till before Odoo had the sale: take the draft,
+    // drop our queued push so close cannot book the old tender.
+    if (event.payload['reopen'] == true) {
+      if (!_orders.applyPeerReopen(incoming)) return false;
+      _onOrderSyncedFromPeer?.call(incoming.uuid);
+      return true;
     }
     // State only moves forward. A paid order never loses to a held one, whatever
     // the clocks say: money taken is not something a later edit can undo, and the

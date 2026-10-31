@@ -258,6 +258,13 @@ class SyncService {
   /// Completes when the in-flight [tick] finishes, so a second flush (End of Day
   /// overlapping the timer) waits instead of returning a silent no-op.
   Completer<void>? _flushDone;
+
+  /// True only while a consolidated Odoo sales booking is in flight. Housekeeping
+  /// ([tick], catalogue refresh) also sets [state] to working but never owns
+  /// `order.push`, so amend must not treat that as "sale on the wire".
+  bool _bookingSales = false;
+  Completer<void>? _salesBookingDone;
+
   String? lastError;
   int sentThisRun = 0;
 
@@ -291,6 +298,15 @@ class SyncService {
   final ValueNotifier<int> catalogueRevision = ValueNotifier<int>(0);
 
   SyncState get state => _state;
+
+  /// True while Close session / shift-retry is booking sales into Odoo.
+  bool get bookingSales => _bookingSales;
+
+  /// Wait out an in-flight sales booking (or return immediately if none).
+  Future<void> waitUntilSalesIdle() async {
+    final wait = _salesBookingDone;
+    if (wait != null) await wait.future;
+  }
 
   /// True when the catalogue has never been pulled or is older than the limit. The
   /// UI uses this to warn, not to block.
@@ -543,8 +559,11 @@ class SyncService {
       if (wait != null) await wait.future;
     }
     _state = SyncState.working;
+    _bookingSales = true;
     final done = Completer<void>();
+    final salesDone = Completer<void>();
     _flushDone = done;
+    _salesBookingDone = salesDone;
     lastOdooOrderRef = null;
     lastMergeSkipReason = null;
     try {
@@ -600,6 +619,9 @@ class SyncService {
         skipReason: e.toString(),
       );
     } finally {
+      _bookingSales = false;
+      if (!salesDone.isCompleted) salesDone.complete();
+      if (_salesBookingDone == salesDone) _salesBookingDone = null;
       if (!done.isCompleted) done.complete();
       if (_flushDone == done) _flushDone = null;
     }
@@ -749,6 +771,7 @@ class SyncService {
       // delivery and lied about "one sale order").
       final plan = closedShiftRetry;
       if (plan != null) {
+        // plan() ends in flushClosedShift, which already flags bookingSales.
         final result = await plan();
         if (result != null && result.merged) {
           online.value = true;
@@ -757,21 +780,30 @@ class SyncService {
         return;
       }
       _state = SyncState.working;
-      await reconcilePending();
-      await _mergeBatchIfAsked();
-      sentThisRun = await _outbox.drain(
-        maxBatches: _retryMaxBatches,
-        kinds: _nonSaleKinds,
-      );
-      if (sentThisRun > 0) {
-        _outboxStore.pruneSent();
-        online.value = true;
-      }
-      final left = pendingSales;
-      _state = left == 0 || sentThisRun > 0 ? SyncState.idle : SyncState.offline;
-      if (left == 0) {
-        lastError = null;
-        _disarmRetry('delivered on retry $_retryAttempts');
+      _bookingSales = true;
+      final salesDone = Completer<void>();
+      _salesBookingDone = salesDone;
+      try {
+        await reconcilePending();
+        await _mergeBatchIfAsked();
+        sentThisRun = await _outbox.drain(
+          maxBatches: _retryMaxBatches,
+          kinds: _nonSaleKinds,
+        );
+        if (sentThisRun > 0) {
+          _outboxStore.pruneSent();
+          online.value = true;
+        }
+        final left = pendingSales;
+        _state = left == 0 || sentThisRun > 0 ? SyncState.idle : SyncState.offline;
+        if (left == 0) {
+          lastError = null;
+          _disarmRetry('delivered on retry $_retryAttempts');
+        }
+      } finally {
+        _bookingSales = false;
+        if (!salesDone.isCompleted) salesDone.complete();
+        if (_salesBookingDone == salesDone) _salesBookingDone = null;
       }
     } catch (e) {
       lastError = e.toString();

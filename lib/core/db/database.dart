@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:sqlite3/sqlite3.dart';
 
 import 'schema.dart';
@@ -33,6 +35,14 @@ class Db {
       } else {
         final escaped = encryptionKey.replaceAll("'", "''");
         db.execute("PRAGMA key = '$escaped'");
+      }
+      // Plain sqlite3 ignores PRAGMA key. On Android that usually means the
+      // SQLCipher .so was not wired; refuse rather than store clear text. Other
+      // platforms keep the historical soft path until sqlite3 3.x migration.
+      if (Platform.isAndroid && db.select('PRAGMA cipher_version;').isEmpty) {
+        db.dispose();
+        throw StateError(
+            'SQLCipher is not loaded; refusing to open an unencrypted till database');
       }
       // Prove the key is right before migrating. On a wrong key SQLCipher cannot
       // read the schema and this throws, which is far better than a later, vaguer

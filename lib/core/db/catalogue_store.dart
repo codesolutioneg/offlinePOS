@@ -274,6 +274,22 @@ class CatalogueStore {
           r['category_id'] as int,
       };
 
+  /// Categories that should appear on a menu rail: those with products, plus every
+  /// ancestor so a parent like "Meals" stays visible when items sit on children.
+  Set<int> categoryIdsForMenuRail() {
+    final stocked = categoryIdsWithProducts();
+    final byId = {for (final c in categories()) c.id: c};
+    final out = {...stocked};
+    for (final id in stocked) {
+      var parent = byId[id]?.parentId;
+      while (parent != null) {
+        if (!out.add(parent)) break;
+        parent = byId[parent]?.parentId;
+      }
+    }
+    return out;
+  }
+
   /// Grow a section allow-list so choosing a parent (e.g. Meals) still admits
   /// every child category products are filed under.
   Set<int> expandCategoryAllowList(Iterable<int> allowed) {
@@ -652,9 +668,9 @@ class CatalogueStore {
   void removeModifier(int id) =>
       _db.raw.execute('DELETE FROM modifiers WHERE id = ?', [id]);
 
-  /// Whole menu as plain data for a LAN join (no product images — those stay
-  /// optional via an Odoo pull after the endpoint is copied).
-  Map<String, dynamic> exportLanSnapshot() {
+  /// Whole menu as plain data for a LAN join. Product images are optional —
+  /// self-order needs them; a plain secondary can pull from Odoo later.
+  Map<String, dynamic> exportLanSnapshot({bool includeImages = false}) {
     final cats = categories(includeArchived: true);
     final prods = _db.raw
         .select('SELECT $_productColumns FROM products ORDER BY name')
@@ -671,6 +687,7 @@ class CatalogueStore {
           .putIfAbsent('${r['product_id']}', () => <int>[])
           .add(r['group_id'] as int);
     }
+    final pics = includeImages ? images() : const <int, Uint8List>{};
     return {
       'categories': [
         for (final c in cats)
@@ -699,6 +716,8 @@ class CatalogueStore {
             'odoo_id': p.odooId,
             'source': p.source.name,
             'color': p.color,
+            if (pics[p.id] != null)
+              'image_b64': base64Encode(pics[p.id]!),
           },
       ],
       'groups': [
@@ -764,25 +783,35 @@ class CatalogueStore {
             active: raw['active'] != false,
           ),
     ];
-    final products = <Product>[
-      for (final raw in (snap['products'] as List? ?? const []))
-        if (raw is Map && asInt(raw['id']) != null && raw['price'] != null)
-          Product(
-            id: asInt(raw['id'])!,
-            name: '${raw['name'] ?? ''}',
-            price: asDouble(raw['price']),
-            categoryId: asInt(raw['category_id']),
-            barcode: raw['barcode'] is String ? raw['barcode'] as String : null,
-            active: raw['active'] != false,
-            soldByWeight: raw['sold_by_weight'] == true,
-            taxRate: asDouble(raw['tax_rate']),
-            cost: asDouble(raw['cost']),
-            odooId: asInt(raw['odoo_id']),
-            source: CatalogueSource.fromName(
-                raw['source'] is String ? raw['source'] as String : null),
-            color: asInt(raw['color']),
-          ),
-    ];
+    final productImages = <int, Uint8List>{};
+    final products = <Product>[];
+    for (final raw in (snap['products'] as List? ?? const [])) {
+      if (raw is! Map || asInt(raw['id']) == null || raw['price'] == null) {
+        continue;
+      }
+      final id = asInt(raw['id'])!;
+      products.add(Product(
+        id: id,
+        name: '${raw['name'] ?? ''}',
+        price: asDouble(raw['price']),
+        categoryId: asInt(raw['category_id']),
+        barcode: raw['barcode'] is String ? raw['barcode'] as String : null,
+        active: raw['active'] != false,
+        soldByWeight: raw['sold_by_weight'] == true,
+        taxRate: asDouble(raw['tax_rate']),
+        cost: asDouble(raw['cost']),
+        odooId: asInt(raw['odoo_id']),
+        source: CatalogueSource.fromName(
+            raw['source'] is String ? raw['source'] as String : null),
+        color: asInt(raw['color']),
+      ));
+      final b64 = raw['image_b64'];
+      if (b64 is String && b64.isNotEmpty) {
+        try {
+          productImages[id] = base64Decode(b64);
+        } catch (_) {}
+      }
+    }
     final groups = <ModifierGroup>[
       for (final raw in (snap['groups'] as List? ?? const []))
         if (raw is Map && asInt(raw['id']) != null)
@@ -860,6 +889,7 @@ class CatalogueStore {
       groups: groups,
       productGroupIds: productGroupIds,
       paymentMethods: payments,
+      productImages: productImages,
       refreshedAt: at,
     );
   }

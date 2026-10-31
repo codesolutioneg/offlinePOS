@@ -233,6 +233,63 @@ const Map<String, String> _ar = {
   'Name / number': 'الاسم / الرقم',
   // the shop network
   'Shop network': 'شبكة المتجر',
+  'Self-order kiosk': 'كيوسك الطلب الذاتي',
+  'Self-order': 'طلب ذاتي',
+  'Self-order kiosk devices join as Secondary with a join PIN '
+          'from this primary. Keep Share On.':
+      'أجهزة كيوسك الطلب الذاتي تنضم كـ Secondary بـ PIN من هذا الـ Primary. سيّب Share On.',
+  'Self-order kiosk: copy the Shop key below into the kiosk app '
+          '(no PIN). Keep Share On.':
+      'كيوسك الطلب الذاتي: انسخ مفتاح المتجر تحت لتطبيق الكيوسك (من غير PIN). سيّب Share On.',
+  'No PIN. On the primary till open Shop network, copy the '
+          'Shop key, paste it here, and connect.':
+      'مفيش PIN. من تيل الـ Primary افتح شبكة المتجر، انسخ مفتاح المتجر، الصقه هنا واتصل.',
+  'Same PC as primary: 127.0.0.1 — other PC: Wi‑Fi IP':
+      'نفس الجهاز: 127.0.0.1 — جهاز تاني: IP الـ Wi‑Fi',
+  'Connect to primary': 'الاتصال بالـ Primary',
+  'Enter host, port and shop key': 'أدخل العنوان والمنفذ ومفتاح المتجر',
+  'Enter your phone number to start': 'أدخل رقم تليفونك للبدء',
+  'We use it to find your order at the cashier':
+      'هنستخدمه عشان نلاقي طلبك عند الكاشير',
+  'Start ordering': 'ابدأ الطلب',
+  'Enter a valid phone number': 'أدخل رقم تليفون صحيح',
+  'Choose your food': 'اختَر طلبك',
+  'Your order': 'طلبك',
+  'Tap items to add them': 'اضغط على الأصناف لإضافتها',
+  'Place order': 'تأكيد الطلب',
+  'Add items to your order': 'أضف أصنافًا لطلبك',
+  'Order placed': 'تم تسجيل الطلب',
+  'Your order number': 'رقم طلبك',
+  'Please pay at the cashier with this number. The kitchen starts after payment.':
+      'ادفع عند الكاشير بهذا الرقم. المطبخ يستلم بعد الدفع.',
+  'Staff exit': 'خروج الموظفين',
+  'Promo video': 'فيديو ترويجي',
+  'Choose promo video': 'اختيار فيديو ترويجي',
+  'Remove promo video': 'إزالة الفيديو الترويجي',
+  'Tap to start ordering': 'اضغط لبدء الطلب',
+  'Find order': 'بحث عن طلب',
+  'Order number or phone': 'رقم الطلب أو التليفون',
+  'No open order matches': 'لا يوجد طلب مفتوح مطابق',
+  'Print ticket': 'طباعة الإيصال',
+  'Ticket printed': 'تم طباعة الإيصال',
+  'Staff tools': 'أدوات الموظفين',
+  'Leave self-order?': 'مغادرة الطلب الذاتي؟',
+  'The items on screen will be discarded.': 'الأصناف على الشاشة ستُلغى.',
+  'Ask the cashier for weighed items': 'اطلب الأصناف بالوزن من الكاشير',
+  'Search order no. or phone': 'بحث برقم الطلب أو التليفون',
+  'Open a shift first': 'افتح وردية أولًا',
+  'Park the order on screen?': 'حفظ الطلب الظاهر على الشاشة؟',
+  'Self-order needs a clear counter. Park what is open, or cancel.':
+      'الطلب الذاتي يحتاج شاشة فاضية. احفظ الطلب المفتوح أو ألغِ.',
+  'Park and continue': 'حفظ ومتابعة',
+  'Join by address': 'الانضمام بعنوان',
+  'For Android emulator use 10.0.2.2 (this PC). On a real tablet '
+          'use the primary Wi‑Fi IP. Port is usually 45333.':
+      'للإيموليتر استخدم 10.0.2.2 (هذا الجهاز). على تابلت حقيقي استخدم IP الويندوز على الـ Wi‑Fi. المنفذ عادة 45333.',
+  'Primary host': 'عنوان الـ Primary',
+  'Join this address': 'انضم لهذا العنوان',
+  'Enter the primary host and port': 'أدخل عنوان ومنفذ الـ Primary',
+
   'Begin': 'بداية',
   'End': 'نهاية',
   'Delivery / Quick Srv': 'توصيل / خدمة سريعة',
@@ -1089,6 +1146,10 @@ const Map<String, String> _ar = {
   'Disabled': 'موقوف',
   'Last sign-in': 'آخر دخول',
   'Can also see': 'يقدر يشوف كمان',
+  'Mobile owner app': 'تطبيق المالك على الموبايل',
+  'Sales detail': 'تفاصيل المبيعات',
+  'Order detail': 'تفاصيل الطلب',
+  'Users & report access': 'المستخدمون وصلاحيات التقارير',
   'The owner sees everything.': 'المالك بيشوف كل حاجة.',
   'Can sign in': 'مسموح له بالدخول',
   'Lowercase letters, digits, dot, dash; 3 to 32':
@@ -1560,6 +1621,8 @@ const Map<String, String> _ar = {
   'Accounts Reports': 'تقارير الحسابات',
   'POS Reports': 'تقارير نقطة البيع',
   'Sessions': 'الورديات',
+  'Tap to select more than one session':
+      'اضغط لاختيار أكثر من وردية',
   'Session': 'وردية',
   'Output': 'إخراج',
   'Screen': 'الشاشة',
@@ -1612,6 +1675,9 @@ const Map<String, String> _ar = {
   'Hide prices on that copy': 'إخفاء الأسعار في تلك النسخة',
   'A packing list: names and quantities only': 'قائمة تجهيز: الأسماء والكميات فقط',
   'Delivery receipt printer': 'طابعة إيصال الدليفري',
+  'Self-order ticket printer': 'طابعة تذكرة الطلب الذاتي',
+  'Prints the guest order number after a self-order is placed':
+      'تطبع رقم الطلب للعميل بعد تأكيد الطلب الذاتي',
   'Same as receipt': 'نفس طابعة الإيصال',
   'Bag slip and paid receipt for store / company delivery':
       'سليب الشنطة وإيصال الدفع لدليفري المحل / الشركات',
@@ -2124,6 +2190,9 @@ const Map<String, String> _ar = {
   'Dark': 'داكن',
   'Product grid': 'شبكة المنتجات',
   'Show product pictures': 'إظهار صور المنتجات',
+  'Self-order product pictures': 'صور منتجات الطلب الذاتي',
+  'Show pictures on the self-order kiosk. Turn on once, then sync the menu / re-pair the kiosk.':
+      'إظهار الصور على كيوسك الطلب الذاتي. فعّلها مرة، بعدين اعمل sync للمنيو أو أعد ربط الكيوسك.',
   'Pictures come down with the menu on the next sync. A product without one keeps its colour.':
       'تصل الصور مع قائمة الأصناف في المزامنة القادمة. المنتج بلا صورة يبقى بلونه.',
   'Table colours': 'ألوان الطاولات',

@@ -16,6 +16,9 @@ import {
 import {
   branchScope,
   capabilitiesOf,
+  DEFAULT_REPORT_KEYS,
+  isOwnerReportKey,
+  reportKeysOf,
   DEFAULT_CAPABILITIES,
   isCapability,
   readableKinds,
@@ -81,6 +84,7 @@ const userJson = (u: User) => ({
   all_branches: u.role === 'owner' || u.allBranches,
   branch_ids: u.branchIds,
   capabilities: capabilitiesOf(u),
+  report_keys: reportKeysOf(u),
   active: u.active,
   created_at: u.createdAt.toISOString(),
   last_login_at: u.lastLoginAt?.toISOString() ?? null,
@@ -372,6 +376,7 @@ export async function registerWeb(
     all_branches?: boolean;
     branch_ids?: string[];
     capabilities?: string[];
+    report_keys?: string[];
     active?: boolean;
   }
 
@@ -400,6 +405,12 @@ export async function registerWeb(
       const caps = body.capabilities.map(String);
       if (caps.some((c) => !isCapability(c))) return (fail(reply, 400, 'unknown capability'), null);
       patch.capabilities = [...new Set(caps)];
+    }
+    if (body.report_keys !== undefined) {
+      if (!Array.isArray(body.report_keys)) return (fail(reply, 400, 'report_keys must be a list'), null);
+      const keys = body.report_keys.map(String);
+      if (keys.some((k) => !isOwnerReportKey(k))) return (fail(reply, 400, 'unknown report key'), null);
+      patch.reportKeys = [...new Set(keys)];
     }
     if (body.active !== undefined) patch.active = Boolean(body.active);
     if (body.password !== undefined && body.password !== '') {
@@ -455,6 +466,7 @@ export async function registerWeb(
         allBranches: patch.allBranches ?? role === 'owner',
         branchIds: patch.branchIds ?? [],
         capabilities: patch.capabilities ?? DEFAULT_CAPABILITIES[role],
+        reportKeys: patch.reportKeys ?? DEFAULT_REPORT_KEYS[role],
         active: patch.active ?? true,
       });
       return reply.code(201).send({ user: userJson(user), password: given ? null : password });

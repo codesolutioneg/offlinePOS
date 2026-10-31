@@ -483,18 +483,25 @@ class OrderStore {
   /// the server's duplicate handling. The next batch push resolves it, because the
   /// server answers the repeat with a duplicate status and the order is marked
   /// synced from that.
+  ///
+  /// Another till's unpaid-to-Odoo sale may be corrected here: ownership moves to
+  /// this till and a fabric [reopen] upsert tells peers to drop their queued push
+  /// so End of Day cannot book the pre-edit version from the till that first took
+  /// the money.
   bool reopen(String uuid, {required WithdrawPush withdrawPush}) {
-    final order = byUuid(uuid);
+    var order = byUuid(uuid);
     if (order == null) return false;
     // Only a tendered sale is reopened: a draft or a held tab is editable already,
     // and synced is the state this must never move.
     if (order.state != OrderState.paid) return false;
-    // Another till's sale is booked by that till, exactly as its tabs are settled
-    // there, so it is not this one's to rewrite.
-    if (ownDeviceId != null && order.deviceId != ownDeviceId) return false;
     // A refund reverses a sale that stands. Editing one back into the cart would
     // turn a credit into a fresh order made of negative lines.
     if (order.isRefund) return false;
+    final fromDevice = order.deviceId;
+    final claimTo = ownDeviceId;
+    if (claimTo != null && order.deviceId != claimTo) {
+      order = _withDevice(order, claimTo);
+    }
     _db.raw.execute('BEGIN');
     try {
       if (!withdrawPush(uuid)) {
@@ -508,12 +515,35 @@ class OrderStore {
       // including a reprint days later and after a restart mid-correction.
       order.amended = true;
       _insert(order, allowReopen: true);
+      // Shop-wide: peers must drop the pre-edit push and show the sale as open
+      // again. Flagged so the applier may move paid → draft (normally refused).
+      final publish = _publish;
+      if (publish != null) {
+        publish(LanEventKind.orderUpsert, order.uuid, {
+          ...order.toMap(),
+          'reopen': true,
+          'from': fromDevice,
+        });
+      }
       _db.raw.execute('COMMIT');
       return true;
     } catch (_) {
       _db.raw.execute('ROLLBACK');
       rethrow;
     }
+  }
+
+  /// Apply a peer's deliberate reopen of a paid sale (fabric [reopen] upsert).
+  ///
+  /// Ordinary upserts never move paid → draft; this is the one path that may, so
+  /// a cashier correcting a payment on another till does not leave the shop
+  /// showing a settled bill that is back on that till's counter.
+  bool applyPeerReopen(Order incoming) {
+    if (incoming.state != OrderState.draft) return false;
+    final local = byUuid(incoming.uuid);
+    if (local != null && local.state == OrderState.synced) return false;
+    _insert(incoming, allowReopen: true);
+    return true;
   }
 
   // ── a tab changing hands ─────────────────────────────────────────

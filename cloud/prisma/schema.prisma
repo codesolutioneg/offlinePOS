@@ -177,6 +177,8 @@ model User {
   branchIds    String[]  @map("branch_ids")
   /// What this user may open, from the capability list (see permissions.ts).
   capabilities String[]
+  /// Mobile owner-app report keys this user may open (owners ignore the list).
+  reportKeys   String[]  @default([]) @map("report_keys")
   active       Boolean   @default(true)
   createdAt    DateTime  @default(now()) @map("created_at")
   lastLoginAt  DateTime? @map("last_login_at")

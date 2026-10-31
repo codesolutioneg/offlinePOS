@@ -33,10 +33,37 @@ export const DEFAULT_CAPABILITIES: Record<Role, Capability[]> = {
 export const isCapability = (c: string): c is Capability =>
   (CAPABILITIES as readonly string[]).includes(c);
 
+/// Screens in the owner mobile app a non-owner may be given.
+export const OWNER_REPORT_KEYS = [
+  'sales_summary',
+  'sales_detail',
+  'costs',
+  'open_orders',
+  'order_detail',
+  'users',
+] as const;
+
+export type OwnerReportKey = (typeof OWNER_REPORT_KEYS)[number];
+
+export const isOwnerReportKey = (k: string): k is OwnerReportKey =>
+  (OWNER_REPORT_KEYS as readonly string[]).includes(k);
+
+export const DEFAULT_REPORT_KEYS: Record<Role, OwnerReportKey[]> = {
+  owner: [...OWNER_REPORT_KEYS],
+  manager: ['sales_summary', 'sales_detail', 'costs', 'open_orders', 'order_detail'],
+  accountant: ['sales_summary', 'sales_detail', 'costs', 'order_detail'],
+};
+
 /// An owner can do everything, whatever the row says.
 export function capabilitiesOf(user: Pick<User, 'role' | 'capabilities'>): Capability[] {
   if (user.role === 'owner') return [...CAPABILITIES];
   return user.capabilities.filter(isCapability);
+}
+
+/// Mobile report keys the account may open. Owners always get the full pack.
+export function reportKeysOf(user: Pick<User, 'role' | 'reportKeys'>): OwnerReportKey[] {
+  if (user.role === 'owner') return [...OWNER_REPORT_KEYS];
+  return (user.reportKeys ?? []).filter(isOwnerReportKey);
 }
 
 /// The branches a user may read: null for every branch of the shop.

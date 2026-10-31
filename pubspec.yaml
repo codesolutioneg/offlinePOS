@@ -52,7 +52,11 @@ dependencies:
   sqlite3: ^2.4.0
   http: ^1.6.0
   path_provider: ^2.1.6
+  # Empty stub kept so older docs/lockfiles resolve; real SQLCipher on Android is
+  # wired via net.zetetic:sqlcipher-android in android/app/build.gradle.kts.
+  # Desktop gets plain sqlite from sqlite3_flutter_libs until sqlite3 ^3 + hooks.
   sqlcipher_flutter_libs: ^0.7.0+eol
+  sqlite3_flutter_libs: ^0.5.40
   flutter_secure_storage: ^11.0.0
   pdf: ^3.12.0
   printing: ^5.14.3
@@ -63,7 +67,8 @@ dependencies:
   # The reports site hands exports to the browser as downloads.
   web: ^1.1.1
   file_selector: ^1.1.0
-
+  video_player: ^2.14.1
+  video_player_win: ^3.3.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -96,6 +101,7 @@ flutter:
   # tool/arf_to_layouts.py for where they come from).
   assets:
     - assets/report_layouts/
+    - assets/self_order/promo.mov
 
   # The receipt renderer names this family explicitly (see LineRasteriser). A till
   # is a locked-down Windows box whose system font fallback for Arabic cannot be

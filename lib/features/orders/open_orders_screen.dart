@@ -4,6 +4,7 @@ import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/feedback.dart';
 import '../../domain/order.dart';
+import '../self_order/self_order_kiosk_screen.dart';
 
 /// Lists orders parked on a table or tab so a cashier can pick one back up.
 ///
@@ -62,9 +63,43 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
   /// tabs first, and a shop that does no delivery never sees the filter at all.
   bool _deliveryOnly = false;
 
+  /// Self-order kiosk tabs waiting to be paid at the cashier.
+  bool _selfOrderOnly = false;
+
+  final _search = TextEditingController();
+
   /// No shift, no recall. Read per build, exactly as the floor and the counter read
   /// it, so opening one and coming straight back lifts the block with no restart.
   bool get _noShift => widget.shiftOpen != null && !widget.shiftOpen!();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<Order> _filtered(List<Order> all) {
+    var list = all;
+    final anyDelivery = all.any((o) => o.type.isDelivery);
+    final anySelf = all.any(SelfOrderKioskScreen.isSelfOrder);
+    if (_deliveryOnly && anyDelivery) {
+      list = list.where((o) => o.type.isDelivery).toList();
+    } else if (_selfOrderOnly && anySelf) {
+      list = list.where(SelfOrderKioskScreen.isSelfOrder).toList();
+    }
+    final q = _search.text.trim().toLowerCase();
+    if (q.isEmpty) return list;
+    return list.where((o) {
+      final no = o.displayNo.toLowerCase();
+      final phone = (o.customerPhone ?? '').toLowerCase();
+      final name = (o.customerName ?? '').toLowerCase();
+      final table = (o.tableLabel ?? '').toLowerCase();
+      return no.contains(q) ||
+          phone.contains(q) ||
+          name.contains(q) ||
+          table.contains(q);
+    }).toList();
+  }
 
   String get _noShiftMessage => tr(context,
       'No shift is open. Open one before you pick a tab back up.');
@@ -145,19 +180,33 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
     // this is the only place they can be looked over as a group: who is waiting,
     // how long they have been waiting, and who is carrying them. Not a dispatch
     // board, and it holds no state of its own; it is a view of the same tabs.
-    final anyDelivery =
-        widget.orders.any((o) => o.type.isDelivery);
+    final anyDelivery = widget.orders.any((o) => o.type.isDelivery);
+    final anySelf = widget.orders.any(SelfOrderKioskScreen.isSelfOrder);
     // The filter is dropped the moment the last delivery leaves the list: a cashier
     // must never be left staring at an empty screen whose only way back has just
     // disappeared with it.
-    final shown = _deliveryOnly && anyDelivery
-        ? widget.orders.where((o) => o.type.isDelivery).toList()
-        : widget.orders;
+    if (_deliveryOnly && !anyDelivery) _deliveryOnly = false;
+    if (_selfOrderOnly && !anySelf) _selfOrderOnly = false;
+    final shown = _filtered(widget.orders);
     return Scaffold(
       appBar: AppBar(title: Text(tr(context, 'Open orders'))),
       body: Column(children: [
         if (_noShift) _noShiftStrip(),
-        if (anyDelivery)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: TextField(
+            key: const Key('open-orders-search'),
+            controller: _search,
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.search),
+              hintText: tr(context, 'Search order no. or phone'),
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+        if (anyDelivery || anySelf)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: Align(
@@ -166,16 +215,34 @@ class _OpenOrdersScreenState extends State<OpenOrdersScreen> {
                 ChoiceChip(
                   key: const Key('open-filter-all'),
                   label: Text(tr(context, 'All')),
-                  selected: !_deliveryOnly,
-                  onSelected: (_) => setState(() => _deliveryOnly = false),
+                  selected: !_deliveryOnly && !_selfOrderOnly,
+                  onSelected: (_) => setState(() {
+                    _deliveryOnly = false;
+                    _selfOrderOnly = false;
+                  }),
                 ),
-                ChoiceChip(
-                  key: const Key('open-filter-delivery'),
-                  avatar: const Icon(Icons.delivery_dining, size: 16),
-                  label: Text(tr(context, 'Delivery')),
-                  selected: _deliveryOnly,
-                  onSelected: (_) => setState(() => _deliveryOnly = true),
-                ),
+                if (anyDelivery)
+                  ChoiceChip(
+                    key: const Key('open-filter-delivery'),
+                    avatar: const Icon(Icons.delivery_dining, size: 16),
+                    label: Text(tr(context, 'Delivery')),
+                    selected: _deliveryOnly,
+                    onSelected: (_) => setState(() {
+                      _deliveryOnly = true;
+                      _selfOrderOnly = false;
+                    }),
+                  ),
+                if (anySelf)
+                  ChoiceChip(
+                    key: const Key('open-filter-self-order'),
+                    avatar: const Icon(Icons.touch_app, size: 16),
+                    label: Text(tr(context, 'Self-order')),
+                    selected: _selfOrderOnly,
+                    onSelected: (_) => setState(() {
+                      _selfOrderOnly = true;
+                      _deliveryOnly = false;
+                    }),
+                  ),
               ]),
             ),
           ),
@@ -256,11 +323,19 @@ class _OpenOrderCard extends StatelessWidget {
   final VoidCallback? onCancel;
   final VoidCallback? onPrintBill;
 
-  String _label(BuildContext context) =>
-      order.tableLabel ??
-      (order.type.isDelivery && order.customerName != null
-          ? order.customerName!
-          : '${tr(context, 'Tab')} ${order.displayNo}');
+  String _label(BuildContext context) {
+    if (SelfOrderKioskScreen.isSelfOrder(order)) {
+      final phone = order.customerPhone?.trim();
+      if (phone != null && phone.isNotEmpty) {
+        return '${tr(context, 'Self-order')} · $phone';
+      }
+      return tr(context, 'Self-order');
+    }
+    return order.tableLabel ??
+        (order.type.isDelivery && order.customerName != null
+            ? order.customerName!
+            : '${tr(context, 'Tab')} ${order.displayNo}');
+  }
 
   /// How long this order has been sitting, which on a delivery is the number that
   /// matters: a bag rung forty minutes ago and still here is a phone call coming.

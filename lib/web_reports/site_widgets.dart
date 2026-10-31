@@ -37,6 +37,17 @@ String capabilityLabel(BuildContext context, String capability) =>
       _ => capability,
     });
 
+String ownerReportKeyLabel(BuildContext context, String key) =>
+    tr(context, switch (key) {
+      'sales_summary' => 'Sales summary',
+      'sales_detail' => 'Sales detail',
+      'costs' => 'Costs and margins',
+      'open_orders' => 'Open orders',
+      'order_detail' => 'Order detail',
+      'users' => 'Users & report access',
+      _ => key,
+    });
+
 void showSiteError(BuildContext context, Object error) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
     content: Text(error is SiteError ? error.message : '$error'),

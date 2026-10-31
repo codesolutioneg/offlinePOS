@@ -26,6 +26,7 @@ class SiteUser {
     required this.allBranches,
     required this.branchIds,
     required this.capabilities,
+    required this.reportKeys,
     required this.active,
     this.lastLoginAt,
   });
@@ -37,6 +38,8 @@ class SiteUser {
   final bool allBranches;
   final List<String> branchIds;
   final Set<String> capabilities;
+  /// Mobile owner-app screens this account may open.
+  final Set<String> reportKeys;
   final bool active;
   final DateTime? lastLoginAt;
 
@@ -51,6 +54,7 @@ class SiteUser {
         allBranches: m['all_branches'] == true,
         branchIds: [for (final id in (m['branch_ids'] as List? ?? const [])) '$id'],
         capabilities: {for (final c in (m['capabilities'] as List? ?? const [])) '$c'},
+        reportKeys: {for (final k in (m['report_keys'] as List? ?? const [])) '$k'},
         active: m['active'] != false,
         lastLoginAt: DateTime.tryParse('${m['last_login_at'] ?? ''}'),
       );
@@ -274,6 +278,7 @@ class SiteUserDraft {
     this.allBranches,
     this.branchIds,
     this.capabilities,
+    this.reportKeys,
     this.active,
   });
 
@@ -284,6 +289,7 @@ class SiteUserDraft {
   final bool? allBranches;
   final List<String>? branchIds;
   final Set<String>? capabilities;
+  final Set<String>? reportKeys;
   final bool? active;
 
   Map<String, Object?> toJson() => {
@@ -294,6 +300,7 @@ class SiteUserDraft {
         'all_branches': ?allBranches,
         'branch_ids': ?branchIds,
         if (capabilities != null) 'capabilities': capabilities!.toList(),
+        if (reportKeys != null) 'report_keys': reportKeys!.toList(),
         'active': ?active,
       };
 }

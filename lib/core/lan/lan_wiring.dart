@@ -14,6 +14,7 @@ import '../db/data_reset.dart';
 import '../db/database.dart';
 import '../db/order_store.dart';
 import '../db/reservation_store.dart';
+import '../db/schema.dart';
 import '../db/settings_store.dart';
 import '../db/shift_store.dart';
 import '../db/sqlite_outbox_store.dart';
@@ -231,12 +232,7 @@ class LanNode {
       onError: log,
       traffic: traffic,
     );
-    Map<String, dynamic>? joinGate({
-      required String pin,
-      required String peerDeviceId,
-    }) {
-      if (!settings.isLanPrimary) return null;
-      if (!settings.consumeJoinPin(pin)) return null;
+    Map<String, dynamic>? pairingSnapshot(String peerDeviceId) {
       final key = settings.lanShopKey;
       if (key == null || key.isEmpty) return null;
       log('lan.device.joined', peerDeviceId);
@@ -259,7 +255,11 @@ class LanNode {
         'odoo_endpoint': endpoints.load()?.toMap(),
         'attendance_open': attendance?.exportOpen() ?? const [],
         'fingerprints': fingerprints?.agentPayload() ?? const [],
-        if (catalogue != null) 'catalogue': catalogue.exportLanSnapshot(),
+        if (catalogue != null)
+          'catalogue': catalogue.exportLanSnapshot(
+            includeImages: settings.showProductImages ||
+                settings.selfOrderShowImages,
+          ),
         'tables': [for (final t in tables.all()) t.toMap()],
         // Full open floor — every till's held/seated tabs — so a rejoining
         // secondary matches the shop, not only what this primary owns.
@@ -267,6 +267,25 @@ class LanNode {
           for (final o in orders.occupyingAnywhere()) o.toMap(),
         ],
       };
+    }
+
+    Map<String, dynamic>? joinGate({
+      required String pin,
+      required String peerDeviceId,
+    }) {
+      if (!settings.isLanPrimary) return null;
+      if (!settings.consumeJoinPin(pin)) return null;
+      return pairingSnapshot(peerDeviceId);
+    }
+
+    Map<String, dynamic>? kioskPairGate({
+      required String shopKey,
+      required String peerDeviceId,
+    }) {
+      if (!settings.isLanPrimary) return null;
+      final key = settings.lanShopKey;
+      if (key == null || key.isEmpty || key != shopKey) return null;
+      return pairingSnapshot(peerDeviceId);
     }
 
     final host = LanHost(
@@ -286,6 +305,7 @@ class LanNode {
         onContact: (id, from, peerPort) =>
             peers.heard(id, host: from, port: peerPort),
         onJoin: joinGate,
+        onKioskPair: kioskPairGate,
         onRefused: log,
       ),
       port: port,
@@ -361,10 +381,33 @@ class LanNode {
   ///
   /// Prefers the device id recorded at join; falls back to any peer advertising
   /// [DeviceRole.primary] (newer builds). Empty peer list = primary not online.
-  bool primaryIsReachable(SettingsStore settings) => primaryReached(
-        activePeers: peers.active,
-        primaryDeviceId: settings.lanPrimaryDeviceId,
-      );
+  ///
+  /// When a secondary joined by typed address (Android emulator → host), the
+  /// UDP beacon never arrives — [refreshRememberedPrimary] keeps that host in
+  /// the peer list so the floor unlocks the same way as a Wi‑Fi beacon.
+  bool primaryIsReachable(SettingsStore settings) {
+    refreshRememberedPrimary(settings);
+    return primaryReached(
+      activePeers: peers.active,
+      primaryDeviceId: settings.lanPrimaryDeviceId,
+    );
+  }
+
+  /// Re-announce the primary from the host/port saved at join, if any.
+  void refreshRememberedPrimary(SettingsStore settings) {
+    final id = settings.lanPrimaryDeviceId?.trim();
+    final host = settings.lanPrimaryHost?.trim();
+    if (id == null || id.isEmpty || host == null || host.isEmpty) return;
+    peers.seen(LanPeer(
+      deviceId: id,
+      name: settings.lanDeviceName == null ? 'Primary' : 'Primary',
+      host: host,
+      port: settings.lanPrimaryPort,
+      schemaVersion: Schema.version,
+      lastSeenAt: DateTime.now().toUtc(),
+      role: DeviceRole.primary,
+    ));
+  }
 
   /// Handed to the stores so a committed change is announced from inside their own
   /// write transaction.
@@ -467,6 +510,13 @@ class LanNode {
   /// Present a join PIN to [primary] and return shop_key + section_configs.
   Future<Map<String, dynamic>> joinWithPrimary(LanPeer primary, String pin) =>
       _client.join(primary, pin: pin, deviceId: deviceId);
+
+  /// Pair a self-order kiosk using the shop key shown on the primary (no PIN).
+  Future<Map<String, dynamic>> pairKioskWithPrimary(
+    LanPeer primary,
+    String shopKey,
+  ) =>
+      _client.kioskPair(primary, shopKey: shopKey, deviceId: deviceId);
 
   /// Tell the shop this till has closed its trading day.
   ///

@@ -143,6 +143,20 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
               widget.onChanged();
             },
           ),
+          SwitchListTile(
+            key: const Key('t-self-order-images'),
+            title: Text(tr(context, 'Self-order product pictures')),
+            subtitle: Text(tr(context,
+                'Show pictures on the self-order kiosk. Turn on once, then sync the menu / re-pair the kiosk.')),
+            value: s.selfOrderShowImages,
+            onChanged: (v) {
+              setState(() {
+                s.selfOrderShowImages = v;
+                if (v) s.showProductImages = true;
+              });
+              widget.onChanged();
+            },
+          ),
           _sectionHeader(tr(context, 'Table colours')),
           _swatchTile(
             key: const Key('table-colour-free'),

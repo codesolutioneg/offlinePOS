@@ -141,6 +141,25 @@ class SqliteOutboxStore implements OutboxStore {
     return true;
   }
 
+  /// Like [withdrawPending], but also drops a parked (`dead_at`) row.
+  ///
+  /// Used when amending a sale that never reached Odoo: a held push is not on the
+  /// books, so correcting the till must be able to take it off the queue. A row
+  /// with [sent_at] still refuses — that acknowledgement means the server has it.
+  bool withdrawUnsent(String kind, String payloadUuid) {
+    final rows = _db.raw.select(
+        'SELECT sent_at FROM outbox WHERE kind = ? AND payload_uuid = ?',
+        [kind, payloadUuid]);
+    if (rows.isNotEmpty && rows.first['sent_at'] != null) {
+      return false;
+    }
+    _db.raw.execute(
+        'DELETE FROM outbox WHERE kind = ? AND payload_uuid = ? '
+        'AND sent_at IS NULL',
+        [kind, payloadUuid]);
+    return true;
+  }
+
   /// Drop every outbox row for this sale push, sent or not. Used when another
   /// till has already booked the ticket into Odoo (shop-wide session resend) so
   /// this till must not push it again under a second sale order.
