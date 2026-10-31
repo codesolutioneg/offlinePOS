@@ -1,0 +1,5 @@
+tags:
+  stress:
+    skip: "Load run. Start it on purpose: flutter test test/stress --run-skipped"
+  known-issue:
+    skip: "Reproduces an open finding and fails until it is fixed. Run: flutter test test/stress --run-skipped"

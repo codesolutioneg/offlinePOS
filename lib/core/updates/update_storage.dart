@@ -36,9 +36,10 @@ class FileUpdateStorage implements UpdateStorage {
     await directory.create(recursive: true);
     final file = File('${directory.path}${Platform.pathSeparator}$fileName');
     await file.writeAsBytes(bytes, flush: true);
-    if (!Platform.isWindows) {
+    if (Platform.isLinux || Platform.isMacOS) {
       // Owner only. Another app or another user on the machine must not be able
-      // to rewrite a build this till has already verified.
+      // to rewrite a build this till has already verified. Not available the same
+      // way on Windows or Android app-private storage.
       await Process.run('chmod', ['600', file.path]);
     }
     return file.path;

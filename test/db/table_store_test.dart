@@ -79,6 +79,13 @@ void main() {
     expect(reloaded.span, 260);
   });
 
+  test('a display label round-trips without changing the recall name', () {
+    final t = tables.add(name: '10', displayLabel: 'Ahmed');
+    expect(t.name, '10');
+    expect(t.shownName, 'Ahmed');
+    expect(tables.byId(t.id)!.displayLabel, 'Ahmed');
+  });
+
   test('copyWith changes shape without touching the rest of the table', () {
     final t = tables.add(name: 'C1');
     final round = t.copyWith(shape: TableShape.round);

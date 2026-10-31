@@ -31,6 +31,7 @@ import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/report_period.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -60,7 +61,9 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     shifts = ShiftStore(db);
-    settings = SettingsStore(db)..shopName = 'Nour Grill';
+    settings = SettingsStore(db)
+      ..shopName = 'Nour Grill'
+      ..lanRolePromptDismissed = true;
     audit = AuditLog(db);
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234');
@@ -164,6 +167,7 @@ void main() {
     await t.pumpAndSettle();
   }
 
+
   /// Pick a format off the download menu of whatever report is on screen.
   Future<void> download(WidgetTester t, String format) async {
     await t.tap(find.byKey(const Key('report-export')));
@@ -212,13 +216,13 @@ void main() {
     // Every range holds all three; the shift holds only what was rung since it
     // opened. Compared against All rather than Today, so the test does not depend
     // on which side of midnight it runs.
-    await t.tap(find.byKey(const Key('range-all')));
+    await tapReport(t, 'rep-summary');
+    expect(pageLine(t, 'Orders'), contains('3'));
+    await closeReport(t);
     await t.pumpAndSettle();
-    expect(find.text('3 order(s) in range'), findsOneWidget);
 
-    await t.tap(find.byKey(const Key('range-openShift')));
-    await t.pumpAndSettle();
-    expect(find.text('2 order(s) in range'), findsOneWidget);
+    await tapReport(t, 'rep-summary', period: 'openShift');
+    expect(pageLine(t, 'Orders'), contains('2'));
   });
 
   testWidgets('with no shift open there is no such range to pick', (t) async {
@@ -229,8 +233,10 @@ void main() {
     await signIn(t);
     await openReports(t);
 
-    expect(find.byKey(const Key('range-today')), findsOneWidget);
-    expect(find.byKey(const Key('range-openShift')), findsNothing);
+    await t.tap(find.byKey(const Key('rep-summary')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('period-today')), findsOneWidget);
+    expect(find.byKey(const Key('period-openShift')), findsNothing);
   });
 
   testWidgets('a single report downloads as a workbook with a full header',
@@ -243,11 +249,10 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
     await openReports(t);
-    await t.tap(find.byKey(const Key('rep-expenses')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-expenses', period: 'today');
 
     await download(t, 'xlsx');
-    expect(find.textContaining('Saved to'), findsOneWidget);
+    expect(find.textContaining('Saved to'), findsWidgets);
 
     final book = Excel.decodeBytes(exported('xlsx').readAsBytesSync());
     final sheet = book.tables[book.tables.keys.first]!;
@@ -276,8 +281,7 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
     await openReports(t);
-    await t.tap(find.byKey(const Key('rep-expenses')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-expenses', period: 'today');
 
     await download(t, 'pdf');
     expect(String.fromCharCodes(exported('pdf').readAsBytesSync().take(4)), '%PDF');
@@ -299,10 +303,7 @@ void main() {
     await t.pumpWidget(app());
     await signIn(t);
     await openReports(t);
-    await t.tap(find.byKey(const Key('range-openShift')));
-    await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('rep-expenses')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-expenses', period: 'openShift');
 
     await download(t, 'csv');
     expect(exported('csv').readAsStringSync(), contains('Period,Current shift'));

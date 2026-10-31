@@ -49,12 +49,13 @@ void main() {
       expect(taxed.margin, closeTo(untaxed.margin, 0.001));
     });
 
-    test('a whole-order discount comes off the revenue, not off the cost', () {
+    test('a whole-order discount stays with the check, as item sales count it',
+        () {
       final rows = productMargins(
           [sale([item(1, 'Pizza', 1, 100)], discountPercent: 10)], {1: 50});
-      expect(rows.single.revenue, closeTo(90, 0.001));
+      expect(rows.single.revenue, closeTo(100, 0.001));
       expect(rows.single.cost, 50, reason: 'a discount does not make food cheaper');
-      expect(rows.single.margin, closeTo(40, 0.001));
+      expect(rows.single.margin, closeTo(50, 0.001));
     });
 
     test('a refund nets the units and the margin back out', () {

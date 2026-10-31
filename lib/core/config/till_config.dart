@@ -24,6 +24,7 @@ class TillConfig {
     this.lanFabric = false,
     this.kdsMode = false,
     this.displayMode = false,
+    this.selfOrderMode = false,
     this.lanPort = 45333,
   });
 
@@ -45,10 +46,12 @@ class TillConfig {
       soleTill: const bool.fromEnvironment('SOLE_TILL', defaultValue: true),
       // Off unless the shop was sold a second device. The fabric is the only
       // feature here that opens a listening socket, so it is the one that has to
-      // be asked for rather than assumed.
-      lanFabric: const bool.fromEnvironment('LAN_FABRIC'),
+      // be asked for rather than assumed. Self-order always wants the fabric.
+      lanFabric: const bool.fromEnvironment('LAN_FABRIC') ||
+          const bool.fromEnvironment('SELF_ORDER_MODE'),
       kdsMode: const bool.fromEnvironment('KDS_MODE'),
       displayMode: const bool.fromEnvironment('DISPLAY_MODE'),
+      selfOrderMode: const bool.fromEnvironment('SELF_ORDER_MODE'),
       lanPort: const int.fromEnvironment('LAN_PORT', defaultValue: 45333),
     );
   }
@@ -104,6 +107,10 @@ class TillConfig {
   /// hardware is for, not a preference.
   final bool displayMode;
 
+  /// Dedicated self-order kiosk: phone + menu only. Joins the primary over LAN
+  /// as a secondary; the cashier pays on the primary till.
+  final bool selfOrderMode;
+
   /// The port the fabric serves on. The beacon announces on the next port up, so
   /// an installer who has to move it past a busy port only sets one number.
   final int lanPort;
@@ -115,9 +122,10 @@ class TillConfig {
   /// A kitchen screen counts as asking for the fabric whether or not the LAN flag
   /// was passed with it: it rings up nothing, so every ticket it shows arrived from
   /// another device, and a KDS build off the LAN is a blank screen. A customer
-  /// display is the same case for the same reason. The device setting still
+  /// display / self-order kiosk is the same case. The device setting still
   /// overrides this either way.
-  bool get lanDefault => lanFabric || kdsMode || displayMode;
+  bool get lanDefault =>
+      lanFabric || kdsMode || displayMode || selfOrderMode;
 
   /// True only when the channel is completely specified. A partly configured
   /// channel is a build mistake, and running with the missing half filled in by a

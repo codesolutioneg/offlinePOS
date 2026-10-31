@@ -86,13 +86,21 @@ void main() {
     expect(outboxStore.deadCount, 0);
   });
 
-  test('a parked push refuses the reopen rather than stranding the sale', () async {
+  test('a parked push can be withdrawn so the sale is corrected before Odoo',
+      () async {
+    // Held (dead) means never acknowledged — same as still waiting for session close.
     final o = await paidSale();
     await outboxStore.markDead((await outboxStore.pending()).single.id, 'rejected');
 
-    expect(orders.reopen(o.uuid, withdrawPush: withdraw), isFalse);
-    expect(orders.byUuid(o.uuid)!.state, OrderState.paid);
-    expect(outboxStore.deadCount, 1);
+    expect(
+      orders.reopen(
+        o.uuid,
+        withdrawPush: (uuid) => outboxStore.withdrawUnsent('order.push', uuid),
+      ),
+      isTrue,
+    );
+    expect(orders.byUuid(o.uuid)!.state, OrderState.draft);
+    expect(outboxStore.deadCount, 0);
   });
 
   test('a refusal to withdraw leaves the order paid and the queue untouched',
@@ -106,11 +114,15 @@ void main() {
     expect(outboxStore.pendingSalesCount, 1);
   });
 
-  test('another till\'s sale is not this one\'s to reopen', () async {
+  test('another till\'s unpaid sale is claimed here so payment can be corrected',
+      () async {
     final o = await paidSale(device: 'till-2');
 
-    expect(orders.reopen(o.uuid, withdrawPush: withdraw), isFalse);
-    expect(orders.byUuid(o.uuid)!.state, OrderState.paid);
+    expect(orders.reopen(o.uuid, withdrawPush: withdraw), isTrue);
+    final back = orders.byUuid(o.uuid)!;
+    expect(back.state, OrderState.draft);
+    expect(back.deviceId, 'till-1');
+    expect(back.amended, isTrue);
   });
 
   test('a refund is a reversal, not something to edit back into the cart', () async {

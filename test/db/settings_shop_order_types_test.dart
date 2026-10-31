@@ -24,12 +24,12 @@ void main() {
   });
 
   test('a withdrawn type is offered to nobody, manager included', () {
-    settings.setShopOrderType(OrderType.delivery, false);
+    settings.setShopOrderType(OrderType.storeDelivery, false);
 
-    expect(settings.shopOrderTypes.contains(OrderType.delivery), isFalse);
-    expect(settings.availableOrderTypesFor('cashier').contains(OrderType.delivery),
+    expect(settings.shopOrderTypes.contains(OrderType.storeDelivery), isFalse);
+    expect(settings.availableOrderTypesFor('cashier').contains(OrderType.storeDelivery),
         isFalse);
-    expect(settings.availableOrderTypesFor('manager').contains(OrderType.delivery),
+    expect(settings.availableOrderTypesFor('manager').contains(OrderType.storeDelivery),
         isFalse);
   });
 
@@ -43,16 +43,21 @@ void main() {
   });
 
   test('the two rules narrow each other rather than overriding', () {
-    settings.setShopOrderType(OrderType.delivery, false);
+    settings.setShopOrderType(OrderType.storeDelivery, false);
     settings.setRoleOrderType('cashier', OrderType.toGo, false);
 
     final available = settings.availableOrderTypesFor('cashier');
-    expect(available, {OrderType.dineIn, OrderType.takeaway});
+    expect(available, {
+      OrderType.dineIn,
+      OrderType.takeaway,
+      OrderType.deliveryFromCompany,
+      OrderType.carDelivery,
+    });
     // The role rule is untouched by the shop rule, so restoring the type restores
     // exactly the roles that had it.
-    expect(settings.orderTypesFor('cashier').contains(OrderType.delivery), isTrue);
-    settings.setShopOrderType(OrderType.delivery, true);
-    expect(settings.availableOrderTypesFor('cashier').contains(OrderType.delivery),
+    expect(settings.orderTypesFor('cashier').contains(OrderType.storeDelivery), isTrue);
+    settings.setShopOrderType(OrderType.storeDelivery, true);
+    expect(settings.availableOrderTypesFor('cashier').contains(OrderType.storeDelivery),
         isTrue);
   });
 
@@ -62,7 +67,9 @@ void main() {
     settings.setRoleOrderType('cashier', OrderType.dineIn, false);
     settings.setRoleOrderType('cashier', OrderType.takeaway, false);
     settings.setRoleOrderType('cashier', OrderType.toGo, false);
-    settings.setShopOrderType(OrderType.delivery, false);
+    settings.setRoleOrderType('cashier', OrderType.deliveryFromCompany, false);
+    settings.setRoleOrderType('cashier', OrderType.carDelivery, false);
+    settings.setShopOrderType(OrderType.storeDelivery, false);
 
     expect(settings.availableOrderTypesFor('cashier'), settings.shopOrderTypes);
     expect(settings.availableOrderTypesFor('cashier'), isNotEmpty);

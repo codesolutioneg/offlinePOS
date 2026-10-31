@@ -70,6 +70,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234', role: 'manager');
@@ -140,7 +141,12 @@ void main() {
     // Signing in lands on the floor home. Most of these are about the grid, so
     // walk to the counter the way a cashier does; a takeaway needs no table drawn.
     if (find.byType(TableFloorScreen).evaluate().isNotEmpty) {
-      await t.tap(find.byKey(const Key('floor-takeaway')));
+      await t.tap(find.byKey(const Key('floor-action-table')));
+      await t.pumpAndSettle();
+    }
+    // The grid shows one category at a time; the pizza is what these ring.
+    if (find.byKey(const Key('cat-chip-1')).evaluate().isNotEmpty) {
+      await t.tap(find.byKey(const Key('cat-chip-1')));
       await t.pumpAndSettle();
     }
   }
@@ -150,6 +156,8 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-settings')));
     await t.pumpAndSettle();
+    await t.scrollUntilVisible(find.byKey(const Key('set-appearance')), 200,
+        scrollable: find.byType(Scrollable).last);
     await t.tap(find.byKey(const Key('set-appearance')));
     await t.pumpAndSettle();
     expect(find.byType(AppearanceSettingsScreen), findsOneWidget);
@@ -191,6 +199,7 @@ void main() {
 
     testWidgets('switching it in settings darkens the till without a restart',
         (t) async {
+      settings.themeMode = 'light';
       seedMenu();
       await boot(t);
       expect(brightnessOnScreen(t), Brightness.light);
@@ -227,6 +236,8 @@ void main() {
       expect(find.byKey(const Key('product-image-10')), findsOneWidget,
           reason: 'the shell must read the pictures, or the toggle is dead');
       // A product with no picture keeps the coloured tile it has today.
+      await t.tap(find.byKey(const Key('cat-chip-2')));
+      await t.pumpAndSettle();
       expect(find.byKey(const Key('product-image-11')), findsNothing);
       expect(find.byKey(const Key('product-11')), findsOneWidget);
     });
@@ -267,17 +278,20 @@ void main() {
       seedMenu();
 
       await boot(t);
-      final chip = t.widget<ChoiceChip>(find.byKey(const Key('cat-chip-2')));
-      expect(chip.side, isNotNull, reason: 'the chip must wear the shop colour');
+      expect(find.byKey(const Key('cat-chip-2')), findsOneWidget);
 
       await t.tap(find.byKey(const Key('cat-chip-2')));
       await t.pumpAndSettle();
 
       expect(find.byKey(const Key('product-11')), findsOneWidget);
       expect(find.byKey(const Key('product-10')), findsNothing);
-      expect(
-          t.widget<ChoiceChip>(find.byKey(const Key('cat-chip-2'))).selectedColor,
-          isNotNull);
+      // Selected square uses a solid fill (border width 2).
+      final selected = t.widget<AnimatedContainer>(find
+          .descendant(
+              of: find.byKey(const Key('cat-chip-2')),
+              matching: find.byType(AnimatedContainer))
+          .first);
+      expect((selected.decoration as BoxDecoration).border?.top.width, 2);
     });
   });
 

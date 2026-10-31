@@ -25,11 +25,12 @@ import 'package:offline_pos/core/sync/sync_service.dart';
 import 'package:offline_pos/domain/catalogue.dart';
 import 'package:offline_pos/domain/order.dart';
 import 'package:offline_pos/features/reports/cost_sales_report_screen.dart';
-import 'package:offline_pos/features/reports/menu_engineering_report_screen.dart';
+import 'package:offline_pos/features/reports/rm/rm_report_viewer.dart';
 import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/report_period.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -56,6 +57,7 @@ void main() {
     db = Db.open(':memory:');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234');
@@ -147,12 +149,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('nav-report')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('range-all')));
-    await t.pumpAndSettle();
-    await t.scrollUntilVisible(find.byKey(Key(tile)), 200,
-        scrollable: find.byType(Scrollable).last);
-    await t.tap(find.byKey(Key(tile)));
-    await t.pumpAndSettle();
+    await tapReport(t, tile);
   }
 
   void tallWindow(WidgetTester t) {
@@ -171,16 +168,16 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
-    await openReport(t, 'rep-cost');
+    await openReport(t, 'rep-cost-sales');
 
-    expect(find.byType(CostSalesReportScreen), findsOneWidget);
-    expect(find.byKey(const Key('cost-empty-state')), findsNothing,
+    expect(find.byType(CostSalesReportScreen, skipOffstage: false), findsOneWidget);
+    expect(find.byKey(const Key('cost-empty-state'), skipOffstage: false), findsNothing,
         reason: 'the shell must hand the hub the costs, or the report is dead');
     // Two pizzas at 100 cost 40 each: 200 in, 80 out, 120 kept. The draft on the
     // till is not a sale and the uncosted water stays out of the totals.
-    expect(find.byKey(const Key('cost-product-1')), findsOneWidget);
+    expect(find.byKey(const Key('cost-product-1'), skipOffstage: false), findsOneWidget);
     expect(find.text('120.00'), findsWidgets);
-    expect(find.byKey(const Key('cost-not-costed')), findsOneWidget);
+    expect(find.byKey(const Key('cost-not-costed'), skipOffstage: false), findsOneWidget);
   });
 
   testWidgets('menu engineering places the dishes the till actually sold',
@@ -192,11 +189,15 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
-    await openReport(t, 'rep-menu');
+    await openReport(t, 'rep-menu-eng');
 
-    expect(find.byType(MenuEngineeringReportScreen), findsOneWidget);
-    expect(find.byKey(const Key('menu-empty-state')), findsNothing);
-    expect(find.byKey(const Key('menu-item-1')), findsOneWidget);
+    // It opens as the back office's Menu Engineering page, over the till's
+    // sales and the costs the menu brought down: the dish is on it, ranked.
+    expect(find.byType(RmReportViewer), findsOneWidget);
+    expect(find.byKey(const Key('rm-unwired')), findsNothing);
+    final dish = pageLine(t, 'Pizza');
+    expect(dish, contains('500.00'));
+    expect(dish.last, isIn(['STAR', 'WORKHORSE', 'CHALLENGE', 'DOG']));
   });
 
   testWidgets('a till whose Odoo states no costs says so instead of guessing',
@@ -214,8 +215,8 @@ void main() {
 
     await t.pumpWidget(app());
     await signIn(t);
-    await openReport(t, 'rep-cost');
+    await openReport(t, 'rep-cost-sales');
 
-    expect(find.byKey(const Key('cost-empty-state')), findsOneWidget);
+    expect(find.byKey(const Key('cost-empty-state'), skipOffstage: false), findsOneWidget);
   });
 }

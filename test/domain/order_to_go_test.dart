@@ -29,7 +29,7 @@ void main() {
   test('every other type still goes over the wire as itself', () {
     for (final type in OrderType.values.where((t) => t != OrderType.toGo)) {
       final o = Order(deviceId: 'till-1', cashierId: 'sara', type: type);
-      expect(o.toServerPayload()['order_type'], type.name);
+      expect(o.toServerPayload()['order_type'], type.wireName);
     }
   });
 
@@ -37,6 +37,6 @@ void main() {
     expect(OrderType.toGo.seatsAtTable, isTrue);
     expect(OrderType.dineIn.seatsAtTable, isTrue);
     expect(OrderType.takeaway.seatsAtTable, isFalse);
-    expect(OrderType.delivery.seatsAtTable, isFalse);
+    expect(OrderType.storeDelivery.seatsAtTable, isFalse);
   });
 }

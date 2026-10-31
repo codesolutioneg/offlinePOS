@@ -1,0 +1,220 @@
+// What the server knows about each shop. Backups are files under STORAGE_DIR,
+// sealed on the till; nothing here can open them. The synced records are the
+// shop's sales and shifts as the tills hold them, for the web reports.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// The business: one owner, one recovery key, any number of branches.
+model Shop {
+  id        String   @id @default(cuid())
+  name      String
+  /// The recovery key the shop's backups are sealed under, set by the first upload.
+  keyId     String?  @map("key_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  branches  Branch[]
+  devices   Device[]
+  backups   Backup[]
+  users          User[]
+  records        Record[]
+  taxInvoices    TaxInvoice[]
+  taxEtaSettings TaxEtaSettings?
+  taxBatches     TaxUploadBatch[]
+
+  @@map("shops")
+}
+
+/// One ETA e-receipt, mirrored from Dishflow Firebase or submitted from this site.
+model TaxInvoice {
+  id               String    @id @default(cuid())
+  shopId           String    @map("shop_id")
+  shop             Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Dishflow odooConnectionId (Nasr first).
+  connectionId     String    @map("connection_id")
+  branchName       String    @default("") @map("branch_name")
+  /// Firebase sales document id when known.
+  firebaseDocId    String?   @unique @map("firebase_doc_id")
+  orderNumber      String    @default("") @map("order_number")
+  sessionId        String    @default("") @map("session_id")
+  businessDateKey  String    @default("") @map("business_date_key")
+  paymentMethod    String    @default("") @map("payment_method")
+  amount           Float     @default(0)
+  /// submitted | pending | failed | rejected
+  status           String    @default("submitted")
+  etaUuid          String?   @map("eta_uuid")
+  etaLongId        String?   @map("eta_long_id")
+  etaSubmissionId  String?   @map("eta_submission_id")
+  etaSubmittedAt   DateTime? @map("eta_submitted_at")
+  error            String?
+  /// Full sale payload as Dishflow stored it (for rebuild / audit).
+  payload          Json
+  batchId          String?   @map("batch_id")
+  batch            TaxUploadBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([shopId, connectionId, etaSubmittedAt])
+  @@index([shopId, status, etaSubmittedAt])
+  @@index([shopId, sessionId])
+  @@map("tax_invoices")
+}
+
+/// ETA company / POS credentials for one shop (server-side only).
+model TaxEtaSettings {
+  shopId            String   @id @map("shop_id")
+  shop              Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  firebaseProjectId String   @default("") @map("firebase_project_id")
+  /// Default Dishflow connection to migrate/submit for.
+  connectionId      String   @default("") @map("connection_id")
+  rin               String   @default("")
+  companyTradeName  String   @default("") @map("company_trade_name")
+  activityCode      String   @default("") @map("activity_code")
+  useSandbox        Boolean  @default(false) @map("use_sandbox")
+  /// JSON list of EtaIntegration maps from Dishflow settings/eta_integration.
+  integrationsJson  Json     @map("integrations_json")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("tax_eta_settings")
+}
+
+model TaxUploadBatch {
+  id           String       @id @default(cuid())
+  shopId       String       @map("shop_id")
+  shop         Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  connectionId String       @map("connection_id")
+  createdBy    String       @default("") @map("created_by")
+  /// running | done | failed
+  status       String       @default("running")
+  total        Int          @default(0)
+  accepted     Int          @default(0)
+  rejected     Int          @default(0)
+  error        String?
+  createdAt    DateTime     @default(now()) @map("created_at")
+  finishedAt   DateTime?    @map("finished_at")
+  invoices     TaxInvoice[]
+
+  @@index([shopId, createdAt])
+  @@map("tax_upload_batches")
+}
+
+model Branch {
+  id           String   @id @default(cuid())
+  shopId       String   @map("shop_id")
+  shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name         String
+  /// sha256 of the branch's pairing code. The code itself is shown once.
+  pairCodeHash String   @unique @map("pair_code_hash")
+  /// Dishflow odooConnectionId for this branch's ETA tax link (empty = not linked).
+  taxConnectionId String @default("") @map("tax_connection_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  devices      Device[]
+
+  @@map("branches")
+}
+
+model Device {
+  id         String    @id @default(cuid())
+  shopId     String    @map("shop_id")
+  shop       Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  branchId   String    @map("branch_id")
+  branch     Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  /// The till's own id (devices table on the till).
+  deviceId   String    @map("device_id")
+  name       String
+  appVersion String    @map("app_version")
+  /// sha256 of the bearer token. A new pairing replaces it.
+  tokenHash  String    @unique @map("token_hash")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+  lastSyncAt DateTime? @map("last_sync_at")
+  backups    Backup[]
+
+  @@unique([shopId, deviceId])
+  @@map("devices")
+}
+
+model Backup {
+  id         String   @id @default(cuid())
+  shopId     String   @map("shop_id")
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  deviceId   String   @map("device_row_id")
+  device     Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// When the till took it, by the till's clock.
+  createdAt  DateTime @map("created_at")
+  receivedAt DateTime @default(now()) @map("received_at")
+  size       Int
+  sha256     String
+  reason     String
+  keyId      String   @map("key_id")
+  /// Relative to STORAGE_DIR.
+  path       String
+
+  @@unique([shopId, sha256])
+  @@index([shopId, createdAt])
+  @@index([deviceId, createdAt])
+  @@map("backups")
+}
+
+/// Someone who signs in to the reports site.
+model User {
+  id           String    @id @default(cuid())
+  shopId       String    @map("shop_id")
+  shop         Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Lower case, unique across the server: it is all a person types to sign in.
+  username     String    @unique
+  displayName  String    @map("display_name")
+  passwordHash String    @map("password_hash")
+  /// owner | manager | accountant
+  role         String
+  /// Every branch, now and later. Owners always.
+  allBranches  Boolean   @default(false) @map("all_branches")
+  branchIds    String[]  @map("branch_ids")
+  /// What this user may open, from the capability list (see permissions.ts).
+  capabilities String[]
+  /// Mobile owner-app report keys this user may open (owners ignore the list).
+  reportKeys   String[]  @default([]) @map("report_keys")
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  lastLoginAt  DateTime? @map("last_login_at")
+  sessions     Session[]
+
+  @@map("users")
+}
+
+model Session {
+  /// sha256 of the cookie value.
+  id         String   @id
+  userId     String   @map("user_id")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now()) @map("created_at")
+  expiresAt  DateTime @map("expires_at")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+/// One fact a till sent: an order, a shift, a clock-in, an audit entry, or the
+/// branch's menu, costs, staff or tenders. The payload is the till's own JSON.
+model Record {
+  shopId    String   @map("shop_id")
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  branchId  String   @map("branch_id")
+  deviceId  String   @map("device_row_id")
+  kind      String
+  key       String
+  /// The moment the record is about, for period queries. Null for the snapshots.
+  at        DateTime?
+  payload   Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@id([shopId, kind, key])
+  @@index([shopId, kind, branchId, at])
+  @@map("records")
+}

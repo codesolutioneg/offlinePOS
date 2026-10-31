@@ -64,11 +64,13 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
   late bool _showTable;
   late bool _showPayment;
   late bool _showItemPrice;
+  late bool _showModifiers;
   late String _dividerStyle;
   late int _columns;
   late String _fontProfile;
   late bool _printLogo;
   late bool _logoRaster;
+  late int _logoHeightMm;
   final TextEditingController _logoPath = TextEditingController();
 
   /// What happened to the last upload, in words: a manager pressing a button that
@@ -88,15 +90,18 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     _showTable = widget.settings.receiptShowTable;
     _showPayment = widget.settings.receiptShowPayment;
     _showItemPrice = widget.settings.receiptShowItemPrice;
+    _showModifiers = widget.settings.receiptShowModifiers;
     // Clamped to the offered choices: the segmented control below asserts on a
     // selection it has no segment for.
     final style = widget.settings.receiptDividerStyle;
-    _dividerStyle = _dividerStyles.contains(style) ? style : 'line';
+    _dividerStyle = _dividerStyles.contains(style) ? style : 'equals';
     // The same paper width the printers screen sets, so the two never disagree.
     _columns = widget.settings.receiptColumns == 32 ? 32 : 42;
     _fontProfile = widget.settings.receiptFontProfile;
     _printLogo = widget.settings.receiptPrintLogo;
     _logoRaster = widget.settings.receiptLogoRaster;
+    _logoHeightMm = widget.settings.receiptLogoHeightMm;
+    _logoPath.text = widget.settings.receiptLogoPath;
     // The preview reads the controllers' text directly; without a listener it
     // would only refresh on the next unrelated setState (e.g. a toggle), so
     // typing in the header or footer would look frozen until something else
@@ -128,11 +133,13 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
     widget.settings.receiptShowTable = _showTable;
     widget.settings.receiptShowPayment = _showPayment;
     widget.settings.receiptShowItemPrice = _showItemPrice;
+    widget.settings.receiptShowModifiers = _showModifiers;
     widget.settings.receiptDividerStyle = _dividerStyle;
     widget.settings.receiptColumns = _columns;
     widget.settings.receiptFontProfile = _fontProfile;
     widget.settings.receiptPrintLogo = _printLogo;
     widget.settings.receiptLogoRaster = _logoRaster;
+    widget.settings.receiptLogoHeightMm = _logoHeightMm;
     widget.onChanged();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'Saved'))));
   }
@@ -143,22 +150,8 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
   /// uploads with the printer off still has its logo and can send it again. The
   /// message says which of the two happened rather than a bare "Saved".
   Future<void> _uploadLogo() async {
-    final path = _logoPath.text.trim();
-    if (path.isEmpty) {
-      setState(() => _logoStatus = tr(context, 'Give the file path of the logo image.'));
-      return;
-    }
-    // The printable width of the roll, so a wide picture is scaled to fit the paper
-    // rather than clipped at the edge.
-    final logo = await loadPrinterLogo(path, maxWidthDots: _columns == 32 ? 384 : 576);
-    if (!mounted) return;
-    if (logo == null) {
-      setState(() =>
-          _logoStatus = tr(context, 'That file could not be read as an image.'));
-      return;
-    }
-    widget.settings.receiptLogo = logo;
-    widget.onChanged();
+    final logo = await _convertLogo();
+    if (logo == null || !mounted) return;
     try {
       await widget.onUploadLogo!(logo);
       if (!mounted) return;
@@ -170,6 +163,51 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
       setState(() => _logoStatus =
           tr(context, 'Kept on the till. The printer did not answer, so send it again.'));
     }
+  }
+
+  /// Printer dots per millimetre of paper: 203 dpi, which is every receipt printer
+  /// this app drives.
+  static const int _dotsPerMm = 8;
+
+  int get _paperDots => _columns == 32 ? 384 : 576;
+
+  /// Cuts the logo from its file at the chosen size and keeps it on the till, or
+  /// says why it could not. Never touches the printer.
+  Future<PrinterLogo?> _convertLogo() async {
+    final path = _logoPath.text.trim();
+    if (path.isEmpty) {
+      setState(() => _logoStatus = tr(context, 'Give the file path of the logo image.'));
+      return null;
+    }
+    // The printable width of the roll, so a wide picture is scaled to fit the paper
+    // rather than clipped at the edge.
+    final logo = await loadPrinterLogo(path,
+        maxWidthDots: _paperDots, maxHeightDots: _logoHeightMm * _dotsPerMm);
+    if (!mounted) return null;
+    if (logo == null) {
+      setState(() =>
+          _logoStatus = tr(context, 'That file could not be read as an image.'));
+      return null;
+    }
+    widget.settings
+      ..receiptLogo = logo
+      ..receiptLogoPath = path
+      ..receiptLogoHeightMm = _logoHeightMm;
+    widget.onChanged();
+    setState(() {});
+    return logo;
+  }
+
+  /// A new size is cut on the till straight away, so the preview and a printer fed
+  /// with every receipt show it at once. The printer's own memory is only written
+  /// from the send button: its flash wears out, and dragging a slider must not.
+  Future<void> _resizeLogo() async {
+    if (_logoPath.text.trim().isEmpty) return;
+    final logo = await _convertLogo();
+    if (logo == null || !mounted) return;
+    setState(() => _logoStatus = _logoRaster
+        ? tr(context, 'Logo resized.')
+        : tr(context, 'Logo resized. Send it to the printer to store the new size.'));
   }
 
   /// The logo controls: whether to print one, how it gets to the paper, and the
@@ -199,6 +237,25 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
             ),
           ),
           const SizedBox(height: 8),
+          Row(
+            children: [
+              Text(tr(context, 'Logo size')),
+              Expanded(
+                child: Slider(
+                  key: const Key('logo-size'),
+                  value: _logoHeightMm.toDouble(),
+                  min: SettingsStore.logoHeightMinMm.toDouble(),
+                  max: SettingsStore.logoHeightMaxMm.toDouble(),
+                  divisions:
+                      (SettingsStore.logoHeightMaxMm - SettingsStore.logoHeightMinMm) ~/ 2,
+                  label: '$_logoHeightMm mm',
+                  onChanged: (v) => setState(() => _logoHeightMm = v.round()),
+                  onChangeEnd: (_) => _resizeLogo(),
+                ),
+              ),
+              Text('$_logoHeightMm mm', key: const Key('logo-size-mm')),
+            ],
+          ),
           OutlinedButton.icon(
             key: const Key('upload-logo'),
             icon: const Icon(Icons.upload),
@@ -208,7 +265,8 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
         ],
         if (loaded != null)
           Text(
-            '${tr(context, 'Loaded')}: ${loaded.widthDots} x ${loaded.heightDots}',
+            '${tr(context, 'Loaded')}: ${loaded.widthDots ~/ _dotsPerMm} x '
+            '${loaded.heightDots ~/ _dotsPerMm} mm',
             key: const Key('logo-loaded'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
@@ -253,7 +311,7 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
   /// A fixed, made-up two-line sale used only to give the preview something to
   /// lay out; it does not read real orders.
   String _sampleBody(int columns) {
-    final divider = _dividerChars[_dividerStyle] ?? '-';
+    final divider = _dividerChars[_dividerStyle] ?? '=';
     final rule = divider * columns;
     final now = DateTime.now();
     String two(int n) => n.toString().padLeft(2, '0');
@@ -261,21 +319,30 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
 
     final lines = <String>[rule];
     if (_showOrderType) lines.add('Dine-in');
-    if (_showTable) lines.add('Table 4 - 2 guests');
-    final stamped = [
-      if (_showDateTime) stamp,
-      if (_showNumber) '#A1B2C3',
-    ].join('  ');
-    if (stamped.isNotEmpty) lines.add(stamped);
-    if (_showCashier) lines.add('Cashier: Sara');
+    if (_showTable) {
+      lines.add('* Table 4 *');
+      lines.add(rule);
+    }
+    lines.add(_rowText(
+      _showDateTime ? stamp : '',
+      _showNumber ? 'ORDER:A1B2C3' : '',
+      columns,
+    ));
+    if (_showCashier) lines.add(_rowText('Server: Sara', 'Cust: (2)', columns));
     lines.add(rule);
-    lines.add(_rowText('2 x Coffee', _showItemPrice ? '5.00' : '', columns));
-    lines.add(_rowText('1 x Sandwich', _showItemPrice ? '6.50' : '', columns));
-    lines.add(rule);
-    lines.add(_rowText('TOTAL', '11.50', columns));
+    lines.add(_rowText('2 Coffee', _showItemPrice ? '5.00' : '', columns));
+    if (_showModifiers) lines.add('  => Extra shot');
+    lines.add(_rowText('1 Sandwich', _showItemPrice ? '6.50' : '', columns));
+    lines.add('-' * columns);
+    lines.add('');
+    // Preview of the reverse TOTAL DUE bar (as plain text).
+    final due = 'TOTAL DUE: 11.50';
+    final pad = ((columns - due.length) ~/ 2).clamp(0, columns);
+    lines.add('${' ' * pad}$due');
     if (_showPayment) {
       lines.add('');
       lines.add(_rowText('Cash', '11.50', columns));
+      lines.add('-' * columns);
     }
     return lines.join('\n');
   }
@@ -316,9 +383,25 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // The dots exactly as they print, at their share of the roll's width.
+          if (_printLogo && widget.settings.receiptLogo != null)
+            Padding(
+              key: const Key('receipt-preview-logo'),
+              padding: const EdgeInsets.only(bottom: 6),
+              child: LayoutBuilder(builder: (context, box) {
+                final logo = widget.settings.receiptLogo!;
+                final w = box.maxWidth * logo.widthDots / _paperDots;
+                return Center(
+                  child: CustomPaint(
+                    size: Size(w, w * logo.heightDots / logo.widthDots),
+                    painter: _LogoDots(logo),
+                  ),
+                );
+              }),
+            )
           // The mark itself lives in the printer, so the preview says where it lands
           // rather than pretending to know what it looks like.
-          if (_printLogo)
+          else if (_printLogo)
             Container(
               key: const Key('receipt-preview-logo'),
               margin: const EdgeInsets.only(bottom: 6),
@@ -435,6 +518,13 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
             subtitle: Text(tr(context, 'Off leaves names and quantities only')),
             value: _showItemPrice,
             onChanged: (v) => setState(() => _showItemPrice = v),
+          ),
+          SwitchListTile(
+            key: const Key('t-modifiers'),
+            title: Text(tr(context, 'Show item options')),
+            subtitle: Text(tr(context, 'Off adds their price into the item')),
+            value: _showModifiers,
+            onChanged: (v) => setState(() => _showModifiers = v),
           ),
           ..._logoItems(context),
           const SizedBox(height: 12),
@@ -584,4 +674,35 @@ class _ReceiptDesignerScreenState extends State<ReceiptDesignerScreen> {
       ]),
     );
   }
+}
+
+/// The logo's dots, one black run per stretch of inked dots in a row.
+class _LogoDots extends CustomPainter {
+  _LogoDots(this.logo);
+
+  final PrinterLogo logo;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final dot = size.width / logo.widthDots;
+    final ink = Paint()..color = Colors.black;
+    final bytes = logo.widthBytes;
+    for (var y = 0; y < logo.heightDots; y++) {
+      int? start;
+      for (var x = 0; x <= logo.widthDots; x++) {
+        final on = x < logo.widthDots &&
+            logo.bits[y * bytes + (x >> 3)] & (0x80 >> (x & 7)) != 0;
+        if (on) {
+          start ??= x;
+        } else if (start != null) {
+          canvas.drawRect(
+              Rect.fromLTWH(start * dot, y * dot, (x - start) * dot, dot + 0.3), ink);
+          start = null;
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_LogoDots old) => !identical(old.logo.bits, logo.bits);
 }

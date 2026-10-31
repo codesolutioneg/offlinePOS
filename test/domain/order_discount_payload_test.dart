@@ -3,9 +3,9 @@ import 'package:offline_pos/domain/order.dart';
 
 /// How a discount reaches Odoo.
 ///
-/// Folding it into the prices books the right money but hands Odoo a cheaper item
-/// rather than a discount, which is why a shop cannot find its discounts there.
-/// Both ways of saying it are checked here, and in both the sale must still total
+/// Order discount always travels as its own amount (menu prices stay full). With
+/// a named discount product it is also a negative line; without one Odoo books
+/// OFFLINE_DISCOUNT from discount_amount. Either way the sale must still total
 /// exactly what the customer paid.
 void main() {
   OrderLine line(double price, {double qty = 1, double off = 0}) => OrderLine(
@@ -13,7 +13,8 @@ void main() {
       discountPercent: off);
 
   /// What Odoo will make of the lines: quantity times price, modifiers included
-  /// the way the module expands them.
+  /// the way the module expands them. When prices do not include the order
+  /// discount, subtract discount_amount (Odoo adds that as a negative line).
   double serverTotal(Map<String, dynamic> payload) {
     var total = 0.0;
     for (final raw in payload['lines'] as List) {
@@ -27,13 +28,23 @@ void main() {
             (m['unit_price'] as num).toDouble();
       }
     }
+    if (payload['prices_include_discount'] != true) {
+      // A named Discount line (sale or refund) already carries the amount.
+      final alreadyALine = (payload['lines'] as List).any((raw) {
+        final m = raw as Map;
+        if (m['name'] == 'Discount') return true;
+        return ((m['unit_price'] as num?)?.toDouble() ?? 0) < -0.005;
+      });
+      if (!alreadyALine) {
+        total -= (payload['discount_amount'] as num?)?.toDouble() ?? 0;
+      }
+    }
     return total;
   }
 
   tearDown(() => DiscountBooking.productId = null);
 
-  test('the payload says what was taken off, even with it folded into the prices',
-      () {
+  test('the payload keeps menu prices and states the discount amount', () {
     final o = Order(deviceId: 'd', cashierId: 'c', discountPercent: 10)
       ..lines.add(line(100));
     final p = o.toServerPayload();
@@ -41,12 +52,10 @@ void main() {
     expect(p['discount_amount'], 10,
         reason: 'without this the payload says nothing about a discount at all, '
             'and nothing on the Odoo side can report on one');
-    expect(p['prices_include_discount'], isTrue,
-        reason: 'the prices are already net, and only saying so makes applying '
-            'the amount a second time impossible');
-    // Unchanged: the percentage stays zeroed and the price stays folded.
+    expect(p['prices_include_discount'], isFalse,
+        reason: 'menu prices are full; Odoo adds the negative discount line');
     expect(p['discount_percent'], 0);
-    expect((p['lines'][0]['unit_price'] as num), 90);
+    expect((p['lines'][0]['unit_price'] as num), 100);
     expect(serverTotal(p), o.total);
   });
 

@@ -25,7 +25,7 @@ void main() {
         deviceId: 'till-1',
         cashierId: 'sara',
         state: OrderState.held,
-        type: OrderType.delivery,
+        type: OrderType.storeDelivery,
         customerName: name,
         driverName: driver,
         deliveryChannel: channel,

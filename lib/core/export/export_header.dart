@@ -8,7 +8,19 @@
 /// The lines are already translated by the caller, because this lives below the
 /// widget tree and has no locale of its own.
 class ExportHeader {
-  const ExportHeader({required this.title, this.lines = const []});
+  const ExportHeader({
+    required this.title,
+    this.lines = const [],
+    this.shop = '',
+    this.pageLabel = 'Page',
+  });
+
+  /// The shop's name, for the formats that set it apart from the other lines:
+  /// the PDF heads the page with it. Empty when nobody said.
+  final String shop;
+
+  /// The word for "Page", already translated, for the PDF's page counter.
+  final String pageLabel;
 
   /// The report's own name, e.g. "Expenses".
   final String title;

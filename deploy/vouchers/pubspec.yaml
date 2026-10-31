@@ -1,0 +1,5 @@
+name: offline_pos
+description: Shared voucher server for the tills.
+publish_to: none
+environment:
+  sdk: ^3.5.0

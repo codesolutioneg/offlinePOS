@@ -10,7 +10,11 @@ class MemStore implements OutboxStore {
   final Map<int,String> dead = {};
   int _n = 1;
   @override Future<void> append(String k, String u, Map<String,dynamic> p) async => e.add(OutboxEntry(id:_n++,kind:k,payloadUuid:u,payload:p));
-  @override Future<List<OutboxEntry>> pending({int limit=20}) async => e.where((x)=>!sent.contains(x.id)&&!dead.containsKey(x.id)).take(limit).toList();
+  @override Future<List<OutboxEntry>> pending({int limit=20, Set<String>? kinds}) async {
+    var list = e.where((x)=>!sent.contains(x.id)&&!dead.containsKey(x.id));
+    if (kinds != null && kinds.isNotEmpty) list = list.where((x) => kinds.contains(x.kind));
+    return list.take(limit).toList();
+  }
   @override Future<void> markSent(int id) async => sent.add(id);
   @override Future<void> markFailed(int id, String err) async {}
   @override Future<void> markDead(int id, String r) async => dead[id]=r;

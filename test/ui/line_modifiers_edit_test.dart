@@ -78,8 +78,12 @@ void main() {
       await t.tap(find.byKey(Key('mod-$option')));
       await t.pumpAndSettle();
     }
-    await t.tap(find.byKey(const Key('confirm-modifiers')));
-    await t.pumpAndSettle();
+    // A single choice adds the line by itself when ringing; confirm only if the
+    // sheet is still up.
+    if (find.byKey(const Key('confirm-modifiers')).evaluate().isNotEmpty) {
+      await t.tap(find.byKey(const Key('confirm-modifiers')));
+      await t.pumpAndSettle();
+    }
   }
 
   /// Open the per-line action sheet for [uuid] by tapping its row in the cart.
@@ -119,9 +123,21 @@ void main() {
     await t.pumpAndSettle();
 
     expect(find.byType(ModifierSheet), findsOneWidget);
-    expect(t.widget<CheckboxListTile>(find.byKey(const Key('mod-1000'))).value, isTrue,
-        reason: 'the cashier has to see what was chosen before changing it');
-    expect(t.widget<CheckboxListTile>(find.byKey(const Key('mod-1001'))).value, isFalse);
+    expect(find.byKey(const Key('mod-1000')), findsOneWidget);
+    expect(find.byKey(const Key('mod-1001')), findsOneWidget);
+    // Selected option uses the Dishflow filled tile (primary border / tint).
+    final selected = t.widget<AnimatedContainer>(find
+        .descendant(
+            of: find.byKey(const Key('mod-1000')),
+            matching: find.byType(AnimatedContainer))
+        .first);
+    final idle = t.widget<AnimatedContainer>(find
+        .descendant(
+            of: find.byKey(const Key('mod-1001')),
+            matching: find.byType(AnimatedContainer))
+        .first);
+    expect((selected.decoration as BoxDecoration).border?.top.width, 2);
+    expect((idle.decoration as BoxDecoration).border?.top.width, 1);
   });
 
   testWidgets('changing the choice reprices the line and is audited', (t) async {

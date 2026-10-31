@@ -3,12 +3,17 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../db/schema.dart';
+import '../updates/download.dart';
 import 'lan_applier.dart';
 import 'lan_claim.dart';
 import 'lan_credential.dart';
 import 'lan_event.dart';
 import 'lan_event_log.dart';
+import 'lan_number_desk.dart';
 import 'lan_peer.dart';
+import 'lan_seat_desk.dart';
+import 'lan_traffic.dart';
+import 'lan_update.dart';
 
 /// A page of one peer's log, with the highest seq that page covers.
 ///
@@ -45,6 +50,18 @@ class LanReply {
 /// The two-request protocol a till serves to its peers: pull to catch up, notify to
 /// keep up. Plain JSON over plain HTTP on the shop LAN.
 ///
+/// Answer a secondary's join PIN. Returns null to refuse with a generic error.
+typedef LanJoinHandler = Map<String, dynamic>? Function({
+  required String pin,
+  required String peerDeviceId,
+});
+
+/// Answer a self-order kiosk that presents the shop key. Null refuses.
+typedef LanKioskPairHandler = Map<String, dynamic>? Function({
+  required String shopKey,
+  required String peerDeviceId,
+});
+
 /// Nothing here reaches a selling path. A request is handled on the event loop
 /// between taps, and every failure is a status code plus a log line.
 class LanProtocol {
@@ -54,6 +71,14 @@ class LanProtocol {
     required LanApplier applier,
     required LanCredential credential,
     LanClaimDesk? claims,
+    this.onJoin,
+    this.onKioskPair,
+    this.seats,
+    this.numbers,
+    this.catchUp,
+    this.traffic,
+    this.updates,
+    this.onContact,
     this.pageSize = 200,
     LanLog? onRefused,
   })  : _log = log,
@@ -76,6 +101,35 @@ class LanProtocol {
   /// keeps its tab.
   static const String claimPath = '/lan/claim';
 
+  /// A till asking the primary to reserve a table before it seats a new tab there.
+  static const String seatPath = '/lan/seat';
+
+  /// A secondary till asking the primary for the next order number.
+  static const String numberPath = '/lan/number';
+
+  /// A secondary till presenting a one-time join PIN to receive the shop key.
+  ///
+  /// Unauthenticated by design: the PIN is the admission proof before the peer
+  /// holds the shop key. Only the primary answers.
+  static const String joinPath = '/lan/join';
+
+  /// Self-order kiosk pairing: presents the shop key (copied from the primary)
+  /// instead of a join PIN. Only the primary answers.
+  static const String kioskPairPath = '/lan/kiosk-pair';
+
+  /// A till about to close its shift asking this one (the primary) to read every
+  /// other till to the end of its log now, and to say which it could not.
+  static const String catchUpPath = '/lan/catchup';
+
+  /// Which build this till (the primary) offers the others, and its digest.
+  ///
+  /// Not gated on the schema version, unlike everything else: a till one schema
+  /// behind is exactly the one that needs to reach this.
+  static const String updatePath = '/lan/update';
+
+  /// The offered build itself, as a zip.
+  static const String updatePackagePath = '/lan/update/package';
+
   final String deviceId;
   final LanEventLog _log;
   final LanApplier _applier;
@@ -83,10 +137,50 @@ class LanProtocol {
 
   /// Null on a device that hands nothing over (a kitchen screen owns no tabs).
   final LanClaimDesk? _claims;
+
+  /// Null when this till cannot admit secondaries (not primary / no PIN bank).
+  final LanJoinHandler? onJoin;
+
+  /// Null when this till cannot admit self-order kiosks by shop key.
+  final LanKioskPairHandler? onKioskPair;
+
+  /// The seat desk, read per request because only the primary answers and the role
+  /// can change while the till is up. Null (or answering null) refuses with 409.
+  final LanSeatDesk? Function()? seats;
+
+  /// The shop's order-number counter, read per request like [seats] and for the
+  /// same reason. Null (or answering null) refuses with 409.
+  final LanNumberDesk? Function()? numbers;
+
+  /// Reads every till seen since the given moment to the end of its log, and
+  /// answers the ones it could not as [LanTillGap] maps. Null refuses with 409.
+  final Future<List<Map<String, dynamic>>> Function(DateTime since)? catchUp;
+
+  /// Where events handed over by a peer are counted, for the shop network screen.
+  final LanTraffic? traffic;
+
+  /// The build this till offers, read per request because only the primary
+  /// offers one. Null (or answering null) refuses with 409.
+  final LanUpdateOffer? Function()? updates;
+
+  /// A pull or a notify that passed the key and schema checks, with the address it
+  /// came from and the port the sender serves on. Sent only by builds that say who
+  /// they are, so an older till is still found by its beacon alone.
+  final void Function(String deviceId, String host, int port)? onContact;
+
   final int pageSize;
   final LanLog? _onRefused;
 
-  LanReply handleGet(String path, Map<String, String> query, {String? auth}) {
+  void _contact(String? peer, String? from, Object? port) {
+    if (onContact == null || peer == null || peer.isEmpty || from == null) return;
+    final p = port is int ? port : int.tryParse('${port ?? ''}');
+    if (p == null || p <= 0) return;
+    onContact!(peer, from, p);
+  }
+
+  LanReply handleGet(String path, Map<String, String> query,
+      {String? auth, String? from}) {
+    if (path == updatePath) return _handleUpdate(query, auth);
     if (path != eventsPath) return const LanReply(404, {'error': 'unknown path'});
     final unpaired = _authRefusal(auth,
         method: 'GET',
@@ -96,6 +190,7 @@ class LanProtocol {
     if (unpaired != null) return unpaired;
     final refusal = _schemaRefusal(int.tryParse(query['schema'] ?? ''), query['peer']);
     if (refusal != null) return refusal;
+    _contact(query['peer'], from, query['port']);
     final since = int.tryParse(query['since'] ?? '') ?? 0;
     final events = _log.since(since, limit: pageSize);
     // The high-water mark is the log's own end when the page is short, so a peer
@@ -112,8 +207,13 @@ class LanProtocol {
     });
   }
 
-  LanReply handlePost(String path, String body, {String? auth}) {
-    if (path != notifyPath && path != claimPath) {
+  LanReply handlePost(String path, String body, {String? auth, String? from}) {
+    if (path == joinPath) return _handleJoin(body);
+    if (path == kioskPairPath) return _handleKioskPair(body);
+    if (path != notifyPath &&
+        path != claimPath &&
+        path != seatPath &&
+        path != numberPath) {
       return const LanReply(404, {'error': 'unknown path'});
     }
     // Before the body is even parsed: an unpaired device gets no say in what this
@@ -135,7 +235,10 @@ class LanProtocol {
     if (peer is! String || peer.isEmpty) {
       return const LanReply(400, {'error': 'no device_id'});
     }
+    _contact(peer, from, decoded['port']);
     if (path == claimPath) return _handleClaim(decoded, peer);
+    if (path == seatPath) return _handleSeat(decoded, peer);
+    if (path == numberPath) return _handleNumber(decoded['count']);
     final raw = decoded['events'];
     if (raw is! List) return const LanReply(400, {'error': 'no events'});
     final events = <LanEvent>[];
@@ -155,7 +258,105 @@ class LanProtocol {
       }
     }
     final applied = _applier.applyAll(peer, events, highSeq: highSeq);
+    traffic?.received(peer, events);
     return LanReply(200, {'applied': applied});
+  }
+
+  /// Asynchronous, unlike every other request: the answer is only known once the
+  /// other tills have been read.
+  Future<LanReply> handleCatchUp(String body, {String? auth}) async {
+    final unpaired =
+        _authRefusal(auth, method: 'POST', path: catchUpPath, body: body);
+    if (unpaired != null) return unpaired;
+    Map<String, dynamic> decoded;
+    try {
+      decoded = (jsonDecode(body) as Map).cast<String, dynamic>();
+    } catch (e) {
+      return const LanReply(400, {'error': 'unreadable body'});
+    }
+    final peer = decoded['device_id'];
+    final refusal = _schemaRefusal(
+        decoded['schema'] is int ? decoded['schema'] as int : null,
+        peer is String ? peer : null);
+    if (refusal != null) return refusal;
+    final run = catchUp;
+    if (run == null) {
+      return const LanReply(409, {'error': 'this device does not catch up others'});
+    }
+    final since = DateTime.tryParse('${decoded['since']}')?.toUtc() ??
+        DateTime.now().toUtc().subtract(const Duration(days: 1));
+    return LanReply(200, {'device_id': deviceId, 'missing': await run(since)});
+  }
+
+  /// Admit a secondary with a one-time PIN; no shop-key stamp required.
+  LanReply _handleJoin(String body) {
+    final gate = onJoin;
+    if (gate == null) {
+      return const LanReply(409, {'error': 'this device does not admit peers'});
+    }
+    Map<String, dynamic> decoded;
+    try {
+      decoded = (jsonDecode(body) as Map).cast<String, dynamic>();
+    } catch (e) {
+      return const LanReply(400, {'error': 'unreadable body'});
+    }
+    final peer = decoded['device_id'];
+    final pin = decoded['pin'];
+    if (peer is! String || peer.isEmpty) {
+      return const LanReply(400, {'error': 'no device_id'});
+    }
+    if (pin is! String || pin.trim().isEmpty) {
+      return const LanReply(400, {'error': 'no pin'});
+    }
+    final refusal = _schemaRefusal(
+        decoded['schema'] is int ? decoded['schema'] as int : null, peer);
+    if (refusal != null) return refusal;
+    final payload = gate(pin: pin.trim(), peerDeviceId: peer);
+    if (payload == null) {
+      _onRefused?.call('lan.join.refused', '$peer presented a bad join PIN');
+      return const LanReply(403, {'error': 'bad pin'});
+    }
+    return LanReply(200, {
+      'device_id': deviceId,
+      'schema': Schema.version,
+      ...payload,
+    });
+  }
+
+  /// Pair a self-order kiosk that already knows the shop key (copied from primary
+  /// settings). No join PIN — the key is the admission proof.
+  LanReply _handleKioskPair(String body) {
+    final gate = onKioskPair;
+    if (gate == null) {
+      return const LanReply(409, {'error': 'this device does not admit kiosks'});
+    }
+    Map<String, dynamic> decoded;
+    try {
+      decoded = (jsonDecode(body) as Map).cast<String, dynamic>();
+    } catch (e) {
+      return const LanReply(400, {'error': 'unreadable body'});
+    }
+    final peer = decoded['device_id'];
+    final key = decoded['shop_key'];
+    if (peer is! String || peer.isEmpty) {
+      return const LanReply(400, {'error': 'no device_id'});
+    }
+    if (key is! String || key.trim().isEmpty) {
+      return const LanReply(400, {'error': 'no shop_key'});
+    }
+    final refusal = _schemaRefusal(
+        decoded['schema'] is int ? decoded['schema'] as int : null, peer);
+    if (refusal != null) return refusal;
+    final payload = gate(shopKey: key.trim(), peerDeviceId: peer);
+    if (payload == null) {
+      _onRefused?.call('lan.kiosk.refused', '$peer presented a bad shop key');
+      return const LanReply(403, {'error': 'bad shop key'});
+    }
+    return LanReply(200, {
+      'device_id': deviceId,
+      'schema': Schema.version,
+      ...payload,
+    });
   }
 
   /// Hand a parked tab to the peer asking for it, or say no and why.
@@ -174,8 +375,13 @@ class LanProtocol {
       return const LanReply(400, {'error': 'no order_uuid'});
     }
     final cashier = decoded['cashier'];
-    final result =
-        desk.grant(uuid, peer, cashier: cashier is String ? cashier : null);
+    final asManager = decoded['as_manager'] == true;
+    final result = desk.grant(
+      uuid,
+      peer,
+      cashier: cashier is String ? cashier : null,
+      asManager: asManager,
+    );
     final order = result.order;
     if (order == null) {
       return LanReply(409, {'error': result.detail ?? 'refused'});
@@ -187,6 +393,68 @@ class LanProtocol {
       // having to trust its own idea of who owned it a moment ago.
       'order': {...order.toMap(), 'claim_from': deviceId},
     });
+  }
+
+  /// Reserve a table for the peer about to seat it, or say another till has it.
+  LanReply _handleSeat(Map<String, dynamic> decoded, String peer) {
+    final desk = seats?.call();
+    if (desk == null) {
+      return const LanReply(409, {'error': 'this device is not the primary'});
+    }
+    final table = decoded['table'];
+    if (table is! String || table.trim().isEmpty) {
+      return const LanReply(400, {'error': 'no table'});
+    }
+    final answer = desk.reserve(table, peer);
+    return LanReply(200, {'device_id': deviceId, 'seat': answer.name});
+  }
+
+  /// Hand the peer the next number off the shop's counter.
+  /// Most numbers one ask can reserve, so a confused peer cannot drain the counter.
+  static const int maxNumbersPerAsk = 50;
+
+  /// One number when [count] is missing (older secondaries), else [count] in a
+  /// row. `order_no` always carries the first, so an older secondary reads it.
+  LanReply _handleNumber(Object? count) {
+    final desk = numbers?.call();
+    if (desk == null) {
+      return const LanReply(409, {'error': 'this device is not the primary'});
+    }
+    final n = count is int ? count.clamp(1, maxNumbersPerAsk) : 1;
+    final issued = desk.issueMany(n);
+    return LanReply(200, {
+      'device_id': deviceId,
+      'order_no': issued.first,
+      'order_nos': issued,
+    });
+  }
+
+  LanReply _handleUpdate(Map<String, String> query, String? auth) {
+    final unpaired = _authRefusal(auth,
+        method: 'GET',
+        path: updatePath,
+        query: LanCredential.canonicalQuery(query),
+        peer: query['peer']);
+    if (unpaired != null) return unpaired;
+    final offer = updates?.call();
+    if (offer == null) return const LanReply(409, {'error': 'no offer'});
+    final manifest = offer.manifest();
+    if (manifest['ready'] == true) {
+      manifest['signature'] = _credential.signOffer(
+          offer.version, manifest['sha256'] as String, manifest['size'] as int);
+    }
+    return LanReply(200, manifest);
+  }
+
+  /// The offered zip for a request that holds the shop key, or null to refuse.
+  File? updatePackage(Map<String, String> query, {String? auth}) {
+    final unpaired = _authRefusal(auth,
+        method: 'GET',
+        path: updatePackagePath,
+        query: LanCredential.canonicalQuery(query),
+        peer: query['peer']);
+    if (unpaired != null) return null;
+    return updates?.call()?.package;
   }
 
   /// The first gate every request passes: proof the caller holds the shop key.
@@ -261,9 +529,19 @@ class LanHost {
   final Future<List<String>> Function() _localAddresses;
 
   HttpServer? _server;
+  List<String> _addresses = const [];
+  String? _lastError;
 
   /// The address this till is reachable on, or null while it is not serving.
-  String? get host => _server?.address.address;
+  String? get host => _server == null || _addresses.isEmpty ? null : _addresses.first;
+
+  /// Every LAN address the socket answers on. Windows can list an address that a
+  /// disconnected adapter remembers, so support sees all of them, not a guess.
+  List<String> get hosts => _server == null ? const [] : _addresses;
+
+  /// Why the last bind failed, or null once serving. Shown on the LAN settings
+  /// screen: a primary that cannot serve sends every secondary to local numbering.
+  String? get lastError => _lastError;
 
   /// The port actually bound, which is [port] unless the caller asked for 0 to let
   /// the machine choose. Shown on the LAN settings screen so support can see where
@@ -278,21 +556,29 @@ class LanHost {
   Future<bool> start() async {
     if (_server != null) return true;
     final addresses = await _localAddresses();
-    if (addresses.isEmpty) {
-      _log?.call('lan.host.unavailable', 'no LAN address to bind to');
-      return false;
-    }
+    if (addresses.isEmpty) return _unavailable('no LAN address to bind to');
     try {
-      final server = await _bind(InternetAddress(addresses.first), port);
+      // Every interface, like the beacon: Windows can list an address a
+      // disconnected adapter remembers, and binding that one fails (errno 10049).
+      // Every request still has to carry the shop key's stamp.
+      final server = await _bind(InternetAddress.anyIPv4, port);
       _server = server;
+      _addresses = addresses;
+      _lastError = null;
       server.listen(_serve, onError: (Object e) {
         _log?.call('lan.host.error', '$e');
       });
       return true;
     } catch (e) {
-      _log?.call('lan.host.unavailable', 'cannot serve on ${addresses.first}:$port: $e');
-      return false;
+      return _unavailable('cannot serve on port $port: $e');
     }
+  }
+
+  /// Logged when the reason changes, not on every retry.
+  bool _unavailable(String why) {
+    if (why != _lastError) _log?.call('lan.host.unavailable', why);
+    _lastError = why;
+    return false;
   }
 
   Future<void> stop() async {
@@ -302,14 +588,23 @@ class LanHost {
   }
 
   Future<void> _serve(HttpRequest request) async {
+    if (request.method == 'GET' && request.uri.path == LanProtocol.updatePackagePath) {
+      return _servePackage(request);
+    }
     LanReply reply;
     try {
       final auth = request.headers.value(LanCredential.header);
+      final from = request.connectionInfo?.remoteAddress.address;
       reply = switch (request.method) {
         'GET' => _protocol.handleGet(
-            request.uri.path, request.uri.queryParameters, auth: auth),
+            request.uri.path, request.uri.queryParameters,
+            auth: auth, from: from),
+        'POST' when request.uri.path == LanProtocol.catchUpPath =>
+          await _protocol.handleCatchUp(
+              await utf8.decoder.bind(request).join(), auth: auth),
         'POST' => _protocol.handlePost(
-            request.uri.path, await utf8.decoder.bind(request).join(), auth: auth),
+            request.uri.path, await utf8.decoder.bind(request).join(),
+            auth: auth, from: from),
         _ => const LanReply(405, {'error': 'method'}),
       };
     } catch (e) {
@@ -326,25 +621,67 @@ class LanHost {
       // The peer hung up mid-reply. It will ask again.
     }
   }
+
+  Future<void> _servePackage(HttpRequest request) async {
+    final response = request.response;
+    try {
+      final file = _protocol.updatePackage(request.uri.queryParameters,
+          auth: request.headers.value(LanCredential.header));
+      if (file == null || !await file.exists()) {
+        response.statusCode = 404;
+        response.headers.contentType = ContentType.json;
+        response.write(jsonEncode({'error': 'no package'}));
+        await response.close();
+        return;
+      }
+      response.statusCode = 200;
+      response.headers.contentType = ContentType('application', 'zip');
+      response.contentLength = await file.length();
+      await response.addStream(file.openRead());
+      await response.close();
+    } catch (e) {
+      _log?.call('lan.host.error', 'update package: $e');
+      try {
+        await response.close();
+      } catch (_) {}
+    }
+  }
 }
 
 /// Talks to peers over HTTP. One short timeout for everything: this runs on a
 /// background timer, and a till that fell off the switch must cost seconds, not a
 /// stalled pass.
 class LanHttpClient {
-  LanHttpClient({required LanCredential credential, Duration? timeout, HttpClient? client})
-      : timeout = timeout ?? const Duration(seconds: 3),
+  LanHttpClient({
+    required LanCredential credential,
+    Duration? timeout,
+    HttpClient? client,
+    this.selfId,
+    this.selfPort,
+  })  : timeout = timeout ?? const Duration(seconds: 3),
         _credential = credential,
         _client = client ?? HttpClient() {
     _client.connectionTimeout = this.timeout;
   }
+
+  /// Who is asking and where it serves, sent with every pull and notify so the
+  /// peer can read this till back even if this till's beacon never reaches it.
+  final String? selfId;
+  final int? selfPort;
 
   final Duration timeout;
   final LanCredential _credential;
   final HttpClient _client;
 
   Future<LanPage> fetch(LanPeer peer, int since) async {
-    final query = {'since': '$since', 'schema': '${Schema.version}'};
+    final query = {
+      'since': '$since',
+      'schema': '${Schema.version}',
+      if (selfId != null && selfPort != null) ...{
+        'peer': selfId!,
+        'port': '$selfPort',
+      },
+    };
     final url = peer.baseUrl
         .replace(path: LanProtocol.eventsPath, queryParameters: query);
     final body = await _send(
@@ -380,6 +717,7 @@ class LanHttpClient {
     final body = jsonEncode({
       'device_id': deviceId,
       'schema': Schema.version,
+      'port': ?selfPort,
       'events': [for (final e in events) e.toMap()],
     });
     await _send(
@@ -401,12 +739,14 @@ class LanHttpClient {
     required String orderUuid,
     required String deviceId,
     String? cashier,
+    bool asManager = false,
   }) async {
     final body = jsonEncode({
       'device_id': deviceId,
       'schema': Schema.version,
       'order_uuid': orderUuid,
       'cashier': ?cashier,
+      'as_manager': asManager,
     });
     final String text;
     try {
@@ -430,15 +770,200 @@ class LanHttpClient {
     return order.cast<String, dynamic>();
   }
 
-  Future<String> _send(String method, Uri url, String? body, String stamp) async {
-    final request = await _client.openUrl(method, url).timeout(timeout);
-    request.headers.set(LanCredential.header, stamp);
+  /// Ask the primary [peer] to reserve [table] for this till. Throws when it cannot
+  /// be reached, which the caller treats as [LanSeatAnswer.unasked].
+  Future<LanSeatAnswer> seat(
+    LanPeer peer, {
+    required String table,
+    required String deviceId,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'table': table,
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.seatPath),
+      body,
+      _credential.stamp(method: 'POST', path: LanProtocol.seatPath, body: body),
+    );
+    final seat = (jsonDecode(text) as Map)['seat'];
+    return seat == LanSeatAnswer.busy.name ? LanSeatAnswer.busy : LanSeatAnswer.granted;
+  }
+
+  /// Ask the primary [peer] for the next order number. Throws when it cannot be
+  /// reached or refuses, which the caller treats as "number locally".
+  /// Reserve [count] order numbers from the primary. An older primary answers
+  /// one, which is still a valid reserve.
+  Future<List<String>> numbers(LanPeer peer,
+      {required String deviceId, int count = 1}) async {
+    final body = jsonEncode(
+        {'device_id': deviceId, 'schema': Schema.version, 'count': count});
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.numberPath),
+      body,
+      _credential.stamp(method: 'POST', path: LanProtocol.numberPath, body: body),
+    );
+    final reply = jsonDecode(text) as Map;
+    final many = reply['order_nos'];
+    final answered = many is List ? many : [reply['order_no']];
+    final valid = [
+      for (final n in answered)
+        if (n is String && int.tryParse(n) != null) n,
+    ];
+    if (valid.isEmpty) throw FormatException('number answered with $answered');
+    return valid;
+  }
+
+  /// Ask the primary [peer] to read every till seen since [since] to the end of its
+  /// log, and answer the ones it could not. A longer timeout than ordinary chatter:
+  /// the primary is reading the others while this waits.
+  Future<List<LanTillGap>> catchUp(
+    LanPeer peer, {
+    required String deviceId,
+    required DateTime since,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'since': since.toUtc().toIso8601String(),
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.catchUpPath),
+      body,
+      _credential.stamp(method: 'POST', path: LanProtocol.catchUpPath, body: body),
+      timeout: const Duration(seconds: 45),
+    );
+    final missing = (jsonDecode(text) as Map)['missing'];
+    return [
+      if (missing is List)
+        for (final m in missing)
+          if (m is Map) LanTillGap.fromMap(m.cast<String, dynamic>()),
+    ];
+  }
+
+  /// Present a join PIN to [peer] (the primary). No shop-key stamp — the PIN is
+  /// the admission proof. Returns the payload (shop_key, section_configs, …).
+  ///
+  /// Uses a longer timeout than ordinary peer chatter: the first-join snapshot
+  /// carries the menu and open tabs, which can be megabytes on a busy shop.
+  Future<Map<String, dynamic>> join(
+    LanPeer peer, {
+    required String pin,
+    required String deviceId,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'pin': pin,
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.joinPath),
+      body,
+      null,
+      timeout: const Duration(seconds: 60),
+    );
+    return (jsonDecode(text) as Map).cast<String, dynamic>();
+  }
+
+  /// Pair as a self-order kiosk using the shop key from the primary's settings.
+  Future<Map<String, dynamic>> kioskPair(
+    LanPeer peer, {
+    required String shopKey,
+    required String deviceId,
+  }) async {
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'schema': Schema.version,
+      'shop_key': shopKey,
+    });
+    final text = await _send(
+      'POST',
+      peer.baseUrl.replace(path: LanProtocol.kioskPairPath),
+      body,
+      null,
+      timeout: const Duration(seconds: 60),
+    );
+    return (jsonDecode(text) as Map).cast<String, dynamic>();
+  }
+
+  /// Which build [peer] (the primary) offers. Throws when it cannot be reached or
+  /// offers nothing.
+  Future<Map<String, dynamic>> updateManifest(LanPeer peer,
+      {required String deviceId}) async {
+    final query = {'peer': deviceId};
+    final text = await _send(
+      'GET',
+      peer.baseUrl.replace(path: LanProtocol.updatePath, queryParameters: query),
+      null,
+      _credential.stamp(
+        method: 'GET',
+        path: LanProtocol.updatePath,
+        query: LanCredential.canonicalQuery(query),
+      ),
+    );
+    return (jsonDecode(text) as Map).cast<String, dynamic>();
+  }
+
+  /// Whether [manifest] was signed by a till holding this shop's key.
+  bool offerIsGenuine(Map<String, dynamic> manifest) {
+    final version = manifest['version'];
+    final sha = manifest['sha256'];
+    final size = manifest['size'];
+    if (version is! String || sha is! String || size is! int) return false;
+    return _credential.offerIsGenuine(
+        manifest['signature'] as String?, version, sha, size);
+  }
+
+  /// Downloads the offered build from [peer] into [to]. Gives up when the
+  /// transfer stalls, not when it is merely long: the package is tens of MB.
+  Future<void> downloadUpdate(LanPeer peer,
+      {required String deviceId,
+      required File to,
+      DownloadProgress? onProgress}) async {
+    final query = {'peer': deviceId};
+    final request = await _client
+        .openUrl('GET',
+            peer.baseUrl.replace(path: LanProtocol.updatePackagePath, queryParameters: query))
+        .timeout(timeout);
+    request.headers.set(
+      LanCredential.header,
+      _credential.stamp(
+        method: 'GET',
+        path: LanProtocol.updatePackagePath,
+        query: LanCredential.canonicalQuery(query),
+      ),
+    );
+    final response = await request.close().timeout(timeout);
+    if (response.statusCode != 200) {
+      final text = await utf8.decoder.bind(response).join().timeout(timeout);
+      throw HttpException('${response.statusCode} from ${peer.baseUrl}: $text');
+    }
+    await saveDownload(response, to, onProgress: onProgress);
+  }
+
+  Future<String> _send(
+    String method,
+    Uri url,
+    String? body,
+    String? stamp, {
+    Duration? timeout,
+  }) async {
+    final limit = timeout ?? this.timeout;
+    final request = await _client.openUrl(method, url).timeout(limit);
+    if (stamp != null) {
+      request.headers.set(LanCredential.header, stamp);
+    }
     if (body != null) {
       request.headers.contentType = ContentType.json;
       request.write(body);
     }
-    final response = await request.close().timeout(timeout);
-    final text = await utf8.decoder.bind(response).join().timeout(timeout);
+    final response = await request.close().timeout(limit);
+    final text = await utf8.decoder.bind(response).join().timeout(limit);
     if (response.statusCode != 200) {
       throw HttpException('${response.statusCode} from $url: $text');
     }

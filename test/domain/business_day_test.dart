@@ -18,6 +18,17 @@ void main() {
     expect(BusinessDay.of(DateTime(2026, 3, 11, 3, 59)).key, '2026-03-10');
   });
 
+  test('opensAt is the cutover of the trading day Flash and Bulletin share', () {
+    expect(
+      BusinessDay.opensAt(DateTime(2026, 3, 11, 1, 15)),
+      DateTime(2026, 3, 10, 4),
+    );
+    expect(
+      BusinessDay.opensAt(DateTime(2026, 3, 11, 10, 0)),
+      DateTime(2026, 3, 11, 4),
+    );
+  });
+
   test('the cutover is configurable for shops that close earlier', () {
     expect(BusinessDay.of(DateTime(2026, 3, 11, 2, 0), cutoverHour: 0).key,
         '2026-03-11');

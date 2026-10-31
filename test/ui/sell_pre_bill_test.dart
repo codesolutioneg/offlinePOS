@@ -51,14 +51,17 @@ void main() {
         ),
       );
 
-  testWidgets('the bill button only appears once the order has lines', (t) async {
+  testWidgets('the bill button only works once the order has lines', (t) async {
     await t.pumpWidget(app());
-    expect(find.byKey(const Key('print-bill')), findsNothing);
+    // It keeps its place in the row, greyed out, rather than jumping in later.
+    OutlinedButton bill() =>
+        t.widget<OutlinedButton>(find.byKey(const Key('print-bill')));
+    expect(bill().onPressed, isNull);
 
     await t.tap(find.byKey(const Key('product-10')));
     await t.pumpAndSettle();
 
-    expect(find.byKey(const Key('print-bill')), findsOneWidget);
+    expect(bill().onPressed, isNotNull);
   });
 
   testWidgets('a till with nowhere to print shows no bill button', (t) async {

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/i18n/l10n.dart';
 import '../../core/theme/app_colors.dart';
+import '../../domain/business_day.dart';
+import '../../domain/cancelled_sales.dart';
 import '../../domain/order.dart';
 
 /// The day so far, at the top of the reports hub.
@@ -31,12 +33,13 @@ class TodayGlanceCard extends StatelessWidget {
   /// Injected in tests so "today" is not the machine clock.
   final DateTime? now;
 
+  /// Today is the trading day, so at 1am the evening service is still on it.
   List<Order> get _today {
-    final at = now ?? DateTime.now();
-    final start = DateTime(at.year, at.month, at.day);
-    return allOrders
-        .where((o) => !o.createdAt.toLocal().isBefore(start))
-        .toList();
+    final start = BusinessDay.opensAt(now ?? DateTime.now());
+    return salesForOdoo([
+      for (final o in allOrders)
+        if (!o.createdAt.toLocal().isBefore(start)) o,
+    ]);
   }
 
   /// The tenders that are cash, by id. Empty falls back to reading the label,

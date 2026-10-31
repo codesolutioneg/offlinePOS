@@ -37,6 +37,16 @@ class BusinessDay {
     return BusinessDay(DateTime(shifted.year, shifted.month, shifted.day));
   }
 
+  /// Local start of the trading day that contains [at] (or now).
+  ///
+  /// Bulletin, Flash "Today", and the glance card all read this same boundary so
+  /// a DST change or a service past midnight cannot make one panel argue with
+  /// another about "today".
+  static DateTime opensAt([DateTime? at]) {
+    final day = BusinessDay.of(at ?? DateTime.now()).date;
+    return DateTime(day.year, day.month, day.day, shopCutoverHour);
+  }
+
   /// ISO date, which is what the server keys a session on.
   String get key =>
       '${date.year.toString().padLeft(4, '0')}-'

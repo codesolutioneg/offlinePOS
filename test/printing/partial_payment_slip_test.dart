@@ -24,61 +24,62 @@ Order table() => Order(
       ],
     );
 
-/// The slip a part payment leaves behind. Its whole job is to say what this money
-/// covered and what is still owed, because no other paper says either: the sale
-/// receipt does not print until the tab settles.
+/// The slip a part payment leaves behind. It is the sale receipt's own layout, so
+/// a guest at a split table gets the same paper as a whole bill, with the due
+/// figure being their share and the table's remaining balance under it.
 void main() {
-  test('a share prints what was paid and what is left, and is not a tax receipt', () {
+  test('a share prints in the sale receipt layout, not a separate payment slip', () {
     final o = table();
-    final bytes = builder().buildPartialPayment(
+    final share = strippedText(builder().buildPartialPayment(
       PartialPayment(
         order: o,
         paidNow: 150,
         stillOwed: 150,
-        title: 'Share of 2',
         tenders: [OrderPayment(methodId: 1, amount: 150, label: 'Cash')],
       ),
-      at: DateTime.utc(2026, 1, 2, 9, 30),
-      actor: 'sara',
-    );
-    final s = strippedText(bytes);
-    expect(s, contains('JOUMA'));
-    expect(s, contains('PAYMENT'));
-    expect(s, contains('NOT A TAX RECEIPT'));
-    expect(s, contains('Table 5'));
-    expect(s, contains('Cashier: sara'));
-    expect(s, contains('Share of 2'));
-    expect(s, contains('Cash'));
-    expect(s, contains('PAID NOW'));
-    expect(s, contains('STILL OWED'));
-    // Both figures print, so neither the guest paying nor the next one has to guess.
-    expect('150.00'.allMatches(s).length, greaterThanOrEqualTo(3));
-  });
-
-  test('an even share itemises nothing, because it bought a share of everything', () {
-    final s = strippedText(builder().buildPartialPayment(
-      PartialPayment(order: table(), paidNow: 150, stillOwed: 150),
-      at: DateTime.utc(2026, 1, 2),
     ));
-    expect(s, isNot(contains('Pizza')));
-    expect(s, isNot(contains('Cola')));
+    final receipt = strippedText(builder().build(o));
+    for (final common in ['JOUMA', 'Table 5', 'DINE IN', 'ORDER', 'Server: sara']) {
+      expect(receipt, contains(common));
+      expect(share, contains(common));
+    }
+    // No "Share of N" heading: the guest's figure is the due line itself.
+    expect(share, isNot(contains('Share of')));
+    expect(share, contains('Cash'));
+    expect(share, contains('TOTAL DUE: 150.00'));
+    expect(share, contains('Balance remaining'));
+    expect(share, isNot(contains('PAYMENT')));
+    expect(share, isNot(contains('NOT A TAX RECEIPT')));
+    expect(share, isNot(contains('PAID NOW')));
+    expect(share, isNot(contains('STILL OWED')));
   });
 
-  test('a check itemises what it covered', () {
+  test('an even share lists the whole table and states the bill total', () {
+    final s = strippedText(builder().buildPartialPayment(
+      PartialPayment(order: table(), paidNow: 100, stillOwed: 200),
+    ));
+    expect(s, contains('Pizza'));
+    expect(s, contains('Cola'));
+    expect(s, contains('Bill total'));
+    expect(s, contains('300.00'));
+    expect(s, contains('TOTAL DUE: 100.00'));
+  });
+
+  test('a check itemises only what it covered', () {
     final o = table();
     final s = strippedText(builder().buildPartialPayment(
       PartialPayment(
         order: o,
         paidNow: 50,
         stillOwed: 250,
-        title: 'Guest 2',
         covered: [o.lines.last],
         tenders: [OrderPayment(methodId: 2, amount: 50, label: 'Card')],
       ),
-      at: DateTime.utc(2026, 1, 2),
     ));
     expect(s, contains('Cola'));
     expect(s, isNot(contains('Pizza')));
+    expect(s, isNot(contains('Bill total')));
+    expect(s, contains('TOTAL DUE: 50.00'));
     // The shop's own name for the tender wins over the one it was rung with.
     expect(s, contains('Visa'));
     expect(s, contains('250.00'));
@@ -93,12 +94,18 @@ void main() {
         cashReceived: 200,
         tenders: [OrderPayment(methodId: 1, amount: 150, label: 'Cash')],
       ),
-      at: DateTime.utc(2026, 1, 2),
     ));
     expect(s, contains('Received'));
     expect(s, contains('200.00'));
     expect(s, contains('Change'));
     expect(s, contains('50.00'));
+  });
+
+  test('the last share owes nothing, so no balance line prints', () {
+    final s = strippedText(builder().buildPartialPayment(
+      PartialPayment(order: table(), paidNow: 150, stillOwed: 0),
+    ));
+    expect(s, isNot(contains('Balance remaining')));
   });
 
   test('the drawer opens for the cash it took, and only when the shop asked', () {
@@ -110,12 +117,11 @@ void main() {
     }
 
     final payment = PartialPayment(order: table(), paidNow: 150, stillOwed: 150);
-    final at = DateTime.utc(2026, 1, 2);
-    expect(kicks(builder(openDrawer: true).buildPartialPayment(payment, at: at)), isTrue);
-    expect(kicks(builder().buildPartialPayment(payment, at: at)), isFalse);
+    expect(kicks(builder(openDrawer: true).buildPartialPayment(payment)), isTrue);
+    expect(kicks(builder().buildPartialPayment(payment)), isFalse);
   });
 
-  test('a shop that hides the tender breakdown still gets the two figures', () {
+  test('a shop that hides the tender breakdown still gets its share and balance', () {
     final s = strippedText(builder(showPayment: false).buildPartialPayment(
       PartialPayment(
         order: table(),
@@ -123,10 +129,9 @@ void main() {
         stillOwed: 150,
         tenders: [OrderPayment(methodId: 1, amount: 150, label: 'Cash')],
       ),
-      at: DateTime.utc(2026, 1, 2),
     ));
     expect(s, isNot(contains('Cash')));
-    expect(s, contains('PAID NOW'));
-    expect(s, contains('STILL OWED'));
+    expect(s, contains('TOTAL DUE: 150.00'));
+    expect(s, contains('Balance remaining'));
   });
 }

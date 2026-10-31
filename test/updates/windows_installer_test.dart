@@ -253,10 +253,30 @@ void main() {
     expect(text, contains(r'"installed $buildName"'));
     // Named with the build, so the app can refuse to hand off the one that
     // already failed without refusing the next one.
-    expect(text, contains(r'"failed $buildName: $($_.Exception.Message)"'));
+    expect(text, contains(r'"failed ${buildName}: $($_.Exception.Message)"'));
     expect(text, contains(r"$buildName = 'u.zip'"));
     expect(text, contains('install not attempted'));
   });
+
+  test('PowerShell can parse the script it is handed', () async {
+    // A parse error fails the whole script before its first line, after the app
+    // has already exited: the till closes, nothing installs, nothing reopens it.
+    final text = installerFor(FakeLauncher(), exits: [])
+        .buildScript(stagedZipPath: r"C:\it's here\u.zip", scriptPath: r'C:\s.ps1');
+    final file = File('${staging.path}${Platform.pathSeparator}parse-me.ps1')
+      ..writeAsStringSync(text);
+
+    final result = await Process.run('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      "\$t = \$null; \$e = \$null; "
+          "[void][System.Management.Automation.Language.Parser]::ParseFile('${file.path}', [ref]\$t, [ref]\$e); "
+          "\$e | ForEach-Object { \$_.Message }; exit \$e.Count",
+    ]);
+
+    expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+  }, skip: !Platform.isWindows);
 
   test('the script waits for this process before it unpacks anything', () async {
     final text = installerFor(FakeLauncher(), exits: [], processId: 9091)

@@ -63,6 +63,13 @@ class SqlitePrintJobStore implements SpoolStore {
   }
 
   @override
+  Future<int> clearAll() async {
+    final n = count;
+    _db.raw.execute('DELETE FROM print_jobs WHERE printer = ?', [printer]);
+    return n;
+  }
+
+  @override
   int get count => _db.raw
       .select('SELECT COUNT(*) c FROM print_jobs WHERE printer = ?', [printer])
       .first['c'] as int;

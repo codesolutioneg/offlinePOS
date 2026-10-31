@@ -124,7 +124,7 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
                     icon: const Icon(Icons.dark_mode_outlined),
                     label: Text(tr(context, 'Dark'), key: const Key('theme-dark'))),
               ],
-              selected: {AppTheme.modeKeys.contains(s.themeMode) ? s.themeMode : 'system'},
+              selected: {AppTheme.modeKeys.contains(s.themeMode) ? s.themeMode : 'dark'},
               onSelectionChanged: (picked) {
                 setState(() => s.themeMode = picked.first);
                 widget.onChanged();
@@ -140,6 +140,20 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
             value: s.showProductImages,
             onChanged: (v) {
               setState(() => s.showProductImages = v);
+              widget.onChanged();
+            },
+          ),
+          SwitchListTile(
+            key: const Key('t-self-order-images'),
+            title: Text(tr(context, 'Self-order product pictures')),
+            subtitle: Text(tr(context,
+                'Show pictures on the self-order kiosk. Turn on once, then sync the menu / re-pair the kiosk.')),
+            value: s.selfOrderShowImages,
+            onChanged: (v) {
+              setState(() {
+                s.selfOrderShowImages = v;
+                if (v) s.showProductImages = true;
+              });
               widget.onChanged();
             },
           ),

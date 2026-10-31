@@ -27,6 +27,7 @@ import 'package:offline_pos/features/sell/sell_screen.dart';
 
 import '../db/sqlite_loader.dart';
 import '../ui/fake_pin_hasher.dart';
+import '../ui/report_period.dart';
 
 class _NoPrinters extends PrinterDiscovery {
   @override
@@ -55,6 +56,7 @@ void main() {
     orders = OrderStore(db);
     shifts = ShiftStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     await AuthService(users: UserStore(db), hasher: FakePinHasher(), audit: audit)
         .enrol(id: 'sara', name: 'Sara', pin: '1234');
@@ -183,8 +185,7 @@ void main() {
     await signIn(t);
     await openReports(t);
 
-    await t.tap(find.byKey(const Key('rep-expenses')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-expenses');
 
     expect(find.text('Taxi for delivery'), findsOneWidget);
     expect(find.textContaining('Transport'), findsWidgets);
@@ -200,8 +201,7 @@ void main() {
     await signIn(t);
     await openReports(t);
 
-    await t.tap(find.byKey(const Key('rep-refunds')));
-    await t.pumpAndSettle();
+    await tapReport(t, 'rep-refunds');
 
     expect(find.textContaining('Pizza x1'), findsOneWidget);
     expect(find.text('Sent back'), findsWidgets);

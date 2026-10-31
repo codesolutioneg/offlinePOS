@@ -57,7 +57,7 @@ void main() {
         isTrue);
     expect(
         t
-            .widget<CheckboxListTile>(find.byKey(const Key('service-type-delivery')))
+            .widget<CheckboxListTile>(find.byKey(const Key('service-type-storeDelivery')))
             .value,
         isFalse);
   });

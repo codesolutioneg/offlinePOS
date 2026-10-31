@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../core/db/attendance_store.dart';
+import '../../domain/attendance_entry.dart';
 import '../../core/i18n/l10n.dart';
 import '../../domain/catalogue.dart';
 import '../../domain/order.dart';

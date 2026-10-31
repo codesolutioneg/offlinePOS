@@ -35,6 +35,17 @@ class _Paper implements PrinterTransport {
   Future<void> send(Uint8List bytes) async => jobs.add(bytes);
 }
 
+/// Refuses every job — stands in for a host the short probe already said is down.
+class _Dead implements PrinterTransport {
+  _Dead(this.host);
+  final String host;
+
+  @override
+  Future<void> send(Uint8List bytes) async {
+    throw PrinterUnavailable('$host not answering');
+  }
+}
+
 Future<String?> _anonymous(String host, int port) async => null;
 
 /// A dead printer already spools and reprints. What is proved here is the step
@@ -48,7 +59,12 @@ void main() {
     return PrinterRegistry(
       discovery: _Subnet(answering),
       identify: _anonymous,
-      open: (host, port) => papers.putIfAbsent(host, () => _Paper(host)),
+      open: (host, port) {
+        // A typed address is still tried after a failed probe; only a real refusal
+        // (here) must trip the spare. A mock that always accepts would hide that.
+        if (!answering.contains(host)) return _Dead(host);
+        return papers.putIfAbsent(host, () => _Paper(host));
+      },
     );
   }
 

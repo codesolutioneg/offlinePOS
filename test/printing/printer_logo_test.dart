@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:offline_pos/core/printing/printer_logo.dart';
@@ -43,6 +45,28 @@ void main() {
 
     expect(bytes.sublist(0, 8), [0x1d, 0x76, 0x30, 0x00, 1, 0, 8, 0]);
     expect(bytes.sublist(8), logo.bits);
+  });
+
+  test('a tall logo is sent as strips that together carry every row once', () {
+    const rows = 150;
+    final bits = Uint8List(2 * rows);
+    for (var i = 0; i < bits.length; i++) {
+      bits[i] = i & 0xff;
+    }
+    final bytes = PrinterLogo(widthDots: 16, heightDots: rows, bits: bits).raster();
+
+    final heights = <int>[];
+    final body = BytesBuilder();
+    var at = 0;
+    while (at < bytes.length) {
+      expect(bytes.sublist(at, at + 6), [0x1d, 0x76, 0x30, 0x00, 2, 0]);
+      final h = bytes[at + 6] | (bytes[at + 7] << 8);
+      heights.add(h);
+      body.add(bytes.sublist(at + 8, at + 8 + 2 * h));
+      at += 8 + 2 * h;
+    }
+    expect(heights, [64, 64, 22]);
+    expect(body.toBytes(), bits);
   });
 
   test('a wide logo reports its width in whole bytes', () {
@@ -107,6 +131,40 @@ void main() {
       expect(PrinterLogo.fromRgba(data, 8, 8).bits, everyElement(0));
     });
 
+    ByteData flat(int width, int height, int r, int g, int b) {
+      final data = ByteData(width * height * 4);
+      for (var i = 0; i < width * height; i++) {
+        data
+          ..setUint8(i * 4, r)
+          ..setUint8(i * 4 + 1, g)
+          ..setUint8(i * 4 + 2, b)
+          ..setUint8(i * 4 + 3, 255);
+      }
+      return data;
+    }
+
+    int inked(PrinterLogo logo) =>
+        logo.bits.fold(0, (n, byte) => n + byte.toRadixString(2).replaceAll('0', '').length);
+
+    test('a mid grey is shaded, not printed as a solid black block', () {
+      final logo = PrinterLogo.fromRgba(flat(32, 32, 128, 128, 128), 32, 32);
+      final share = inked(logo) / (32 * 32);
+      expect(share, inInclusiveRange(0.4, 0.6));
+    });
+
+    test('a coloured part of a logo is shaded too', () {
+      // A strong red, which a plain cut printed as solid black.
+      final logo = PrinterLogo.fromRgba(flat(32, 32, 220, 30, 30), 32, 32);
+      final share = inked(logo) / (32 * 32);
+      expect(share, greaterThan(0.2));
+      expect(share, lessThan(0.9));
+    });
+
+    test('the near-white background of a JPG prints nothing', () {
+      final logo = PrinterLogo.fromRgba(flat(32, 32, 238, 240, 236), 32, 32);
+      expect(logo.bits, everyElement(0));
+    });
+
     test('an odd size is padded to whole bytes both ways', () {
       final logo = PrinterLogo.fromRgba(pixels(20, 13, {0}), 20, 13);
       // 20 dots across is two whole bytes and a remainder that carries no picture.
@@ -115,6 +173,58 @@ void main() {
       expect(logo.heightDots, 16);
       expect(logo.bits.length, 2 * 16);
       expect(logo.bits[0], 0x80);
+    });
+  });
+
+  group('loading a file', () {
+    /// A [size] square PNG on white with a black square of [mark] in the middle.
+    Future<File> png(Directory dir, int size, int mark) async {
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder)
+        ..drawRect(ui.Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble()),
+            ui.Paint()..color = const ui.Color(0xFFFFFFFF));
+      final start = (size - mark) / 2;
+      canvas.drawRect(ui.Rect.fromLTWH(start, start, mark.toDouble(), mark.toDouble()),
+          ui.Paint()..color = const ui.Color(0xFF000000));
+      final image = await recorder.endRecording().toImage(size, size);
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      final file = File('${dir.path}${Platform.pathSeparator}logo.png');
+      await file.writeAsBytes(data!.buffer.asUint8List());
+      return file;
+    }
+
+    testWidgets('the white border is trimmed and the mark fits the height cap',
+        (tester) async {
+      await tester.runAsync(() async {
+        final dir = await Directory.systemTemp.createTemp('logo');
+        try {
+          final file = await png(dir, 1000, 400);
+          final logo = await loadPrinterLogo(file.path, maxWidthDots: 576, maxHeightDots: 160);
+          expect(logo, isNotNull);
+          expect(logo!.widthDots, 160);
+          expect(logo.heightDots, 160);
+          // All mark, no border: the corners are inked.
+          expect(logo.bits.first & 0x80, 0x80);
+          expect(logo.bits.last & 0x01, 0x01);
+          // A few kilobytes a slip, not tens.
+          expect(logo.raster().length, lessThan(4000));
+        } finally {
+          await dir.delete(recursive: true);
+        }
+      });
+    });
+
+    testWidgets('a picture that is all paper is not a logo', (tester) async {
+      await tester.runAsync(() async {
+        final dir = await Directory.systemTemp.createTemp('logo');
+        try {
+          final file = await png(dir, 64, 0);
+          expect(await loadPrinterLogo(file.path), isNull);
+        } finally {
+          await dir.delete(recursive: true);
+        }
+      });
     });
   });
 }

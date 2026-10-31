@@ -54,6 +54,7 @@ void main() {
     ShiftStore(db).openShift(openingFloat: 100, cashierId: 'sara');
     orders = OrderStore(db);
     settings = SettingsStore(db);
+    settings.lanRolePromptDismissed = true;
     audit = AuditLog(db);
     CatalogueStore(db).replaceAll(
       categories: const [Category(id: 1, name: 'Pizza')],
@@ -125,52 +126,19 @@ void main() {
     await t.pumpAndSettle();
   }
 
-  Future<void> openLineActions(WidgetTester t, Order order) async {
+  testWidgets('the line actions no longer offer a price, discount, guest or void',
+      (t) async {
+    final order = draftOnTheTill();
+
+    await t.pumpWidget(app());
+    await signIn(t);
     await t.tap(find.byKey(Key('line-${order.lines.first.uuid}')));
     await t.pumpAndSettle();
-  }
 
-  testWidgets('a granted cashier can sell a line at another price, and it is recorded',
-      (t) async {
-    settings.setRolePermission('cashier', Permission.priceOverride, true);
-    final order = draftOnTheTill();
-
-    await t.pumpWidget(app());
-    await signIn(t);
-    await openLineActions(t, order);
-    await t.tap(find.byKey(const Key('line-price')));
-    await t.pumpAndSettle();
-    await t.enterText(find.byKey(const Key('line-price-value')), '180');
-    await t.tap(find.byKey(const Key('apply-line-price')));
-    await t.pumpAndSettle();
-
-    // On screen and on disk: two at 180, not two at 250.
-    expect(find.byKey(const Key('total')), findsOneWidget);
-    await t.tap(find.byKey(const Key('hold')));
-    await t.pumpAndSettle();
-    final held = orders.held().single;
-    expect(held.lines.single.unitPrice, 180);
-    expect(held.total, 360);
-
-    final entry = audit.recent(event: 'line.price_override').single;
-    expect(entry['detail'], contains('Margherita|250.0|180.0'),
-        reason: 'what it was and what it became, or the money is untraceable');
-  });
-
-  testWidgets('without the grant the price takes a manager', (t) async {
-    final order = draftOnTheTill();
-
-    await t.pumpWidget(app());
-    await signIn(t);
-    await openLineActions(t, order);
-    await t.tap(find.byKey(const Key('line-price')));
-    await t.pumpAndSettle();
-
-    expect(find.byKey(const Key('manager-pin')), findsOneWidget);
-    await t.enterText(find.byKey(const Key('manager-pin')), '9999');
-    await t.tap(find.byKey(const Key('manager-ok')));
-    await t.pumpAndSettle();
-    expect(find.byKey(const Key('line-price-value')), findsOneWidget);
+    expect(find.byKey(const Key('line-note')), findsOneWidget);
+    for (final gone in ['line-price', 'line-discount', 'line-seat', 'line-void']) {
+      expect(find.byKey(Key(gone)), findsNothing, reason: gone);
+    }
   });
 
   testWidgets('the 86 board asks for the availability grant, not the price one',

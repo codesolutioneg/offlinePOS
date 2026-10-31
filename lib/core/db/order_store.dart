@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import '../../domain/cancelled_sales.dart';
 import '../../domain/order.dart';
+import '../../domain/shift.dart';
 import '../lan/lan_cart_board.dart';
 import '../lan/lan_event.dart';
 import 'database.dart';
@@ -101,13 +103,16 @@ class OrderStore {
 
   /// Whether this order is shared state.
   ///
-  /// A draft is not: it is being rung right now on the till in front of the
-  /// cashier, it changes on every tap, and no other device has any use for it.
-  /// Anything committed (held, paid, synced) is what a second till and a kitchen
-  /// screen need. Only the till that created the order ever announces it.
-  bool _isShared(Order order) =>
-      order.state != OrderState.draft &&
-      (ownDeviceId == null || order.deviceId == ownDeviceId);
+  /// Plain drafts (no table) stay local: they change on every tap and no other
+  /// device needs them. A draft seated on a table is shared so the floor on every
+  /// till colours that table busy the moment it is opened, not only after Hold.
+  /// Held / paid / synced always share. Only the owning till announces.
+  bool _isShared(Order order) {
+    if (ownDeviceId != null && order.deviceId != ownDeviceId) return false;
+    if (order.state != OrderState.draft) return true;
+    final table = order.tableLabel;
+    return table != null && table.isNotEmpty;
+  }
 
   /// The single writer for a row, optionally with its fabric event in the same
   /// transaction so an event cannot describe a record that was never committed.
@@ -115,15 +120,45 @@ class OrderStore {
   /// If the event cannot be written the order is committed on its own. A sale
   /// outranks replication every time: losing money because a peer bookkeeping table
   /// misbehaved would be a far worse bug than two tills disagreeing about a tab.
+  ///
+  /// Inside a caller's transaction the row and its event join that one instead of
+  /// opening their own: SQLite does not nest BEGIN, and rolling back here would
+  /// undo the caller's writes along with this one.
+  /// Run [body] as one transaction, so a sale and whatever is queued for it land
+  /// together or not at all: power lost between the two would leave a paid sale
+  /// nothing ever sends. Joins an outer transaction rather than nesting one.
+  void inTransaction(void Function() body) {
+    if (!_db.raw.autocommit) {
+      body();
+      return;
+    }
+    _db.raw.execute('BEGIN');
+    try {
+      body();
+      _db.raw.execute('COMMIT');
+    } catch (_) {
+      _db.raw.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
   void _write(Order order, void Function()? announce) {
     if (announce == null) {
       _insert(order);
       return;
     }
+    if (!_db.raw.autocommit) {
+      if (!_insert(order)) return;
+      try {
+        announce();
+      } catch (e) {
+        _onAnnounceFailed?.call(order.uuid, e);
+      }
+      return;
+    }
     _db.raw.execute('BEGIN');
     try {
-      _insert(order);
-      announce();
+      if (_insert(order)) announce();
       _db.raw.execute('COMMIT');
     } catch (e) {
       _db.raw.execute('ROLLBACK');
@@ -136,16 +171,28 @@ class OrderStore {
   /// can change hands both ways: to another till, and to another cashier on this
   /// one. Leaving them behind would file the order under whoever used to have it
   /// while the bill on it says otherwise, and the reads that decide money are
-  /// scoped by exactly those columns.
-  void _insert(Order order) {
+  /// scoped by exactly those columns. The sale time follows too: it is restamped at
+  /// payment, and the Z and the Odoo close pick sales by that column.
+  ///
+  /// Money only moves forward: a copy of an order read before it was paid (a
+  /// course-fire loop waiting on a slow printer, a sheet left open) must not turn
+  /// the paid sale back into a tab, and a paid copy must not un-sync a sale Odoo
+  /// already has. Such a write is dropped here, where every caller passes, rather
+  /// than trusted to each caller re-reading first. [reopen] is the one deliberate
+  /// way back and says so with [allowReopen]. Returns whether the row was written.
+  bool _insert(Order order, {bool allowReopen = false}) {
     _db.raw.execute(
       '''
       INSERT INTO orders (uuid, device_id, cashier_id, created_at, state, server_id, total, payload)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(uuid) DO UPDATE SET
         device_id = excluded.device_id, cashier_id = excluded.cashier_id,
+        created_at = excluded.created_at,
         state = excluded.state, server_id = excluded.server_id,
         total = excluded.total, payload = excluded.payload
+      WHERE ? = 1 OR orders.state NOT IN ('paid', 'synced')
+        OR (CASE excluded.state WHEN 'synced' THEN 3 WHEN 'paid' THEN 2 ELSE 0 END)
+          >= (CASE orders.state WHEN 'synced' THEN 3 ELSE 2 END)
       ''',
       [
         order.uuid,
@@ -156,8 +203,10 @@ class OrderStore {
         order.serverId,
         order.total,
         jsonEncode(order.toMap()),
+        if (allowReopen) 1 else 0,
       ],
     );
+    return _db.raw.updatedRows > 0;
   }
 
   Order? byUuid(String uuid) {
@@ -183,23 +232,114 @@ class OrderStore {
   /// here, which is the whole reason the fabric exists.
   List<Order> heldAnywhere() => _query("state = 'held'");
 
-  /// Parked orders belonging to another till. Empty on a single-till shop and with
-  /// the fabric off.
+  /// Every order that occupies a table in the shop: parked tabs plus live drafts
+  /// that already have a table label (including ones replicated from peers).
+  /// Filtered in memory because older schemas keep the label only inside payload.
+  List<Order> occupyingAnywhere() => [
+        ...heldAnywhere(),
+        ..._query("state = 'draft'").where(
+          (o) => o.tableLabel != null && o.tableLabel!.isNotEmpty,
+        ),
+      ];
+
+  /// Parked or seated-draft orders belonging to another till. Empty on a
+  /// single-till shop and with the fabric off.
   List<Order> heldElsewhere() => ownDeviceId == null
       ? const []
       : _query("state = 'held' AND device_id <> ?", [ownDeviceId]);
+
+  /// Every order that occupies a table elsewhere: parked tabs and live drafts
+  /// with a table label on another till.
+  List<Order> occupyingElsewhere() => ownDeviceId == null
+      ? const []
+      : occupyingAnywhere()
+          .where((o) => o.deviceId != ownDeviceId)
+          .toList();
 
   /// Paid but not yet confirmed by the server.
   ///
   /// Scoped to this till, and that scoping is what keeps the books straight: this
   /// is the list the sync reconcile sweeps into the outbox, so a sale replicated
   /// from another till must never appear in it or the shop would book it twice.
-  List<Order> awaitingSync() => _mine("state = 'paid'");
+  ///
+  /// Fully cancelled pairs are omitted so a voided complimentary cannot re-enter
+  /// the outbox on the next Sync now.
+  List<Order> awaitingSync() =>
+      salesForOdoo(_mine("state = 'paid'"));
+
+  /// Refunds never go to Odoo, by the owner's decision: the shop books them there
+  /// by hand. So they are never owed, never hold a close open, and never count as
+  /// synced.
+  static const String _notRefund = r"json_extract(payload, '$.refund_of_uuid') IS NULL";
+
+  /// Paid sales on this till that fall inside [shift]'s open→close window.
+  ///
+  /// Close-shift sync uses this — not [awaitingSync] — so a backlog from an
+  /// earlier shift cannot ride along under the new shift's uuid, and the Z and
+  /// the Odoo SO cover the same tickets.
+  ///
+  /// Fully cancelled sales (original + matching refund) are dropped: the refund
+  /// rows are loaded only to detect the pair, then stripped so Odoo never sees
+  /// a complimentary / officer ticket the cashier already voided.
+  List<Order> awaitingSyncInShift(Shift shift) {
+    final from = shift.openedAt.toIso8601String();
+    final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
+    return salesForOdoo(_mine(
+      "state = 'paid' AND created_at >= ? AND created_at <= ?",
+      [from, to],
+    ));
+  }
+
+  /// Every completed sale in [shift]'s window — this till and every peer that
+  /// replicated here. Paid and already-synced both: a manager who deleted the
+  /// Odoo sale order and wants the whole session sent again needs the ones that
+  /// were marked synced after a partial push, not only what is still owed.
+  ///
+  /// Fully cancelled pairs are excluded the same way as [awaitingSyncInShift].
+  ///
+  /// Never feed this into the ordinary Sync now path: that stays on
+  /// [awaitingSyncInShift] so another till's tickets are not booked twice by
+  /// accident. The deliberate "resend closed session" action is the caller.
+  List<Order> salesInShift(Shift shift, {bool anyDevice = false}) {
+    final from = shift.openedAt.toIso8601String();
+    final to = (shift.closedAt ?? DateTime.now().toUtc()).toIso8601String();
+    final own = anyDevice ? null : ownDeviceId;
+    final raw = _db.raw
+        .select(
+          "SELECT payload FROM orders WHERE state IN ('paid','synced') "
+          "${own == null ? '' : 'AND device_id = ? '}"
+          'AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC',
+          [?own, from, to],
+        )
+        .map((r) =>
+            Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
+        .toList();
+    return salesForOdoo(raw);
+  }
+
+  /// Mark [uuid] synced and tell every till on the fabric, including when the
+  /// sale was rung on another device. Ordinary [markSynced] will not announce a
+  /// peer's row (authorship stays with the owner); after a shop-wide session
+  /// resend the peers must hear so they drop their own outbox copies.
+  void tellShopSynced(String uuid, [int? serverId]) {
+    final order = byUuid(uuid);
+    if (order == null) return;
+    order.state = OrderState.synced;
+    if (serverId != null) order.serverId = serverId;
+    final publish = _publish;
+    if (publish == null) {
+      _write(order, null);
+      return;
+    }
+    _write(order, () {
+      publish(LanEventKind.orderUpsert, order.uuid, order.toMap());
+    });
+  }
 
   /// Completed sales, newest first, for the history / reprint browser and the
   /// reports. Includes both paid-not-yet-synced and synced, so a sale shows up the
   /// instant it is taken, not only after the server confirms. This till's own: a
-  /// second till's takings are not this till's to report on.
+  /// second till's takings are not this till's to report on or book twice.
   List<Order> recent({int limit = 50}) {
     final own = ownDeviceId;
     return _db.raw
@@ -213,10 +353,83 @@ class OrderStore {
         .toList();
   }
 
+  /// Every paid/synced sale in the shop, including ones rung on another till and
+  /// replicated here. For the history browser so a cashier can find a receipt
+  /// from any counter. Never feed this into the outbox or cash-up: those stay on
+  /// [recent] / [awaitingSync].
+  List<Order> recentAnywhere({int limit = 50}) => _db.raw
+      .select(
+          "SELECT payload FROM orders WHERE state IN ('paid','synced') "
+          'ORDER BY created_at DESC LIMIT ?',
+          [limit])
+      .map((r) =>
+          Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
+      .toList();
+
+  /// Completed sales from [from] up to [to] (exclusive), newest first, with no
+  /// cap: a report over a busy week has to hold every sale in it, not the last
+  /// thousand. Null ends are open. This till's own unless [anyDevice].
+  List<Order> paidBetween({DateTime? from, DateTime? to, bool anyDevice = false}) {
+    final own = anyDevice ? null : ownDeviceId;
+    final where = [
+      "state IN ('paid','synced')",
+      if (own != null) 'device_id = ?',
+      if (from != null) 'created_at >= ?',
+      if (to != null) 'created_at < ?',
+    ].join(' AND ');
+    return _db.raw
+        .select('SELECT payload FROM orders WHERE $where ORDER BY created_at DESC', [
+          ?own,
+          if (from != null) from.toUtc().toIso8601String(),
+          if (to != null) to.toUtc().toIso8601String(),
+        ])
+        .map((r) =>
+            Order.fromMap(jsonDecode(r['payload'] as String) as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// The highest order number among the newest [limit] rows and every open tab
+  /// from every till, so the next number climbs past it. Open tabs count however
+  /// old they are: a table parked on another till already has its number on a
+  /// kitchen ticket. Refunds and rows with no number are left out.
+  ///
+  /// A floor, not a lock: two tills handing out a number inside one replication
+  /// window can still pick the same one. It narrows the collision to that window.
+  ///
+  /// SQLite reads the one field out of the payload, so no bill is decoded:
+  /// decoding 2000 of them was most of what a Pay cost on a till with a few
+  /// thousand sales.
+  int orderNumberFloor({int limit = 2000}) {
+    var floor = 0;
+    final rows = _db.raw.select(
+        "SELECT json_extract(payload, '\$.order_no') AS n FROM orders "
+        "WHERE json_extract(payload, '\$.order_no') IS NOT NULL AND $_notRefund "
+        "AND (state IN ('draft','held') OR uuid IN "
+        '(SELECT uuid FROM orders ORDER BY created_at DESC LIMIT ?))',
+        [limit]);
+    for (final raw in rows.map((r) => r['n']).whereType<String>()) {
+      final n = int.tryParse(Order.shortOrderNumber(raw.trim()));
+      if (n != null && n > floor) floor = n;
+    }
+    return floor;
+  }
+
+  /// How many sales every till in the shop has closed since [since], and what
+  /// they came to. One aggregate over indexed columns, so the floor can read it on
+  /// every build without decoding a single payload.
+  ({int count, double total}) paidAnywhereSince(DateTime since) {
+    final row = _db.raw.select(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS t FROM orders "
+        "WHERE state IN ('paid','synced') AND created_at >= ?",
+        [since.toUtc().toIso8601String()]).first;
+    return (count: row['n'] as int, total: (row['t'] as num).toDouble());
+  }
+
   /// [_query] restricted to orders this till rang.
-  List<Order> _mine(String where) => ownDeviceId == null
-      ? _query(where)
-      : _query('$where AND device_id = ?', [ownDeviceId]);
+  List<Order> _mine(String where, [List<Object?> args = const []]) =>
+      ownDeviceId == null
+          ? _query(where, args)
+          : _query('$where AND device_id = ?', [...args, ownDeviceId]);
 
   List<Order> _query(String where, [List<Object?> args = const []]) => _db.raw
       .select('SELECT payload FROM orders WHERE $where ORDER BY created_at ASC', args)
@@ -270,18 +483,25 @@ class OrderStore {
   /// the server's duplicate handling. The next batch push resolves it, because the
   /// server answers the repeat with a duplicate status and the order is marked
   /// synced from that.
+  ///
+  /// Another till's unpaid-to-Odoo sale may be corrected here: ownership moves to
+  /// this till and a fabric [reopen] upsert tells peers to drop their queued push
+  /// so End of Day cannot book the pre-edit version from the till that first took
+  /// the money.
   bool reopen(String uuid, {required WithdrawPush withdrawPush}) {
-    final order = byUuid(uuid);
+    var order = byUuid(uuid);
     if (order == null) return false;
     // Only a tendered sale is reopened: a draft or a held tab is editable already,
     // and synced is the state this must never move.
     if (order.state != OrderState.paid) return false;
-    // Another till's sale is booked by that till, exactly as its tabs are settled
-    // there, so it is not this one's to rewrite.
-    if (ownDeviceId != null && order.deviceId != ownDeviceId) return false;
     // A refund reverses a sale that stands. Editing one back into the cart would
     // turn a credit into a fresh order made of negative lines.
     if (order.isRefund) return false;
+    final fromDevice = order.deviceId;
+    final claimTo = ownDeviceId;
+    if (claimTo != null && order.deviceId != claimTo) {
+      order = _withDevice(order, claimTo);
+    }
     _db.raw.execute('BEGIN');
     try {
       if (!withdrawPush(uuid)) {
@@ -294,7 +514,17 @@ class OrderStore {
       // Rides on the order so the corrected receipt is marked whenever it prints,
       // including a reprint days later and after a restart mid-correction.
       order.amended = true;
-      _insert(order);
+      _insert(order, allowReopen: true);
+      // Shop-wide: peers must drop the pre-edit push and show the sale as open
+      // again. Flagged so the applier may move paid → draft (normally refused).
+      final publish = _publish;
+      if (publish != null) {
+        publish(LanEventKind.orderUpsert, order.uuid, {
+          ...order.toMap(),
+          'reopen': true,
+          'from': fromDevice,
+        });
+      }
       _db.raw.execute('COMMIT');
       return true;
     } catch (_) {
@@ -303,34 +533,77 @@ class OrderStore {
     }
   }
 
+  /// Apply a peer's deliberate reopen of a paid sale (fabric [reopen] upsert).
+  ///
+  /// Ordinary upserts never move paid → draft; this is the one path that may, so
+  /// a cashier correcting a payment on another till does not leave the shop
+  /// showing a settled bill that is back on that till's counter.
+  bool applyPeerReopen(Order incoming) {
+    if (incoming.state != OrderState.draft) return false;
+    final local = byUuid(incoming.uuid);
+    if (local != null && local.state == OrderState.synced) return false;
+    _insert(incoming, allowReopen: true);
+    return true;
+  }
+
   // ── a tab changing hands ─────────────────────────────────────────
 
-  /// Give a parked tab to another till, and say what was handed over.
+  /// Give a parked (or seated draft) tab to another till, and say what was handed
+  /// over.
   ///
-  /// Null is a refusal, and the refusals are the whole point of the method. Only a
-  /// HELD order can move: a draft is being rung by a cashier standing at a counter,
-  /// and a paid one is money this till is going to book. Only the till that owns it
-  /// can give it away, so two devices cannot both hand out the same tab, and the
-  /// giving up and the announcing happen in one transaction, so there is no instant
-  /// where nobody owns it or both do.
-  ///
-  /// The order is rebuilt rather than edited because its device is what identifies
-  /// the till that will settle it: making that field writable would let anything
-  /// anywhere quietly reassign a sale.
+  /// Null is a refusal, and the refusals are the whole point of the method. A
+  /// HELD order can move, and so can a DRAFT that already has a table — seating
+  /// shares occupancy before Hold, and the opener must still be able to settle
+  /// it from another till. A paid one is money this till is going to book. Only
+  /// the till that owns it can give it away.
   Order? handOver(String uuid, String toDeviceId) {
     final order = byUuid(uuid);
     if (order == null) return null;
-    if (order.state != OrderState.held) return null;
+    final seatedDraft = order.state == OrderState.draft &&
+        order.tableLabel != null &&
+        order.tableLabel!.isNotEmpty;
+    if (order.state != OrderState.held && !seatedDraft) return null;
     if (order.deviceId == toDeviceId) return order;
     if (ownDeviceId != null && order.deviceId != ownDeviceId) return null;
-    final moved = _withDevice(order, toDeviceId);
+    return _moveOwnership(order, toDeviceId, seatedDraft: seatedDraft);
+  }
+
+  /// Primary till only: take a parked tab whose owner cannot answer.
+  ///
+  /// Uses the local replica and announces [LanEventKind.orderClaim] so a secondary
+  /// that rejoins learns it no longer owns the bill. Deliberately skips the
+  /// "only the owner may give it away" check — that is the whole point when the
+  /// owner is unreachable and the primary is the shop authority.
+  Order? seizeFromUnreachable(String uuid, String toDeviceId) {
+    final order = byUuid(uuid);
+    if (order == null) return null;
+    final seatedDraft = order.state == OrderState.draft &&
+        order.tableLabel != null &&
+        order.tableLabel!.isNotEmpty;
+    if (order.state != OrderState.held && !seatedDraft) return null;
+    if (order.deviceId == toDeviceId) return order;
+    return _moveOwnership(order, toDeviceId, seatedDraft: seatedDraft, seized: true);
+  }
+
+  Order _moveOwnership(
+    Order order,
+    String toDeviceId, {
+    required bool seatedDraft,
+    bool seized = false,
+  }) {
+    final moved = _withDevice(
+      seatedDraft
+          ? (Order.fromMap({...order.toMap(), 'state': OrderState.held.name}))
+          : order,
+      toDeviceId,
+    );
     final publish = _publish;
     _write(
       moved,
       publish == null
           ? null
-          : () => publish(LanEventKind.orderClaim, uuid,
-              {'to': toDeviceId, 'from': order.deviceId}),
+          : () => publish(LanEventKind.orderClaim, order.uuid,
+              {'to': toDeviceId, 'from': order.deviceId, if (seized) 'seized': true}),
     );
     return moved;
   }
@@ -431,6 +704,18 @@ class OrderStore {
       remove();
       _onAnnounceFailed?.call(uuid, e);
     }
+  }
+
+  /// Wipe every open (draft / held) tab before a secondary join snapshot lands.
+  ///
+  /// Without this, a till that once ran alone keeps stale tabs whose owner device
+  /// is gone — the floor shows ancient timers and claim fails with "did not answer".
+  /// Paid history is kept. No LAN announce: the primary's snapshot is the truth.
+  void clearOpenForJoin() {
+    _db.raw.execute(
+      "DELETE FROM orders WHERE state IN (?, ?)",
+      [OrderState.draft.name, OrderState.held.name],
+    );
   }
 
   int get count => _db.raw.select('SELECT COUNT(*) c FROM orders').first['c'] as int;

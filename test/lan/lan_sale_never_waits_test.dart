@@ -18,7 +18,7 @@ const _pizza = Product(id: 1, name: 'Pizza', price: 100);
 /// nothing awaited.
 Order ringUpAndPay(PosSession session) {
   session.addProduct(_pizza);
-  return session.pay(payments: const [OrderPayment(methodId: 1, amount: 100)]);
+  return session.pay(payments: const [OrderPayment(methodId: 1, amount: 100)])!;
 }
 
 PosSession sessionOn(Db db, OrderStore orders, {required String deviceId}) =>
